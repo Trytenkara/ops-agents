@@ -157,6 +157,7 @@ function AgentsNav({ path }: { path: string }) {
   const items = [
     { href: "/agents", label: "Activity feed" },
     { href: "/agents/config", label: "Configuration" },
+    { href: "/agents/audit", label: "Audit log" },
     { href: "/agents/health", label: "System health" },
   ];
   return (
