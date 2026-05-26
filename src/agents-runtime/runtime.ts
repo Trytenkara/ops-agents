@@ -1,5 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getAgentDefinition, type RuntimeContext } from "./registry";
+import { getAgentDefinition, type RuntimeContext, type AgentDefinition } from "./registry";
 
 // Side-effect import: registers all embedded agents at module load. Must come
 // AFTER the registry import so the order is deterministic.
@@ -8,14 +8,22 @@ import "./agents";
 export { listAgentDefinitions, getAgentDefinition } from "./registry";
 export type { AgentDefinition, RuntimeContext } from "./registry";
 
-// Orchestrator: claims a lock on the agent, opens a run, executes the agent,
-// closes the run. Concurrency-safe — rejects a second run for the same agent
-// while one is in progress (via the locked_until column).
-export async function executeAgentRun(opts: {
+export interface RunClaim {
+  agentId: string;
+  agentName: string;
+  agentSlug: string;
+  runId: string;
+  triggerSource: "cron" | "manual" | "webhook";
+  def: AgentDefinition;
+}
+
+// Step 1: synchronously reserve the agent's lock and open the agent_runs row.
+// Returns quickly so the route handler can respond to the user. The actual
+// agent body runs in claimRun's caller via runClaimed().
+export async function claimRun(opts: {
   agentSlug: string;
   triggerSource: "cron" | "manual" | "webhook";
-  triggeredBy?: string | null;
-}): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {
+}): Promise<{ ok: true; claim: RunClaim } | { ok: false; error: string }> {
   const def = getAgentDefinition(opts.agentSlug);
   if (!def) return { ok: false, error: `agent ${opts.agentSlug} not registered in embedded runtime` };
 
@@ -23,9 +31,8 @@ export async function executeAgentRun(opts: {
   const now = new Date();
   const lockUntil = new Date(now.getTime() + 30 * 60 * 1000).toISOString();
 
-  // Reap orphans: any agent_runs left in `running` whose run_started_at is
-  // older than the function timeout (300s) were killed by Vercel without
-  // finalizing. Mark them failed so the UI and reports are honest.
+  // Reap orphans: agent_runs left in `running` past the function timeout were
+  // killed by Vercel without finalizing. Mark them failed so the UI is honest.
   const orphanCutoff = new Date(now.getTime() - 6 * 60 * 1000).toISOString();
   await admin
     .from("agent_runs")
@@ -64,17 +71,36 @@ export async function executeAgentRun(opts: {
   }
   await admin.from("agents").update({ current_run_id: run.id }).eq("id", agent.id);
 
+  return {
+    ok: true,
+    claim: {
+      agentId: agent.id,
+      agentName: agent.name,
+      agentSlug: agent.slug,
+      runId: run.id,
+      triggerSource: opts.triggerSource,
+      def,
+    },
+  };
+}
+
+// Step 2: actually run the agent body. Long-running. Call this from after()
+// or any background task — by the time it starts, the user already has the
+// run_id and is polling the events endpoint.
+export async function runClaimed(claim: RunClaim): Promise<void> {
+  const admin = createAdminClient();
+
   let finalSummary: string | null = null;
   let itemsProcessed = 0;
   let finalStatus: "success" | "partial" | "failure" = "success";
 
   const ctx: RuntimeContext = {
-    runId: run.id,
-    agentId: agent.id,
-    agentSlug: agent.slug,
+    runId: claim.runId,
+    agentId: claim.agentId,
+    agentSlug: claim.agentSlug,
     log: async (message, o) => {
       await admin.from("agent_run_events").insert({
-        run_id: run.id,
+        run_id: claim.runId,
         level: o?.level ?? "info",
         step: o?.step ?? null,
         message,
@@ -86,10 +112,10 @@ export async function executeAgentRun(opts: {
     setStatus: (s) => { finalStatus = s; },
   };
 
-  await ctx.log(`Run started — ${agent.name}`, { step: "start", data: { trigger: opts.triggerSource } });
+  await ctx.log(`Run started — ${claim.agentName}`, { step: "start", data: { trigger: claim.triggerSource } });
 
   try {
-    await def.run(ctx);
+    await claim.def.run(ctx);
   } catch (err: any) {
     finalStatus = "failure";
     await ctx.log(`Run crashed: ${err?.message ?? String(err)}`, {
@@ -107,11 +133,21 @@ export async function executeAgentRun(opts: {
       summary: finalSummary,
       items_processed: itemsProcessed,
     })
-    .eq("id", run.id);
+    .eq("id", claim.runId);
   await admin
     .from("agents")
     .update({ locked_until: null, status: "idle", current_run_id: null, last_run_at: new Date().toISOString() })
-    .eq("id", agent.id);
+    .eq("id", claim.agentId);
+}
 
-  return { ok: true, runId: run.id };
+// Convenience for callers that want claim+run in one shot (cron, tests).
+export async function executeAgentRun(opts: {
+  agentSlug: string;
+  triggerSource: "cron" | "manual" | "webhook";
+  triggeredBy?: string | null;
+}): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {
+  const claimed = await claimRun({ agentSlug: opts.agentSlug, triggerSource: opts.triggerSource });
+  if (!claimed.ok) return claimed;
+  await runClaimed(claimed.claim);
+  return { ok: true, runId: claimed.claim.runId };
 }
