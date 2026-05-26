@@ -8,8 +8,10 @@ export async function middleware(request: NextRequest) {
   reqHeaders.set("x-tackle-path", request.nextUrl.pathname);
   let response = NextResponse.next({ request: { headers: reqHeaders } });
 
-  // Agent API endpoints authenticate via bearer key, not Supabase session — skip.
-  if (request.nextUrl.pathname.startsWith("/api/agent")) {
+  // API routes own their auth: external-agent bearer (POST /api/agent/*),
+  // cron-secret (GET /api/cron), session-cookie-via-getSession (POST /api/agents/*).
+  // Skip middleware so they return JSON 401 instead of an HTML redirect to /login.
+  if (request.nextUrl.pathname.startsWith("/api/")) {
     return response;
   }
 
