@@ -44,7 +44,7 @@ async function pMap<T, R>(items: T[], concurrency: number, mapper: (t: T) => Pro
 
 registerAgent({
   slug: "agent-02-revalidation",
-  displayName: "Quote Revalidation",
+  displayName: "Agent 02 - Quote Revalidation",
   description: "Weekly platform-wide sweep for expiring/expired supplier quotes.",
   async run(ctx) {
     const today = new Date().toISOString().slice(0, 10);

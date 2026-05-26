@@ -15,7 +15,7 @@ export default async function RunDetail({ params }: { params: { id: string } }) 
   const [runRes, eventsRes] = await Promise.all([
     admin
       .from("agent_runs")
-      .select("id, status, run_started_at, run_finished_at, summary, items_processed, agents(name, slug)")
+      .select("id, status, run_started_at, run_finished_at, summary, items_processed, agents(name, slug, description)")
       .eq("id", params.id)
       .maybeSingle(),
     admin
@@ -35,6 +35,9 @@ export default async function RunDetail({ params }: { params: { id: string } }) 
         <h1 className="font-serif text-3xl tracking-tight mt-2">
           {(runRes.data as any).agents?.name ?? "Run"} <span className="text-muted-foreground text-base">· {relativeTime(runRes.data.run_started_at)}</span>
         </h1>
+        {(runRes.data as any).agents?.description && (
+          <p className="text-sm text-muted-foreground mt-1 max-w-3xl">{(runRes.data as any).agents.description}</p>
+        )}
       </div>
       <RunEventStream
         runId={params.id}

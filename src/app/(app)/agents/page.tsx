@@ -22,12 +22,12 @@ export default async function AgentActivityPage() {
   const [runsRes, leadExportsRes, csvDownloadsRes, leadCountRes] = await Promise.all([
     admin
       .from("agent_runs")
-      .select("id, agent_id, org_id, run_started_at, run_finished_at, status, summary, items_processed, agents(name, slug), orgs(slug, name)")
+      .select("id, agent_id, org_id, run_started_at, run_finished_at, status, summary, items_processed, agents(name, slug, description), orgs(slug, name)")
       .order("run_started_at", { ascending: false })
       .limit(60),
     admin
       .from("lead_scanner_exports")
-      .select("id, supplier_name, status, generated_at, slack_message_ts, agents:agents!lead_scanner_exports_generated_by_agent_fkey(name, slug)")
+      .select("id, supplier_name, status, generated_at, slack_message_ts, agents:agents!lead_scanner_exports_generated_by_agent_fkey(name, slug, description)")
       .order("generated_at", { ascending: false })
       .limit(40),
     admin
@@ -106,7 +106,7 @@ function EventRow({ event }: { event: any }) {
       <TableRow>
         <TableCell><EventIcon kind="run" /></TableCell>
         <TableCell><Badge variant={runStatusVariant(r.status)}>{r.status}</Badge></TableCell>
-        <TableCell className="font-medium">{r.agents?.name ?? "—"}</TableCell>
+        <TableCell className="font-medium" title={r.agents?.description ?? undefined}>{r.agents?.name ?? "—"}</TableCell>
         <TableCell>{r.orgs?.name ?? "—"}</TableCell>
         <TableCell className="text-muted-foreground truncate max-w-[40ch]">
           {r.summary ?? `${r.items_processed ?? 0} items${dur != null ? ` · ${dur}s` : ""}`}
@@ -121,7 +121,7 @@ function EventRow({ event }: { event: any }) {
       <TableRow>
         <TableCell><EventIcon kind="lead_export" /></TableCell>
         <TableCell><Badge variant="default">CSV → Andrew</Badge></TableCell>
-        <TableCell className="font-medium">{r.agents?.name ?? "—"}</TableCell>
+        <TableCell className="font-medium" title={r.agents?.description ?? undefined}>{r.agents?.name ?? "—"}</TableCell>
         <TableCell>{r.supplier_name ?? "—"}</TableCell>
         <TableCell className="text-muted-foreground text-xs">
           status: {r.status}

@@ -3,9 +3,9 @@ import { registerAgent } from "../registry";
 // A no-op agent. Useful for verifying the embedded runtime end-to-end
 // without burning LLM tokens or touching Missive.
 registerAgent({
-  slug: "ping",
-  displayName: "Ping",
-  description: "Runtime heartbeat. Writes a few events and exits cleanly.",
+  slug: "agent-01-ping",
+  displayName: "Agent 01 - Ping",
+  description: "Infrastructure heartbeat agent. Runs on a schedule and POSTs to /api/runs to verify the SuperAgent ↔ Ops Assistants pipeline is intact. No real workflow logic. Used as the system liveness check.",
   async run(ctx) {
     await ctx.log("Heartbeat 1/3", { step: "heartbeat", data: { n: 1 } });
     await new Promise((r) => setTimeout(r, 300));
