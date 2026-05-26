@@ -8,10 +8,18 @@ const postSchema = z.object({
   thread_id: z.string(),
   draft_id: z.string(),
   agent_run_id: z.string().uuid().optional(),
+  // Either org_slug OR tenkara_org_id may be passed. The Tenkara UUID is more convenient
+  // for agents that already have it from a Tenkara DB query.
   org_slug: z.string().optional(),
+  tenkara_org_id: z.string().uuid().optional(),
   supplier_id: z.string().optional(),
   material_id: z.string().optional(),
+  // quote_id is the canonical de-dup key for the revalidation flow.
+  // quote_ids accepts a list when a single Missive draft covers multiple expiring materials
+  // for the same supplier — in that case we still store one draft_references row with
+  // metadata.covered_quote_ids set to the full list, and quote_id is the primary (first) id.
   quote_id: z.string().optional(),
+  quote_ids: z.array(z.string()).optional(),
   subject: z.string().optional(),
   body_preview: z.string().max(2000).optional(),
   metadata: z.record(z.any()).optional(),
@@ -29,14 +37,25 @@ export async function POST(request: NextRequest) {
   // Resolve org + auto-assignment.
   let org_id: string | null = null;
   let assigned_operator: string | null = null;
-  if (parsed.data.org_slug) {
-    const { data: org } = await admin
+  let orgRow: any = null;
+  if (parsed.data.tenkara_org_id) {
+    const { data } = await admin
+      .from("orgs")
+      .select("id, org_default_operators(primary_user_id, backup_user_id, primary_user:users!org_default_operators_primary_user_id_fkey(status))")
+      .eq("tenkara_org_id", parsed.data.tenkara_org_id)
+      .maybeSingle();
+    orgRow = data;
+  } else if (parsed.data.org_slug) {
+    const { data } = await admin
       .from("orgs")
       .select("id, org_default_operators(primary_user_id, backup_user_id, primary_user:users!org_default_operators_primary_user_id_fkey(status))")
       .eq("slug", parsed.data.org_slug)
       .maybeSingle();
-    org_id = org?.id ?? null;
-    const ops = (org as any)?.org_default_operators?.[0] ?? (org as any)?.org_default_operators;
+    orgRow = data;
+  }
+  if (orgRow) {
+    org_id = orgRow.id;
+    const ops = orgRow.org_default_operators?.[0] ?? orgRow.org_default_operators;
     if (ops) {
       const primaryOoo = ops.primary_user?.status === "out_of_office";
       assigned_operator = primaryOoo
@@ -45,17 +64,25 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // De-dup: if a staged draft already exists for the same (quote_id|material_id, agent), don't double-create.
-  if (parsed.data.quote_id) {
+  // Primary quote_id for de-dup is either the explicit field or the first of quote_ids.
+  const primaryQuoteId = parsed.data.quote_id ?? parsed.data.quote_ids?.[0] ?? null;
+
+  // De-dup: if a staged draft already exists for this (primary quote_id, agent), don't double-create.
+  if (primaryQuoteId) {
     const { data: existing } = await admin
       .from("draft_references")
       .select("id")
-      .eq("quote_id", parsed.data.quote_id)
+      .eq("quote_id", primaryQuoteId)
       .eq("agent_id", agent.id)
       .eq("status", "staged")
       .maybeSingle();
     if (existing) return NextResponse.json({ draft_id: existing.id, deduped: true });
   }
+
+  // If multiple quote_ids were passed, stash the full list in metadata so ops can see what's covered.
+  const enrichedMetadata = parsed.data.quote_ids && parsed.data.quote_ids.length > 1
+    ? { ...(parsed.data.metadata ?? {}), covered_quote_ids: parsed.data.quote_ids }
+    : (parsed.data.metadata ?? null);
 
   const { data, error } = await admin
     .from("draft_references")
@@ -68,11 +95,11 @@ export async function POST(request: NextRequest) {
       org_id,
       supplier_id: parsed.data.supplier_id ?? null,
       material_id: parsed.data.material_id ?? null,
-      quote_id: parsed.data.quote_id ?? null,
+      quote_id: primaryQuoteId,
       subject: parsed.data.subject ?? null,
       body_preview: parsed.data.body_preview ?? null,
       assigned_operator,
-      metadata: parsed.data.metadata ?? null,
+      metadata: enrichedMetadata,
     })
     .select("id")
     .single();
