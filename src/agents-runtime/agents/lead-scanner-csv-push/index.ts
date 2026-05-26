@@ -4,8 +4,11 @@ import { uploadCsvAndSign } from "@/lib/storage";
 import { postSlackMessage } from "@/lib/slack";
 import { buildSupplierCsv, normalizeSupplierKey, type LeadRow } from "./csv-builder";
 
-// Andrew (Tenkara eng) Slack DM. Override via env if it changes.
-const ANDREW_DM_ID = process.env.ANDREW_SLACK_DM_ID ?? "D0ACDLMLBEH";
+// Andrew (Tenkara eng) Slack DM. The bot↔Andrew DM was opened via
+// conversations.open(U0ACH1LLSEN) — Slack also accepts the user ID directly
+// as the channel arg (auto-opens the DM via im:write). Override via env if
+// Andrew changes handles or we re-target the handoff.
+const ANDREW_DM_ID = process.env.ANDREW_SLACK_DM_ID ?? "U0ACH1LLSEN";
 const BUCKET = "lead-scanner-csvs";
 
 // v1 trims (see migration 0009 and SESSION-04 report):
