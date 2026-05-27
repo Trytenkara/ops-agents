@@ -195,7 +195,7 @@ registerAgent({
       if (conv.last_activity_at > maxActivityAt) maxActivityAt = conv.last_activity_at;
       let msgs;
       try {
-        msgs = await getConversationMessages(conv.id, 25);
+        msgs = await getConversationMessages(conv.id, 10);
       } catch (e: any) {
         conversationErrors++;
         await ctx.log(`Missive get messages failed for ${conv.id}: ${e.message}`, {

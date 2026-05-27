@@ -143,9 +143,11 @@ export async function listTeamConversations(teamId: string, limit = 50): Promise
   return body.conversations ?? [];
 }
 
-export async function getConversationMessages(conversationId: string, limit = 25): Promise<MissiveMessage[]> {
+// Missive caps this endpoint at limit=10 (returns 400 otherwise). We clamp.
+export async function getConversationMessages(conversationId: string, limit = 10): Promise<MissiveMessage[]> {
+  const safeLimit = Math.min(Math.max(1, limit), 10);
   const body = await missiveGet<{ messages: MissiveMessage[] }>(
-    `/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}`
+    `/conversations/${encodeURIComponent(conversationId)}/messages?limit=${safeLimit}`
   );
   return body.messages ?? [];
 }
