@@ -11,3 +11,4 @@ import "./outreach";
 import "./marketplace-validation";
 import "./escalation";
 import "./outreach-qa";
+import "./email-scanner";

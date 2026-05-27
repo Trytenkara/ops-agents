@@ -94,3 +94,58 @@ export async function createMissiveDraft(input: CreateDraftInput): Promise<Missi
 export function missiveDraftLink(conversationId: string, draftId: string): string {
   return `https://mail.missiveapp.com/#inbox/conversations/${conversationId}/drafts/${draftId}`;
 }
+
+// ---------- Read helpers (used by Agent 08 — Email Scanner) ----------
+//
+// The Missive API requires a mailbox filter on /conversations (it returns 400
+// otherwise — "You need to paginate at least one mailbox"). team_all returns
+// every conversation in a team's mailbox; that's the filter Agent 08 needs.
+
+export interface MissiveConversation {
+  id: string;
+  subject: string | null;
+  latest_message_subject: string | null;
+  last_activity_at: number; // unix seconds
+  created_at: number;
+  messages_count: number;
+  drafts_count: number;
+  external_authors: Array<{ name?: string; address: string }>;
+}
+
+export interface MissiveMessage {
+  id: string;
+  created_at: number;
+  subject?: string | null;
+  preview?: string | null;
+  from_field?: { name?: string; address?: string } | null;
+  to_fields?: Array<{ name?: string; address?: string }>;
+  // True for drafts — Agent 08 ignores these.
+  draft?: boolean;
+}
+
+async function missiveGet<T>(path: string): Promise<T> {
+  const token = process.env.MISSIVE_API_TOKEN;
+  if (!token) throw new Error("MISSIVE_API_TOKEN not configured");
+  const res = await fetch(`${MISSIVE_BASE}${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Missive GET ${path} failed: ${res.status} ${text.slice(0, 500)}`);
+  }
+  return (await res.json()) as T;
+}
+
+export async function listTeamConversations(teamId: string, limit = 50): Promise<MissiveConversation[]> {
+  const body = await missiveGet<{ conversations: MissiveConversation[] }>(
+    `/conversations?team_all=${encodeURIComponent(teamId)}&limit=${limit}`
+  );
+  return body.conversations ?? [];
+}
+
+export async function getConversationMessages(conversationId: string, limit = 25): Promise<MissiveMessage[]> {
+  const body = await missiveGet<{ messages: MissiveMessage[] }>(
+    `/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}`
+  );
+  return body.messages ?? [];
+}
