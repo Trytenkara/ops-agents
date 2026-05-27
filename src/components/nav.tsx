@@ -130,6 +130,7 @@ function WorkNav({ orgs, path, session }: { orgs: OrgItem[]; path: string; sessi
       {!isAccountManagerOnly && (
         <>
           <NavLink href="/work/cross-org" active={path === "/work/cross-org"}>Cross-org views</NavLink>
+          <NavLink href="/work/leads" active={path.startsWith("/work/leads")}>Leads in flight</NavLink>
           <NavLink href="/work/exports" active={path.startsWith("/work/exports")}>Exports (30d)</NavLink>
         </>
       )}
