@@ -1,33 +1,69 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { sanitizeDraft } from "@/lib/email-style";
 
-const SYSTEM_BASE = `You are writing a supplier outreach email asking them to re-validate a quote (or set of quotes) the company has on file that are past their reanalyze date.
+// Voice anchored to the team's Notion "EMAIL 1 / EMAIL 2 / EMAIL 6" templates.
+// Every paragraph stands alone with a blank line above and below. No em dashes.
+// Sign-off is always: "Thanks," / blank line / "Procurement Team" / "{Org}".
 
-Write the email like a human sourcing coordinator wrote it from scratch — warm, casual, professional, not templated. Every email should read uniquely.
+const STYLE_ANCHOR = `REFERENCE VOICE (real examples from our workflow guide — match this tone exactly):
 
-STYLE GUIDE:
-- First-name basis. Vary greetings naturally ("Hi", "Hey", "Hello").
-- Short paragraphs separated by blank lines.
-- Under 130 words total in the body.
-- Hopeful, non-accusatory framing. We're checking in to keep records current, not complaining.
+Example A (initial outreach):
+  Hi The Green Labs,
+  ${""}
+  We are expanding our supplier network at Bobber Labs and are looking for Organic Barley.
+  ${""}
+  Do you supply this? If so, could you kindly share current pricing, estimated lead times, and MOQs?
+  ${""}
+  We may have follow-up questions as we go along. Quick responses are always appreciated.
+  ${""}
+  Thanks,
+  ${""}
+  Procurement Team
+  Bobber Labs
+
+Example B (a check-in / follow-up):
+  Hi Herbal Creations Team,
+  ${""}
+  Bumping this up one more time from my email on January 20.
+  ${""}
+  No worries if this isn't something you can help with. We'd just appreciate a quick note either way so we can close the loop.
+  ${""}
+  Thanks,
+  ${""}
+  Procurement Team
+  Bobber Labs`;
+
+const SYSTEM_BASE = `You are writing a supplier outreach email asking them to re-validate a quote (or set of quotes) we have on file that are past their reanalyze date.
+
+Write it like a human sourcing coordinator wrote it from scratch. Warm, lightly informal, professional. Every email should read uniquely.
+
+${STYLE_ANCHOR}
+
+STYLE RULES (non-negotiable):
+- First-name basis when we know it. Otherwise "Hi {Company} Team,".
+- EVERY thought is its own paragraph with a blank line above and below it. Do not chain ideas in one block.
+- Sentences stay short. Whole body under 130 words.
+- Tone is hopeful and non-accusatory. We're keeping records fresh, not complaining.
+- Sign-off ALWAYS exactly:
+    Thanks,
+    ${""}
+    Procurement Team
+    {sender org on its own line}
+- NEVER use em dashes (—) or en dashes (–). Use commas, periods, or "and" instead.
+- NEVER use phrases like "I hope this email finds you well", "Per our records", "I am reaching out to", "In conclusion", "Please don't hesitate", "circle back", "touch base", "jump on a call", "hop on a quick call", "schedule a meeting".
+- NEVER fabricate prior conversations, relationships, or call references.
 
 WHEN PREV PRICING / LEAD TIME IS PROVIDED:
-- Mention it inline (single material) or include in the bulleted list (multi-material), and ask whether it's still the same.
+- Mention it naturally (inline for one material, in a clean bullet list for 2+) and ask if it's still the same.
 
 FORMATTING:
-- Multiple materials (2+): organized bullet list, one per line, with prev pricing/lead time + last-quote date.
-- Single material: brief paragraph, mention the prev pricing inline. No bullet list.
-
-DO NOT USE:
-- Em dashes (—).
-- Offers to "jump on a call", "hop on a quick call", "schedule a meeting", or any synonym.
-- AI tells: "I hope this email finds you well", "Per our records", "I am reaching out to", "In conclusion", "Please don't hesitate", "circle back", "touch base".
-- Accusatory language.
-- Fabricated prior conversations or relationships not present in the data.
+- Multiple materials (2+): one short intro paragraph, then a clean bullet list (one per line) with prev pricing/lead time + last-quote date, then the ask, then sign-off. Blank line between every section.
+- Single material: brief paragraph mentioning the prev pricing inline. No bullet list.
 
 OUTPUT: respond with a JSON object exactly matching this schema:
 {
   "subject": "<short, friendly subject line, no em dashes>",
-  "body": "<full email body — greeting, 2-3 short paragraphs (or 1 paragraph + bulleted list for multi-material), ask, sign-off>"
+  "body": "<full email body with the exact sign-off block above>"
 }`;
 
 export interface DraftPayload {
@@ -44,16 +80,21 @@ function systemPromptFor(mode: "active" | "ghost", clientName: string, ghostBran
   if (mode === "active") {
     return SYSTEM_BASE + `
 
-SIGN-OFF FOR THIS EMAIL:
-- The email is FROM the client (${clientName}'s purchasing team).
-- Sign off with a comma-ended close (e.g., "Thanks so much,") then "${clientName} Purchasing Team" on the next line.`;
+SIGN-OFF FOR THIS EMAIL (use exactly this format, blank lines included):
+Thanks,
+
+Procurement Team
+${clientName}`;
   }
   return SYSTEM_BASE + `
 
-SIGN-OFF FOR THIS EMAIL:
-- The email is FROM ${ghostBrand} (a sourcing brand) reaching out on behalf of a buyer.
-- Do NOT name the underlying client (${clientName}) anywhere in the email body.
-- Sign off with a comma-ended close then "${ghostBrand} Sourcing" on the next line.`;
+SIGN-OFF FOR THIS EMAIL (use exactly this format, blank lines included):
+Thanks,
+
+Procurement Team
+${ghostBrand}
+
+IMPORTANT: Do NOT name the underlying client (${clientName}) anywhere in the email body or subject.`;
 }
 
 let client: Anthropic | null = null;
@@ -89,7 +130,7 @@ export async function generateRevalidationEmail(opts: {
     throw new Error(`Anthropic response missing subject/body. Raw text: ${text.slice(0, 400)}`);
   }
   return {
-    draft: { subject: String(parsed.subject), body: String(parsed.body) },
+    draft: sanitizeDraft({ subject: String(parsed.subject), body: String(parsed.body) }),
     usage: { inputTokens: res.usage.input_tokens, outputTokens: res.usage.output_tokens },
   };
 }

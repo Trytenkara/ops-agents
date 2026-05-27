@@ -1,16 +1,19 @@
 import type { OutreachMode } from "../quote-revalidation/config";
+import { sanitizeDraft } from "@/lib/email-style";
 
-// Pure template — no LLM in v1. Mirrors the tone of Agent 02's revalidation
-// templates so suppliers see consistent voice across both flows.
+// Template mirrors the Bobber Labs / Notion "EMAIL 1: Initial RFQ" workflow:
+// short paragraphs separated by blank lines, conversational tone, no em
+// dashes, catalog ask, "Procurement Team / {Org}" sign-off.
 
 export interface DraftInput {
   mode: OutreachMode; // 'active' | 'ghost'
   ghostBrand?: string;
   clientOrgName: string;
   supplierContactName: string | null;
+  supplierCompanyName?: string | null;
   materialName: string;
   inciName: string | null;
-  signal: string | null; // how we found them — informs the lede
+  signal: string | null; // how we found them — kept for telemetry, no longer changes copy
 }
 
 export interface ComposedDraft {
@@ -18,51 +21,38 @@ export interface ComposedDraft {
   body: string;
 }
 
-function greeting(name: string | null): string {
-  if (!name) return "Hi there,";
-  // Pick the first token — many POC fields are "First Last", a few are full
-  // company-style names. Keep it simple.
-  const first = name.trim().split(/\s+/)[0];
-  return `Hi ${first},`;
-}
-
-function lede(signal: string | null, materialName: string): string {
-  switch (signal) {
-    case "quoted_same_material":
-      return `We're sourcing ${materialName} and noticed you've quoted it before — wanted to see if you can quote again.`;
-    case "quoted_similar_inci":
-      return `We're sourcing ${materialName} and saw you've quoted materials with the same INCI in the past.`;
-    case "quoted_similar_name":
-      return `We're sourcing ${materialName} and saw you've quoted very similar material before.`;
-    case "catalog_match":
-      return `We're sourcing ${materialName} and saw it listed in your catalog — checking if you can quote.`;
-    default:
-      return `We're sourcing ${materialName} and would like to see if you can quote.`;
+function greeting(contactName: string | null, supplierCompany: string | null | undefined): string {
+  if (contactName) {
+    const first = contactName.trim().split(/\s+/)[0];
+    return `Hi ${first},`;
   }
+  if (supplierCompany) return `Hi ${supplierCompany.trim()} Team,`;
+  return "Hi there,";
 }
 
 export function composeOutreachDraft(input: DraftInput): ComposedDraft {
-  const senderLabel =
-    input.mode === "ghost" ? `${input.ghostBrand} Sourcing` : `${input.clientOrgName} Purchasing Team`;
-  const inciLine = input.inciName ? ` (INCI: ${input.inciName})` : "";
+  const senderOrg = input.mode === "ghost" ? input.ghostBrand! : input.clientOrgName;
+  const materialLabel = input.inciName
+    ? `${input.materialName} (INCI: ${input.inciName})`
+    : input.materialName;
 
   const subject = `Sourcing inquiry: ${input.materialName}`;
   const body = [
-    greeting(input.supplierContactName),
+    greeting(input.supplierContactName, input.supplierCompanyName),
     "",
-    lede(input.signal, input.materialName) + inciLine + ".",
+    `We are expanding our supplier network at ${senderOrg} and are looking for ${materialLabel}.`,
     "",
-    "To move quickly, could you share:",
-    "  • Pricing at typical volumes (e.g. 25 kg, 100 kg, 500 kg)",
-    "  • Current lead time",
-    "  • Whether you carry it in stock or produce to order",
-    "  • Country of origin and COA / spec sheet availability",
+    "Do you supply this? If so, could you kindly share current pricing, estimated lead times, and MOQs?",
     "",
-    "Happy to send a more detailed RFQ if helpful.",
+    "Additionally, if you have a product catalog, please share it. We're evaluating suppliers across multiple raw materials and will share what you carry with the rest of our procurement team.",
+    "",
+    "We may have follow-up questions as we go along. Quick responses are always appreciated.",
     "",
     "Thanks,",
-    senderLabel,
+    "",
+    "Procurement Team",
+    senderOrg,
   ].join("\n");
 
-  return { subject, body };
+  return sanitizeDraft({ subject, body });
 }

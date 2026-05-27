@@ -201,6 +201,7 @@ registerAgent({
         ghostBrand: c.ghostBrand,
         clientOrgName: c.clientOrgName,
         supplierContactName: c.contactName,
+        supplierCompanyName: c.lead.supplier_name ?? null,
         materialName: c.lead.material_name ?? "the material",
         inciName: payload.inci_name ?? null,
         signal: payload.signal ?? null,
