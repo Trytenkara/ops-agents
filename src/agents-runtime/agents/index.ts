@@ -8,3 +8,6 @@ import "./lead-scanner-csv-push";
 import "./lead-creator";
 import "./data-enrichment";
 import "./outreach";
+import "./marketplace-validation";
+import "./escalation";
+import "./outreach-qa";
