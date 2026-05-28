@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/lib/utils";
 import { getAssignedOrgIds, seesAllOrgs } from "@/lib/org-access";
 import { LeadRowActions } from "@/components/lead-row-actions";
+import { LeadsExportCsvButton } from "@/components/leads-export-csv-button";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,11 @@ export const dynamic = "force-dynamic";
 const STAGES = ["raw", "enriched", "ready_for_outreach", "ready_for_approval", "terminal"] as const;
 type Stage = (typeof STAGES)[number];
 
-export default async function LeadsPage({ searchParams }: { searchParams: { stage?: string; drift?: string } }) {
+export default async function LeadsPage({
+  searchParams,
+}: {
+  searchParams: { stage?: string; drift?: string; material?: string; source?: string; status?: string };
+}) {
   const session = (await getSession())!;
   if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator", "monitor"])) redirect("/work");
 
@@ -24,6 +29,9 @@ export default async function LeadsPage({ searchParams }: { searchParams: { stag
     ? (searchParams.stage as Stage)
     : "raw";
   const driftOnly = searchParams.drift === "1";
+  const material = (searchParams.material ?? "").trim();
+  const source = (searchParams.source ?? "").trim();
+  const statusFilter = (searchParams.status ?? "").trim();
 
   const assigned = await getAssignedOrgIds(session);
   const admin = createAdminClient();
@@ -34,24 +42,41 @@ export default async function LeadsPage({ searchParams }: { searchParams: { stag
     .order("confidence_score", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
     .limit(200);
-  // The terminal stage also wants dropped rows for full audit trail.
-  if (stage === "terminal") {
+  if (statusFilter) {
+    q = q.eq("status", statusFilter);
+  } else if (stage === "terminal") {
     q = q.in("status", ["active", "dropped", "terminal"]);
   } else {
     q = q.eq("status", "active");
   }
   if (assigned) q = q.in("org_id", assigned);
   if (driftOnly) q = q.eq("payload->>catalog_drift", "no_longer_listed");
+  if (material) q = q.ilike("material_name", `%${material}%`);
+  if (source) q = q.eq("source", source);
   const { data: rows } = await q;
   const canAct = seesAllOrgs(session) || (assigned !== null && assigned.length > 0);
+  const rowCount = rows?.length ?? 0;
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="font-serif text-3xl tracking-tight">Leads in flight</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Candidate suppliers staged by Agent 03 (Lead Creator) and other lead agents. Top of the list = highest confidence.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="font-serif text-3xl tracking-tight">Leads in flight</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Candidate suppliers staged by Agent 03 (Lead Creator) and other lead agents. Top of the list = highest confidence.
+          </p>
+        </div>
+        <LeadsExportCsvButton
+          disabled={rowCount === 0}
+          count={rowCount}
+          filters={{
+            stage,
+            ...(driftOnly ? { drift: "1" } : {}),
+            ...(material ? { material } : {}),
+            ...(source ? { source } : {}),
+            ...(statusFilter ? { status: statusFilter } : {}),
+          }}
+        />
       </div>
 
       <div className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
@@ -77,6 +102,27 @@ export default async function LeadsPage({ searchParams }: { searchParams: { stag
             {s}
           </Link>
         ))}
+        {(material || source || statusFilter) && (
+          <span className="text-xs text-muted-foreground ml-2 self-center">active filters:</span>
+        )}
+        {material && (
+          <ActiveFilterChip
+            label={`material: ${material}`}
+            clearHref={buildHref({ stage, driftOnly, source, status: statusFilter })}
+          />
+        )}
+        {source && (
+          <ActiveFilterChip
+            label={`source: ${source}`}
+            clearHref={buildHref({ stage, driftOnly, material, status: statusFilter })}
+          />
+        )}
+        {statusFilter && (
+          <ActiveFilterChip
+            label={`status: ${statusFilter}`}
+            clearHref={buildHref({ stage, driftOnly, material, source })}
+          />
+        )}
         <Link
           href={driftOnly ? `/work/leads?stage=${stage}` : `/work/leads?stage=${stage}&drift=1`}
           className={
@@ -110,15 +156,58 @@ export default async function LeadsPage({ searchParams }: { searchParams: { stag
             const signal = r.payload?.signal as string | undefined;
             const signalCount = r.payload?.signal_count as number | undefined;
             const conf = r.confidence_score != null ? Number(r.confidence_score) : null;
+            const isScout = r.source === "ai_discovery";
+            const sourceUrl = (r.payload?.source_url ?? r.payload?.supplier_website) as string | undefined;
+            const siteType = r.payload?.site_type as "M" | "MS" | "N" | undefined;
+            const citations = Array.isArray(r.payload?.source_citations) ? r.payload.source_citations : [];
             return (
               <TableRow key={r.id}>
-                <TableCell className="font-medium">
-                  {r.supplier_name ?? "—"}
+                <TableCell className="font-medium align-top">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span>{r.supplier_name ?? "—"}</span>
+                    {siteType && (
+                      <span
+                        className="inline-flex items-center rounded-full border border-border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+                        title={
+                          siteType === "M" ? "Marketplace — online checkout, no signup" :
+                          siteType === "MS" ? "Marketplace — checkout after registration" :
+                          "Non-marketplace — quote/RFQ only"
+                        }
+                      >
+                        {siteType}
+                      </span>
+                    )}
+                  </div>
                   {r.payload?.supplier_country && (
-                    <span className="ml-2 text-xs text-muted-foreground">{r.payload.supplier_country}</span>
+                    <div className="text-xs text-muted-foreground">{r.payload.supplier_country}</div>
+                  )}
+                  {sourceUrl && (
+                    <a
+                      href={sourceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block text-xs text-primary hover:underline truncate max-w-[28ch]"
+                      title={sourceUrl}
+                    >
+                      {sourceUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")} ↗
+                    </a>
+                  )}
+                  {citations.length > 1 && (
+                    <details className="text-xs text-muted-foreground mt-0.5">
+                      <summary className="cursor-pointer hover:text-foreground">{citations.length} sources</summary>
+                      <ul className="mt-1 space-y-0.5 max-w-[40ch]">
+                        {citations.slice(0, 6).map((u: string, i: number) => (
+                          <li key={i} className="truncate">
+                            <a href={u} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                              {u.replace(/^https?:\/\//, "").slice(0, 50)}
+                            </a>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
                   )}
                 </TableCell>
-                <TableCell>
+                <TableCell className="align-top">
                   <div className="flex items-center gap-2">
                     <span>{r.material_name ?? "—"}</span>
                     {r.payload?.catalog_drift === "no_longer_listed" && (
@@ -133,17 +222,27 @@ export default async function LeadsPage({ searchParams }: { searchParams: { stag
                   {r.payload?.inci_name && (
                     <div className="text-xs text-muted-foreground truncate max-w-[28ch]">{r.payload.inci_name}</div>
                   )}
+                  {isScout && (
+                    <span
+                      className="mt-1 inline-flex items-center rounded-full bg-yellow-500/15 text-yellow-700 dark:text-yellow-400 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                      title="Discovered by Agent 03 via web search. Verify the supplier and pricing before promoting."
+                    >
+                      Scout discovery — needs verification
+                    </span>
+                  )}
                 </TableCell>
-                <TableCell className="text-muted-foreground text-xs">
+                <TableCell className="text-muted-foreground text-xs align-top">
                   {signal ? (
                     <>
                       <code>{signal}</code>
                       {signalCount != null && <span className="ml-1">×{signalCount}</span>}
                     </>
+                  ) : isScout ? (
+                    <code className="text-yellow-700 dark:text-yellow-400">scout</code>
                   ) : "—"}
                 </TableCell>
-                <TableCell><ConfidenceBadge value={conf} /></TableCell>
-                <TableCell className="text-muted-foreground">{r.source ?? "—"}</TableCell>
+                <TableCell className="align-top"><ConfidenceBadge value={conf} /></TableCell>
+                <TableCell className="text-muted-foreground align-top">{r.source ?? "—"}</TableCell>
                 <TableCell className="text-muted-foreground">
                   {r.orgs?.name ?? <span className="italic text-xs">cross-org</span>}
                 </TableCell>
@@ -189,6 +288,31 @@ export default async function LeadsPage({ searchParams }: { searchParams: { stag
         </TableBody>
       </Table>
     </div>
+  );
+}
+
+function buildHref(p: {
+  stage: string;
+  driftOnly?: boolean;
+  material?: string;
+  source?: string;
+  status?: string;
+}) {
+  const sp = new URLSearchParams();
+  sp.set("stage", p.stage);
+  if (p.driftOnly) sp.set("drift", "1");
+  if (p.material) sp.set("material", p.material);
+  if (p.source) sp.set("source", p.source);
+  if (p.status) sp.set("status", p.status);
+  return `/work/leads?${sp.toString()}`;
+}
+
+function ActiveFilterChip({ label, clearHref }: { label: string; clearHref: string }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-secondary border border-secondary px-2 py-0.5 text-xs text-secondary-foreground">
+      {label}
+      <Link href={clearHref} className="text-muted-foreground hover:text-foreground" title="Clear filter">×</Link>
+    </span>
   );
 }
 

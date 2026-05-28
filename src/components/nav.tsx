@@ -92,6 +92,7 @@ function WorkNav({ orgs, session }: { orgs: OrgItem[]; session: SessionContext }
         <>
           <NavLink href="/work/cross-org">Cross-org views</NavLink>
           <NavLink href="/work/leads" match="prefix">Leads in flight</NavLink>
+          <NavLink href="/work/marketplace-findings" match="prefix">Marketplace findings</NavLink>
           <NavLink href="/work/exports" match="prefix">Exports (30d)</NavLink>
         </>
       )}

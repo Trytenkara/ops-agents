@@ -1,6 +1,7 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { queryRecentMaterials, findCandidatesForMaterial, type CandidateSupplier, type MaterialRow } from "./sql";
+import { scoutSuppliersForMaterial, scoreScoutConfidence, type ScoutSupplier } from "./scout";
 
 // v1 trims (vs. full spec):
 //   - existing-DB only mode. BrowserBase external discovery is gated on
@@ -45,9 +46,14 @@ function scoreCandidate(c: CandidateSupplier): number {
 }
 
 function sourceFromSignal(signal: CandidateSupplier["signal"]): "existing_db" | "marketplace" {
-  // All v1 signals come from Tenkara prod — the existing supplier graph.
-  // Reserved for future: 'ai_discovery' once BrowserBase wired up.
+  // All graph signals come from Tenkara prod — the existing supplier graph.
   return signal === "catalog_match" ? "marketplace" : "existing_db";
+}
+
+function hostOf(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try { return new URL(url).host.toLowerCase().replace(/^www\./, ""); }
+  catch { return null; }
 }
 
 registerAgent({
@@ -121,10 +127,30 @@ registerAgent({
     }
     await ctx.log(`Loaded ${tenkaraOrgToOaOrg.size} tenkara→OA org mappings`, { step: "org_map" });
 
-    // 4. Check BrowserBase config — agent must not fail if absent.
-    const browserbaseEnabled = !!process.env.BROWSERBASE_API_KEY;
-    if (!browserbaseEnabled) {
-      await ctx.log("BROWSERBASE_API_KEY not set — external discovery skipped (existing-DB only mode)", {
+    // 3c. Per-material idempotency for the scout phase. Equivalent to Ben's
+    //     `processed_material_ids` set in sourcing-trigger.json — once a
+    //     material has any scout-discovered lead, we don't re-scout it (the
+    //     model would just re-find the same hosts and we'd waste API calls
+    //     + risk duplicate inserts). Graph re-runs are still safe because
+    //     they're keyed on Tenkara supplier_id, which is unique per material.
+    const materialIds = materials.map((m) => m.id);
+    const { data: scoutedRows } = await admin
+      .from("leads_in_flight")
+      .select("material_id")
+      .eq("source", "ai_discovery")
+      .in("material_id", materialIds);
+    const alreadyScouted = new Set((scoutedRows ?? []).map((r: any) => r.material_id as string));
+    if (alreadyScouted.size > 0) {
+      await ctx.log(`${alreadyScouted.size} materials already have scout leads — skipping scout phase for them`, {
+        step: "scout_dedup",
+      });
+    }
+
+    // 4. AI scout config — Anthropic web_search tool. If no key, scout phase
+    //    is skipped silently and we run graph-only.
+    const scoutEnabled = !!process.env.ANTHROPIC_API_KEY;
+    if (!scoutEnabled) {
+      await ctx.log("ANTHROPIC_API_KEY not set — AI scout discovery skipped (graph-only mode)", {
         step: "config",
         level: "info",
       });
@@ -132,8 +158,10 @@ registerAgent({
 
     // 5. For each material, find candidates and stage leads.
     let leadsCreated = 0;
+    let scoutLeadsCreated = 0;
     let materialsWithLeads = 0;
     let materialsWithoutLeads = 0;
+    let materialsWithScoutLeads = 0;
     let skippedByMirror = 0;
     const noLeadMaterials: string[] = [];
 
@@ -156,23 +184,13 @@ registerAgent({
         continue;
       }
 
-      // Dedup candidates by supplier_id (keep best signal — order in sql.ts
+      // Dedup graph candidates by supplier_id (keep best signal — order in sql.ts
       // already prefers stronger signals, so first wins).
       const seen = new Map<string, CandidateSupplier>();
       for (const c of candidates) {
         if (!seen.has(c.supplier_id)) seen.set(c.supplier_id, c);
       }
       const unique = Array.from(seen.values());
-
-      if (unique.length === 0) {
-        materialsWithoutLeads++;
-        noLeadMaterials.push(matLabel);
-        await ctx.log(`No candidate suppliers found for ${matLabel}`, {
-          step: "candidates",
-          data: { material_id: material.id, material_name: matLabel },
-        });
-        continue;
-      }
 
       // Mirror-based skip (supplier_name × material_name match).
       const fresh: CandidateSupplier[] = [];
@@ -184,12 +202,11 @@ registerAgent({
         }
         fresh.push(c);
       }
-      if (fresh.length === 0) {
-        await ctx.log(`All ${unique.length} candidates for ${matLabel} skipped by 90d mirror dedup`, {
+      if (unique.length > 0 && fresh.length === 0) {
+        await ctx.log(`All ${unique.length} graph candidates for ${matLabel} skipped by 90d mirror dedup`, {
           step: "dedup",
           data: { material_id: material.id },
         });
-        continue;
       }
 
       // Resolve OA org_id from the material's Tenkara organization. Null if
@@ -206,61 +223,155 @@ registerAgent({
         });
       }
 
-      // Build insert rows.
-      const budget = MAX_NEW_LEADS_PER_RUN - leadsCreated;
-      const toInsert = fresh.slice(0, budget).map((c) => ({
-        org_id: oaOrgId,
-        supplier_name: c.supplier_name,
-        supplier_id: c.supplier_id,
-        material_name: matLabel,
-        material_id: material.id,
-        stage: "raw" as const,
-        status: "active" as const,
-        source: sourceFromSignal(c.signal),
-        payload: {
-          inci_name: material.inci,
-          supplier_website: c.supplier_website,
-          supplier_contact_name: c.supplier_poc_name,
-          supplier_contact_email: c.supplier_poc_email,
-          supplier_country: c.supplier_country,
-          signal: c.signal,
-          signal_count: c.signal_count,
-          tenkara_org_id: material.tenkara_org_id,
-        },
-        confidence_score: scoreCandidate(c),
-        agent_run_id: ctx.runId,
-      }));
-
-      const { error: insErr, data: inserted } = await admin
-        .from("leads_in_flight")
-        .insert(toInsert)
-        .select("id");
-      if (insErr) {
-        await ctx.log(`Insert failed for ${matLabel}: ${insErr.message}`, {
-          level: "error",
-          step: "insert",
-          data: { material_id: material.id },
-        });
-        continue;
-      }
-      leadsCreated += inserted?.length ?? 0;
-      materialsWithLeads++;
-      await ctx.log(`Staged ${inserted?.length ?? 0} leads for ${matLabel}`, {
-        step: "insert",
-        data: {
-          material_id: material.id,
+      // 5a. Stage graph-derived leads first (high confidence, deterministic).
+      let stagedThisMaterial = 0;
+      const graphHosts = new Set<string>();
+      if (fresh.length > 0) {
+        const budget = MAX_NEW_LEADS_PER_RUN - leadsCreated;
+        const toInsert = fresh.slice(0, budget).map((c) => ({
+          org_id: oaOrgId,
+          supplier_name: c.supplier_name,
+          supplier_id: c.supplier_id,
           material_name: matLabel,
-          lead_ids: (inserted ?? []).map((r: any) => r.id),
-        },
-      });
+          material_id: material.id,
+          stage: "raw" as const,
+          status: "active" as const,
+          source: sourceFromSignal(c.signal),
+          payload: {
+            inci_name: material.inci,
+            supplier_website: c.supplier_website,
+            supplier_contact_name: c.supplier_poc_name,
+            supplier_contact_email: c.supplier_poc_email,
+            supplier_country: c.supplier_country,
+            signal: c.signal,
+            signal_count: c.signal_count,
+            tenkara_org_id: material.tenkara_org_id,
+          },
+          confidence_score: scoreCandidate(c),
+          agent_run_id: ctx.runId,
+        }));
+        for (const c of fresh) {
+          const h = hostOf(c.supplier_website);
+          if (h) graphHosts.add(h);
+        }
+
+        const { error: insErr, data: inserted } = await admin
+          .from("leads_in_flight")
+          .insert(toInsert)
+          .select("id");
+        if (insErr) {
+          await ctx.log(`Graph insert failed for ${matLabel}: ${insErr.message}`, {
+            level: "error",
+            step: "insert",
+            data: { material_id: material.id },
+          });
+        } else {
+          stagedThisMaterial += inserted?.length ?? 0;
+          leadsCreated += inserted?.length ?? 0;
+          await ctx.log(`Staged ${inserted?.length ?? 0} graph leads for ${matLabel}`, {
+            step: "insert",
+            data: {
+              material_id: material.id,
+              material_name: matLabel,
+              lead_ids: (inserted ?? []).map((r: any) => r.id),
+            },
+          });
+        }
+      }
+
+      // 5b. AI scout — runs whenever ANTHROPIC_API_KEY is set AND we haven't
+      //     already produced scout leads for this material in a prior run
+      //     (Ben's processed_material_ids equivalent). Dedups by host vs graph
+      //     hits so we don't double-stage the same supplier.
+      if (scoutEnabled && leadsCreated < MAX_NEW_LEADS_PER_RUN && !alreadyScouted.has(material.id)) {
+        let scoutResults: ScoutSupplier[] = [];
+        try {
+          scoutResults = await scoutSuppliersForMaterial(material, {
+            excludeHosts: graphHosts,
+            log: (msg, meta) => ctx.log(msg, { step: "scout", data: { ...meta, material_id: material.id } }),
+          });
+        } catch (e: any) {
+          await ctx.log(`Scout failed for ${matLabel}: ${e.message}`, {
+            level: "warn",
+            step: "scout",
+            data: { material_id: material.id },
+          });
+        }
+
+        if (scoutResults.length > 0) {
+          const scoutBudget = MAX_NEW_LEADS_PER_RUN - leadsCreated;
+          const scoutToInsert = scoutResults.slice(0, scoutBudget).map((s) => ({
+            org_id: oaOrgId,
+            supplier_name: s.supplier_name,
+            supplier_id: null,                  // no Tenkara supplier_id — new discovery
+            material_name: matLabel,
+            material_id: material.id,
+            stage: "raw" as const,
+            status: "active" as const,
+            source: "ai_discovery" as const,
+            payload: {
+              inci_name: material.inci,
+              supplier_website: s.url,
+              supplier_contact_email: s.email,
+              supplier_country: s.country,
+              site_type: s.site_type,            // M / MS / N — surfaced in UI
+              confidence_hint: s.confidence_hint,
+              source_url: s.url,
+              source_citations: s.source_citations,
+              scout_notes: s.notes,
+              tenkara_org_id: material.tenkara_org_id,
+            },
+            confidence_score: scoreScoutConfidence(s.confidence_hint),
+            agent_run_id: ctx.runId,
+          }));
+
+          const { error: scoutErr, data: scoutInserted } = await admin
+            .from("leads_in_flight")
+            .insert(scoutToInsert)
+            .select("id");
+          if (scoutErr) {
+            await ctx.log(`Scout insert failed for ${matLabel}: ${scoutErr.message}`, {
+              level: "error",
+              step: "scout",
+              data: { material_id: material.id },
+            });
+          } else {
+            const n = scoutInserted?.length ?? 0;
+            stagedThisMaterial += n;
+            scoutLeadsCreated += n;
+            leadsCreated += n;
+            if (n > 0) materialsWithScoutLeads++;
+            await ctx.log(`Staged ${n} scout leads for ${matLabel}`, {
+              step: "scout",
+              data: {
+                material_id: material.id,
+                material_name: matLabel,
+                lead_ids: (scoutInserted ?? []).map((r: any) => r.id),
+              },
+            });
+          }
+        }
+      }
+
+      if (stagedThisMaterial > 0) {
+        materialsWithLeads++;
+      } else {
+        materialsWithoutLeads++;
+        noLeadMaterials.push(matLabel);
+        await ctx.log(`No candidates (graph or scout) for ${matLabel}`, {
+          step: "candidates",
+          data: { material_id: material.id, material_name: matLabel },
+        });
+      }
     }
 
     ctx.setItemsProcessed(leadsCreated);
     ctx.setStatus("success");
+    const graphLeads = leadsCreated - scoutLeadsCreated;
     ctx.setSummary(
-      `Staged ${leadsCreated} raw leads across ${materialsWithLeads} material${materialsWithLeads === 1 ? "" : "s"} · ` +
-        `${materialsWithoutLeads} materials had no candidates · ${skippedByMirror} candidates skipped by 90d mirror` +
-        (browserbaseEnabled ? "" : " · external discovery off (no BROWSERBASE_API_KEY)") +
+      `Staged ${leadsCreated} raw leads (${graphLeads} graph, ${scoutLeadsCreated} scout) across ${materialsWithLeads} material${materialsWithLeads === 1 ? "" : "s"} · ` +
+        `${materialsWithScoutLeads} got scout leads · ${materialsWithoutLeads} empty · ${skippedByMirror} graph candidates skipped by 90d mirror` +
+        (scoutEnabled ? "" : " · scout off (no ANTHROPIC_API_KEY)") +
         (noLeadMaterials.length
           ? ` · empty: ${noLeadMaterials.slice(0, 3).join(", ")}${noLeadMaterials.length > 3 ? "…" : ""}`
           : "")

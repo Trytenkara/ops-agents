@@ -1,221 +1,226 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
-import { uploadCsvAndSign } from "@/lib/storage";
-import { buildCsv, type ValidationRow } from "./csv-builder";
+import { recheckMarketplaceQuote, type RecheckResult } from "./price-recheck";
 
-// v1: re-verify catalog-match leads. Agent 03 finds suppliers via four signals;
-// `catalog_match` (the supplier listed the material in their uploaded catalog)
-// is the only one that depends on a separate Tenkara table — supplier_catalog_materials.
-// That data drifts: suppliers re-upload catalogs, remove SKUs, etc.
+// Agent 05 - Marketplace Price Re-check.
 //
-// For each lead with signal='catalog_match' (regardless of stage), we check
-// whether the supplier still lists the material by INCI or product name. If
-// not, we set payload.catalog_drift so the human reviewer knows the original
-// signal no longer holds. We never drop the lead — that's a human call.
-const MAX_LEADS_PER_RUN = 50;
+// Replaces the prior catalog-drift behavior. For each Tenkara marketplace
+// quote that's expiring within 7 days, ask Anthropic (with web_search) to
+// pull the current public price from the supplier's product page and write
+// a finding to marketplace_check_findings for ops review.
+//
+// READ-ONLY on Tenkara. Findings get a status='pending_review' and stay
+// there until a human approves or dismisses them in the UI. The approved
+// rows are exported as a CSV that ops uploads to Tenkara manually - no
+// auto-write-back to Tenkara prod.
+//
+// Slug stays 'agent-05-marketplace-validation' to keep agent_runs history
+// continuous. The display name + description were updated in migration 0019.
 
-interface LeadRow {
-  id: string;
-  supplier_id: string | null;
-  material_name: string | null;
-  payload: Record<string, any> | null;
+const MAX_QUOTES_PER_RUN = 25;
+const SIGNIFICANCE_THRESHOLD_PCT = 1.0; // <1% drift treated as unchanged
+
+interface QuoteRow {
+  id: string;                      // material_quotes.id
+  material_id: string;
+  material_name: string;
+  supplier_id: string;
+  supplier_name: string;
+  price: number | null;
+  case_size: number | null;
+  unit_of_measurement: string | null;
+  product_url: string;
+  reanalyze: string | null;
+  updated_at: string;
+  tenkara_org_id: string | null;   // resolved via material -> user -> org
 }
 
-interface CatalogRow {
-  hit_count: number;
-}
-
-async function supplierStillListsMaterial(
-  supplierId: string,
-  inci: string | null,
-  nameKey: string | null
-): Promise<boolean> {
-  // Same OR-conditions as Agent 03's catalog signal query, scoped to one
-  // supplier so it's cheap.
-  const rows = await tenkaraQuery<CatalogRow>(
-    `select count(*)::int as hit_count
-       from public.supplier_catalog_materials scm
-      where scm.supplier_id = $1::uuid
-        and ( ($2::text is not null and lower(scm.inci) = lower($2::text))
-           or ($3::text is not null and (
-               lower(coalesce(scm.product_name,'')) = lower($3::text)
-            or lower(coalesce(scm.trade_name,''))   = lower($3::text)
-           ))
-        )`,
-    [supplierId, inci, nameKey]
+async function fetchExpiringMarketplaceQuotes(): Promise<QuoteRow[]> {
+  return tenkaraQuery<QuoteRow>(
+    `select mq.id,
+            mq.material_id,
+            m.name  as material_name,
+            mq.supplier_id,
+            s.name  as supplier_name,
+            mq.price,
+            mq.case_size,
+            mq.unit_of_measurement,
+            mq.product_url,
+            mq.reanalyze::text as reanalyze,
+            mq.updated_at::text as updated_at,
+            u.organization_id   as tenkara_org_id
+       from public.material_quotes mq
+       join public.suppliers s on s.id = mq.supplier_id
+       join public.materials m on m.id = mq.material_id
+       left join public.users u on u.id = m.user_id
+      where s.is_marketplace = true
+        and mq.product_url is not null and mq.product_url <> ''
+        and mq.product_url not ilike '%welcome.com%'
+        and mq.product_url not ilike '%seed-suppliers.com%'
+        and mq.product_url not ilike '%example.com%'
+        and mq.product_url not ilike '%localhost%'
+        and mq.product_url not ilike '%.invalid%'
+        and length(regexp_replace(mq.product_url, '^https?://[^/]+', '')) > 1
+        and mq.replaced_quote_id is null
+        and mq.reanalyze is not null
+        and mq.reanalyze::date >= current_date
+        and mq.reanalyze::date <  current_date + 7
+      order by mq.reanalyze asc
+      limit $1`,
+    [MAX_QUOTES_PER_RUN]
   );
-  return (rows[0]?.hit_count ?? 0) > 0;
+}
+
+function classify(baseline: number | null, current: number | null, result: RecheckResult): string {
+  if (result.classification === "link_broken") return "link_broken";
+  if (result.classification === "needs_review") return "needs_review";
+  if (current == null) return "no_signal_found";
+  if (baseline == null || baseline === 0) return "needs_review";
+  const pct = ((current - baseline) / baseline) * 100;
+  if (Math.abs(pct) < SIGNIFICANCE_THRESHOLD_PCT) return "signal_matches_baseline";
+  return "signal_diverges";
 }
 
 registerAgent({
   slug: "agent-05-marketplace-validation",
-  displayName: "Agent 05 - Marketplace Validation",
+  displayName: "Agent 05 - Marketplace Price Re-check",
   description:
-    "Re-verifies catalog-match leads against Tenkara's current catalog. Flags payload.catalog_drift when a supplier no longer lists a material we sourced from them.",
+    "Re-checks current public pricing on Tenkara marketplace quotes expiring within 7 days. Uses Anthropic web_search to find a current price signal per quote and writes findings to marketplace_check_findings for ops review. Read-only on Tenkara; never writes back.",
   async run(ctx) {
     const admin = createAdminClient();
 
-    // Pull leads whose original signal was catalog_match. We use a JSON filter;
-    // PostgREST supports it via `payload->>signal=eq.catalog_match`.
-    const { data: leads, error: pullErr } = await admin
-      .from("leads_in_flight")
-      .select("id, supplier_id, material_name, payload")
-      .filter("payload->>signal", "eq", "catalog_match")
-      .eq("status", "active")
-      .order("created_at", { ascending: false })
-      .limit(MAX_LEADS_PER_RUN);
-
-    if (pullErr) {
-      await ctx.log(`Pull failed: ${pullErr.message}`, { level: "error", step: "pull" });
+    if (!process.env.ANTHROPIC_API_KEY) {
+      await ctx.log("ANTHROPIC_API_KEY not set - cannot run price re-check", {
+        level: "error",
+        step: "config",
+      });
       ctx.setStatus("failure");
-      ctx.setSummary(`Pull failed: ${pullErr.message}`);
+      ctx.setSummary("ANTHROPIC_API_KEY missing");
       return;
     }
-    if (!leads || leads.length === 0) {
+
+    let quotes: QuoteRow[];
+    try {
+      quotes = await fetchExpiringMarketplaceQuotes();
+    } catch (e: any) {
+      await ctx.log(`Tenkara quote query failed: ${e.message}`, { level: "error", step: "query" });
+      ctx.setStatus("failure");
+      ctx.setSummary(`Tenkara query failed: ${e.message}`);
+      return;
+    }
+    await ctx.log(`Pulled ${quotes.length} expiring marketplace quotes`, { step: "query" });
+    if (quotes.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary("No catalog_match leads to validate.");
+      ctx.setSummary("No marketplace quotes expiring within 7 days.");
       return;
     }
-    await ctx.log(`Validating ${leads.length} catalog_match leads`, { step: "pull" });
 
-    let stillListed = 0;
-    let drifted = 0;
-    let skipped = 0;
-    let errored = 0;
-    const csvRows: ValidationRow[] = [];
+    // Build Tenkara->OA org map so findings inherit the right org_id.
+    const { data: orgRows } = await admin.from("orgs").select("id, tenkara_org_id");
+    const tenkaraOrgToOaOrg = new Map<string, string>();
+    for (const r of (orgRows ?? []) as { id: string; tenkara_org_id: string | null }[]) {
+      if (r.tenkara_org_id) tenkaraOrgToOaOrg.set(r.tenkara_org_id, r.id);
+    }
 
-    for (const row of leads as LeadRow[]) {
-      const payload = row.payload ?? {};
-      const inci = (payload.inci_name as string | undefined) ?? null;
-      const nameKey = row.material_name ?? null;
-      if (!row.supplier_id || (!inci && !nameKey)) {
-        skipped++;
+    // Skip quotes we already have a pending finding for - operators haven't acted on it yet.
+    const quoteIds = quotes.map((q) => q.id);
+    const { data: existing } = await admin
+      .from("marketplace_check_findings")
+      .select("quote_id, status")
+      .in("quote_id", quoteIds)
+      .eq("status", "pending_review");
+    const pendingFor = new Set((existing ?? []).map((r: any) => r.quote_id));
+
+    let written = 0;
+    let skippedPending = 0;
+    const counts = {
+      signal_matches_baseline: 0,
+      signal_diverges: 0,
+      no_signal_found: 0,
+      needs_review: 0,
+      link_broken: 0,
+    };
+
+    for (const q of quotes) {
+      if (pendingFor.has(q.id)) {
+        skippedPending++;
         continue;
       }
 
-      let listed: boolean;
+      let result: RecheckResult;
       try {
-        listed = await supplierStillListsMaterial(row.supplier_id, inci, nameKey);
-      } catch (e: any) {
-        errored++;
-        await ctx.log(`Tenkara query failed for lead ${row.id}: ${e.message}`, {
-          level: "warn",
-          step: "tenkara",
-          data: { lead_id: row.id },
+        result = await recheckMarketplaceQuote({
+          supplier_name: q.supplier_name,
+          material_name: q.material_name,
+          product_url: q.product_url,
+          baseline_price: q.price,
+          case_size: q.case_size,
+          unit: q.unit_of_measurement,
         });
-        continue;
+      } catch (e: any) {
+        await ctx.log(`Re-check failed for quote ${q.id}: ${e.message}`, {
+          level: "warn",
+          step: "recheck",
+          data: { quote_id: q.id, supplier: q.supplier_name, material: q.material_name },
+        });
+        result = {
+          classification: "needs_review",
+          current_price: null,
+          pack_size: null,
+          source_url: q.product_url,
+          source_citations: [],
+          notes: `Re-check failed: ${e.message}`,
+        };
       }
 
-      const nowIso = new Date().toISOString();
-      const validation = {
-        last_checked_at: nowIso,
-        last_checked_run_id: ctx.runId,
-        still_listed: listed,
-      };
+      const oaOrgId = q.tenkara_org_id ? tenkaraOrgToOaOrg.get(q.tenkara_org_id) ?? null : null;
+      const classification = classify(q.price, result.current_price, result);
+      counts[classification as keyof typeof counts]++;
 
-      // Only update if state changed — avoids touchy updated_at churn.
-      const prev = payload.catalog_validation as { still_listed?: boolean } | undefined;
-      const stateChanged = !prev || prev.still_listed !== listed;
-
-      if (listed) {
-        stillListed++;
-      } else {
-        drifted++;
-      }
-
-      csvRows.push({
-        lead_id: row.id,
-        supplier_id: row.supplier_id,
-        supplier_name: null,
-        material_name: nameKey,
-        inci,
-        still_listed: listed,
-        previous_still_listed: prev?.still_listed ?? null,
-        state_changed: stateChanged,
-        last_checked_at: nowIso,
+      const { error: insErr } = await admin.from("marketplace_check_findings").insert({
+        org_id: oaOrgId,
+        run_id: ctx.runId,
+        quote_id: q.id,
+        supplier_id: q.supplier_id,
+        supplier_name: q.supplier_name,
+        material_id: q.material_id,
+        material_name: q.material_name,
+        baseline_price: q.price,
+        current_price: result.current_price,
+        currency: "USD",
+        pack_size: result.pack_size,
+        classification,
+        source_url: result.source_url,
+        source_citations: result.source_citations,
+        notes: result.notes,
+        status: "pending_review",
       });
 
-      if (!stateChanged) {
-        // Still update the last_checked_at timestamp so we can prove the run touched it.
-        await admin
-          .from("leads_in_flight")
-          .update({
-            payload: {
-              ...payload,
-              catalog_validation: { ...validation, still_listed: listed },
-            },
-          })
-          .eq("id", row.id);
-        continue;
-      }
-
-      const newPayload = {
-        ...payload,
-        catalog_validation: validation,
-        catalog_drift: listed ? null : "no_longer_listed",
-      };
-      const { error: upErr } = await admin
-        .from("leads_in_flight")
-        .update({ payload: newPayload })
-        .eq("id", row.id);
-      if (upErr) {
-        errored++;
-        await ctx.log(`Update failed for lead ${row.id}: ${upErr.message}`, {
+      if (insErr) {
+        await ctx.log(`Insert finding failed for quote ${q.id}: ${insErr.message}`, {
           level: "error",
-          step: "update",
-          data: { lead_id: row.id },
+          step: "insert",
+          data: { quote_id: q.id },
         });
         continue;
       }
+      written++;
       await ctx.log(
-        `${listed ? "Still listed" : "Drifted"}: supplier ${row.supplier_id} × ${nameKey ?? inci}`,
-        { step: "validate", data: { lead_id: row.id, still_listed: listed } }
+        `${classification}: ${q.supplier_name} x ${q.material_name} (baseline=${q.price ?? "—"}, current=${result.current_price ?? "—"})`,
+        { step: "finding", data: { quote_id: q.id, classification } }
       );
     }
 
-    // Hydrate supplier names from Tenkara for the CSV.
-    if (csvRows.length > 0) {
-      const supplierIds = Array.from(new Set(csvRows.map((r) => r.supplier_id)));
-      try {
-        const suppliers = await tenkaraQuery<{ id: string; name: string | null }>(
-          `select id::text as id, name from public.suppliers where id = any($1::uuid[])`,
-          [supplierIds]
-        );
-        const nameById = new Map(suppliers.map((s) => [s.id, s.name]));
-        for (const r of csvRows) r.supplier_name = nameById.get(r.supplier_id) ?? null;
-      } catch (e: any) {
-        await ctx.log(`Supplier name hydration failed: ${e.message}`, { level: "warn", step: "csv" });
-      }
-    }
-
-    // Build + upload CSV. Bucket shared with Agent 02 — filename keeps it distinct.
-    if (csvRows.length > 0) {
-      try {
-        const today = new Date().toISOString().slice(0, 10);
-        const csvContent = buildCsv(csvRows);
-        const csvFilename = `${today}_marketplace_validation_${stillListed}listed_${drifted}drifted.csv`;
-        const signed = await uploadCsvAndSign({
-          filename: csvFilename,
-          content: csvContent,
-          expiresInDays: 7,
-        });
-        await ctx.log(`CSV uploaded → ${signed.signedUrl}`, { step: "csv", data: { url: signed.signedUrl } });
-        ctx.setMetadata({
-          csvSignedUrl: signed.signedUrl,
-          csvFilename,
-          csvExpiresAt: signed.expiresAt,
-        });
-      } catch (e: any) {
-        await ctx.log(`CSV upload failed: ${e.message}`, { level: "warn", step: "csv" });
-      }
-    }
-
-    ctx.setItemsProcessed(stillListed + drifted);
-    ctx.setStatus(errored > 0 && stillListed + drifted === 0 ? "failure" : errored > 0 ? "partial" : "success");
+    ctx.setItemsProcessed(written);
+    ctx.setStatus("success");
+    const interesting = counts.signal_diverges + counts.link_broken + counts.needs_review;
     ctx.setSummary(
-      `Validated ${stillListed + drifted} catalog_match leads · ${stillListed} still listed · ${drifted} drifted${skipped ? ` · ${skipped} skipped (missing fields)` : ""}${errored ? ` · ${errored} errors` : ""}`
+      `Re-checked ${written} quotes (${interesting} need review) · ` +
+        `${counts.signal_matches_baseline} unchanged · ${counts.signal_diverges} diverged · ` +
+        `${counts.no_signal_found} no signal · ${counts.needs_review} needs review · ${counts.link_broken} link broken` +
+        (skippedPending ? ` · ${skippedPending} skipped (already pending)` : "")
     );
   },
 });

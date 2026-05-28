@@ -52,14 +52,44 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
+// Pool poisoning guard: when a Vercel invocation is killed mid-query, the
+// max:1 pool's only connection stays in a hung state and the next invocation
+// reuses it and hangs again. Force-destroy the pool on any failure so the
+// next call rebuilds from scratch.
+async function destroyPool() {
+  if (!pool) return;
+  const dying = pool;
+  pool = null;
+  try { await withTimeout(dying.end(), 2_000, "pool.end"); } catch { /* best-effort */ }
+}
+
 export async function tenkaraQuery<T extends Record<string, any> = Record<string, any>>(text: string, params: any[] = []): Promise<T[]> {
   if (!pool) pool = buildPool();
-  const { rows } = await withTimeout(pool.query<T>(text, params), QUERY_TIMEOUT_MS, "tenkara query");
-  return rows;
+  try {
+    const { rows } = await withTimeout(pool.query<T>(text, params), QUERY_TIMEOUT_MS, "tenkara query");
+    return rows;
+  } catch (e) {
+    await destroyPool();
+    throw e;
+  }
 }
 
 export async function withTenkaraClient<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
   if (!pool) pool = buildPool();
-  const client = await withTimeout(pool.connect(), 8_000, "tenkara connect");
-  try { return await fn(client); } finally { client.release(); }
+  let client: PoolClient;
+  try {
+    client = await withTimeout(pool.connect(), 8_000, "tenkara connect");
+  } catch (e) {
+    await destroyPool();
+    throw e;
+  }
+  try {
+    return await fn(client);
+  } catch (e) {
+    try { client.release(true); } catch { /* ignore */ }
+    await destroyPool();
+    throw e;
+  } finally {
+    try { client.release(); } catch { /* already released on error path */ }
+  }
 }
