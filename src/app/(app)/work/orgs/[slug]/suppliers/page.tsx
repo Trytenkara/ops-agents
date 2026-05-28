@@ -1,8 +1,16 @@
+import { ListPageHeader } from "@/components/list-page-header";
+
 export default function SuppliersPage() {
   return (
-    <div className="rounded-lg border border-dashed p-12 text-center">
-      <h2 className="text-lg font-semibold">Suppliers</h2>
-      <p className="text-sm text-muted-foreground mt-1">Pulled read-only from Tenkara in Phase 2. Per-supplier rules and doc-expiry tracking live here.</p>
+    <div className="space-y-4">
+      <ListPageHeader
+        level={2}
+        title="Suppliers"
+        description="Read-only supplier view pulled from Tenkara. Per-supplier rules and doc-expiry tracking will live here."
+      />
+      <div className="rounded-lg border border-dashed p-12 text-center text-sm text-muted-foreground">
+        Not wired up yet — coming in a later phase.
+      </div>
     </div>
   );
 }

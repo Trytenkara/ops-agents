@@ -1,7 +1,7 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { queryRecentMaterials, findCandidatesForMaterial, type CandidateSupplier, type MaterialRow } from "./sql";
-import { scoutSuppliersForMaterial, scoreScoutConfidence, type ScoutSupplier } from "./scout";
+import { scoutSuppliersForMaterial, scoreScoutConfidence, scoutCompleteness, type ScoutSupplier } from "./scout";
 
 // v1 trims (vs. full spec):
 //   - existing-DB only mode. BrowserBase external discovery is gated on
@@ -15,7 +15,7 @@ import { scoutSuppliersForMaterial, scoreScoutConfidence, type ScoutSupplier } f
 // logic. Production cron stays at the 4h cadence the spec asks for.
 const DEFAULT_LOOKBACK_HOURS = 4;
 const RECENT_MIRROR_DAYS = 90;
-const MAX_NEW_LEADS_PER_RUN = 50;
+const MAX_NEW_LEADS_PER_RUN = 120;  // expansive runs: up to ~50 scout leads/material across marketplace + non-marketplace, plus graph leads
 
 function envOverrideLookbackHours(): number | null {
   const v = process.env.LEAD_CREATOR_LOOKBACK_HOURS;
@@ -311,11 +311,21 @@ registerAgent({
             source: "ai_discovery" as const,
             payload: {
               inci_name: material.inci,
+              trade_name: s.trade_name,
               supplier_website: s.url,
               supplier_contact_email: s.email,
+              supplier_phone: s.phone,
               supplier_country: s.country,
+              supplier_role: s.role,             // Manufacturer / Distributor / Reseller / Trader / Marketplace
+              hq_address: s.hq_address,
+              supplier_background: s.supplier_background,
+              pack_sizes_pricing: s.pack_sizes_pricing,
+              grades_offered: s.grades_offered,
+              certifications: s.certifications,
+              moq: s.moq,
               site_type: s.site_type,            // M / MS / N — surfaced in UI
               confidence_hint: s.confidence_hint,
+              completeness_score: scoutCompleteness(s),
               source_url: s.url,
               source_citations: s.source_citations,
               scout_notes: s.notes,

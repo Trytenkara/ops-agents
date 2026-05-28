@@ -8,7 +8,7 @@ export function LeadsExportCsvButton({
 }: {
   disabled?: boolean;
   count: number;
-  filters: { stage?: string; material?: string; source?: string; status?: string; drift?: string; org?: string };
+  filters: { stage?: string; material?: string; source?: string; status?: string; drift?: string; org?: string; channel?: string; priced?: string; sort?: string };
 }) {
   function download() {
     const sp = new URLSearchParams();

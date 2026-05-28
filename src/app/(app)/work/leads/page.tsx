@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -10,6 +9,7 @@ import { LeadRowActions } from "@/components/lead-row-actions";
 import { LeadsExportCsvButton } from "@/components/leads-export-csv-button";
 import { LeadsFilterBar } from "@/components/leads-filter-bar";
 import { PaginationBar } from "@/components/pagination-bar";
+import { ListPageHeader, FilterChip, FilterRow } from "@/components/list-page-header";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +20,18 @@ const STAGES = ["raw", "enriched", "ready_for_outreach", "ready_for_approval", "
 type Stage = (typeof STAGES)[number];
 
 const SOURCES = ["ai_discovery", "existing_db", "marketplace"] as const;
+// Supplier channel (payload.site_type): non-marketplace (RFQ-only) vs the two
+// marketplace flavors. Lets ops split the manufacturer-direct list from the
+// marketplace/retail list when triaging a long scout batch.
+const CHANNELS = [
+  { value: "N", label: "Non-marketplace" },
+  { value: "MS", label: "Marketplace (signup)" },
+  { value: "M", label: "Marketplace/retail" },
+] as const;
+const SORTS = [
+  { value: "confidence", label: "Confidence" },
+  { value: "completeness", label: "Ready to RFQ" },
+] as const;
 const PAGE_SIZE = 50;
 
 export default async function LeadsPage({
@@ -32,6 +44,9 @@ export default async function LeadsPage({
     source?: string;
     status?: string;
     org?: string;
+    channel?: string;
+    sort?: string;
+    priced?: string;
     page?: string;
   };
 }) {
@@ -46,6 +61,11 @@ export default async function LeadsPage({
   const source = (searchParams.source ?? "").trim();
   const statusFilter = (searchParams.status ?? "").trim();
   const orgSlug = (searchParams.org ?? "").trim();
+  const channel = (CHANNELS as readonly { value: string }[]).some((c) => c.value === searchParams.channel)
+    ? (searchParams.channel as string)
+    : "";
+  const sort = searchParams.sort === "completeness" ? "completeness" : "confidence";
+  const pricedOnly = searchParams.priced === "1";
   const pageRaw = parseInt(searchParams.page ?? "1", 10);
   const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
 
@@ -76,6 +96,8 @@ export default async function LeadsPage({
       out = out.or(`material_name.ilike.%${esc}%,payload->>inci_name.ilike.%${esc}%`);
     }
     if (source) out = out.eq("source", source);
+    if (channel) out = out.eq("payload->>site_type", channel);
+    if (pricedOnly) out = out.not("payload->>pack_sizes_pricing", "is", null);
     return out;
   }
 
@@ -90,13 +112,19 @@ export default async function LeadsPage({
   const fromIdx = (safePage - 1) * PAGE_SIZE;
   const toIdx = fromIdx + PAGE_SIZE - 1;
 
-  const listQuery = applyFilters(
+  let listQuery = applyFilters(
     admin
       .from("leads_in_flight")
       .select(
         "id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)"
       )
-  )
+  );
+  if (sort === "completeness") {
+    // completeness_score lives in payload (no top-level column); JSON-path
+    // order sorts these consistently since values are all 0.xx or 1.
+    listQuery = listQuery.order("payload->>completeness_score", { ascending: false, nullsFirst: false });
+  }
+  listQuery = listQuery
     .order("confidence_score", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
     .range(fromIdx, toIdx);
@@ -112,99 +140,94 @@ export default async function LeadsPage({
     ...(source ? { source } : {}),
     ...(statusFilter ? { status: statusFilter } : {}),
     ...(orgSlug ? { org: orgSlug } : {}),
+    ...(channel ? { channel } : {}),
+    ...(sort !== "confidence" ? { sort } : {}),
+    ...(pricedOnly ? { priced: "1" } : {}),
   };
   const baseQs = new URLSearchParams(baseFilters as Record<string, string>).toString();
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="font-serif text-3xl tracking-tight">Leads in flight</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Candidate suppliers staged by Agent 03 (Lead Creator) and other lead agents. Top of the list = highest confidence.
-          </p>
-        </div>
-        <LeadsExportCsvButton
-          disabled={total === 0}
-          count={total}
-          filters={baseFilters}
-        />
-      </div>
+      <ListPageHeader
+        title="Leads in flight"
+        description="Candidate suppliers staged by Agent 03 (Lead Creator) and other lead agents. Top of the list = highest confidence."
+        actions={<LeadsExportCsvButton disabled={total === 0} count={total} filters={baseFilters} />}
+        explainer={
+          <>
+            <span className="font-medium text-foreground">Agent-written rows, human-gated flow.</span>{" "}
+            Rows are created by Agent 03 (Lead Creator) and processed by Agent 06 (Enrichment).
+            Use <span className="font-medium text-foreground">Promote</span> to hand a lead to Agent 04 (Outreach) — moves it to <code>ready_for_outreach</code>.
+            Use <span className="font-medium text-foreground">Drop</span> when a lead shouldn&apos;t be pursued — moves it to <code>terminal</code> with the reason recorded.
+            Promotable from <code>enriched</code>, or from <code>raw</code> when enrichment was blocked but you want to contact anyway.
+          </>
+        }
+        filters={
+          <>
+            <LeadsFilterBar orgs={orgOptions} selectedOrgId={orgSlug} material={material} />
 
-      <div className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">Agent-written rows, human-gated flow.</span>{" "}
-        Rows are created by Agent 03 (Lead Creator) and processed by Agent 06 (Enrichment).
-        Use <span className="font-medium text-foreground">Promote</span> to hand a lead to Agent 04 (Outreach) — moves it to <code>ready_for_outreach</code>.
-        Use <span className="font-medium text-foreground">Drop</span> when a lead shouldn&apos;t be pursued — moves it to <code>terminal</code> with the reason recorded.
-        Promotable from <code>enriched</code>, or from <code>raw</code> when enrichment was blocked but you want to contact anyway.
-      </div>
+            <FilterRow label="Stage:">
+              {STAGES.map((s) => (
+                <FilterChip key={s} href={buildHref({ ...baseFilters, stage: s })} active={s === stage}>
+                  {s}
+                </FilterChip>
+              ))}
+            </FilterRow>
 
-      <LeadsFilterBar orgs={orgOptions} selectedOrgId={orgSlug} material={material} />
+            <FilterRow label="Source:">
+              <FilterChip href={buildHref({ ...baseFilters, source: undefined })} active={!source}>
+                all
+              </FilterChip>
+              {SOURCES.map((s) => (
+                <FilterChip key={s} href={buildHref({ ...baseFilters, source: s })} active={s === source}>
+                  {s}
+                </FilterChip>
+              ))}
+              <FilterChip
+                href={buildHref({ ...baseFilters, drift: driftOnly ? undefined : "1" })}
+                active={driftOnly}
+                tone="amber"
+                title="Show only leads where Agent 05 flagged the catalog drift (supplier dropped material)."
+              >
+                {driftOnly ? "✓ catalog drift" : "+ catalog drift"}
+              </FilterChip>
+            </FilterRow>
 
-      <div className="flex flex-wrap gap-2 text-sm">
-        <span className="text-xs text-muted-foreground self-center mr-1">Stage:</span>
-        {STAGES.map((s) => (
-          <Link
-            key={s}
-            href={buildHref({ ...baseFilters, stage: s })}
-            className={
-              "rounded-full px-3 py-1 border " +
-              (s === stage
-                ? "bg-primary text-primary-foreground border-primary"
-                : "border-border text-muted-foreground hover:text-foreground")
-            }
-          >
-            {s}
-          </Link>
-        ))}
-      </div>
+            <FilterRow label="Channel:">
+              <FilterChip href={buildHref({ ...baseFilters, channel: undefined })} active={!channel}>
+                all
+              </FilterChip>
+              {CHANNELS.map((c) => (
+                <FilterChip key={c.value} href={buildHref({ ...baseFilters, channel: c.value })} active={c.value === channel}>
+                  {c.label}
+                </FilterChip>
+              ))}
+              <FilterChip
+                href={buildHref({ ...baseFilters, priced: pricedOnly ? undefined : "1" })}
+                active={pricedOnly}
+                tone="amber"
+                title="Show only leads where the scanner captured published pack sizes / pricing."
+              >
+                {pricedOnly ? "✓ has pricing" : "+ has pricing"}
+              </FilterChip>
+            </FilterRow>
 
-      <div className="flex flex-wrap gap-2 text-sm">
-        <span className="text-xs text-muted-foreground self-center mr-1">Source:</span>
-        <Link
-          href={buildHref({ ...baseFilters, source: undefined })}
-          className={
-            "rounded-full px-3 py-1 border " +
-            (!source
-              ? "bg-primary text-primary-foreground border-primary"
-              : "border-border text-muted-foreground hover:text-foreground")
-          }
-        >
-          all
-        </Link>
-        {SOURCES.map((s) => (
-          <Link
-            key={s}
-            href={buildHref({ ...baseFilters, source: s })}
-            className={
-              "rounded-full px-3 py-1 border " +
-              (s === source
-                ? "bg-primary text-primary-foreground border-primary"
-                : "border-border text-muted-foreground hover:text-foreground")
-            }
-          >
-            {s}
-          </Link>
-        ))}
-        <Link
-          href={buildHref({ ...baseFilters, drift: driftOnly ? undefined : "1" })}
-          className={
-            "rounded-full px-3 py-1 border ml-auto " +
-            (driftOnly
-              ? "bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/40"
-              : "border-border text-muted-foreground hover:text-foreground")
-          }
-          title="Show only leads where Agent 05 flagged the catalog drift (supplier dropped material)."
-        >
-          {driftOnly ? "✓ catalog drift" : "+ catalog drift"}
-        </Link>
-      </div>
+            <FilterRow label="Sort:">
+              {SORTS.map((s) => (
+                <FilterChip key={s.value} href={buildHref({ ...baseFilters, sort: s.value })} active={s.value === sort}>
+                  {s.label}
+                </FilterChip>
+              ))}
+            </FilterRow>
+          </>
+        }
+      />
 
       <Table>
         <TableHeader>
           <TableRow>
             <TableHead>Supplier</TableHead>
             <TableHead>Material</TableHead>
+            <TableHead>Pricing / MOQ</TableHead>
             <TableHead>Signal</TableHead>
             <TableHead>Confidence</TableHead>
             <TableHead>Source</TableHead>
@@ -222,6 +245,10 @@ export default async function LeadsPage({
             const isScout = r.source === "ai_discovery";
             const sourceUrl = (r.payload?.source_url ?? r.payload?.supplier_website) as string | undefined;
             const siteType = r.payload?.site_type as "M" | "MS" | "N" | undefined;
+            const pricing = r.payload?.pack_sizes_pricing as string | undefined;
+            const moq = r.payload?.moq as string | undefined;
+            const completeness =
+              r.payload?.completeness_score != null ? Number(r.payload.completeness_score) : null;
             const citations = Array.isArray(r.payload?.source_citations) ? r.payload.source_citations : [];
             return (
               <TableRow key={r.id}>
@@ -241,8 +268,10 @@ export default async function LeadsPage({
                       </span>
                     )}
                   </div>
-                  {r.payload?.supplier_country && (
-                    <div className="text-xs text-muted-foreground">{r.payload.supplier_country}</div>
+                  {(r.payload?.supplier_country || r.payload?.supplier_role) && (
+                    <div className="text-xs text-muted-foreground">
+                      {[r.payload?.supplier_role, r.payload?.supplier_country].filter(Boolean).join(" · ")}
+                    </div>
                   )}
                   {sourceUrl && (
                     <a
@@ -294,6 +323,14 @@ export default async function LeadsPage({
                     </span>
                   )}
                 </TableCell>
+                <TableCell className="align-top text-xs max-w-[26ch]">
+                  {pricing ? (
+                    <span className="text-foreground">{pricing}</span>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                  {moq && <div className="text-muted-foreground mt-0.5">MOQ: {moq}</div>}
+                </TableCell>
                 <TableCell className="text-muted-foreground text-xs align-top">
                   {signal ? (
                     <>
@@ -304,7 +341,17 @@ export default async function LeadsPage({
                     <code className="text-yellow-700 dark:text-yellow-400">scout</code>
                   ) : "—"}
                 </TableCell>
-                <TableCell className="align-top"><ConfidenceBadge value={conf} /></TableCell>
+                <TableCell className="align-top">
+                  <ConfidenceBadge value={conf} />
+                  {completeness != null && (
+                    <div
+                      className="text-[10px] text-muted-foreground mt-0.5"
+                      title="Share of RFQ fields the scanner captured (pricing, contact, MOQ, grades, certs, HQ)"
+                    >
+                      {Math.round(completeness * 100)}% ready
+                    </div>
+                  )}
+                </TableCell>
                 <TableCell className="text-muted-foreground align-top">{r.source ?? "—"}</TableCell>
                 <TableCell className="text-muted-foreground">
                   {r.orgs?.name ?? <span className="italic text-xs">cross-org</span>}
@@ -343,7 +390,7 @@ export default async function LeadsPage({
           })}
           {rowCount === 0 && (
             <TableRow>
-              <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
+              <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
                 No leads match these filters.
               </TableCell>
             </TableRow>
@@ -369,6 +416,9 @@ function buildHref(p: {
   source?: string;
   status?: string;
   org?: string;
+  channel?: string;
+  sort?: string;
+  priced?: string;
 }) {
   const sp = new URLSearchParams();
   if (p.stage) sp.set("stage", p.stage);
@@ -377,6 +427,9 @@ function buildHref(p: {
   if (p.source) sp.set("source", p.source);
   if (p.status) sp.set("status", p.status);
   if (p.org) sp.set("org", p.org);
+  if (p.channel) sp.set("channel", p.channel);
+  if (p.sort && p.sort !== "confidence") sp.set("sort", p.sort);
+  if (p.priced) sp.set("priced", p.priced);
   return `/work/leads?${sp.toString()}`;
 }
 

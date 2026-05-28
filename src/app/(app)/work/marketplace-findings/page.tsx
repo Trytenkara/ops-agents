@@ -8,6 +8,7 @@ import { relativeTime } from "@/lib/utils";
 import { getAssignedOrgIds, seesAllOrgs } from "@/lib/org-access";
 import { MarketplaceFindingActions } from "@/components/marketplace-finding-actions";
 import { ExportApprovedCsvButton } from "@/components/marketplace-export-csv-button";
+import { ListPageHeader } from "@/components/list-page-header";
 
 export const dynamic = "force-dynamic";
 
@@ -90,26 +91,21 @@ export default async function MarketplaceFindingsPage({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="font-serif text-3xl tracking-tight">Marketplace findings</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Daily price re-check on Tenkara marketplace quotes expiring within 7 days. Highest % change first.
-            Approve to queue for the next CSV export; ops uploads that CSV to Tenkara manually.
-          </p>
-        </div>
-        <ExportApprovedCsvButton disabled={!approvedCount} count={approvedCount ?? 0} />
-      </div>
-
-      <div className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">Agent 05 (Marketplace Price Re-check)</span> writes one row per marketplace quote it re-checked.
-        <span className="font-medium text-foreground"> Approve</span> queues a finding for the next CSV download.
-        <span className="font-medium text-foreground"> Dismiss</span> marks it as noise / false-positive.
-        Findings never write back to Tenkara automatically — your safety floor.
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        {STATUSES.map((s) => (
+      <ListPageHeader
+        title="Marketplace findings"
+        description="Daily price re-check on Tenkara marketplace quotes expiring within 7 days. Highest % change first. Approve to queue for the next CSV export; ops uploads that CSV to Tenkara manually."
+        actions={<ExportApprovedCsvButton disabled={!approvedCount} count={approvedCount ?? 0} />}
+        explainer={
+          <>
+            <span className="font-medium text-foreground">Agent 05 (Marketplace Price Re-check)</span> writes one row per marketplace quote it re-checked.
+            <span className="font-medium text-foreground"> Approve</span> queues a finding for the next CSV download.
+            <span className="font-medium text-foreground"> Dismiss</span> marks it as noise / false-positive.
+            Findings never write back to Tenkara automatically — your safety floor.
+          </>
+        }
+        filters={
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            {STATUSES.map((s) => (
           <Link
             key={s}
             href={{ pathname: "/work/marketplace-findings", query: { status: s, ...(supplierFilter ? { supplier: supplierFilter } : {}), ...(orgFilter ? { org: orgFilter } : {}) } }}
@@ -155,7 +151,9 @@ export default async function MarketplaceFindingsPage({
             {sn}
           </Link>
         ))}
-      </div>
+          </div>
+        }
+      />
 
       <Table>
         <TableHeader>

@@ -27,6 +27,8 @@ export async function GET(request: NextRequest) {
   const source = (sp.get("source") ?? "").trim();
   const status = (sp.get("status") ?? "").trim();
   const orgSlug = (sp.get("org") ?? "").trim();
+  const channel = (sp.get("channel") ?? "").trim();
+  const pricedOnly = sp.get("priced") === "1";
 
   const admin = createAdminClient();
   const assigned = await getAssignedOrgIds(session);
@@ -68,32 +70,44 @@ export async function GET(request: NextRequest) {
     q = q.or(`material_name.ilike.%${esc}%,payload->>inci_name.ilike.%${esc}%`);
   }
   if (source) q = q.eq("source", source);
+  if (channel === "M" || channel === "MS" || channel === "N") q = q.eq("payload->>site_type", channel);
+  if (pricedOnly) q = q.not("payload->>pack_sizes_pricing", "is", null);
 
   const { data: rows, error } = await q;
   if (error) return new NextResponse(error.message, { status: 500 });
 
+  // Column order mirrors Ben's "Vita Organica – Supplier Sourcing" sheet so the
+  // export drops into the same workflow: material → supplier identity → the
+  // actionable RFQ fields (pricing, contact, MOQ, grades, certs) → provenance.
   const headers = [
     "id",
     "org_slug",
     "org_name",
-    "supplier_name",
-    "supplier_country",
-    "supplier_website",
-    "supplier_contact_email",
-    "supplier_phone",
     "material_name",
     "inci_name",
+    "trade_name",
+    "supplier_name",
+    "role",
+    "site_type",
+    "country",
+    "listing_url",
+    "pack_sizes_pricing",
+    "sales_email",
+    "sales_phone",
+    "hq_address",
+    "supplier_background",
+    "grades_offered",
+    "certifications",
+    "moq",
     "stage",
     "status",
     "source",
     "signal",
     "signal_count",
-    "site_type",
     "confidence_score",
     "completeness_score",
-    "source_url",
     "source_citations",
-    "scout_notes",
+    "notes",
     "catalog_drift",
     "enrichment_blocked_reason",
     "drop_reason",
@@ -110,22 +124,29 @@ export async function GET(request: NextRequest) {
         r.id,
         r.orgs?.slug ?? null,
         r.orgs?.name ?? null,
-        r.supplier_name,
-        p.supplier_country ?? null,
-        p.supplier_website ?? p.source_url ?? null,
-        p.supplier_contact_email ?? null,
-        p.supplier_phone ?? null,
         r.material_name,
         p.inci_name ?? null,
+        p.trade_name ?? null,
+        r.supplier_name,
+        p.supplier_role ?? null,
+        p.site_type ?? null,
+        p.supplier_country ?? null,
+        p.supplier_website ?? p.source_url ?? null,
+        p.pack_sizes_pricing ?? null,
+        p.supplier_contact_email ?? null,
+        p.supplier_phone ?? null,
+        p.hq_address ?? null,
+        p.supplier_background ?? null,
+        p.grades_offered ?? null,
+        p.certifications ?? null,
+        p.moq ?? null,
         r.stage,
         r.status,
         r.source,
         p.signal ?? null,
         p.signal_count ?? null,
-        p.site_type ?? null,
         r.confidence_score,
         p.completeness_score ?? null,
-        p.source_url ?? null,
         citations.join("; ") || null,
         p.scout_notes ?? p.scout_rationale ?? null,
         p.catalog_drift ?? null,
