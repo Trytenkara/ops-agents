@@ -55,12 +55,12 @@ export function Shell({
           </Link>
           <div className="flex flex-wrap gap-1">
             {session.roles.map((r) => (
-              <span key={r} className={cn("inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide whitespace-nowrap", ROLE_CHIP[r])}>
+              <span key={r} className={cn("inline-flex items-center justify-center text-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide leading-tight", ROLE_CHIP[r])}>
                 {roleLabel(r)}
               </span>
             ))}
             {session.status === "out_of_office" && (
-              <span className="inline-flex items-center rounded-full bg-highlight px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide whitespace-nowrap">OOO</span>
+              <span className="inline-flex items-center justify-center text-center rounded-full bg-highlight px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide leading-tight">OOO</span>
             )}
           </div>
           <SignOutButton />

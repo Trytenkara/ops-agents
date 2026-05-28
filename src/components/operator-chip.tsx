@@ -20,7 +20,7 @@ export function OperatorChip({ name, email, role, size = "sm" }: OperatorChipPro
       {role && (
         <span
           className={cn(
-            "inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide whitespace-nowrap",
+            "inline-flex items-center justify-center text-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide leading-tight",
             ROLE_CHIP[(role as AppRole)] ?? "bg-secondary text-secondary-foreground"
           )}
         >
