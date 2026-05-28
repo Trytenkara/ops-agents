@@ -6,6 +6,7 @@ import { relativeTime } from "@/lib/utils";
 import { OperatorChip } from "@/components/operator-chip";
 import { operatorRoles, primaryRole } from "@/lib/operator";
 import { CaseResolve } from "@/components/case-resolve";
+import { ListPageHeader } from "@/components/list-page-header";
 
 export const dynamic = "force-dynamic";
 
@@ -31,16 +32,16 @@ export default async function CasesPage({ params }: { params: { slug: string } }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="font-serif text-2xl">Cases</h2>
-        <p className="text-sm text-muted-foreground mt-1">
-          Stale leads escalated by Agent 07 — supplier outreach that's been active &gt;14d. Pick a case, take the recommended action in Missive or off-platform, and resolve.
-        </p>
-      </div>
-
-      <div className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">Agent 07 (Escalation)</span> opens these when an in-flight lead crosses 14 days without resolution. The assigned operator is the org's primary (or backup if OOO).
-      </div>
+      <ListPageHeader
+        level={2}
+        title="Cases"
+        description="Stale leads escalated by Agent 07 — supplier outreach that's been active >14d. Pick a case, take the recommended action in Missive or off-platform, and resolve."
+        explainer={
+          <>
+            <span className="font-medium text-foreground">Agent 07 (Escalation)</span> opens these when an in-flight lead crosses 14 days without resolution. The assigned operator is the org&apos;s primary (or backup if OOO).
+          </>
+        }
+      />
 
       <Table>
         <TableHeader>

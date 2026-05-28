@@ -6,6 +6,7 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@
 import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/lib/utils";
 import { getAssignedOrgIds } from "@/lib/org-access";
+import { ListPageHeader } from "@/components/list-page-header";
 
 export const dynamic = "force-dynamic";
 
@@ -32,15 +33,16 @@ export default async function ExportsRollup() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="font-serif text-3xl tracking-tight">Exports — last 30 days</h1>
-        <p className="text-sm text-muted-foreground mt-1">Every CSV-bound approval across all orgs. Re-download here if needed.</p>
-      </div>
-
-      <div className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">Agent-prepared after approval.</span>{" "}
-        CSVs are assembled by Agent 11 (Lead Scanner CSV Push) once a human approves the underlying batch. Uploads to Tenkara prod remain manual.
-      </div>
+      <ListPageHeader
+        title="Exports — last 30 days"
+        description="Every CSV-bound approval across all orgs. Re-download here if needed."
+        explainer={
+          <>
+            <span className="font-medium text-foreground">Agent-prepared after approval.</span>{" "}
+            CSVs are assembled by Agent 11 (Lead Scanner CSV Push) once a human approves the underlying batch. Uploads to Tenkara prod remain manual.
+          </>
+        }
+      />
       <Table>
         <TableHeader>
           <TableRow>
