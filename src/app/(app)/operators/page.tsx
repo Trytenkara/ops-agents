@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { OperatorsTable } from "@/components/operators-table";
+import { PageExplainer } from "@/components/page-explainer";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +29,10 @@ export default async function OperatorsPage() {
           Manage who has access to Tackle Box, what role they have, and which orgs they work on.
         </p>
       </div>
+      <PageExplainer tag="Access control.">
+        Each operator's role determines what they can do; org assignments determine which client orgs they can see.
+        Admins, Lead Operators and Monitors see every org; Operators and Account Managers see only their assigned orgs.
+      </PageExplainer>
       <OperatorsTable
         actor={{ id: session.userId, roles: session.roles }}
         users={(users ?? []) as any}

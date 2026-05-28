@@ -2,6 +2,7 @@ import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { uploadCsvAndSign } from "@/lib/storage";
 import { postSlackMessage } from "@/lib/slack";
+import { alertExportFailed72h } from "@/lib/safety-alerts";
 import { buildSupplierCsv, normalizeSupplierKey, type LeadRow } from "./csv-builder";
 
 // Andrew (Tenkara eng) Slack DM. The bot↔Andrew DM was opened via
@@ -26,6 +27,29 @@ registerAgent({
   description: "Daily per-supplier CSV handoff to Andrew.",
   async run(ctx) {
     const admin = createAdminClient();
+
+    // 0. Sweep "sent" exports older than 72h that Andrew never acked → mark failed + alert Sam.
+    const failCutoff = new Date(Date.now() - 72 * 3600 * 1000).toISOString();
+    const { data: stale } = await admin
+      .from("lead_scanner_exports")
+      .select("id, supplier_name, supplier_id, generated_at")
+      .eq("status", "sent")
+      .lt("generated_at", failCutoff);
+    if (stale && stale.length > 0) {
+      await admin
+        .from("lead_scanner_exports")
+        .update({ status: "failed", error: "andrew_no_ack_72h" })
+        .in("id", stale.map((s: any) => s.id));
+      for (const s of stale as any[]) {
+        alertExportFailed72h({
+          exportId: s.id,
+          supplierName: s.supplier_name,
+          supplierId: s.supplier_id,
+          generatedAt: s.generated_at,
+        }).catch((e) => console.error("[safety-alerts] export 72h alert failed:", e));
+      }
+      await ctx.log(`Marked ${stale.length} stale 'sent' exports as failed (Andrew no-ack 72h).`, { step: "no_ack_sweep" });
+    }
 
     // 1. Pull dropped/terminal leads from leads_in_flight.
     const { data: leadsRaw, error: leadsErr } = await admin

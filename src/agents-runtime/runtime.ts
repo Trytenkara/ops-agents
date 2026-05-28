@@ -1,5 +1,6 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAgentDefinition, type RuntimeContext, type AgentDefinition } from "./registry";
+import { alertErrorEvent, alertRunFinished } from "@/lib/safety-alerts";
 
 // Side-effect import: registers all embedded agents at module load. Must come
 // AFTER the registry import so the order is deterministic.
@@ -99,13 +100,25 @@ export async function runClaimed(claim: RunClaim): Promise<void> {
     agentId: claim.agentId,
     agentSlug: claim.agentSlug,
     log: async (message, o) => {
+      const level = o?.level ?? "info";
       await admin.from("agent_run_events").insert({
         run_id: claim.runId,
-        level: o?.level ?? "info",
+        level,
         step: o?.step ?? null,
         message,
         data: o?.data ?? null,
       });
+      if (level === "error") {
+        // Debounced inside the alerter; safe to fire on every error event.
+        alertErrorEvent({
+          agentId: claim.agentId,
+          agentSlug: claim.agentSlug,
+          agentName: claim.agentName,
+          runId: claim.runId,
+          message,
+          step: o?.step ?? null,
+        }).catch((e) => console.error("[safety-alerts] alertErrorEvent failed:", e));
+      }
     },
     setSummary: (s) => { finalSummary = s; },
     setItemsProcessed: (n) => { itemsProcessed = n; },
@@ -138,6 +151,17 @@ export async function runClaimed(claim: RunClaim): Promise<void> {
     .from("agents")
     .update({ locked_until: null, status: "idle", current_run_id: null, last_run_at: new Date().toISOString() })
     .eq("id", claim.agentId);
+
+  if (finalStatus !== "success") {
+    alertRunFinished({
+      agentId: claim.agentId,
+      agentSlug: claim.agentSlug,
+      agentName: claim.agentName,
+      runId: claim.runId,
+      status: finalStatus,
+      summary: finalSummary,
+    }).catch((e) => console.error("[safety-alerts] alertRunFinished failed:", e));
+  }
 }
 
 // Convenience for callers that want claim+run in one shot (cron, tests).

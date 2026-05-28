@@ -3,17 +3,29 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@
 import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/lib/utils";
 import Link from "next/link";
+import { getSession } from "@/lib/auth";
+import { redirect } from "next/navigation";
+import { getAssignedOrgIds } from "@/lib/org-access";
+import { DraftSignals } from "@/components/draft-signals";
 
 export const dynamic = "force-dynamic";
 
 export default async function CrossOrgPage() {
+  const session = (await getSession())!;
+  const assigned = await getAssignedOrgIds(session);
+  // Account-managers-only land here with assigned=[] when they have no orgs.
+  // Either way, narrow the query before hitting the admin client.
+  if (assigned && assigned.length === 0) redirect("/work");
+
   const admin = createAdminClient();
-  const { data: drafts } = await admin
+  let q = admin
     .from("draft_references")
-    .select("id, subject, status, created_at, orgs(slug, name)")
+    .select("id, subject, status, created_at, org_id, metadata, orgs(slug, name)")
     .eq("status", "staged")
     .order("created_at", { ascending: false })
     .limit(50);
+  if (assigned) q = q.in("org_id", assigned);
+  const { data: drafts } = await q;
 
   return (
     <div className="space-y-4">
@@ -39,7 +51,12 @@ export default async function CrossOrgPage() {
         <TableBody>
           {(drafts ?? []).map((d: any) => (
             <TableRow key={d.id}>
-              <TableCell className="font-medium">{d.subject ?? "(no subject)"}</TableCell>
+              <TableCell className="font-medium">
+                <div className="flex flex-col gap-1">
+                  <span>{d.subject ?? "(no subject)"}</span>
+                  <DraftSignals metadata={d.metadata} />
+                </div>
+              </TableCell>
               <TableCell>{d.orgs?.name ?? "—"}</TableCell>
               <TableCell><Badge variant="warn">{d.status}</Badge></TableCell>
               <TableCell className="text-muted-foreground">{relativeTime(d.created_at)}</TableCell>

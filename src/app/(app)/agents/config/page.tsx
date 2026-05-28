@@ -6,6 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { StampToggle, RotateKeyButton } from "@/components/agent-config-controls";
 import { RunNowButton } from "@/components/run-now-button";
 import { relativeTime } from "@/lib/utils";
+import { PageExplainer } from "@/components/page-explainer";
+import { agentNumberFromSlug } from "@/lib/agents-sort";
 
 export const dynamic = "force-dynamic";
 
@@ -14,10 +16,14 @@ export default async function AgentConfigPage() {
   if (!canSeeAgentTab(session)) redirect("/");
 
   const admin = createAdminClient();
-  const { data: agents } = await admin
+  const { data: agentsRaw } = await admin
     .from("agents")
-    .select("id, slug, name, description, status, runtime, training_wheels_mode, stamp_of_approval, prompt_version, schedule_cron, api_key_prefix, last_run_at, current_run_id, locked_until")
-    .order("created_at");
+    .select("id, slug, name, description, status, runtime, training_wheels_mode, stamp_of_approval, prompt_version, schedule_cron, api_key_prefix, last_run_at, current_run_id, locked_until");
+  // Sort by the leading number in the slug (agent-01-…, agent-02-…) so the
+  // list reads 01..11 left-to-right regardless of registration order.
+  const agents = [...(agentsRaw ?? [])].sort(
+    (a: any, b: any) => agentNumberFromSlug(a.slug) - agentNumberFromSlug(b.slug)
+  );
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -25,8 +31,12 @@ export default async function AgentConfigPage() {
         <h1 className="font-serif text-3xl tracking-tight">Agent configuration</h1>
         <p className="text-sm text-muted-foreground mt-1">Per-agent settings, runtime, and the stamp-of-approval gate.</p>
       </div>
+      <PageExplainer tag="Per-agent controls.">
+        Training wheels stage drafts for review instead of acting directly. The stamp-of-approval gate must be on before an agent can run on cron.
+        See <a href="/how-it-works" className="underline hover:text-foreground">How Tackle Box works</a> for what each agent does.
+      </PageExplainer>
       <div className="grid gap-4">
-        {(agents ?? []).map((a: any) => {
+        {agents.map((a: any) => {
           const isRunning = a.locked_until && new Date(a.locked_until) > new Date();
           return (
           <Card key={a.id} className="tb-surface shadow-none">

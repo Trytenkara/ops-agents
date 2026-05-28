@@ -49,6 +49,14 @@ const SAFETY_BANNED_KEYS = new Set(["send", "from_field"]);
 function assertNoSendOrFromField(input: Record<string, unknown>) {
   for (const k of Object.keys(input)) {
     if (SAFETY_BANNED_KEYS.has(k)) {
+      const detail = `Banned field "${k}" present in draft payload (subject="${(input.subject as string) ?? ""}").`;
+      // Fire-and-forget Slack DM; this should never happen, so loud failure mode is intentional.
+      void (async () => {
+        try {
+          const { alertMissiveFromField } = await import("@/lib/safety-alerts");
+          await alertMissiveFromField(detail);
+        } catch (e) { console.error("[safety-alerts] from_field alert failed:", e); }
+      })();
       throw new Error(
         `[missive client safety] Refusing to POST a draft that includes "${k}". ` +
         `from_field must remain empty (operator picks the sender) and send must never be true (operator clicks Send).`

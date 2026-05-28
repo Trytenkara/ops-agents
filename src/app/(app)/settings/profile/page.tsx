@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { OooToggle } from "@/components/ooo-toggle";
 import { OperatorChip } from "@/components/operator-chip";
+import { ChangePasswordForm } from "@/components/change-password-form";
 import { rolesGlossary } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
@@ -81,6 +82,16 @@ export default async function ProfilePage() {
         </CardHeader>
         <CardContent>
           <OooToggle initialStatus={session.status} />
+        </CardContent>
+      </Card>
+
+      <Card className="tb-surface shadow-none">
+        <CardHeader>
+          <CardTitle className="text-base">Password</CardTitle>
+          <CardDescription>Set or change the password you'll use on the sign-in screen.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ChangePasswordForm />
         </CardContent>
       </Card>
 

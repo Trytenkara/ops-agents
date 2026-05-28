@@ -12,3 +12,4 @@ import "./marketplace-validation";
 import "./escalation";
 import "./outreach-qa";
 import "./email-scanner";
+import "./fleet-summary";

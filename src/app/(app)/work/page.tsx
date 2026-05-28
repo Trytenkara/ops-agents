@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { relativeTime } from "@/lib/utils";
 import { resolveSupplierNames, resolveMaterialNames } from "@/lib/tenkara-names";
+import { PageExplainer } from "@/components/page-explainer";
 
 export const dynamic = "force-dynamic";
 
@@ -70,6 +71,11 @@ export default async function TodayInboxPage() {
             : "Drafts, cases, and escalations that need a human."}
         </p>
       </header>
+
+      <PageExplainer tag="Your inbox.">
+        Agents stage work here for human review. Nothing is sent until you click Send in Missive.
+        See <a href="/how-it-works" className="underline hover:text-foreground">How Tackle Box works</a> for the full pipeline.
+      </PageExplainer>
 
       <Card className="tb-surface shadow-none">
         <CardHeader>

@@ -5,6 +5,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/lib/utils";
+import { getAssignedOrgIds, seesAllOrgs } from "@/lib/org-access";
+import { LeadRowActions } from "@/components/lead-row-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -14,23 +16,34 @@ export const dynamic = "force-dynamic";
 const STAGES = ["raw", "enriched", "ready_for_outreach", "ready_for_approval", "terminal"] as const;
 type Stage = (typeof STAGES)[number];
 
-export default async function LeadsPage({ searchParams }: { searchParams: { stage?: string } }) {
+export default async function LeadsPage({ searchParams }: { searchParams: { stage?: string; drift?: string } }) {
   const session = (await getSession())!;
   if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator", "monitor"])) redirect("/work");
 
   const stage: Stage = (STAGES as readonly string[]).includes(searchParams.stage ?? "")
     ? (searchParams.stage as Stage)
     : "raw";
+  const driftOnly = searchParams.drift === "1";
 
+  const assigned = await getAssignedOrgIds(session);
   const admin = createAdminClient();
-  const { data: rows } = await admin
+  let q = admin
     .from("leads_in_flight")
-    .select("id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, confidence_score, agent_run_id, created_at, orgs(slug, name)")
+    .select("id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)")
     .eq("stage", stage)
-    .eq("status", "active")
     .order("confidence_score", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
     .limit(200);
+  // The terminal stage also wants dropped rows for full audit trail.
+  if (stage === "terminal") {
+    q = q.in("status", ["active", "dropped", "terminal"]);
+  } else {
+    q = q.eq("status", "active");
+  }
+  if (assigned) q = q.in("org_id", assigned);
+  if (driftOnly) q = q.eq("payload->>catalog_drift", "no_longer_listed");
+  const { data: rows } = await q;
+  const canAct = seesAllOrgs(session) || (assigned !== null && assigned.length > 0);
 
   return (
     <div className="space-y-4">
@@ -42,16 +55,18 @@ export default async function LeadsPage({ searchParams }: { searchParams: { stag
       </div>
 
       <div className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">Agent-written.</span>{" "}
-        Every row on this page was created by an agent — no human writes here. <code>raw</code> rows come straight from Agent 03's last cron run.
-        Read-only for now; human review tooling (promote / drop) ships with Agent 06 (Data Enrichment).
+        <span className="font-medium text-foreground">Agent-written rows, human-gated flow.</span>{" "}
+        Rows are created by Agent 03 (Lead Creator) and processed by Agent 06 (Enrichment).
+        Use <span className="font-medium text-foreground">Promote</span> to hand a lead to Agent 04 (Outreach) — moves it to <code>ready_for_outreach</code>.
+        Use <span className="font-medium text-foreground">Drop</span> when a lead shouldn't be pursued — moves it to <code>terminal</code> with the reason recorded.
+        Promotable from <code>enriched</code>, or from <code>raw</code> when enrichment was blocked but you want to contact anyway.
       </div>
 
-      <div className="flex gap-2 text-sm">
+      <div className="flex flex-wrap gap-2 text-sm">
         {STAGES.map((s) => (
           <Link
             key={s}
-            href={`/work/leads?stage=${s}`}
+            href={`/work/leads?stage=${s}${driftOnly ? "&drift=1" : ""}`}
             className={
               "rounded-full px-3 py-1 border " +
               (s === stage
@@ -62,6 +77,18 @@ export default async function LeadsPage({ searchParams }: { searchParams: { stag
             {s}
           </Link>
         ))}
+        <Link
+          href={driftOnly ? `/work/leads?stage=${stage}` : `/work/leads?stage=${stage}&drift=1`}
+          className={
+            "rounded-full px-3 py-1 border ml-auto " +
+            (driftOnly
+              ? "bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/40"
+              : "border-border text-muted-foreground hover:text-foreground")
+          }
+          title="Show only leads where Agent 05 flagged the catalog drift (supplier dropped material)."
+        >
+          {driftOnly ? "✓ catalog drift" : "+ catalog drift"}
+        </Link>
       </div>
 
       <Table>
@@ -75,6 +102,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: { stag
             <TableHead>Org</TableHead>
             <TableHead>Staged</TableHead>
             <TableHead>Run</TableHead>
+            <TableHead className="text-right">Action</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -91,7 +119,17 @@ export default async function LeadsPage({ searchParams }: { searchParams: { stag
                   )}
                 </TableCell>
                 <TableCell>
-                  {r.material_name ?? "—"}
+                  <div className="flex items-center gap-2">
+                    <span>{r.material_name ?? "—"}</span>
+                    {r.payload?.catalog_drift === "no_longer_listed" && (
+                      <span
+                        className="inline-flex items-center rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-400 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                        title="Agent 05 detected the supplier dropped this material from their catalog."
+                      >
+                        drift
+                      </span>
+                    )}
+                  </div>
                   {r.payload?.inci_name && (
                     <div className="text-xs text-muted-foreground truncate max-w-[28ch]">{r.payload.inci_name}</div>
                   )}
@@ -123,12 +161,27 @@ export default async function LeadsPage({ searchParams }: { searchParams: { stag
                     </a>
                   ) : "—"}
                 </TableCell>
+                <TableCell className="text-right">
+                  {r.status === "active" ? (
+                    <LeadRowActions
+                      leadId={r.id}
+                      stage={r.stage}
+                      status={r.status}
+                      hasBlockedReason={!!r.payload?.enrichment_blocked_reason}
+                      disabled={!canAct}
+                    />
+                  ) : (
+                    <span className="text-xs text-muted-foreground" title={r.drop_reason ?? undefined}>
+                      {r.status}
+                    </span>
+                  )}
+                </TableCell>
               </TableRow>
             );
           })}
           {(!rows || rows.length === 0) && (
             <TableRow>
-              <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+              <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                 No leads at stage <code>{stage}</code>.
               </TableCell>
             </TableRow>

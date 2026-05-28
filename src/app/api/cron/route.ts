@@ -31,13 +31,19 @@ export async function GET(request: NextRequest) {
 
   const { data: agents } = await admin
     .from("agents")
-    .select("id, slug, name, schedule_cron, last_run_at, locked_until, runtime")
+    .select("id, slug, name, schedule_cron, schedule_tz, last_run_at, locked_until, runtime, training_wheels")
     .eq("runtime", "embedded")
     .not("schedule_cron", "is", null);
 
   const triggered: string[] = [];
   const skipped: { slug: string; reason: string }[] = [];
   for (const a of agents ?? []) {
+    // Kill switch — set training_wheels=true to pause an agent without dropping its cron schedule.
+    // Agent 01 ignores this so the heartbeat keeps reporting on a halted fleet.
+    if (a.training_wheels && a.slug !== "agent-01-ping") {
+      skipped.push({ slug: a.slug, reason: "training_wheels" });
+      continue;
+    }
     if (a.locked_until && new Date(a.locked_until) > new Date()) {
       skipped.push({ slug: a.slug, reason: "locked" });
       continue;
@@ -47,7 +53,8 @@ export async function GET(request: NextRequest) {
     let due = false;
     try {
       const last = a.last_run_at ? new Date(a.last_run_at) : new Date(0);
-      const interval = CronExpressionParser.parse(a.schedule_cron, { currentDate: last, tz: "America/New_York" });
+      const tz = a.schedule_tz ?? "Asia/Manila";
+      const interval = CronExpressionParser.parse(a.schedule_cron, { currentDate: last, tz });
       const next = interval.next().toDate();
       if (next <= new Date()) due = true;
     } catch (e: any) {

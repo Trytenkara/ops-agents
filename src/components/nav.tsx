@@ -46,18 +46,21 @@ export function Shell({
         </nav>
 
         <div className="mt-auto border-t border-border px-5 py-4 space-y-2">
+          <Link href="/how-it-works" className="block text-xs text-muted-foreground hover:text-foreground hover:underline">
+            How Tackle Box works →
+          </Link>
           <Link href="/settings/profile" className="block text-sm hover:underline">
             <div className="font-medium">{session.displayName ?? session.email}</div>
             <div className="text-xs text-muted-foreground truncate">{session.email}</div>
           </Link>
           <div className="flex flex-wrap gap-1">
             {session.roles.map((r) => (
-              <span key={r} className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider", ROLE_CHIP[r])}>
+              <span key={r} className={cn("inline-flex items-center justify-center text-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide leading-tight", ROLE_CHIP[r])}>
                 {roleLabel(r)}
               </span>
             ))}
             {session.status === "out_of_office" && (
-              <span className="inline-flex items-center rounded-full bg-highlight px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider">OOO</span>
+              <span className="inline-flex items-center justify-center text-center rounded-full bg-highlight px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide leading-tight">OOO</span>
             )}
           </div>
           <SignOutButton />

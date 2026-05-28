@@ -21,6 +21,13 @@ function buildPool(): Pool {
   let parsed: URL;
   try { parsed = new URL(raw); } catch { throw new Error("TENKARA_READONLY_DATABASE_URL is not a valid URL"); }
   if (!parsed.username || !parsed.username.startsWith(REQUIRED_USERNAME_PREFIX)) {
+    const detail = `username="${parsed.username}" — expected prefix "${REQUIRED_USERNAME_PREFIX}"`;
+    void (async () => {
+      try {
+        const { alertTenkaraWriteAttempt } = await import("@/lib/safety-alerts");
+        await alertTenkaraWriteAttempt(detail);
+      } catch (e) { console.error("[safety-alerts] tenkara write-attempt alert failed:", e); }
+    })();
     throw new Error(
       `TENKARA_READONLY_DATABASE_URL must use the mcp_readonly role (username starts with "${REQUIRED_USERNAME_PREFIX}"); ` +
       `got "${parsed.username}". Refusing to connect to avoid accidental writes.`

@@ -1,10 +1,13 @@
 import { redirect } from "next/navigation";
-import { getSession, canSeeAgentTab } from "@/lib/auth";
+import { getSession, canSeeAgentTab, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { relativeTime } from "@/lib/utils";
+import { compareAgentsBySlug } from "@/lib/agents-sort";
+import { HaltAllAgents } from "@/components/halt-all-agents";
+import { RetriggerExportButton } from "@/components/retrigger-export-button";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +16,12 @@ export default async function SystemHealthPage() {
   if (!canSeeAgentTab(session)) redirect("/");
 
   const admin = createAdminClient();
-  const { data: agents } = await admin.from("agents").select("name, slug, last_run_at, status");
+  const isAdmin = hasAnyRole(session, ["admin"]);
+  const { data: agentsRaw } = await admin
+    .from("agents")
+    .select("name, slug, last_run_at, status, schedule_cron, schedule_tz, training_wheels");
+  const haltedCount = (agentsRaw ?? []).filter((a: any) => a.training_wheels && a.slug !== "agent-01-ping").length;
+  const agents = [...(agentsRaw ?? [])].sort(compareAgentsBySlug);
   const { data: leadExports } = await admin
     .from("lead_scanner_exports")
     .select("id, supplier_name, supplier_id, status, generated_at, slack_message_ts, error, generated_by_agent, agents:agents!lead_scanner_exports_generated_by_agent_fkey(name)")
@@ -36,6 +44,20 @@ export default async function SystemHealthPage() {
         <p className="text-sm text-muted-foreground mt-1">Connector status, last-run heartbeats, and the Lead Scanner handoff to Andrew.</p>
       </div>
 
+      {isAdmin && (
+        <Card className="tb-surface shadow-none border-destructive/30">
+          <CardHeader>
+            <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Kill switch</CardTitle>
+          </CardHeader>
+          <CardContent className="flex items-center justify-between">
+            <p className="text-xs text-muted-foreground max-w-md">
+              Halts every agent except <code>agent-01-ping</code> by flipping <code>training_wheels=true</code>. The cron fan-out sees the flag and exits without acting. Use when something starts behaving unexpectedly — recoverable in one click.
+            </p>
+            <HaltAllAgents haltedCount={haltedCount} totalCount={agents.length} />
+          </CardContent>
+        </Card>
+      )}
+
       <Card className="tb-surface shadow-none">
         <CardHeader><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Connectors</CardTitle></CardHeader>
         <CardContent className="space-y-2 text-sm">
@@ -54,11 +76,23 @@ export default async function SystemHealthPage() {
       <Card className="tb-surface shadow-none">
         <CardHeader><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Last run per agent</CardTitle></CardHeader>
         <CardContent className="space-y-2 text-sm">
-          {(agents ?? []).length === 0 && <p className="text-muted-foreground">No agents registered.</p>}
-          {(agents ?? []).map((a: any) => (
-            <div key={a.slug} className="flex items-center justify-between">
-              <span>{a.name}</span>
-              <span className="text-muted-foreground text-xs">{a.last_run_at ? relativeTime(a.last_run_at) : "never"}</span>
+          {agents.length === 0 && <p className="text-muted-foreground">No agents registered.</p>}
+          {agents.map((a: any) => (
+            <div key={a.slug} className="flex items-center justify-between gap-3">
+              <span className="flex items-center gap-2">
+                {a.name}
+                {a.training_wheels && a.slug !== "agent-01-ping" && (
+                  <Badge variant="danger" className="text-[10px]">Halted</Badge>
+                )}
+              </span>
+              <span className="flex items-center gap-3 text-xs">
+                {a.schedule_cron ? (
+                  <code className="text-muted-foreground" title={`tz: ${a.schedule_tz ?? "Asia/Manila"}`}>{a.schedule_cron}</code>
+                ) : (
+                  <span className="text-muted-foreground italic">manual</span>
+                )}
+                <span className="text-muted-foreground">{a.last_run_at ? relativeTime(a.last_run_at) : "never"}</span>
+              </span>
             </div>
           ))}
         </CardContent>
@@ -66,11 +100,14 @@ export default async function SystemHealthPage() {
 
       <Card className="tb-surface shadow-none">
         <CardHeader>
-          <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">
-            Lead Scanner exports{" "}
-            <span className="ml-1 text-foreground">· {leadExports?.length ?? 0}</span>
-            {failedCount > 0 && <Badge variant="danger" className="ml-2">{failedCount} failed</Badge>}
-          </CardTitle>
+          <div className="flex items-center justify-between gap-3">
+            <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">
+              Lead Scanner exports{" "}
+              <span className="ml-1 text-foreground">· {leadExports?.length ?? 0}</span>
+              {failedCount > 0 && <Badge variant="danger" className="ml-2">{failedCount} failed</Badge>}
+            </CardTitle>
+            {isAdmin && <RetriggerExportButton />}
+          </div>
         </CardHeader>
         <CardContent>
           {(leadExports ?? []).length === 0 ? (

@@ -5,6 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/lib/utils";
+import { getAssignedOrgIds } from "@/lib/org-access";
 
 export const dynamic = "force-dynamic";
 
@@ -16,14 +17,18 @@ export default async function ExportsRollup() {
   if (!hasAnyRole(session, ["admin", "ops_lead", "monitor"])) redirect("/work");
 
   const since = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const assigned = await getAssignedOrgIds(session);
+  if (assigned && assigned.length === 0) redirect("/work");
   const admin = createAdminClient();
-  const { data: rows } = await admin
+  let q = admin
     .from("pending_approvals")
-    .select("id, type, status, requested_at, decided_at, payload, orgs(slug, name), agents(name)")
+    .select("id, org_id, type, status, requested_at, decided_at, payload, orgs(slug, name), agents(name)")
     .in("status", ["approved", "ready_for_export", "exported"])
     .gte("requested_at", since)
     .order("requested_at", { ascending: false })
     .limit(200);
+  if (assigned) q = q.in("org_id", assigned);
+  const { data: rows } = await q;
 
   return (
     <div className="space-y-4">

@@ -7,6 +7,7 @@ import { notFound } from "next/navigation";
 import { OperatorChip } from "@/components/operator-chip";
 import { operatorRoles, primaryRole } from "@/lib/operator";
 import { resolveSupplierNames, resolveMaterialNames, resolveQuoteRefs } from "@/lib/tenkara-names";
+import { DraftSignals } from "@/components/draft-signals";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ export default async function RevalidationPage({ params }: { params: { slug: str
 
   const { data: drafts } = await admin
     .from("draft_references")
-    .select("id, subject, supplier_id, material_id, quote_id, status, created_at, assigned_operator, users:users!draft_references_assigned_operator_fkey(display_name, email, user_roles(role)), agents(name)")
+    .select("id, subject, supplier_id, material_id, quote_id, status, created_at, metadata, assigned_operator, users:users!draft_references_assigned_operator_fkey(display_name, email, user_roles(role)), agents(name)")
     .eq("org_id", org.id)
     .order("created_at", { ascending: false })
     .limit(100);
@@ -65,7 +66,12 @@ export default async function RevalidationPage({ params }: { params: { slug: str
             const quoteRef = d.quote_id ? quoteRefs.get(d.quote_id) : null;
             return (
             <TableRow key={d.id}>
-              <TableCell className="font-medium">{d.subject ?? "(no subject)"}</TableCell>
+              <TableCell className="font-medium">
+                <div className="flex flex-col gap-1">
+                  <span>{d.subject ?? "(no subject)"}</span>
+                  <DraftSignals metadata={d.metadata} />
+                </div>
+              </TableCell>
               <TableCell title={d.supplier_id ?? undefined}>
                 {supplierName ?? (d.supplier_id ? <code className="text-xs text-muted-foreground">{d.supplier_id.slice(0, 8)}…</code> : "—")}
               </TableCell>
