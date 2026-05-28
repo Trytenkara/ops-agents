@@ -8,6 +8,8 @@ import { relativeTime } from "@/lib/utils";
 import { getAssignedOrgIds, seesAllOrgs } from "@/lib/org-access";
 import { LeadRowActions } from "@/components/lead-row-actions";
 import { LeadsExportCsvButton } from "@/components/leads-export-csv-button";
+import { LeadsFilterBar } from "@/components/leads-filter-bar";
+import { PaginationBar } from "@/components/pagination-bar";
 
 export const dynamic = "force-dynamic";
 
@@ -17,10 +19,21 @@ export const dynamic = "force-dynamic";
 const STAGES = ["raw", "enriched", "ready_for_outreach", "ready_for_approval", "terminal"] as const;
 type Stage = (typeof STAGES)[number];
 
+const SOURCES = ["ai_discovery", "existing_db", "marketplace"] as const;
+const PAGE_SIZE = 50;
+
 export default async function LeadsPage({
   searchParams,
 }: {
-  searchParams: { stage?: string; drift?: string; material?: string; source?: string; status?: string };
+  searchParams: {
+    stage?: string;
+    drift?: string;
+    material?: string;
+    source?: string;
+    status?: string;
+    org?: string;
+    page?: string;
+  };
 }) {
   const session = (await getSession())!;
   if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator", "monitor"])) redirect("/work");
@@ -32,30 +45,75 @@ export default async function LeadsPage({
   const material = (searchParams.material ?? "").trim();
   const source = (searchParams.source ?? "").trim();
   const statusFilter = (searchParams.status ?? "").trim();
+  const orgSlug = (searchParams.org ?? "").trim();
+  const pageRaw = parseInt(searchParams.page ?? "1", 10);
+  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
 
-  const assigned = await getAssignedOrgIds(session);
   const admin = createAdminClient();
-  let q = admin
-    .from("leads_in_flight")
-    .select("id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)")
-    .eq("stage", stage)
+  const assigned = await getAssignedOrgIds(session);
+
+  // Org dropdown options: assigned orgs for scoped users, all orgs for global.
+  let orgOptions: { id: string; slug: string; name: string }[] = [];
+  if (assigned === null) {
+    const { data } = await admin.from("orgs").select("id, slug, name").order("name");
+    orgOptions = (data ?? []) as any[];
+  } else if (assigned.length > 0) {
+    const { data } = await admin.from("orgs").select("id, slug, name").in("id", assigned).order("name");
+    orgOptions = (data ?? []) as any[];
+  }
+  const selectedOrg = orgSlug ? orgOptions.find((o) => o.slug === orgSlug) ?? null : null;
+
+  function applyFilters(q: any): any {
+    let out: any = q.eq("stage", stage);
+    if (statusFilter) out = out.eq("status", statusFilter);
+    else if (stage === "terminal") out = out.in("status", ["active", "dropped", "terminal"]);
+    else out = out.eq("status", "active");
+    if (selectedOrg) out = out.eq("org_id", selectedOrg.id);
+    else if (assigned) out = out.in("org_id", assigned);
+    if (driftOnly) out = out.eq("payload->>catalog_drift", "no_longer_listed");
+    if (material) {
+      const esc = material.replace(/[,()]/g, " ");
+      out = out.or(`material_name.ilike.%${esc}%,payload->>inci_name.ilike.%${esc}%`);
+    }
+    if (source) out = out.eq("source", source);
+    return out;
+  }
+
+  // Two queries: head:true count for the pagination footer, then the page slice.
+  const countQuery = applyFilters(
+    admin.from("leads_in_flight").select("id", { count: "exact", head: true })
+  );
+  const { count: totalCount } = await countQuery;
+  const total = totalCount ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const fromIdx = (safePage - 1) * PAGE_SIZE;
+  const toIdx = fromIdx + PAGE_SIZE - 1;
+
+  const listQuery = applyFilters(
+    admin
+      .from("leads_in_flight")
+      .select(
+        "id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)"
+      )
+  )
     .order("confidence_score", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
-    .limit(200);
-  if (statusFilter) {
-    q = q.eq("status", statusFilter);
-  } else if (stage === "terminal") {
-    q = q.in("status", ["active", "dropped", "terminal"]);
-  } else {
-    q = q.eq("status", "active");
-  }
-  if (assigned) q = q.in("org_id", assigned);
-  if (driftOnly) q = q.eq("payload->>catalog_drift", "no_longer_listed");
-  if (material) q = q.ilike("material_name", `%${material}%`);
-  if (source) q = q.eq("source", source);
-  const { data: rows } = await q;
+    .range(fromIdx, toIdx);
+  const { data: rows } = await listQuery;
+
   const canAct = seesAllOrgs(session) || (assigned !== null && assigned.length > 0);
   const rowCount = rows?.length ?? 0;
+
+  const baseFilters = {
+    stage,
+    ...(driftOnly ? { drift: "1" } : {}),
+    ...(material ? { material } : {}),
+    ...(source ? { source } : {}),
+    ...(statusFilter ? { status: statusFilter } : {}),
+    ...(orgSlug ? { org: orgSlug } : {}),
+  };
+  const baseQs = new URLSearchParams(baseFilters as Record<string, string>).toString();
 
   return (
     <div className="space-y-4">
@@ -67,15 +125,9 @@ export default async function LeadsPage({
           </p>
         </div>
         <LeadsExportCsvButton
-          disabled={rowCount === 0}
-          count={rowCount}
-          filters={{
-            stage,
-            ...(driftOnly ? { drift: "1" } : {}),
-            ...(material ? { material } : {}),
-            ...(source ? { source } : {}),
-            ...(statusFilter ? { status: statusFilter } : {}),
-          }}
+          disabled={total === 0}
+          count={total}
+          filters={baseFilters}
         />
       </div>
 
@@ -83,15 +135,18 @@ export default async function LeadsPage({
         <span className="font-medium text-foreground">Agent-written rows, human-gated flow.</span>{" "}
         Rows are created by Agent 03 (Lead Creator) and processed by Agent 06 (Enrichment).
         Use <span className="font-medium text-foreground">Promote</span> to hand a lead to Agent 04 (Outreach) — moves it to <code>ready_for_outreach</code>.
-        Use <span className="font-medium text-foreground">Drop</span> when a lead shouldn't be pursued — moves it to <code>terminal</code> with the reason recorded.
+        Use <span className="font-medium text-foreground">Drop</span> when a lead shouldn&apos;t be pursued — moves it to <code>terminal</code> with the reason recorded.
         Promotable from <code>enriched</code>, or from <code>raw</code> when enrichment was blocked but you want to contact anyway.
       </div>
 
+      <LeadsFilterBar orgs={orgOptions} selectedOrgId={orgSlug} material={material} />
+
       <div className="flex flex-wrap gap-2 text-sm">
+        <span className="text-xs text-muted-foreground self-center mr-1">Stage:</span>
         {STAGES.map((s) => (
           <Link
             key={s}
-            href={`/work/leads?stage=${s}${driftOnly ? "&drift=1" : ""}`}
+            href={buildHref({ ...baseFilters, stage: s })}
             className={
               "rounded-full px-3 py-1 border " +
               (s === stage
@@ -102,29 +157,37 @@ export default async function LeadsPage({
             {s}
           </Link>
         ))}
-        {(material || source || statusFilter) && (
-          <span className="text-xs text-muted-foreground ml-2 self-center">active filters:</span>
-        )}
-        {material && (
-          <ActiveFilterChip
-            label={`material: ${material}`}
-            clearHref={buildHref({ stage, driftOnly, source, status: statusFilter })}
-          />
-        )}
-        {source && (
-          <ActiveFilterChip
-            label={`source: ${source}`}
-            clearHref={buildHref({ stage, driftOnly, material, status: statusFilter })}
-          />
-        )}
-        {statusFilter && (
-          <ActiveFilterChip
-            label={`status: ${statusFilter}`}
-            clearHref={buildHref({ stage, driftOnly, material, source })}
-          />
-        )}
+      </div>
+
+      <div className="flex flex-wrap gap-2 text-sm">
+        <span className="text-xs text-muted-foreground self-center mr-1">Source:</span>
         <Link
-          href={driftOnly ? `/work/leads?stage=${stage}` : `/work/leads?stage=${stage}&drift=1`}
+          href={buildHref({ ...baseFilters, source: undefined })}
+          className={
+            "rounded-full px-3 py-1 border " +
+            (!source
+              ? "bg-primary text-primary-foreground border-primary"
+              : "border-border text-muted-foreground hover:text-foreground")
+          }
+        >
+          all
+        </Link>
+        {SOURCES.map((s) => (
+          <Link
+            key={s}
+            href={buildHref({ ...baseFilters, source: s })}
+            className={
+              "rounded-full px-3 py-1 border " +
+              (s === source
+                ? "bg-primary text-primary-foreground border-primary"
+                : "border-border text-muted-foreground hover:text-foreground")
+            }
+          >
+            {s}
+          </Link>
+        ))}
+        <Link
+          href={buildHref({ ...baseFilters, drift: driftOnly ? undefined : "1" })}
           className={
             "rounded-full px-3 py-1 border ml-auto " +
             (driftOnly
@@ -278,42 +341,43 @@ export default async function LeadsPage({
               </TableRow>
             );
           })}
-          {(!rows || rows.length === 0) && (
+          {rowCount === 0 && (
             <TableRow>
               <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
-                No leads at stage <code>{stage}</code>.
+                No leads match these filters.
               </TableCell>
             </TableRow>
           )}
         </TableBody>
       </Table>
+
+      <PaginationBar
+        basePath="/work/leads"
+        baseQs={baseQs}
+        page={safePage}
+        pageSize={PAGE_SIZE}
+        total={total}
+      />
     </div>
   );
 }
 
 function buildHref(p: {
-  stage: string;
-  driftOnly?: boolean;
+  stage?: string;
+  drift?: string;
   material?: string;
   source?: string;
   status?: string;
+  org?: string;
 }) {
   const sp = new URLSearchParams();
-  sp.set("stage", p.stage);
-  if (p.driftOnly) sp.set("drift", "1");
+  if (p.stage) sp.set("stage", p.stage);
+  if (p.drift) sp.set("drift", p.drift);
   if (p.material) sp.set("material", p.material);
   if (p.source) sp.set("source", p.source);
   if (p.status) sp.set("status", p.status);
+  if (p.org) sp.set("org", p.org);
   return `/work/leads?${sp.toString()}`;
-}
-
-function ActiveFilterChip({ label, clearHref }: { label: string; clearHref: string }) {
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-secondary border border-secondary px-2 py-0.5 text-xs text-secondary-foreground">
-      {label}
-      <Link href={clearHref} className="text-muted-foreground hover:text-foreground" title="Clear filter">×</Link>
-    </span>
-  );
 }
 
 function ConfidenceBadge({ value }: { value: number | null }) {

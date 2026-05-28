@@ -26,9 +26,23 @@ export async function GET(request: NextRequest) {
   const material = (sp.get("material") ?? "").trim();
   const source = (sp.get("source") ?? "").trim();
   const status = (sp.get("status") ?? "").trim();
+  const orgSlug = (sp.get("org") ?? "").trim();
 
   const admin = createAdminClient();
   const assigned = await getAssignedOrgIds(session);
+
+  // Resolve org slug -> id, validated against the caller's assigned orgs so a
+  // scoped user can't escape RLS by passing an arbitrary slug.
+  let selectedOrgId: string | null = null;
+  if (orgSlug) {
+    const { data: orgRow } = await admin.from("orgs").select("id, slug").eq("slug", orgSlug).maybeSingle();
+    if (orgRow) {
+      if (assigned && !assigned.includes(orgRow.id)) {
+        return new NextResponse("forbidden", { status: 403 });
+      }
+      selectedOrgId = orgRow.id;
+    }
+  }
 
   let q = admin
     .from("leads_in_flight")
@@ -46,9 +60,13 @@ export async function GET(request: NextRequest) {
   } else {
     q = q.eq("status", "active");
   }
-  if (assigned) q = q.in("org_id", assigned);
+  if (selectedOrgId) q = q.eq("org_id", selectedOrgId);
+  else if (assigned) q = q.in("org_id", assigned);
   if (driftOnly) q = q.eq("payload->>catalog_drift", "no_longer_listed");
-  if (material) q = q.ilike("material_name", `%${material}%`);
+  if (material) {
+    const esc = material.replace(/[,()]/g, " ");
+    q = q.or(`material_name.ilike.%${esc}%,payload->>inci_name.ilike.%${esc}%`);
+  }
   if (source) q = q.eq("source", source);
 
   const { data: rows, error } = await q;
@@ -120,7 +138,7 @@ export async function GET(request: NextRequest) {
   );
 
   const iso = new Date().toISOString().slice(0, 10);
-  const slug = buildFilterSlug({ stage, material, source, status, driftOnly });
+  const slug = buildFilterSlug({ stage, material, source, status, driftOnly, org: orgSlug });
   const filename = `leads-in-flight-${slug}-${iso}.csv`;
 
   return new NextResponse(body, {
@@ -139,14 +157,17 @@ function buildFilterSlug({
   source,
   status,
   driftOnly,
+  org,
 }: {
   stage: string;
   material: string;
   source: string;
   status: string;
   driftOnly: boolean;
+  org: string;
 }) {
   const parts: string[] = [`stage-${stage}`];
+  if (org) parts.push(`org-${slugify(org)}`);
   if (material) parts.push(`material-${slugify(material)}`);
   if (source) parts.push(`source-${slugify(source)}`);
   if (status) parts.push(`status-${slugify(status)}`);
