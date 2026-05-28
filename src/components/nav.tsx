@@ -29,9 +29,12 @@ export function Shell({
     <div className="flex min-h-screen">
       <aside className="w-64 shrink-0 border-r border-border bg-background flex flex-col">
         <div className="px-5 pt-6 pb-4">
-          <Link href="/" className="block">
-            <div className="font-serif text-2xl tracking-tight">Tackle Box</div>
-            <div className="text-xs text-muted-foreground mt-0.5">A Tenkara operations hub</div>
+          <Link href="/" className="flex items-center gap-2.5">
+            <RobotLogo className="h-8 w-8 shrink-0" />
+            <div>
+              <div className="font-serif text-2xl tracking-tight leading-none">Tackle Box</div>
+              <div className="text-xs text-muted-foreground mt-1">A Tenkara operations hub</div>
+            </div>
           </Link>
         </div>
 
@@ -76,6 +79,22 @@ export function Shell({
 
 function TabToggle() {
   return <TabToggleClient />;
+}
+
+function RobotLogo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 64 64" className={className} fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect width="64" height="64" rx="14" fill="#0011FF" />
+      <line x1="32" y1="9" x2="32" y2="17" stroke="#F7F6F5" strokeWidth="3" strokeLinecap="round" />
+      <circle cx="32" cy="8" r="3.5" fill="#F7F6F5" />
+      <rect x="14" y="18" width="36" height="30" rx="8" fill="#F7F6F5" />
+      <circle cx="25" cy="32" r="4" fill="#0011FF" />
+      <circle cx="39" cy="32" r="4" fill="#0011FF" />
+      <rect x="24" y="40" width="16" height="3.5" rx="1.75" fill="#0011FF" />
+      <rect x="9" y="28" width="4" height="10" rx="2" fill="#F7F6F5" />
+      <rect x="51" y="28" width="4" height="10" rx="2" fill="#F7F6F5" />
+    </svg>
+  );
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
