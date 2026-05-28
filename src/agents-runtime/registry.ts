@@ -12,6 +12,7 @@ export interface RuntimeContext {
   setSummary: (s: string) => void;
   setItemsProcessed: (n: number) => void;
   setStatus: (s: "success" | "partial" | "failure") => void;
+  setMetadata: (patch: Record<string, any>) => void;
 }
 
 export interface AgentDefinition {

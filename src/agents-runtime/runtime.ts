@@ -94,6 +94,7 @@ export async function runClaimed(claim: RunClaim): Promise<void> {
   let finalSummary: string | null = null;
   let itemsProcessed = 0;
   let finalStatus: "success" | "partial" | "failure" = "success";
+  let metadata: Record<string, any> = {};
 
   const ctx: RuntimeContext = {
     runId: claim.runId,
@@ -123,6 +124,7 @@ export async function runClaimed(claim: RunClaim): Promise<void> {
     setSummary: (s) => { finalSummary = s; },
     setItemsProcessed: (n) => { itemsProcessed = n; },
     setStatus: (s) => { finalStatus = s; },
+    setMetadata: (patch) => { metadata = { ...metadata, ...patch }; },
   };
 
   await ctx.log(`Run started — ${claim.agentName}`, { step: "start", data: { trigger: claim.triggerSource } });
@@ -145,6 +147,7 @@ export async function runClaimed(claim: RunClaim): Promise<void> {
       status: finalStatus,
       summary: finalSummary,
       items_processed: itemsProcessed,
+      metadata: Object.keys(metadata).length > 0 ? metadata : null,
     })
     .eq("id", claim.runId);
   await admin
