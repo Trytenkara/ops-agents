@@ -1,6 +1,8 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
+import { uploadCsvAndSign } from "@/lib/storage";
+import { buildCsv, type ValidationRow } from "./csv-builder";
 
 // v1: re-verify catalog-match leads. Agent 03 finds suppliers via four signals;
 // `catalog_match` (the supplier listed the material in their uploaded catalog)
@@ -82,6 +84,7 @@ registerAgent({
     let drifted = 0;
     let skipped = 0;
     let errored = 0;
+    const csvRows: ValidationRow[] = [];
 
     for (const row of leads as LeadRow[]) {
       const payload = row.payload ?? {};
@@ -122,6 +125,18 @@ registerAgent({
         drifted++;
       }
 
+      csvRows.push({
+        lead_id: row.id,
+        supplier_id: row.supplier_id,
+        supplier_name: null,
+        material_name: nameKey,
+        inci,
+        still_listed: listed,
+        previous_still_listed: prev?.still_listed ?? null,
+        state_changed: stateChanged,
+        last_checked_at: nowIso,
+      });
+
       if (!stateChanged) {
         // Still update the last_checked_at timestamp so we can prove the run touched it.
         await admin
@@ -158,6 +173,43 @@ registerAgent({
         `${listed ? "Still listed" : "Drifted"}: supplier ${row.supplier_id} × ${nameKey ?? inci}`,
         { step: "validate", data: { lead_id: row.id, still_listed: listed } }
       );
+    }
+
+    // Hydrate supplier names from Tenkara for the CSV.
+    if (csvRows.length > 0) {
+      const supplierIds = Array.from(new Set(csvRows.map((r) => r.supplier_id)));
+      try {
+        const suppliers = await tenkaraQuery<{ id: string; name: string | null }>(
+          `select id::text as id, name from public.suppliers where id = any($1::uuid[])`,
+          [supplierIds]
+        );
+        const nameById = new Map(suppliers.map((s) => [s.id, s.name]));
+        for (const r of csvRows) r.supplier_name = nameById.get(r.supplier_id) ?? null;
+      } catch (e: any) {
+        await ctx.log(`Supplier name hydration failed: ${e.message}`, { level: "warn", step: "csv" });
+      }
+    }
+
+    // Build + upload CSV. Bucket shared with Agent 02 — filename keeps it distinct.
+    if (csvRows.length > 0) {
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        const csvContent = buildCsv(csvRows);
+        const csvFilename = `${today}_marketplace_validation_${stillListed}listed_${drifted}drifted.csv`;
+        const signed = await uploadCsvAndSign({
+          filename: csvFilename,
+          content: csvContent,
+          expiresInDays: 7,
+        });
+        await ctx.log(`CSV uploaded → ${signed.signedUrl}`, { step: "csv", data: { url: signed.signedUrl } });
+        ctx.setMetadata({
+          csvSignedUrl: signed.signedUrl,
+          csvFilename,
+          csvExpiresAt: signed.expiresAt,
+        });
+      } catch (e: any) {
+        await ctx.log(`CSV upload failed: ${e.message}`, { level: "warn", step: "csv" });
+      }
     }
 
     ctx.setItemsProcessed(stillListed + drifted);

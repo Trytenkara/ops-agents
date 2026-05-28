@@ -268,6 +268,11 @@ registerAgent({
       return;
     }
     await ctx.log(`CSV uploaded → ${signed.signedUrl} (expires ${signed.expiresAt})`, { step: "storage", data: { url: signed.signedUrl } });
+    ctx.setMetadata({
+      csvSignedUrl: signed.signedUrl,
+      csvFilename,
+      csvExpiresAt: signed.expiresAt,
+    });
 
     // Slack notify (skip if no token configured — log and continue).
     if (process.env.SLACK_BOT_TOKEN) {

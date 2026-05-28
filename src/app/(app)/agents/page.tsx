@@ -22,7 +22,7 @@ export default async function AgentActivityPage() {
   const [runsRes, leadExportsRes, csvDownloadsRes, leadCountRes] = await Promise.all([
     admin
       .from("agent_runs")
-      .select("id, agent_id, org_id, run_started_at, run_finished_at, status, summary, items_processed, agents(name, slug, description), orgs(slug, name)")
+      .select("id, agent_id, org_id, run_started_at, run_finished_at, status, summary, items_processed, metadata, agents(name, slug, description), orgs(slug, name)")
       .order("run_started_at", { ascending: false })
       .limit(60),
     admin
@@ -102,6 +102,7 @@ function EventRow({ event }: { event: any }) {
     const dur = r.run_finished_at
       ? Math.round((new Date(r.run_finished_at).getTime() - new Date(r.run_started_at).getTime()) / 1000)
       : null;
+    const csvUrl = r.metadata?.csvSignedUrl as string | undefined;
     return (
       <TableRow>
         <TableCell><EventIcon kind="run" /></TableCell>
@@ -109,7 +110,18 @@ function EventRow({ event }: { event: any }) {
         <TableCell className="font-medium" title={r.agents?.description ?? undefined}>{r.agents?.name ?? "—"}</TableCell>
         <TableCell>{r.orgs?.name ?? "—"}</TableCell>
         <TableCell className="text-muted-foreground truncate max-w-[40ch]">
-          {r.summary ?? `${r.items_processed ?? 0} items${dur != null ? ` · ${dur}s` : ""}`}
+          <span>{r.summary ?? `${r.items_processed ?? 0} items${dur != null ? ` · ${dur}s` : ""}`}</span>
+          {csvUrl && (
+            <a
+              href={csvUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="ml-2 inline-flex items-center text-xs font-medium text-foreground underline hover:no-underline"
+              title="Download CSV (signed URL, 7-day expiry)"
+            >
+              ⬇ CSV
+            </a>
+          )}
         </TableCell>
         <TableCell className="text-muted-foreground text-xs">{relativeTime(r.run_started_at)}</TableCell>
       </TableRow>
