@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
     .eq("runtime", "embedded")
     .not("schedule_cron", "is", null);
 
-  const triggered: string[] = [];
+  const due: string[] = [];
   const skipped: { slug: string; reason: string }[] = [];
   for (const a of agents ?? []) {
     // Kill switch — set training_wheels=true to pause an agent without dropping its cron schedule.
@@ -50,26 +50,35 @@ export async function GET(request: NextRequest) {
     }
     if (!a.schedule_cron) continue;
 
-    let due = false;
     try {
       const last = a.last_run_at ? new Date(a.last_run_at) : new Date(0);
       const tz = a.schedule_tz ?? "Asia/Manila";
       const interval = CronExpressionParser.parse(a.schedule_cron, { currentDate: last, tz });
       const next = interval.next().toDate();
-      if (next <= new Date()) due = true;
+      if (next <= new Date()) due.push(a.slug);
+      else skipped.push({ slug: a.slug, reason: "not yet due" });
     } catch (e: any) {
       skipped.push({ slug: a.slug, reason: `bad cron: ${e.message}` });
-      continue;
     }
-    if (!due) {
-      skipped.push({ slug: a.slug, reason: "not yet due" });
-      continue;
-    }
-
-    // Fire and don't await — multiple agents could be due. Each is concurrency-safe.
-    executeAgentRun({ agentSlug: a.slug, triggerSource: "cron" }).catch(() => {});
-    triggered.push(a.slug);
   }
+
+  // Dispatch each due agent to its OWN invocation (own 300s budget) instead of
+  // running them all fire-and-forget inside this one. A heavy agent (03 scout)
+  // can no longer starve/kill the lightweight ones, and if this dispatcher hits
+  // its own limit while waiting, each agent's invocation still finishes
+  // independently. We await so a quick cron tick reports real outcomes.
+  const origin = new URL(request.url).origin;
+  const results = await Promise.allSettled(
+    due.map((slug) =>
+      fetch(`${origin}/api/cron?slug=${encodeURIComponent(slug)}`, {
+        headers: { authorization: `Bearer ${expected}` },
+      }).then((r) => r.json())
+    )
+  );
+  const triggered = due.map((slug, i) => ({
+    slug,
+    ok: results[i].status === "fulfilled",
+  }));
 
   return NextResponse.json({ triggered, skipped, at: new Date().toISOString() });
 }

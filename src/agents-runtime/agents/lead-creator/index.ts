@@ -2,8 +2,6 @@ import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { queryRecentMaterials, findCandidatesForMaterial, existingQuotesForMaterials, type CandidateSupplier, type MaterialRow } from "./sql";
 import { scoutSuppliersForMaterial, scoreScoutConfidence, scoutCompleteness, type ScoutSupplier } from "./scout";
-import { enrichAndStageLead } from "../data-enrichment/run-enrich";
-import { executeAgentRun } from "../../runtime";
 import { toCsv } from "@/lib/csv";
 import { uploadCsvAndSign } from "@/lib/storage";
 
@@ -68,42 +66,13 @@ registerAgent({
   async run(ctx) {
     const admin = createAdminClient();
 
-    // Single-driver model: Agents 06 (Enrichment) and 04 (Outreach) are no longer
-    // independently scheduled — Agent 03 drives them. Drain the existing backlog
-    // FIRST (enrich raw leads, then let 04 draft the enriched ones), then scout
-    // new materials. Everything is bounded by a wall-clock budget so we stay
-    // under the 300s function limit; anything not reached rolls to the next run.
+    // Agent 03 scouts + stages raw leads only. Enrichment (06) and outreach (04)
+    // run as their own scheduled, isolated invocations — each agent gets its own
+    // 300s budget via the cron dispatcher, so a long scout can't starve them.
+    // Budget-guard the scout loop so a backlog of new materials still fits 300s.
     const DRIVE_BUDGET_MS = 250_000;
     const driveStart = Date.now();
     const elapsedMs = () => Date.now() - driveStart;
-
-    {
-      const { data: rawLeads } = await admin
-        .from("leads_in_flight")
-        .select("id, supplier_id, supplier_name, material_name, payload")
-        .eq("stage", "raw")
-        .eq("status", "active")
-        .order("confidence_score", { ascending: false, nullsFirst: false })
-        .limit(25);
-      let drainedEnriched = 0;
-      for (const row of (rawLeads ?? []) as any[]) {
-        if (elapsedMs() > 90_000) break; // reserve budget for scouting
-        const o = await enrichAndStageLead(
-          { id: row.id, supplier_id: row.supplier_id, supplier_name: row.supplier_name, material_name: row.material_name, payload: row.payload ?? {} },
-          { admin, runId: ctx.runId, log: (m, meta) => ctx.log(m, { step: "drain-enrich", ...(meta ?? {}) }) }
-        );
-        if (o.status === "promoted") drainedEnriched++;
-      }
-      await ctx.log(`Drain: enriched ${drainedEnriched} raw lead(s) before scouting`, { step: "drain" });
-      // Agent 04 is template-based and fast — let it draft the enriched backlog.
-      if (elapsedMs() < 180_000) {
-        try {
-          await executeAgentRun({ agentSlug: "agent-04-outreach", triggerSource: "cron" });
-        } catch (e: any) {
-          await ctx.log(`Drain outreach (agent-04) failed: ${e?.message ?? e}`, { level: "warn", step: "drain" });
-        }
-      }
-    }
 
     // 1. Determine lookback window: prefer last successful run; fallback to 4h.
     const { data: lastRun } = await admin
