@@ -1,9 +1,7 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createMissiveDraft, missiveDraftLink } from "@/lib/missive";
-import { classifyClient, MISSIVE_ORGANIZATION_ID, MISSIVE_TEAM_ID } from "../quote-revalidation/config";
-import { composeOutreachDraft } from "./drafter";
-import { bodyToHtml } from "@/lib/email-style";
+import { classifyClient } from "../quote-revalidation/config";
+import { runOutreachForLead } from "./run-outreach";
 import { suppliersWithPriorRelationship } from "@/lib/tenkara-relationships";
 
 // v1 trim (vs. full spec):
@@ -238,118 +236,39 @@ registerAgent({
       return;
     }
 
-    // 5. Compose + stage in Missive serially. Missive API has loose rate limits
-    //    but staging outreach is meant to be deliberate — no concurrency win.
+    // 5. Compose + stage via the shared draft→QA pipeline, serially. Missive API
+    //    has loose rate limits but staging outreach is meant to be deliberate.
     let staged = 0;
     let missiveErrors = 0;
     let promoted = 0;
 
     for (const c of cleanCandidates) {
-      const payload = (c.lead.payload ?? {}) as any;
-      const draft = composeOutreachDraft({
+      const res = await runOutreachForLead({
+        admin,
+        agentId: tackleAgentId,
+        runId: ctx.runId,
+        lead: c.lead,
+        email: c.email,
+        contactName: c.contactName,
         mode: c.mode,
         ghostBrand: c.ghostBrand,
         clientOrgName: c.clientOrgName,
-        supplierContactName: c.contactName,
-        supplierCompanyName: c.lead.supplier_name ?? null,
-        materialName: c.lead.material_name ?? "the material",
-        inciName: payload.inci_name ?? null,
-        signal: payload.signal ?? null,
+        assignedOperator: c.assignedOperator,
+        log: (m, meta) => ctx.log(m, meta),
       });
-
-      let missiveDraft;
-      try {
-        missiveDraft = await createMissiveDraft({
-          subject: draft.subject,
-          body: bodyToHtml(draft.body),
-          to_fields: [{ name: c.contactName ?? "", address: c.email }],
-          organization: MISSIVE_ORGANIZATION_ID,
-          team: MISSIVE_TEAM_ID,
-          add_to_team_inbox: true,
-        });
-      } catch (e: any) {
+      if (res.staged) {
+        staged++;
+        if (!res.reason) promoted++;
+      } else {
         missiveErrors++;
-        await ctx.log(`Missive error for ${c.lead.supplier_name} × ${c.lead.material_name}: ${e.message}`, {
-          level: "warn",
-          step: "missive",
-          data: { lead_id: c.lead.id },
-        });
-        continue;
       }
-      staged++;
-      await ctx.log(`Staged draft: ${c.lead.supplier_name} → ${c.lead.material_name} (${c.mode})`, {
-        step: "missive",
-        data: {
-          lead_id: c.lead.id,
-          missive_draft_id: missiveDraft.id,
-          missive_conversation_id: missiveDraft.conversation_id,
-        },
-      });
-
-      // 5a. Register draft pointer.
-      const { error: drErr } = await admin.from("draft_references").insert({
-        email_client: "missive",
-        thread_id: missiveDraft.conversation_id ?? "",
-        draft_id: missiveDraft.id,
-        agent_id: tackleAgentId,
-        agent_run_id: ctx.runId,
-        org_id: c.lead.org_id,
-        supplier_id: c.lead.supplier_id,
-        material_id: c.lead.material_id,
-        subject: draft.subject,
-        body_preview: draft.body.slice(0, 1500),
-        assigned_operator: c.assignedOperator,
-        metadata: {
-          outreach_mode: c.mode,
-          ghost_brand: c.ghostBrand ?? null,
-          suggested_signoff: c.mode === "ghost" ? `${c.ghostBrand} Sourcing` : `${c.clientOrgName} Purchasing Team`,
-          missive_draft_link: missiveDraft.conversation_id
-            ? missiveDraftLink(missiveDraft.conversation_id, missiveDraft.id)
-            : null,
-          lead_id: c.lead.id,
-        },
-      });
-      if (drErr) {
-        await ctx.log(`draft_references insert failed for lead ${c.lead.id}: ${drErr.message}`, {
-          level: "error",
-          step: "register",
-        });
-        // Don't promote stage if we couldn't register the pointer — keeps the
-        // pipeline auditable.
-        continue;
-      }
-
-      // 5b. Promote the lead.
-      const newPayload = {
-        ...payload,
-        outreach: {
-          missive_draft_id: missiveDraft.id,
-          missive_conversation_id: missiveDraft.conversation_id ?? null,
-          mode: c.mode,
-          ghost_brand: c.ghostBrand ?? null,
-          staged_at: new Date().toISOString(),
-          staged_by_run_id: ctx.runId,
-        },
-      };
-      const { error: upErr } = await admin
-        .from("leads_in_flight")
-        .update({ stage: "ready_for_outreach", payload: newPayload })
-        .eq("id", c.lead.id);
-      if (upErr) {
-        await ctx.log(`Stage promotion failed for lead ${c.lead.id}: ${upErr.message}`, {
-          level: "error",
-          step: "promote",
-        });
-        continue;
-      }
-      promoted++;
     }
 
     ctx.setItemsProcessed(staged);
     ctx.setStatus(missiveErrors > 0 && staged === 0 ? "failure" : missiveErrors > 0 ? "partial" : "success");
     ctx.setSummary(
       `Staged ${staged} Missive draft${staged === 1 ? "" : "s"} · promoted ${promoted} to ready_for_outreach` +
-        (missiveErrors ? ` · ${missiveErrors} Missive errors` : "") +
+        (missiveErrors ? ` · ${missiveErrors} staging errors` : "") +
         (priorRelSkipped ? ` · skipped ${priorRelSkipped} existing-relationship` : "") +
         (dedupSkipped ? ` · skipped ${dedupSkipped} already-staged` : "") +
         (droppedNoEmail || droppedNoOrg || droppedSkipClient

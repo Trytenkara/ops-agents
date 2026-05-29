@@ -1,10 +1,15 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { lintDraft, type Finding } from "./lint";
 
 // v1: a defensive lint over staged drafts. Operators may sit on a draft for
 // a while before opening it — we want to surface problems (unfilled
 // placeholders, missing operator assignment, suspicious phrasing) so they
 // see them when they pick the draft up.
+//
+// The lint rules themselves live in ./lint.ts so intake agents (02/03/08) run
+// the identical checks inline when they stage a draft. This scheduled sweep is
+// a backstop for drafts that weren't linted at creation time.
 //
 // We grace-period 1 hour so we don't QA a draft Agent 04 staged 30s ago.
 // Drafts older than ~7 days are skipped (operator already abandoned them).
@@ -14,72 +19,6 @@ import { createAdminClient } from "@/lib/supabase/admin";
 const GRACE_MINUTES = 60;
 const MAX_AGE_DAYS = 7;
 const MAX_DRAFTS_PER_RUN = 100;
-
-type Severity = "warn" | "error";
-interface Finding { severity: Severity; code: string; message: string; }
-
-// Each rule looks at the draft row and returns 0..n findings.
-type Rule = (d: { subject: string | null; body_preview: string | null; assigned_operator: string | null; metadata: any }) => Finding[];
-
-const PLACEHOLDER_RE = /\{\{[^}]+\}\}|\{[A-Z_][A-Z0-9_]*\}|<<[^>]+>>|TBD|TODO|XXX/g;
-
-const RULES: Record<string, Rule> = {
-  placeholders_in_body: ({ body_preview }) => {
-    if (!body_preview) return [];
-    const matches = body_preview.match(PLACEHOLDER_RE);
-    if (!matches) return [];
-    return [{
-      severity: "error",
-      code: "placeholders_in_body",
-      message: `Unfilled placeholders in body: ${Array.from(new Set(matches)).join(", ")}`,
-    }];
-  },
-  placeholders_in_subject: ({ subject }) => {
-    if (!subject) return [];
-    const matches = subject.match(PLACEHOLDER_RE);
-    if (!matches) return [];
-    return [{
-      severity: "error",
-      code: "placeholders_in_subject",
-      message: `Unfilled placeholders in subject: ${Array.from(new Set(matches)).join(", ")}`,
-    }];
-  },
-  missing_operator: ({ assigned_operator }) => {
-    if (assigned_operator) return [];
-    return [{
-      severity: "warn",
-      code: "missing_operator",
-      message: "Draft has no assigned_operator — operator org_default_operators row likely missing.",
-    }];
-  },
-  empty_body: ({ body_preview }) => {
-    if (body_preview && body_preview.trim().length > 50) return [];
-    return [{
-      severity: "error",
-      code: "empty_body",
-      message: "Body is empty or suspiciously short (<50 chars).",
-    }];
-  },
-  ghost_brand_leak: ({ body_preview, metadata }) => {
-    // If we're in ghost mode but the body mentions the real client org name,
-    // we'd be leaking attribution. metadata.outreach_mode + ghost_brand are
-    // set by Agent 04.
-    if (!body_preview || metadata?.outreach_mode !== "ghost") return [];
-    const ghost = metadata?.ghost_brand as string | undefined;
-    if (!ghost) return [];
-    // Look for known client names that should not appear in ghost outreach.
-    // We only have a few — list them inline so we don't have to import config.
-    const CLIENT_NAMES = ["Aurora", "Bobber", "Vita Organica", "McGinley", "Nutripro", "PharmaLab", "Sphere", "Ulo", "Tenkara"];
-    const leaks = CLIENT_NAMES
-      .filter((c) => c !== ghost && body_preview.toLowerCase().includes(c.toLowerCase()));
-    if (!leaks.length) return [];
-    return [{
-      severity: "error",
-      code: "ghost_brand_leak",
-      message: `Ghost-mode draft mentions: ${leaks.join(", ")} — should only mention ${ghost}.`,
-    }];
-  },
-};
 
 registerAgent({
   slug: "agent-10-qa-outreach",
@@ -123,14 +62,7 @@ registerAgent({
     const codeCounts: Record<string, number> = {};
 
     for (const d of drafts as any[]) {
-      const findings: Finding[] = [];
-      for (const rule of Object.values(RULES)) {
-        try {
-          findings.push(...rule(d));
-        } catch {
-          // A buggy rule shouldn't kill the run.
-        }
-      }
+      const findings: Finding[] = lintDraft(d);
       for (const f of findings) codeCounts[f.code] = (codeCounts[f.code] ?? 0) + 1;
 
       const newMetadata = {
