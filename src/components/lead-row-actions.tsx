@@ -1,6 +1,7 @@
 "use client";
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
 import { promoteLead, dropLead, DROP_REASONS, type DropReason } from "@/app/actions/leads";
 
 interface Props {
@@ -45,16 +46,15 @@ export function LeadRowActions({ leadId, stage, status, hasBlockedReason, disabl
   if (dropping) {
     return (
       <div className="flex flex-col gap-1 items-end">
-        <select
-          className="text-xs border border-border rounded px-1 py-0.5 bg-background"
+        <Select
+          size="sm"
+          className="w-40"
+          ariaLabel="Drop reason"
           value={reason}
-          onChange={(e) => setReason(e.target.value as DropReason)}
+          onValueChange={(v) => setReason(v as DropReason)}
           disabled={pending}
-        >
-          {DROP_REASONS.map((r) => (
-            <option key={r.value} value={r.value}>{r.label}</option>
-          ))}
-        </select>
+          options={DROP_REASONS.map((r) => ({ value: r.value, label: r.label }))}
+        />
         {reason === "other" && (
           <input
             type="text"

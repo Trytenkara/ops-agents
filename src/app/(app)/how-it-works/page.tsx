@@ -1,6 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { AGENT_SPECS } from "@/lib/agents-spec";
+import { PipelineDiagram } from "@/components/pipeline-diagram";
 
 export const metadata = { title: "How Tackle Box works" };
 
@@ -25,15 +26,14 @@ export default function HowItWorksPage() {
         </ul>
       </section>
 
-      <section className="space-y-3">
+      <section className="space-y-4">
         <h2 className="font-serif text-xl">Pipeline at a glance</h2>
         <p className="text-sm text-muted-foreground">
-          Agent 03 surfaces raw leads → Agent 06 enriches them → an operator promotes (or drops) on{" "}
-          <a href="/work/leads" className="underline hover:text-foreground">Leads in flight</a> → Agent 04 stages a
-          Missive draft → Agent 10 lints it → operator clicks Send → Agent 08 detects the reply.
-          Side-channels: Agent 02 (weekly quote revalidation), Agent 05 (catalog drift), Agent 07 (14d stale → case),
-          Agent 11 (daily CSV to Andrew), Agent 01 (heartbeat).
+          The outreach happy path runs left to right. Agents do the automatic steps; the two cyan steps are where{" "}
+          <span className="font-medium text-foreground">you</span> take over — promote a lead on{" "}
+          <a href="/work/review/leads" className="underline hover:text-foreground">the Review queue</a>, and send the draft in Missive.
         </p>
+        <PipelineDiagram />
       </section>
 
       <section className="space-y-4">

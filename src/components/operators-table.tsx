@@ -2,6 +2,7 @@
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { useRouter } from "next/navigation";
@@ -153,9 +154,12 @@ function InviteModal({ onClose, actor, orgs }: { onClose: () => void; actor: Act
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Rosie Mendoza" />
         </Field>
         <Field label="Role">
-          <select value={role} onChange={(e) => setRole(e.target.value as AppRole)} className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm">
-            {invitableRoles(actor).map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
-          </select>
+          <Select
+            ariaLabel="Role"
+            value={role}
+            onValueChange={(v) => setRole(v as AppRole)}
+            options={invitableRoles(actor).map((r) => ({ value: r, label: ROLE_LABELS[r] }))}
+          />
         </Field>
         <Field label={`Org assignments (${selectedOrgs.size})`}>
           <div className="border border-border rounded-md p-2 max-h-48 overflow-y-auto space-y-1">
@@ -220,14 +224,13 @@ function ManageModal({ user, actor, orgs, onClose }: { user: UserRow; actor: Act
         <div className="text-sm text-muted-foreground">{user.email}</div>
 
         <Field label="Role">
-          <select
+          <Select
+            ariaLabel="Role"
             value={role}
-            onChange={(e) => setRole(e.target.value as AppRole)}
+            onValueChange={(v) => setRole(v as AppRole)}
             disabled={isSelf}
-            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm disabled:opacity-50"
-          >
-            {invitableRoles(actor).map((r) => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
-          </select>
+            options={invitableRoles(actor).map((r) => ({ value: r, label: ROLE_LABELS[r] }))}
+          />
           {isSelf && <p className="text-xs text-muted-foreground mt-1">You can't change your own role.</p>}
         </Field>
 

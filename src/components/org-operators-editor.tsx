@@ -2,6 +2,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
 import { OperatorChip } from "@/components/operator-chip";
 import { Badge } from "@/components/ui/badge";
 import type { AppRole } from "@/lib/auth";
@@ -134,20 +135,23 @@ function UserSelect({
   placeholder: string;
 }) {
   return (
-    <select
+    <Select
       value={value ?? ""}
-      onChange={(e) => onChange(e.target.value || null)}
-      className="flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm"
-    >
-      <option value="">{placeholder}</option>
-      {candidates
-        .filter((c) => c.id !== excludeId)
-        .map((c) => (
-          <option key={c.id} value={c.id}>
-            {(c.display_name ?? c.email) + (c.role ? ` · ${roleLabel(c.role)}` : "")}
-            {c.status === "out_of_office" ? " (OOO)" : ""}
-          </option>
-        ))}
-    </select>
+      onValueChange={(v) => onChange(v || null)}
+      placeholder={placeholder}
+      ariaLabel={placeholder}
+      options={[
+        { value: "", label: placeholder },
+        ...candidates
+          .filter((c) => c.id !== excludeId)
+          .map((c) => ({
+            value: c.id,
+            label:
+              (c.display_name ?? c.email) +
+              (c.role ? ` · ${roleLabel(c.role)}` : "") +
+              (c.status === "out_of_office" ? " (OOO)" : ""),
+          })),
+      ]}
+    />
   );
 }

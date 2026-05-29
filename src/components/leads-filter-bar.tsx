@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
+import { Select } from "@/components/ui/select";
 
 // Filter bar for /work/leads. Renders the org dropdown + material typeahead.
 // Updates URL params via router.replace so the server page re-runs with the new
@@ -20,7 +21,7 @@ export function LeadsFilterBar({
   material: string;
 }) {
   const router = useRouter();
-  const pathname = usePathname() ?? "/work/leads";
+  const pathname = usePathname() ?? "/work/review/leads";
   const searchParams = useSearchParams();
   const [, startTransition] = useTransition();
 
@@ -71,16 +72,17 @@ export function LeadsFilterBar({
     <div className="flex flex-wrap items-center gap-2 text-sm">
       <label className="flex items-center gap-1">
         <span className="text-xs text-muted-foreground">Org:</span>
-        <select
+        <Select
+          size="sm"
+          className="min-w-[11rem]"
+          ariaLabel="Filter by org"
           value={selectedOrgId}
-          onChange={(e) => setOrg(e.target.value)}
-          className="h-8 rounded-md border border-input bg-transparent px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        >
-          <option value="">All my orgs</option>
-          {orgs.map((o) => (
-            <option key={o.id} value={o.slug}>{o.name}</option>
-          ))}
-        </select>
+          onValueChange={setOrg}
+          options={[
+            { value: "", label: "All my orgs" },
+            ...orgs.map((o) => ({ value: o.slug, label: o.name })),
+          ]}
+        />
       </label>
 
       <form
