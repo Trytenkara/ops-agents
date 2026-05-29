@@ -29,9 +29,9 @@ export default function HowItWorksPage() {
       <section className="space-y-4">
         <h2 className="font-serif text-xl">Pipeline at a glance</h2>
         <p className="text-sm text-muted-foreground">
-          The outreach happy path runs left to right. Agents do the automatic steps; the two cyan steps are where{" "}
-          <span className="font-medium text-foreground">you</span> take over — promote a lead on{" "}
-          <a href="/work/review/leads" className="underline hover:text-foreground">the Review queue</a>, and send the draft in Missive.
+          The outreach happy path runs left to right. Agent 03 drives the automatic steps end-to-end; the cyan steps are where{" "}
+          <span className="font-medium text-foreground">you</span> take over — reviewing and sending each draft in Missive. You can also
+          Promote or Drop leads anytime on <a href="/work/review/leads" className="underline hover:text-foreground">the Review queue</a>.
         </p>
         <PipelineDiagram />
       </section>

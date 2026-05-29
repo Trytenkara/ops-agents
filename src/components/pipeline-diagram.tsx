@@ -12,22 +12,23 @@ interface Step {
   detail: string;
 }
 
+// Agent 03 is the single driver: it discovers, then calls 06 → 04 → 10 as
+// sub-steps. The only human gate is Send (nothing leaves without a click).
 const MAIN_FLOW: Step[] = [
-  { kind: "agent", badge: "03", title: "Lead Creator", detail: "New Tenkara material → raw lead" },
-  { kind: "agent", badge: "06", title: "Data Enrichment", detail: "Fills detail, raw → enriched" },
-  { kind: "human", badge: "YOU", title: "Promote", detail: "On Leads in flight — or Drop it" },
-  { kind: "agent", badge: "04", title: "Outreach", detail: "Drafts the email in Missive" },
-  { kind: "agent", badge: "10", title: "QA Outreach", detail: "Lints the draft for problems" },
+  { kind: "agent", badge: "03", title: "Lead Creator", detail: "Discovers suppliers + drives the pipeline" },
+  { kind: "agent", badge: "06", title: "Enrichment", detail: "Fills contacts (called by 03)" },
+  { kind: "agent", badge: "04", title: "Outreach", detail: "Drafts the email (called by 03)" },
+  { kind: "agent", badge: "10", title: "QA", detail: "Lints the draft inline" },
   { kind: "human", badge: "YOU", title: "Send", detail: "Review & click Send in Missive" },
-  { kind: "agent", badge: "08", title: "Email Scanner", detail: "Detects the supplier's reply" },
+  { kind: "agent", badge: "08", title: "Email Scanner", detail: "Detects the reply, drafts a response" },
+  { kind: "human", badge: "YOU", title: "Send reply", detail: "Review & send the response" },
 ];
 
 const SIDE_CHANNELS = [
-  { badge: "02", title: "Quote Revalidation", detail: "Weekly — drafts re-quotes for expiring quotes" },
-  { badge: "05", title: "Marketplace Validation", detail: "Daily — flags leads whose catalog match dropped" },
-  { badge: "07", title: "Escalation", detail: "Leads idle >14d become a case someone owns" },
-  { badge: "11", title: "CSV Push", detail: "Daily — dropped leads handed back to Tenkara eng" },
-  { badge: "01", title: "Ping", detail: "Heartbeat — confirms the runtime is alive" },
+  { badge: "02", title: "Quote Revalidation", detail: "Daily — drafts re-quotes for expiring quotes" },
+  { badge: "05", title: "Price Changes", detail: "Daily — flags marketplace price changes to apply" },
+  { badge: "07", title: "Escalation + Nudge", detail: "Daily — opens cases for stale leads, nudges ops on pending work" },
+  { badge: "01", title: "Heartbeat", detail: "Confirms the runtime is alive" },
 ];
 
 export function PipelineDiagram() {
