@@ -1,6 +1,12 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { postSlackMessage, deepLink } from "@/lib/slack";
 
+// Escalation has two jobs:
+//   1. (cases) open a case for any lead that's been sitting at status='active'
+//   2. (nudge) chase ops in Slack about items surfaced by 02/03/08 that haven't
+//      been actioned yet — staged drafts not sent, leads stuck at enriched.
+//
 // v1: open a case for any lead that's been sitting at status='active' with no
 // movement for STALE_DAYS. The case carries the supplier/material so an
 // operator can pick it up; the lead itself is moved to status='dropped' with
@@ -13,6 +19,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 // thresholds in v1; future iteration can.
 const STALE_DAYS = 14;
 const MAX_ESCALATIONS_PER_RUN = 25;
+// Gentler, earlier threshold for the nudge (vs. the 14d case threshold).
+const NUDGE_STALE_DAYS = 3;
 
 registerAgent({
   slug: "agent-07-escalation",
@@ -37,16 +45,13 @@ registerAgent({
       ctx.setSummary(`Pull failed: ${pullErr.message}`);
       return;
     }
-    if (!leads || leads.length === 0) {
-      ctx.setItemsProcessed(0);
-      ctx.setStatus("success");
-      ctx.setSummary(`No leads older than ${STALE_DAYS}d to escalate.`);
-      return;
-    }
-    await ctx.log(`Found ${leads.length} stale leads (>${STALE_DAYS}d at status=active)`, { step: "pull" });
+    const staleLeads = leads ?? [];
+    // Note: we don't early-return on an empty set — the nudge pass below still
+    // needs to run to chase un-actioned drafts/leads.
+    await ctx.log(`Found ${staleLeads.length} stale leads (>${STALE_DAYS}d at status=active)`, { step: "pull" });
 
     // Look up operators in one round-trip.
-    const orgIds = Array.from(new Set(leads.map((l) => l.org_id).filter(Boolean) as string[]));
+    const orgIds = Array.from(new Set(staleLeads.map((l) => l.org_id).filter(Boolean) as string[]));
     const opByOrg = new Map<string, string | null>();
     if (orgIds.length) {
       const { data: opRows } = await admin
@@ -63,7 +68,7 @@ registerAgent({
     let errored = 0;
     let skippedNoOrg = 0;
 
-    for (const lead of leads) {
+    for (const lead of staleLeads) {
       if (!lead.org_id) {
         // cases.org_id is NOT NULL — we can't open a case without one.
         skippedNoOrg++;
@@ -151,10 +156,72 @@ registerAgent({
       });
     }
 
+    // --- Nudge pass: chase un-actioned items surfaced by 02/03/08 ---------
+    // Pure nudge — no DB writes, just a Slack chase. Counts per org: staged
+    // drafts not yet sent, and leads parked at enriched awaiting a promote.
+    const nudgeCutoff = new Date(Date.now() - NUDGE_STALE_DAYS * 24 * 3600 * 1000).toISOString();
+    let nudgedOrgs = 0;
+    try {
+      const [{ data: staleDrafts }, { data: stuckLeads }] = await Promise.all([
+        admin
+          .from("draft_references")
+          .select("org_id, metadata")
+          .eq("status", "staged")
+          .lt("created_at", nudgeCutoff)
+          .limit(1000),
+        admin
+          .from("leads_in_flight")
+          .select("org_id")
+          .eq("status", "active")
+          .eq("stage", "enriched")
+          .lt("updated_at", nudgeCutoff)
+          .limit(1000),
+      ]);
+
+      type Counts = { drafts: number; replies: number; promote: number };
+      const byOrg = new Map<string, Counts>();
+      const bump = (orgId: string | null, k: keyof Counts) => {
+        if (!orgId) return;
+        const c = byOrg.get(orgId) ?? { drafts: 0, replies: 0, promote: 0 };
+        c[k]++;
+        byOrg.set(orgId, c);
+      };
+      for (const d of (staleDrafts ?? []) as any[]) {
+        bump(d.org_id, (d.metadata as any)?.draft_kind === "inbound_reply" ? "replies" : "drafts");
+      }
+      for (const l of (stuckLeads ?? []) as any[]) bump(l.org_id, "promote");
+
+      if (byOrg.size > 0) {
+        const { data: orgRows } = await admin.from("orgs").select("id, slug, name").in("id", Array.from(byOrg.keys()));
+        const orgById = new Map((orgRows ?? []).map((o: any) => [o.id, o]));
+        const lines: string[] = [];
+        for (const [orgId, c] of byOrg) {
+          const org = orgById.get(orgId);
+          if (!org) continue;
+          const bits = [
+            c.drafts ? `${c.drafts} draft${c.drafts === 1 ? "" : "s"} to send` : null,
+            c.replies ? `${c.replies} reply draft${c.replies === 1 ? "" : "s"} to send` : null,
+            c.promote ? `${c.promote} lead${c.promote === 1 ? "" : "s"} to promote` : null,
+          ].filter(Boolean);
+          if (!bits.length) continue;
+          lines.push(`• <${deepLink(`/work/orgs/${org.slug}`)}|${org.name}>: ${bits.join(", ")}`);
+          nudgedOrgs++;
+        }
+        if (lines.length && process.env.SLACK_BOT_TOKEN) {
+          await postSlackMessage({
+            text: `*Action pending* — items waiting on ops for >${NUDGE_STALE_DAYS}d:\n${lines.join("\n")}`,
+          });
+          await ctx.log(`Posted nudge for ${nudgedOrgs} org(s)`, { step: "nudge" });
+        }
+      }
+    } catch (e: any) {
+      await ctx.log(`Nudge pass failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "nudge" });
+    }
+
     ctx.setItemsProcessed(escalated);
     ctx.setStatus(errored > 0 && escalated === 0 ? "failure" : errored > 0 ? "partial" : "success");
     ctx.setSummary(
-      `Escalated ${escalated}/${leads.length} stale lead${escalated === 1 ? "" : "s"} → cases${skippedNoOrg ? ` · ${skippedNoOrg} skipped (no org)` : ""}${errored ? ` · ${errored} errors` : ""}`
+      `Escalated ${escalated}/${staleLeads.length} stale lead${escalated === 1 ? "" : "s"} → cases${nudgedOrgs ? ` · nudged ${nudgedOrgs} org(s)` : ""}${skippedNoOrg ? ` · ${skippedNoOrg} skipped (no org)` : ""}${errored ? ` · ${errored} errors` : ""}`
     );
   },
 });

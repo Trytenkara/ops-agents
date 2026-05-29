@@ -2,6 +2,8 @@ import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { listTeamConversations, getConversationMessages } from "@/lib/missive";
 import { MISSIVE_TEAM_ID } from "../quote-revalidation/config";
+import { composeReply } from "./reply-drafter";
+import { stageDraft } from "@/lib/draft-staging";
 
 // Agent 08 — Email Scanner (v1)
 //
@@ -22,10 +24,14 @@ import { MISSIVE_TEAM_ID } from "../quote-revalidation/config";
 //      is a supplier reply → stamp draft_references.metadata + leads_in_flight.
 //   5. Update cursor to max last_activity_at observed.
 //
+// On a detected reply it also DRAFTS a response (composeReply → stageDraft) for
+// the operator to review and send — deduped via metadata.reply_draft so a reply
+// is only drafted once.
+//
 // Safety:
-//   - Read-only on Missive (no POSTs, no /drafts calls).
-//   - Writes only to OA (draft_references.metadata + leads_in_flight.payload + agent_state).
-//   - training_wheels_mode=true on the agent row.
+//   - Missive: read for scanning; the only POST is staging a draft (never sends;
+//     the Missive client refuses send/from_field at compile + runtime).
+//   - Writes only to OA (draft_references + leads_in_flight.payload + agent_state).
 const DEFAULT_LOOKBACK_DAYS = 7;
 const MAX_CONVERSATIONS_PER_RUN = 50;
 
@@ -75,6 +81,8 @@ interface DraftRefRow {
   material_id: string | null;
   metadata: Record<string, any> | null;
   status: string;
+  subject: string | null;
+  assigned_operator: string | null;
 }
 
 registerAgent({
@@ -105,7 +113,7 @@ registerAgent({
     //    the original outreach was about in the log.
     const { data: refs, error: refsErr } = await admin
       .from("draft_references")
-      .select("id, org_id, supplier_id, material_id, metadata, status, subject, thread_id")
+      .select("id, org_id, supplier_id, material_id, metadata, status, subject, thread_id, assigned_operator")
       .neq("status", "discarded");
     if (refsErr) {
       await ctx.log(`draft_references pull failed: ${refsErr.message}`, { level: "error", step: "pull" });
@@ -150,6 +158,8 @@ registerAgent({
         material_id: r.material_id,
         metadata: r.metadata ?? {},
         status: r.status,
+        subject: r.subject ?? null,
+        assigned_operator: r.assigned_operator ?? null,
       });
       outreachByEmail.set(ev.email, arr);
     }
@@ -186,10 +196,14 @@ registerAgent({
 
     // 4. Scan fresh conversations for supplier-sent messages.
     let repliesDetected = 0;
+    let repliesDrafted = 0;
+    let draftErrors = 0;
     let messagesScanned = 0;
     let conversationErrors = 0;
     let maxActivityAt = cursor;
     const matchedDraftIds = new Set<string>();
+    const orgNameById = new Map<string, string>();
+    const canDraftReplies = !!process.env.ANTHROPIC_API_KEY;
 
     for (const conv of fresh) {
       if (conv.last_activity_at > maxActivityAt) maxActivityAt = conv.last_activity_at;
@@ -251,12 +265,14 @@ registerAgent({
 
           // Also stamp the lead so /work/leads UI can show "supplier replied".
           const leadId = (ref.metadata as any)?.lead_id as string | undefined;
+          let leadRow: any = null;
           if (leadId) {
-            const { data: leadRow } = await admin
+            const { data } = await admin
               .from("leads_in_flight")
-              .select("payload")
+              .select("payload, supplier_name, material_name")
               .eq("id", leadId)
               .maybeSingle();
+            leadRow = data;
             const newPayload = {
               ...((leadRow?.payload as any) ?? {}),
               supplier_reply: {
@@ -273,6 +289,80 @@ registerAgent({
             step: "reply",
             data: { draft_id: ref.id, conversation_id: conv.id, sender, lead_id: leadId ?? null },
           });
+
+          // Draft a response (Agent 04 building block) — operator reviews & sends.
+          // Dedup: skip if we already drafted a reply for this draft_reference.
+          const alreadyDrafted = !!(ref.metadata as any)?.reply_draft;
+          if (canDraftReplies && !alreadyDrafted) {
+            try {
+              let orgName = "the client";
+              if (ref.org_id) {
+                if (!orgNameById.has(ref.org_id)) {
+                  const { data: o } = await admin.from("orgs").select("name").eq("id", ref.org_id).maybeSingle();
+                  orgNameById.set(ref.org_id, o?.name ?? "the client");
+                }
+                orgName = orgNameById.get(ref.org_id)!;
+              }
+              const mode = ((ref.metadata as any)?.outreach_mode === "ghost" ? "ghost" : "active") as "active" | "ghost";
+              const reply = await composeReply({
+                mode,
+                clientOrgName: orgName,
+                ghostBrand: (ref.metadata as any)?.ghost_brand ?? undefined,
+                supplierName: leadRow?.supplier_name ?? null,
+                supplierContactName: (leadRow?.payload as any)?.supplier_contact_name ?? m.from_field?.name ?? null,
+                materialName: leadRow?.material_name ?? null,
+                originalSubject: ref.subject,
+                theirSubject: m.subject ?? conv.latest_message_subject ?? null,
+                theirPreview: m.preview ?? null,
+              });
+              const staged = await stageDraft({
+                admin,
+                agentId: ctx.agentId,
+                runId: ctx.runId,
+                orgId: ref.org_id,
+                supplierId: ref.supplier_id,
+                materialId: ref.material_id,
+                to: { name: m.from_field?.name ?? null, address: sender },
+                subject: reply.subject,
+                body: reply.body,
+                assignedOperator: ref.assigned_operator,
+                metadata: {
+                  outreach_mode: mode,
+                  ghost_brand: (ref.metadata as any)?.ghost_brand ?? null,
+                  draft_kind: "inbound_reply",
+                  in_reply_to_draft_ref: ref.id,
+                  reply_to_conversation_id: conv.id,
+                  lead_id: leadId ?? null,
+                },
+              });
+              if (staged.ok) {
+                repliesDrafted++;
+                await admin
+                  .from("draft_references")
+                  .update({
+                    metadata: {
+                      ...newMetadata,
+                      reply_draft: {
+                        draft_ref_id: staged.draftRefId,
+                        staged_at: new Date().toISOString(),
+                        conversation_id: staged.conversationId,
+                      },
+                    },
+                  })
+                  .eq("id", ref.id);
+                await ctx.log(`Drafted reply for ${sender} (draft_ref ${staged.draftRefId})`, {
+                  step: "reply_draft",
+                  data: { in_reply_to: ref.id, draft_ref_id: staged.draftRefId },
+                });
+              } else {
+                draftErrors++;
+                await ctx.log(`Reply draft staging failed for ${ref.id}: ${staged.error}`, { level: "warn", step: "reply_draft" });
+              }
+            } catch (e: any) {
+              draftErrors++;
+              await ctx.log(`Reply compose failed for ${ref.id}: ${e?.message ?? e}`, { level: "warn", step: "reply_draft" });
+            }
+          }
         }
       }
     }
@@ -283,7 +373,7 @@ registerAgent({
     ctx.setItemsProcessed(repliesDetected);
     ctx.setStatus(conversationErrors > 0 && repliesDetected === 0 ? "partial" : "success");
     ctx.setSummary(
-      `Scanned ${fresh.length} fresh conversations · ${messagesScanned} messages · ${repliesDetected} supplier reply${repliesDetected === 1 ? "" : "ies"} detected${conversationErrors ? ` · ${conversationErrors} conv errors` : ""}`
+      `Scanned ${fresh.length} fresh conversations · ${messagesScanned} messages · ${repliesDetected} supplier repl${repliesDetected === 1 ? "y" : "ies"} detected · ${repliesDrafted} reply draft${repliesDrafted === 1 ? "" : "s"} staged${draftErrors ? ` · ${draftErrors} draft errors` : ""}${conversationErrors ? ` · ${conversationErrors} conv errors` : ""}`
     );
   },
 });

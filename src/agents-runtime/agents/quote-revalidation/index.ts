@@ -6,7 +6,13 @@ import { generateRevalidationEmail, formatUserMessage } from "./drafter";
 import { buildCsv, type GroupResult } from "./csv-builder";
 import { uploadCsvAndSign } from "@/lib/storage";
 import { createMissiveDraft, missiveDraftLink } from "@/lib/missive";
+import { lintDraft } from "../outreach-qa/lint";
 import { postQrSummary } from "./slack-notifier";
+
+// Now runs daily (was weekly), so a quote that's expiring stays "overdue" for
+// days. Debounce: don't re-draft a quote we already drafted within this window,
+// regardless of whether the operator has sent it yet.
+const REDRAFT_DEBOUNCE_DAYS = 7;
 
 // Group key: (client_org × supplier).
 function groupKey(r: OverdueRow): string {
@@ -219,11 +225,19 @@ registerAgent({
             assignedOperator = ooo ? (ops.backup_user_id ?? ops.primary_user_id) : ops.primary_user_id;
           }
         }
+        const qaFindings = lintDraft({
+          subject: r.subject ?? null,
+          body_preview: r.body ?? null,
+          assigned_operator: assignedOperator,
+          metadata: { outreach_mode: r.mode, ghost_brand: r.ghostBrand ?? null },
+        });
+        const debounceSince = new Date(Date.now() - REDRAFT_DEBOUNCE_DAYS * 24 * 3600 * 1000).toISOString();
         for (const row of r.group.rows) {
-          // De-dup: skip if a staged draft for this quote already exists for this agent.
+          // Debounce: skip if we drafted this quote within the window (any status),
+          // so the daily sweep doesn't re-draft the same expiring quote each day.
           const { data: existing } = await admin
             .from("draft_references")
-            .select("id").eq("quote_id", row.quote_id).eq("agent_id", tackleAgentId).eq("status", "staged").maybeSingle();
+            .select("id").eq("quote_id", row.quote_id).eq("agent_id", tackleAgentId).gte("created_at", debounceSince).maybeSingle();
           if (existing) continue;
           await admin.from("draft_references").insert({
             email_client: "missive",
@@ -243,6 +257,8 @@ registerAgent({
               suggested_from_email: r.group.client_purchasing_email,
               ghost_brand: r.ghostBrand ?? null,
               missive_draft_link: missiveDraftLink(r.missiveConversationId, r.missiveDraftId),
+              qa_findings: qaFindings,
+              qa_linted_at: new Date().toISOString(),
             },
           });
           registered += 1;
