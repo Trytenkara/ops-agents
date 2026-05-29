@@ -2,10 +2,12 @@ import Link from "next/link";
 import { roleLabel, ROLE_CHIP } from "@/lib/roles";
 import type { SessionContext } from "@/lib/auth";
 import { canSeeAgentTab, hasAnyRole } from "@/lib/auth";
+import { seesAllOrgs } from "@/lib/org-access";
 import { SignOutButton } from "@/components/sign-out-button";
 import { NavLink } from "@/components/nav-link";
 import { TabToggleClient } from "@/components/tab-toggle";
 import { NavSwitcher } from "@/components/nav-switcher";
+import { RunbookAssistant } from "@/components/runbook-assistant";
 import { cn } from "@/lib/utils";
 
 export interface OrgItem {
@@ -49,6 +51,7 @@ export function Shell({
         </nav>
 
         <div className="mt-auto border-t border-border px-5 py-4 space-y-2">
+          <RunbookAssistant />
           <Link href="/how-it-works" className="block text-xs text-muted-foreground hover:text-foreground hover:underline">
             How Tackle Box works →
           </Link>
@@ -104,18 +107,24 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function WorkNav({ orgs, session }: { orgs: OrgItem[]; session: SessionContext }) {
   const isAccountManagerOnly = hasAnyRole(session, ["account_manager"]) && !hasAnyRole(session, ["admin", "ops_lead", "ops_operator"]);
   const canManageOperators = hasAnyRole(session, ["admin", "ops_lead"]);
+  const allOrgs = seesAllOrgs(session);
   return (
     <>
+      <SectionLabel>Your work</SectionLabel>
       <NavLink href="/work">Today</NavLink>
       {!isAccountManagerOnly && (
         <>
-          <NavLink href="/work/cross-org">Cross-org views</NavLink>
-          <NavLink href="/work/leads" match="prefix">Leads in flight</NavLink>
-          <NavLink href="/work/marketplace-findings" match="prefix">Marketplace findings</NavLink>
+          <SectionLabel>Queues</SectionLabel>
+          <NavLink href="/work/review" match="prefix">Review queue</NavLink>
           <NavLink href="/work/exports" match="prefix">Exports (30d)</NavLink>
         </>
       )}
-      <SectionLabel>Orgs</SectionLabel>
+      <div className="flex items-center justify-between px-3 pt-4 pb-1.5">
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Orgs</span>
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          {allOrgs ? "All orgs" : `${orgs.length} assigned`}
+        </span>
+      </div>
       {orgs.length === 0 && <div className="text-xs text-muted-foreground px-3">No orgs synced yet</div>}
       {orgs.map((o) => (
         <NavLink key={o.slug} href={`/work/orgs/${o.slug}`} match="prefix">

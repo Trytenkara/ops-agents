@@ -399,7 +399,7 @@ export default async function LeadsPage({
       </Table>
 
       <PaginationBar
-        basePath="/work/leads"
+        basePath="/work/review/leads"
         baseQs={baseQs}
         page={safePage}
         pageSize={PAGE_SIZE}
@@ -430,7 +430,7 @@ function buildHref(p: {
   if (p.channel) sp.set("channel", p.channel);
   if (p.sort && p.sort !== "confidence") sp.set("sort", p.sort);
   if (p.priced) sp.set("priced", p.priced);
-  return `/work/leads?${sp.toString()}`;
+  return `/work/review/leads?${sp.toString()}`;
 }
 
 function ConfidenceBadge({ value }: { value: number | null }) {

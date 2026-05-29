@@ -7,6 +7,8 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@
 import { relativeTime } from "@/lib/utils";
 import { resolveSupplierNames, resolveMaterialNames } from "@/lib/tenkara-names";
 import { PageExplainer } from "@/components/page-explainer";
+import { roleLabel } from "@/lib/roles";
+import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +61,13 @@ export default async function TodayInboxPage() {
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const firstName = session.displayName?.split(" ")[0] ?? null;
 
+  // Role + org scope line so an operator immediately knows what they're seeing.
+  const primaryRoleLabel = session.roles.length ? roleLabel(session.roles[0]) : "Operator";
+  const assignedOrgIds = await getAssignedOrgIds(session);
+  const orgScope = seesAllOrgs(session)
+    ? "all orgs"
+    : `${assignedOrgIds?.length ?? 0} org${(assignedOrgIds?.length ?? 0) === 1 ? "" : "s"}`;
+
   return (
     <div className="space-y-8 max-w-6xl">
       <header>
@@ -69,6 +78,9 @@ export default async function TodayInboxPage() {
           {isAccountManager
             ? "Client-facing items needing your attention."
             : "Drafts, cases, and escalations that need a human."}
+        </p>
+        <p className="text-xs text-muted-foreground mt-1">
+          You&apos;re signed in as <span className="font-medium text-foreground">{primaryRoleLabel}</span> · covering {orgScope}.
         </p>
       </header>
 
@@ -85,7 +97,7 @@ export default async function TodayInboxPage() {
           {assignedDrafts && assignedDrafts.length > 0 ? (
             <DraftTable rows={assignedDrafts as any} supplierNames={supplierNames} materialNames={materialNames} />
           ) : (
-            <p className="text-sm text-muted-foreground">Nothing assigned. Take a look at unassigned items below.</p>
+            <p className="text-sm text-muted-foreground">Nothing assigned to you right now. Pick up an unassigned item below.</p>
           )}
         </CardContent>
       </Card>
@@ -99,6 +111,11 @@ export default async function TodayInboxPage() {
             <DraftTable rows={unassignedDrafts as any} supplierNames={supplierNames} materialNames={materialNames} />
           ) : (
             <p className="text-sm text-muted-foreground">Inbox zero — nothing waiting for pickup.</p>
+          )}
+          {!isAccountManager && (
+            <Link href="/work/review/leads" className="mt-3 inline-block text-sm text-primary hover:underline">
+              Browse the Review queue →
+            </Link>
           )}
         </CardContent>
       </Card>

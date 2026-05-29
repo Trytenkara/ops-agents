@@ -108,7 +108,7 @@ export default async function MarketplaceFindingsPage({
             {STATUSES.map((s) => (
           <Link
             key={s}
-            href={{ pathname: "/work/marketplace-findings", query: { status: s, ...(supplierFilter ? { supplier: supplierFilter } : {}), ...(orgFilter ? { org: orgFilter } : {}) } }}
+            href={{ pathname: "/work/review/marketplace", query: { status: s, ...(supplierFilter ? { supplier: supplierFilter } : {}), ...(orgFilter ? { org: orgFilter } : {}) } }}
             className={
               "rounded-full px-3 py-1 border " +
               (s === status
@@ -123,7 +123,7 @@ export default async function MarketplaceFindingsPage({
         {Array.from(orgsSeen.entries()).map(([id, name]) => (
           <Link
             key={id}
-            href={{ pathname: "/work/marketplace-findings", query: { status, ...(orgFilter === id ? {} : { org: id }) } }}
+            href={{ pathname: "/work/review/marketplace", query: { status, ...(orgFilter === id ? {} : { org: id }) } }}
             className={
               "rounded-full px-2 py-0.5 text-xs border " +
               (orgFilter === id
@@ -139,7 +139,7 @@ export default async function MarketplaceFindingsPage({
         {suppliersSeen.map((sn) => (
           <Link
             key={sn}
-            href={{ pathname: "/work/marketplace-findings", query: { status, ...(supplierFilter === sn ? {} : { supplier: sn }) } }}
+            href={{ pathname: "/work/review/marketplace", query: { status, ...(supplierFilter === sn ? {} : { supplier: sn }) } }}
             className={
               "rounded-full px-2 py-0.5 text-xs border " +
               (supplierFilter === sn
@@ -199,7 +199,7 @@ export default async function MarketplaceFindingsPage({
                 )}
               </TableCell>
               <TableCell className="align-top">
-                <Link href="/work/leads" className="text-foreground hover:underline">
+                <Link href="/work/review/leads" className="text-foreground hover:underline">
                   {r.material_name}
                 </Link>
                 {r.pack_size && (

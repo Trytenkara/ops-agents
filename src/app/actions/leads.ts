@@ -89,7 +89,7 @@ export async function promoteLead(leadId: string): Promise<ActionResult> {
     diff: { from_stage: fromStage, to_stage: "ready_for_outreach", override: isRawOverride || undefined },
   });
 
-  revalidatePath("/work/leads");
+  revalidatePath("/work/review/leads");
   return { ok: true };
 }
 
@@ -129,6 +129,6 @@ export async function dropLead(leadId: string, reason: DropReason, note?: string
     diff: { from_stage: lead.stage, reason, note: note?.trim() || undefined },
   });
 
-  revalidatePath("/work/leads");
+  revalidatePath("/work/review/leads");
   return { ok: true };
 }

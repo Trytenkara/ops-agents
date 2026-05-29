@@ -47,7 +47,7 @@ export async function approveFinding(findingId: string): Promise<ActionResult> {
     })
     .eq("id", findingId);
   if (error) return { ok: false, error: error.message };
-  revalidatePath("/work/marketplace-findings");
+  revalidatePath("/work/review/marketplace");
   return { ok: true };
 }
 
@@ -66,7 +66,7 @@ export async function dismissFinding(findingId: string): Promise<ActionResult> {
     })
     .eq("id", findingId);
   if (error) return { ok: false, error: error.message };
-  revalidatePath("/work/marketplace-findings");
+  revalidatePath("/work/review/marketplace");
   return { ok: true };
 }
 
@@ -85,6 +85,6 @@ export async function reopenFinding(findingId: string): Promise<ActionResult> {
     })
     .eq("id", findingId);
   if (error) return { ok: false, error: error.message };
-  revalidatePath("/work/marketplace-findings");
+  revalidatePath("/work/review/marketplace");
   return { ok: true };
 }

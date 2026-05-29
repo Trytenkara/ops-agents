@@ -41,7 +41,7 @@ export const AGENT_SPECS: AgentSpec[] = [
     cadence: "Every 4 hours · America/New_York",
     purpose: "For each newly-added Tenkara material, surface candidate suppliers from the existing supplier graph.",
     automatic: "Scans Tenkara materials added since the last cursor, finds candidate suppliers via quote history + catalogs, inserts rows into leads_in_flight at stage=raw (cap 50/run).",
-    humanInput: "None at this stage — Agent 06 picks them up next. Use /work/leads if you want to peek or drop a bad row.",
+    humanInput: "None at this stage — Agent 06 picks them up next. Use /work/review/leads if you want to peek or drop a bad row.",
   },
   {
     number: 4,
@@ -61,7 +61,7 @@ export const AGENT_SPECS: AgentSpec[] = [
     cadence: "Daily · 07:00 America/New_York",
     purpose: "Re-verify catalog-match leads against Tenkara's current supplier catalogs.",
     automatic: "Reads leads with signal=catalog_match, checks supplier_catalog_materials, flags payload.catalog_drift='no_longer_listed' when a supplier has dropped the material.",
-    humanInput: "Review flagged leads on /work/leads — drop ones whose drift signal makes them no longer worth pursuing.",
+    humanInput: "Review flagged leads on /work/review/leads — drop ones whose drift signal makes them no longer worth pursuing.",
   },
   {
     number: 6,
@@ -71,7 +71,7 @@ export const AGENT_SPECS: AgentSpec[] = [
     cadence: "Every 2 hours · America/New_York",
     purpose: "Promote raw leads to enriched, or mark them blocked with a reason.",
     automatic: "Reads top 25 stage=raw leads by confidence, merges Tenkara supplier metadata, sets supplier_phone / country / completeness_score. Promotes to stage=enriched or leaves at raw with payload.enrichment_blocked_reason.",
-    humanInput: "On /work/leads, click Promote on an enriched lead to hand it to Agent 04, or click Drop with a reason if it shouldn't be pursued. Raw-with-blocked-reason leads can be promoted as an override when you want to contact anyway.",
+    humanInput: "On /work/review/leads, click Promote on an enriched lead to hand it to Agent 04, or click Drop with a reason if it shouldn't be pursued. Raw-with-blocked-reason leads can be promoted as an override when you want to contact anyway.",
   },
   {
     number: 7,
@@ -111,7 +111,7 @@ export const AGENT_SPECS: AgentSpec[] = [
     cadence: "Hourly at :15 · America/New_York",
     purpose: "Lint staged drafts for placeholders, missing operators, empty bodies, and ghost-mode brand leaks.",
     automatic: "Reads draft_references staged between 7d and 1h ago, writes findings to draft_references.metadata.qa_findings. Does not change draft status.",
-    humanInput: "Check qa_findings on /work/cross-org before sending a draft — fix any errors first.",
+    humanInput: "Check qa_findings on /work/review/drafts before sending a draft — fix any errors first.",
   },
   {
     number: 11,
