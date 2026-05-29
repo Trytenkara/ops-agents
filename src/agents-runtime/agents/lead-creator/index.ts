@@ -1,6 +1,6 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { queryRecentMaterials, findCandidatesForMaterial, type CandidateSupplier, type MaterialRow } from "./sql";
+import { queryRecentMaterials, findCandidatesForMaterial, existingQuotesForMaterials, type CandidateSupplier, type MaterialRow } from "./sql";
 import { scoutSuppliersForMaterial, scoreScoutConfidence, scoutCompleteness, type ScoutSupplier } from "./scout";
 import { enrichAndStageLead } from "../data-enrichment/run-enrich";
 import { executeAgentRun } from "../../runtime";
@@ -428,15 +428,33 @@ registerAgent({
         .select("supplier_name, material_name, payload, source, confidence_score, stage")
         .eq("agent_run_id", ctx.runId);
       if (runLeads && runLeads.length) {
-        const headers = ["supplier", "material", "inci", "role", "site_type", "country", "website", "email", "phone", "pricing", "moq", "grades", "certifications", "confidence", "source", "stage"];
-        const rows = runLeads.map((r: any) => {
+        const headers = ["kind", "supplier", "material", "inci", "role", "site_type", "country", "website", "email", "phone", "pricing", "moq", "grades", "certifications", "confidence", "source", "stage"];
+        const rows: any[][] = runLeads.map((r: any) => {
           const p = r.payload ?? {};
           return [
-            r.supplier_name ?? "", r.material_name ?? "", p.inci_name ?? "", p.supplier_role ?? "", p.site_type ?? "", p.supplier_country ?? "",
+            "lead", r.supplier_name ?? "", r.material_name ?? "", p.inci_name ?? "", p.supplier_role ?? "", p.site_type ?? "", p.supplier_country ?? "",
             p.supplier_website ?? p.source_url ?? "", p.supplier_contact_email ?? "", p.supplier_phone ?? "", p.pack_sizes_pricing ?? "", p.moq ?? "",
             p.grades_offered ?? "", p.certifications ?? "", r.confidence_score ?? "", r.source ?? "", r.stage ?? "",
           ];
         });
+
+        // Ben's recco: append the saved quotes we already have for these materials
+        // as context rows (kind=existing_quote) so the sourcing index shows what's
+        // already covered — these are NOT new outreach leads.
+        try {
+          const quotes = await existingQuotesForMaterials(materials.map((m) => m.id));
+          for (const q of quotes) {
+            const priceLabel = q.price != null ? `$${q.price}${q.uom ? `/${q.uom}` : ""}${q.lead_time_days != null ? ` · lt ${q.lead_time_days}d` : ""}` : "";
+            rows.push([
+              "existing_quote", q.supplier_name ?? "", q.material_name ?? "", "", "", "", "",
+              q.product_url ?? "", "", "", priceLabel, "", "", "", "", q.status ?? "quoted", "quoted",
+            ]);
+          }
+          if (quotes.length) await ctx.log(`CSV: appended ${quotes.length} existing saved quote(s) as context`, { step: "csv" });
+        } catch (e: any) {
+          await ctx.log(`Existing-quotes lookup failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "csv" });
+        }
+
         const filename = `${new Date().toISOString().slice(0, 10)}_new_leads_${runLeads.length}.csv`;
         const signed = await uploadCsvAndSign({ filename, content: toCsv(headers, rows), expiresInDays: 7 });
         csvUrl = signed.signedUrl;

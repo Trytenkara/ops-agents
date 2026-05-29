@@ -157,3 +157,59 @@ export async function findCandidatesForMaterial(material: MaterialRow): Promise<
 
   return candidates;
 }
+
+// Saved quotes we already have for a material — Ben's recco: surface what's
+// already in the quotes DB so the scanner shows existing coverage instead of
+// re-sourcing it. Read-only; resolves supplier names in SQL.
+export interface ExistingQuote {
+  quote_id: string;
+  material_id: string;
+  material_name: string | null;
+  supplier_name: string | null;
+  price: number | null;
+  uom: string | null;
+  lead_time_days: number | null;
+  status: string | null;
+  quote_date: string | null;
+  product_url: string | null;
+}
+
+const EXISTING_QUOTE_SELECT = `
+  select q.id::text          as quote_id,
+         q.material_id::text  as material_id,
+         m.name               as material_name,
+         s.name               as supplier_name,
+         q.price              as price,
+         q.unit_of_measurement as uom,
+         q.lead_time_days     as lead_time_days,
+         q.status::text       as status,
+         q.quote_date::text   as quote_date,
+         q.product_url        as product_url
+    from public.material_quotes q
+    join public.materials m on m.id = q.material_id
+    left join public.suppliers s on s.id = q.supplier_id`;
+
+// Existing quotes for a set of materials (used to annotate Agent 03's CSV).
+export async function existingQuotesForMaterials(materialIds: string[]): Promise<ExistingQuote[]> {
+  const ids = Array.from(new Set(materialIds.filter(Boolean)));
+  if (ids.length === 0) return [];
+  return tenkaraQuery<ExistingQuote>(
+    `${EXISTING_QUOTE_SELECT}
+      where q.material_id = any($1::uuid[]) and q.price is not null
+      order by m.name, q.quote_date desc nulls last`,
+    [ids]
+  );
+}
+
+// Existing quotes across all materials owned by a Tenkara org (used on the
+// per-org Leads tab). Materials link to an org via users.organization_id.
+export async function existingQuotesForOrg(tenkaraOrgId: string, limit = 200): Promise<ExistingQuote[]> {
+  return tenkaraQuery<ExistingQuote>(
+    `${EXISTING_QUOTE_SELECT}
+      left join public.users u on u.id = q.user_id
+      where u.organization_id = $1::uuid and q.price is not null
+      order by m.name, q.quote_date desc nulls last
+      limit $2`,
+    [tenkaraOrgId, limit]
+  );
+}
