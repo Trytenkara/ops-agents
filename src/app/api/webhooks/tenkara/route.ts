@@ -15,7 +15,7 @@ export const runtime = "nodejs";
 
 const SIGNATURE_HEADER = "x-tenkara-signature";
 
-const payloadSchema = z.object({
+const statusSchema = z.object({
   event: z.enum(["draft.sent", "draft.discarded"]),
   draft_id: z.string().min(1),       // Tenkara's draft id == draft_references.draft_id
   thread_id: z.string().optional(),
@@ -23,7 +23,18 @@ const payloadSchema = z.object({
   occurred_at: z.string().optional(),
 });
 
-const EVENT_TO_STATUS: Record<z.infer<typeof payloadSchema>["event"], "sent" | "discarded"> = {
+const inboundSchema = z.object({
+  event: z.literal("message.received"),
+  conversation_id: z.string().min(1),
+  message_id: z.string().min(1),
+  in_reply_to_draft_id: z.string().nullish(),
+  from: z.string().min(1),
+  subject: z.string().nullish(),
+  body_text: z.string().nullish(),
+  received_at: z.string().nullish(),
+});
+
+const EVENT_TO_STATUS: Record<z.infer<typeof statusSchema>["event"], "sent" | "discarded"> = {
   "draft.sent": "sent",
   "draft.discarded": "discarded",
 };
@@ -48,13 +59,28 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "invalid_signature" }, { status: 401 });
   }
 
-  let json: unknown;
+  let json: any;
   try {
     json = JSON.parse(raw);
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
-  const parsed = payloadSchema.safeParse(json);
+
+  const admin = createAdminClient();
+
+  // Inbound supplier reply → match the originating draft, compose + stage a reply.
+  if (json?.event === "message.received") {
+    const inbound = inboundSchema.safeParse(json);
+    if (!inbound.success) {
+      return NextResponse.json({ error: inbound.error.flatten() }, { status: 400 });
+    }
+    const { handleInboundReply } = await import("@/lib/tenkara-inbound");
+    const result = await handleInboundReply(admin, inbound.data);
+    return NextResponse.json(result.body, { status: result.status });
+  }
+
+  // Otherwise it's a draft status event (sent/discarded).
+  const parsed = statusSchema.safeParse(json);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
@@ -62,8 +88,6 @@ export async function POST(request: NextRequest) {
   const { event, draft_id, thread_id, operator, occurred_at } = parsed.data;
   const newStatus = EVENT_TO_STATUS[event];
   const reviewedAt = occurred_at ?? new Date().toISOString();
-
-  const admin = createAdminClient();
 
   // Match on Tenkara's draft id within Rod's app namespace.
   let lookup = admin
