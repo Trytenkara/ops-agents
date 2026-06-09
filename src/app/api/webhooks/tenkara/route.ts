@@ -34,6 +34,25 @@ const inboundSchema = z.object({
   received_at: z.string().nullish(),
 });
 
+// Fired after a cold-outbound conversation+draft is created via Tenkara's
+// /api/external/conversations. A resilience confirmation (fires once per real
+// create, never on idempotent replay) that lets us record the staged draft even
+// if the synchronous 201 was lost. Internal ids (org/supplier/material/lead/
+// operator) ride along in `context` so we can populate the draft_references row.
+const conversationCreatedSchema = z.object({
+  event: z.literal("conversation.agent_created"),
+  conversation_id: z.string().min(1),
+  draft_id: z.string().min(1),
+  external_id: z.string().nullish(),
+  agent_name: z.string().nullish(),
+  to_email: z.string().nullish(),
+  to_name: z.string().nullish(),
+  subject: z.string().nullish(),
+  requires_sender_selection: z.boolean().nullish(),
+  created_at: z.string().nullish(),
+  context: z.record(z.any()).nullish(),
+});
+
 const EVENT_TO_STATUS: Record<z.infer<typeof statusSchema>["event"], "sent" | "discarded"> = {
   "draft.sent": "sent",
   "draft.discarded": "discarded",
@@ -77,6 +96,64 @@ export async function POST(request: NextRequest) {
     const { handleInboundReply } = await import("@/lib/tenkara-inbound");
     const result = await handleInboundReply(admin, inbound.data);
     return NextResponse.json(result.body, { status: result.status });
+  }
+
+  // Cold-outbound conversation created via /api/external/conversations →
+  // record it as a staged draft (idempotent on draft_id).
+  if (json?.event === "conversation.agent_created") {
+    const created = conversationCreatedSchema.safeParse(json);
+    if (!created.success) {
+      return NextResponse.json({ error: created.error.flatten() }, { status: 400 });
+    }
+    const p = created.data;
+    const ctx = (p.context ?? {}) as Record<string, any>;
+
+    const { data: existing } = await admin
+      .from("draft_references")
+      .select("id")
+      .eq("draft_id", p.draft_id)
+      .eq("email_client", "rod_app")
+      .maybeSingle();
+    if (existing) {
+      return NextResponse.json({ recorded: false, deduped: true, draft_ref_id: existing.id });
+    }
+
+    const { data, error } = await admin
+      .from("draft_references")
+      .insert({
+        email_client: "rod_app",
+        thread_id: p.conversation_id,
+        draft_id: p.draft_id,
+        org_id: ctx.org_id ?? null,
+        supplier_id: ctx.supplier_id ?? null,
+        material_id: ctx.material_id ?? null,
+        quote_id: ctx.quote_id ?? null,
+        subject: p.subject ?? null,
+        assigned_operator: ctx.assigned_operator ?? null,
+        status: "staged",
+        metadata: {
+          draft_kind: "cold_outbound",
+          external_id: p.external_id ?? null,
+          agent_name: p.agent_name ?? null,
+          to_email: p.to_email ?? null,
+          to_name: p.to_name ?? null,
+          requires_sender_selection: p.requires_sender_selection ?? null,
+          lead_id: ctx.lead_id ?? null,
+          context: ctx,
+        },
+      })
+      .select("id")
+      .maybeSingle();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+    await admin.from("audit_log").insert({
+      action: "draft.cold_outbound_created",
+      target_table: "draft_references",
+      target_id: data?.id,
+      diff: { source: "tenkara_webhook", conversation_id: p.conversation_id, draft_id: p.draft_id, external_id: p.external_id ?? null },
+    });
+
+    return NextResponse.json({ recorded: true, draft_ref_id: data?.id });
   }
 
   // Otherwise it's a draft status event (sent/discarded).
