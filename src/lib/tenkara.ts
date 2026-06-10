@@ -84,3 +84,77 @@ export async function createTenkaraDraft(input: CreateTenkaraDraftInput): Promis
     createdAt: d.created_at,
   };
 }
+
+// ---------- Cold outbound (Agents 02 + 04) ----------
+//
+// Creates a brand-new conversation + draft in one round trip via Tenkara's
+// /api/external/conversations. This is the standalone-outbound path for agents
+// that start a fresh thread (no conversation_id to reply into). Requires the
+// token's `conversations:write` scope. Never sends — operator picks the sender
+// and clicks Send in Tenkara's Pending Outreach surface.
+
+export interface CreateTenkaraConversationInput {
+  externalId: string;                 // idempotency key, ≤200 chars, stable per intended create
+  to: { name?: string | null; address: string };
+  subject: string;
+  bodyHtml: string;
+  bodyText?: string;
+  emailAccountId?: string;            // optional sender; omit → operator picks at review
+  context?: Record<string, any>;      // free-form; forwarded verbatim on the conversation.agent_created webhook
+}
+
+export interface TenkaraConversation {
+  conversationId: string;
+  draftId: string;                    // matches draft_id on later send/discard webhooks
+  requiresSenderSelection: boolean;
+  createdAt?: string;
+  idempotent: boolean;                // true if external_id replayed an existing create
+}
+
+export async function createTenkaraConversation(input: CreateTenkaraConversationInput): Promise<TenkaraConversation> {
+  const token = process.env.TENKARA_API_TOKEN;
+  if (!token) throw new Error("TENKARA_API_TOKEN not configured");
+  if (!input.externalId) throw new Error("createTenkaraConversation requires externalId");
+
+  const payload: Record<string, unknown> = {
+    external_id: input.externalId,
+    to_email: input.to.address,
+    subject: input.subject,
+    body_html: input.bodyHtml,
+  };
+  if (input.to.name) payload.to_name = input.to.name;
+  if (input.bodyText) payload.body_text = input.bodyText;
+  if (input.emailAccountId) payload.email_account_id = input.emailAccountId;
+  if (input.context) payload.context = input.context;
+
+  const res = await fetch(`${TENKARA_INBOX_BASE}/api/external/conversations`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Tenkara POST /api/external/conversations failed: ${res.status} ${text.slice(0, 500)}`);
+  }
+
+  const body = await res.json();
+  return {
+    conversationId: body.conversation_id ?? "",
+    draftId: body.draft_id ?? "",
+    requiresSenderSelection: body.requires_sender_selection ?? true,
+    createdAt: body.created_at,
+    idempotent: body.idempotent ?? false,
+  };
+}
+
+// Rollout flag: which email app a cold-outbound agent stages into. Defaults to
+// Missive. Set COLD_OUTBOUND_TENKARA_AGENTS to "all" (or a csv like "04" /
+// "02,04") to route those agents to Tenkara. Lets us flip per-deploy — and
+// migrate one agent at a time — without a code change.
+export function coldOutboundEmailClient(agent: "02" | "04"): "missive" | "rod_app" {
+  const raw = (process.env.COLD_OUTBOUND_TENKARA_AGENTS ?? "").trim().toLowerCase();
+  if (!raw) return "missive";
+  if (raw === "all" || raw === "true" || raw === "1") return "rod_app";
+  const enabled = new Set(raw.split(",").map((s) => s.trim()));
+  return enabled.has(agent) ? "rod_app" : "missive";
+}

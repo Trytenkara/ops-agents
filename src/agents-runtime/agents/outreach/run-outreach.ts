@@ -1,6 +1,7 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { composeOutreachDraft } from "./drafter";
 import { stageDraft } from "@/lib/draft-staging";
+import { coldOutboundEmailClient } from "@/lib/tenkara";
 
 // Per-lead outreach: compose the email, stage it through the shared draft→QA
 // pipeline, and promote the lead to ready_for_outreach. Shared by Agent 04's
@@ -54,6 +55,7 @@ export async function runOutreachForLead(input: RunOutreachInput): Promise<RunOu
     signal: payload.signal ?? null,
   });
 
+  const emailClient = coldOutboundEmailClient("04");
   const staged = await stageDraft({
     admin,
     agentId,
@@ -65,6 +67,8 @@ export async function runOutreachForLead(input: RunOutreachInput): Promise<RunOu
     subject: draft.subject,
     body: draft.body,
     assignedOperator,
+    emailClient,
+    externalId: emailClient === "rod_app" ? `agent-04-outreach-${lead.id}` : undefined,
     metadata: {
       outreach_mode: mode,
       ghost_brand: ghostBrand ?? null,
@@ -84,8 +88,12 @@ export async function runOutreachForLead(input: RunOutreachInput): Promise<RunOu
   const newPayload = {
     ...payload,
     outreach: {
-      missive_draft_id: staged.missiveDraftId,
-      missive_conversation_id: staged.conversationId ?? null,
+      email_client: emailClient,
+      draft_id: staged.draftId ?? null,
+      conversation_id: staged.conversationId ?? null,
+      // back-compat: keep missive_* populated when staged into Missive
+      missive_draft_id: emailClient === "missive" ? staged.missiveDraftId : null,
+      missive_conversation_id: emailClient === "missive" ? (staged.conversationId ?? null) : null,
       mode,
       ghost_brand: ghostBrand ?? null,
       staged_at: new Date().toISOString(),
