@@ -6,6 +6,8 @@ import { generateRevalidationEmail, formatUserMessage } from "./drafter";
 import { buildCsv, type GroupResult } from "./csv-builder";
 import { uploadCsvAndSign } from "@/lib/storage";
 import { createMissiveDraft, missiveDraftLink } from "@/lib/missive";
+import { createTenkaraConversation, coldOutboundEmailClient } from "@/lib/tenkara";
+import { bodyToHtml } from "@/lib/email-style";
 import { lintDraft } from "../outreach-qa/lint";
 import { postQrSummary } from "./slack-notifier";
 
@@ -54,6 +56,7 @@ registerAgent({
   description: "Weekly platform-wide sweep for expiring/expired supplier quotes.",
   async run(ctx) {
     const today = new Date().toISOString().slice(0, 10);
+    const emailClient = coldOutboundEmailClient("02");
     await ctx.log("Querying Tenkara prod for overdue quotes…", { step: "query" });
 
     let overdue: OverdueRow[];
@@ -158,35 +161,52 @@ registerAgent({
         return { ...baseResult, stage: "llm_error", error: e.message };
       }
 
-      let staged;
+      let draftIdValue: string;
+      let conversationIdValue: string;
       try {
-        staged = await createMissiveDraft({
-          subject: draft.subject,
-          body: draft.body,
-          to_fields: [{
-            name: group.supplier_contact_name ?? "",
-            address: group.supplier_contact_email,
-          }],
-          organization: MISSIVE_ORGANIZATION_ID,
-          team: MISSIVE_TEAM_ID,
-          add_to_team_inbox: true,
-        });
+        if (emailClient === "rod_app") {
+          const c = await createTenkaraConversation({
+            externalId: `agent-02-reval-${group.client_org_id}-${group.supplier_id}-${today}`,
+            to: { name: group.supplier_contact_name ?? "", address: group.supplier_contact_email },
+            subject: draft.subject,
+            bodyHtml: bodyToHtml(draft.body),
+            bodyText: draft.body,
+            context: { agent: "02 Quote Revalidation", client_org_id: group.client_org_id, supplier_id: group.supplier_id },
+          });
+          draftIdValue = c.draftId;
+          conversationIdValue = c.conversationId;
+        } else {
+          const m = await createMissiveDraft({
+            subject: draft.subject,
+            body: draft.body,
+            to_fields: [{
+              name: group.supplier_contact_name ?? "",
+              address: group.supplier_contact_email,
+            }],
+            organization: MISSIVE_ORGANIZATION_ID,
+            team: MISSIVE_TEAM_ID,
+            add_to_team_inbox: true,
+          });
+          draftIdValue = m.id;
+          conversationIdValue = m.conversation_id ?? "";
+        }
       } catch (e: any) {
-        await ctx.log(`Missive error for ${group.client_org_name}/${group.supplier_name}: ${e.message}`, {
+        await ctx.log(`${emailClient} error for ${group.client_org_name}/${group.supplier_name}: ${e.message}`, {
           level: "warn",
-          step: "missive",
+          step: "stage",
           data: { client: group.client_org_name, supplier: group.supplier_name },
         });
-        return { ...baseResult, stage: "missive_error", error: e.message };
+        return { ...baseResult, stage: emailClient === "rod_app" ? "tenkara_error" : "missive_error", error: e.message };
       }
 
       await ctx.log(`Staged: ${group.client_org_name} × ${group.supplier_name} (${group.rows.length} material${group.rows.length === 1 ? "" : "s"})`, {
-        step: "missive",
+        step: "stage",
         data: {
           client: group.client_org_name,
           supplier: group.supplier_name,
           materials: group.rows.length,
-          missive_draft_id: staged.id,
+          email_client: emailClient,
+          draft_id: draftIdValue,
         },
       });
       return {
@@ -194,8 +214,9 @@ registerAgent({
         stage: "ok",
         subject: draft.subject,
         body: draft.body,
-        missiveConversationId: staged.conversation_id,
-        missiveDraftId: staged.id,
+        missiveConversationId: conversationIdValue,
+        missiveDraftId: draftIdValue,
+        draftLink: emailClient === "missive" ? `https://mail.missiveapp.com/#inbox/conversations/${conversationIdValue}` : null,
       };
     });
 
@@ -240,7 +261,7 @@ registerAgent({
             .select("id").eq("quote_id", row.quote_id).eq("agent_id", tackleAgentId).gte("created_at", debounceSince).maybeSingle();
           if (existing) continue;
           await admin.from("draft_references").insert({
-            email_client: "missive",
+            email_client: emailClient,
             thread_id: r.missiveConversationId,
             draft_id: r.missiveDraftId,
             agent_id: tackleAgentId,
@@ -256,7 +277,10 @@ registerAgent({
               suggested_signoff: r.mode === "active" ? `${r.group.client_org_name} Purchasing Team` : `${r.ghostBrand} Sourcing`,
               suggested_from_email: r.group.client_purchasing_email,
               ghost_brand: r.ghostBrand ?? null,
-              missive_draft_link: missiveDraftLink(r.missiveConversationId, r.missiveDraftId),
+              missive_draft_link: emailClient === "missive" ? missiveDraftLink(r.missiveConversationId, r.missiveDraftId) : null,
+              ...(emailClient === "rod_app"
+                ? { draft_kind: "cold_outbound", external_id: `agent-02-reval-${r.group.client_org_id}-${r.group.supplier_id}-${today}` }
+                : {}),
               qa_findings: qaFindings,
               qa_linted_at: new Date().toISOString(),
             },

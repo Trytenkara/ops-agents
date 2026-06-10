@@ -98,62 +98,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(result.body, { status: result.status });
   }
 
-  // Cold-outbound conversation created via /api/external/conversations →
-  // record it as a staged draft (idempotent on draft_id).
+  // Cold-outbound conversation created via /api/external/conversations.
+  // The staging agent (02/04) is the synchronous writer of the draft_references
+  // row(s) — Agent 02 writes one row per quote, which a single-row webhook
+  // insert would race/conflict with — so this is a lightweight ack only.
   if (json?.event === "conversation.agent_created") {
     const created = conversationCreatedSchema.safeParse(json);
     if (!created.success) {
       return NextResponse.json({ error: created.error.flatten() }, { status: 400 });
     }
-    const p = created.data;
-    const ctx = (p.context ?? {}) as Record<string, any>;
-
-    const { data: existing } = await admin
-      .from("draft_references")
-      .select("id")
-      .eq("draft_id", p.draft_id)
-      .eq("email_client", "rod_app")
-      .maybeSingle();
-    if (existing) {
-      return NextResponse.json({ recorded: false, deduped: true, draft_ref_id: existing.id });
-    }
-
-    const { data, error } = await admin
-      .from("draft_references")
-      .insert({
-        email_client: "rod_app",
-        thread_id: p.conversation_id,
-        draft_id: p.draft_id,
-        org_id: ctx.org_id ?? null,
-        supplier_id: ctx.supplier_id ?? null,
-        material_id: ctx.material_id ?? null,
-        quote_id: ctx.quote_id ?? null,
-        subject: p.subject ?? null,
-        assigned_operator: ctx.assigned_operator ?? null,
-        status: "staged",
-        metadata: {
-          draft_kind: "cold_outbound",
-          external_id: p.external_id ?? null,
-          agent_name: p.agent_name ?? null,
-          to_email: p.to_email ?? null,
-          to_name: p.to_name ?? null,
-          requires_sender_selection: p.requires_sender_selection ?? null,
-          lead_id: ctx.lead_id ?? null,
-          context: ctx,
-        },
-      })
-      .select("id")
-      .maybeSingle();
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-    await admin.from("audit_log").insert({
-      action: "draft.cold_outbound_created",
-      target_table: "draft_references",
-      target_id: data?.id,
-      diff: { source: "tenkara_webhook", conversation_id: p.conversation_id, draft_id: p.draft_id, external_id: p.external_id ?? null },
-    });
-
-    return NextResponse.json({ recorded: true, draft_ref_id: data?.id });
+    return NextResponse.json({ acknowledged: true, conversation_id: created.data.conversation_id });
   }
 
   // Otherwise it's a draft status event (sent/discarded).

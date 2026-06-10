@@ -1,6 +1,6 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { createMissiveDraft, missiveDraftLink } from "@/lib/missive";
-import { createTenkaraDraft } from "@/lib/tenkara";
+import { createTenkaraDraft, createTenkaraConversation } from "@/lib/tenkara";
 import { bodyToHtml } from "@/lib/email-style";
 import { MISSIVE_ORGANIZATION_ID, MISSIVE_TEAM_ID } from "@/agents-runtime/agents/quote-revalidation/config";
 import { lintDraft, type Finding } from "@/agents-runtime/agents/outreach-qa/lint";
@@ -31,7 +31,10 @@ export interface StageDraftInput {
   // Which email app to stage into. "missive" (default) POSTs a Missive draft;
   // "rod_app" POSTs a Tenkara draft and requires conversationId (Phase 1 = replies only).
   emailClient?: "missive" | "rod_app";
-  conversationId?: string | null; // Tenkara conversation to reply into; required when emailClient="rod_app"
+  // For emailClient="rod_app": pass conversationId to reply into an existing thread,
+  // OR externalId to create a brand-new cold-outbound conversation. One is required.
+  conversationId?: string | null;
+  externalId?: string | null; // idempotency key for cold-outbound conversation creates
   // Caller-supplied metadata (outreach_mode, ghost_brand, lead_id, etc.).
   // qa_findings + the draft link are merged in here.
   metadata?: Record<string, any>;
@@ -64,20 +67,38 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
   let draftId: string;
   let threadId: string;
   let draftLink: string | null = null;
+  const extraMeta: Record<string, any> = {};
   try {
     if (emailClient === "rod_app") {
-      if (!input.conversationId) {
-        return { ok: false, error: "rod_app drafts require conversationId", qaFindings };
+      if (input.conversationId) {
+        // Reply into an existing Tenkara conversation.
+        const t = await createTenkaraDraft({
+          conversationId: input.conversationId,
+          to: { name: to.name ?? "", address: to.address },
+          subject,
+          bodyHtml: bodyToHtml(body),
+          bodyText: body,
+        });
+        draftId = t.id;
+        threadId = t.conversationId;
+      } else if (input.externalId) {
+        // Cold outbound: create a brand-new conversation + draft.
+        const c = await createTenkaraConversation({
+          externalId: input.externalId,
+          to: { name: to.name ?? "", address: to.address },
+          subject,
+          bodyHtml: bodyToHtml(body),
+          bodyText: body,
+          context: { org_id: orgId, supplier_id: supplierId ?? null, material_id: materialId ?? null, quote_id: quoteId ?? null, ...callerMeta },
+        });
+        draftId = c.draftId;
+        threadId = c.conversationId;
+        extraMeta.draft_kind = callerMeta.draft_kind ?? "cold_outbound";
+        extraMeta.external_id = input.externalId;
+        extraMeta.requires_sender_selection = c.requiresSenderSelection;
+      } else {
+        return { ok: false, error: "rod_app drafts require conversationId (reply) or externalId (cold outbound)", qaFindings };
       }
-      const t = await createTenkaraDraft({
-        conversationId: input.conversationId,
-        to: { name: to.name ?? "", address: to.address },
-        subject,
-        bodyHtml: bodyToHtml(body),
-        bodyText: body,
-      });
-      draftId = t.id;
-      threadId = t.conversationId;
     } else {
       const m = await createMissiveDraft({
         subject,
@@ -100,6 +121,7 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
     qa_findings: qaFindings,
     qa_linted_at: new Date().toISOString(),
     missive_draft_link: draftLink,
+    ...extraMeta,
   };
 
   const { data, error } = await admin

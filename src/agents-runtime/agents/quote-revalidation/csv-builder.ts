@@ -36,12 +36,15 @@ export interface GroupResult {
   };
   mode: "active" | "ghost";
   ghostBrand?: string;
-  stage: "ok" | "llm_error" | "missive_error";
+  stage: "ok" | "llm_error" | "missive_error" | "tenkara_error";
   error?: string;
   subject?: string;
   body?: string;
   missiveConversationId?: string;
   missiveDraftId?: string;
+  // Pre-computed operator deep-link to the staged draft (Missive URL, or null
+  // for Tenkara where the conversation surfaces in the Pending Outreach UI).
+  draftLink?: string | null;
 }
 
 function operatorString(row: OverdueRow): string {
@@ -73,9 +76,11 @@ export function buildCsv(results: GroupResult[]): string {
       : `${ghostBrand} Sourcing`;
     const suggestedFrom = group.client_purchasing_email ?? "";
 
-    const draftLink = (stage === "ok" && res.missiveConversationId)
-      ? `https://mail.missiveapp.com/#inbox/conversations/${res.missiveConversationId}`
-      : "";
+    const draftLink = res.draftLink !== undefined
+      ? (res.draftLink ?? "")
+      : (stage === "ok" && res.missiveConversationId)
+        ? `https://mail.missiveapp.com/#inbox/conversations/${res.missiveConversationId}`
+        : "";
 
     for (const row of group.rows) {
       let draftStatus: string;
