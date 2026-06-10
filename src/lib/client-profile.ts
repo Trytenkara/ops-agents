@@ -39,7 +39,7 @@ interface TenkaraData {
   enabledModules: any;
   createdAt: string | null;
   contacts: { name: string; email: string }[];
-  materials: string[];
+  materials: { label: string; volume: string | null; needType: string | null }[];
   quoteCount: number;
   supplierCount: number;
   topSuppliers: { name: string; lastQuote: string | null }[];
@@ -62,7 +62,8 @@ async function gatherTenkaraData(tenkaraOrgId: string): Promise<TenkaraData | nu
         [tenkaraOrgId]
       ),
       tenkaraQuery<any>(
-        `select coalesce(m.trade_name, m.name) as label
+        `select coalesce(m.trade_name, m.name) as label,
+                m.annual_volume_expected, m.volume_unit, m.need_type
            from public.materials m join public.users u on u.id = m.user_id
           where u.organization_id = $1::uuid and coalesce(m.trade_name, m.name) is not null
           order by m.created_at desc limit 30`,
@@ -92,7 +93,11 @@ async function gatherTenkaraData(tenkaraOrgId: string): Promise<TenkaraData | nu
       enabledModules: org.enabled_modules ?? null,
       createdAt: org.created_at ? new Date(org.created_at).toISOString() : null,
       contacts: contacts.map((c) => ({ name: c.name, email: c.email })),
-      materials: materials.map((m) => m.label),
+      materials: materials.map((m) => ({
+        label: m.label,
+        volume: m.annual_volume_expected != null ? `${m.annual_volume_expected}${m.volume_unit ? ` ${m.volume_unit}` : ""}/yr` : null,
+        needType: m.need_type ?? null,
+      })),
       quoteCount: quoteAgg[0]?.quotes ?? 0,
       supplierCount: quoteAgg[0]?.suppliers ?? 0,
       topSuppliers: (topSuppliers ?? []).map((s) => ({ name: s.name, lastQuote: s.last_quote ?? null })),
@@ -112,20 +117,31 @@ function deriveClientType(
   return hasActivity ? "active" : "prospect";
 }
 
-const SYSTEM_PROMPT = `You build concise client profiles for the operations team at Tenkara, a B2B ingredient-sourcing platform. The "client" is a company that sources raw materials through Tenkara.
+const SYSTEM_PROMPT = `You build client profiles for the operations team at Tenkara, a B2B ingredient-sourcing platform. The "client" is a company that sources raw materials through Tenkara. Operators represent the client to suppliers (over email/call), so the profile must answer the questions suppliers typically ask about the client.
 
-You are given internal data we hold on the client plus any notes ops uploaded. Use the web_search tool to research the company publicly (their website, what they make/sell, industry, size, brands), then synthesize ONE profile that lets an operator instantly understand who this client is and how to work with them.
+You are given internal data we hold on the client plus any notes ops uploaded. Use the web_search tool to research the company publicly (their website, what they make/sell, how long they've been in business, location, size, brands), then fill out the profile.
 
-Return ONLY a JSON object (no prose) of the form:
+Return ONLY a JSON object (no prose):
 {
-  "summary": "<markdown, 120-220 words: who they are, what they make/buy, industry & size, how they use Tenkara, anything notable for ops>",
-  "highlights": ["<=6 short factual bullets, e.g. 'Indie skincare brand, ~50 SKUs'"],
+  "summary": "<markdown, 100-180 words: who they are, what they make/buy, how they use Tenkara, anything notable for an operator representing them>",
+  "highlights": ["<=6 short factual bullets"],
+  "rep_sheet": {
+    "years_in_business": "<how long in business / founded year, or null>",
+    "products": "<what the company makes/sells, or null>",
+    "address": "<business address or city/country, or null>",
+    "end_use": "<what the sourced materials are used for, or null>",
+    "volume": "<monthly/annual volume of materials needed — use the internal volume figures if present, or null>",
+    "order_timing": "<when they plan to place orders, or null>",
+    "intended_use": "<'resale/distribution' or 'manufacturing' (or 'unknown')>",
+    "can_meet_in_person": "<yes/no/where, or null>"
+  },
   "sources": [{"title": "<page title>", "url": "<https url you actually visited>"}]
 }
 
 Rules:
-- Ground claims in the internal data and pages you actually visited via web_search. Do NOT fabricate URLs, figures, or brands.
-- If the web yields little, say so briefly and lean on the internal data.
+- Ground claims in the internal data and pages you actually visited via web_search. Do NOT fabricate URLs, figures, addresses, or dates.
+- For any rep_sheet field you can't determine from research or internal data, use null — do NOT guess. Operators will fill those in. order_timing, intended_use and can_meet_in_person often aren't public; leave null/'unknown' unless the data says otherwise.
+- Prefer the internal volume/material figures for "volume" and "end_use".
 - Keep it operator-useful, not marketing fluff.`;
 
 function buildUserMessage(input: {
@@ -144,7 +160,12 @@ function buildUserMessage(input: {
     if (t.marginPercentage != null) p.push(`  margin %: ${t.marginPercentage}`);
     if (t.enabledModules) p.push(`  enabled modules: ${JSON.stringify(t.enabledModules)}`);
     p.push(`  quotes: ${t.quoteCount} · suppliers used: ${t.supplierCount}`);
-    if (t.materials.length) p.push(`  materials sourced (${t.materials.length}): ${t.materials.slice(0, 25).join(", ")}`);
+    if (t.materials.length) {
+      p.push(`  materials sourced (${t.materials.length}) — name [volume] [need type]:`);
+      for (const m of t.materials.slice(0, 25)) {
+        p.push(`    - ${m.label}${m.volume ? ` [${m.volume}]` : ""}${m.needType ? ` [${m.needType}]` : ""}`);
+      }
+    }
     if (t.topSuppliers.length) p.push(`  recent suppliers: ${t.topSuppliers.map((s) => `${s.name}${s.lastQuote ? ` (${s.lastQuote})` : ""}`).join(", ")}`);
     if (t.contacts.length) p.push(`  contacts: ${t.contacts.map((c) => `${c.name} <${c.email}>`).join(", ")}`);
   } else {
@@ -172,6 +193,37 @@ function buildUserMessage(input: {
   }
   p.push(`\nResearch this client on the web and return the JSON profile.`);
   return p.join("\n");
+}
+
+// The supplier-facing rep sheet: the questions suppliers typically ask about a
+// client, which an operator must be able to answer when representing them.
+export const REP_FIELDS = [
+  { key: "years_in_business", label: "Years in business" },
+  { key: "products", label: "Company / products" },
+  { key: "address", label: "Address" },
+  { key: "end_use", label: "End use of material" },
+  { key: "volume", label: "Volume needed (monthly/annual)" },
+  { key: "order_timing", label: "Order timing" },
+  { key: "intended_use", label: "Intended use (resale/distribution vs manufacturing)" },
+  { key: "can_meet_in_person", label: "Can meet in person" },
+] as const;
+export type RepSheet = Record<(typeof REP_FIELDS)[number]["key"], string | null>;
+
+function emptyRepSheet(): RepSheet {
+  return Object.fromEntries(REP_FIELDS.map((f) => [f.key, null])) as RepSheet;
+}
+function sanitizeRepSheet(raw: any): RepSheet {
+  const out = emptyRepSheet();
+  if (raw && typeof raw === "object") {
+    for (const f of REP_FIELDS) {
+      const v = raw[f.key];
+      if (typeof v === "string") {
+        const t = v.trim();
+        out[f.key] = t && !/^(null|n\/a|unknown|none)$/i.test(t) ? t : null;
+      }
+    }
+  }
+  return out;
 }
 
 function extractJson(text: string): any {
@@ -219,6 +271,7 @@ export async function generateClientProfile(
   let summary = "";
   let highlights: string[] = [];
   let sources: { title: string; url: string }[] = [];
+  let repSheet = emptyRepSheet();
 
   if (process.env.ANTHROPIC_API_KEY) {
     try {
@@ -237,18 +290,26 @@ export async function generateClientProfile(
       sources = Array.isArray(parsed.sources)
         ? parsed.sources.filter((s: any) => s && typeof s.url === "string").map((s: any) => ({ title: String(s.title ?? s.url), url: s.url })).slice(0, 10)
         : [];
+      repSheet = sanitizeRepSheet(parsed.rep_sheet);
     } catch (e: any) {
       return { status: "error", error: e.message };
     }
   } else {
     // No LLM key: deterministic fallback from internal data only.
+    const matLabels = tenkara ? tenkara.materials.map((m) => m.label) : [];
     summary = tenkara
-      ? `${org.name}: ${tenkara.quoteCount} quotes across ${tenkara.supplierCount} suppliers; sources ${tenkara.materials.slice(0, 8).join(", ") || "n/a"}.`
+      ? `${org.name}: ${tenkara.quoteCount} quotes across ${tenkara.supplierCount} suppliers; sources ${matLabels.slice(0, 8).join(", ") || "n/a"}.`
       : `${org.name}: no Tenkara data yet.`;
     highlights = [
       `${oaActivity.leads} leads, ${oaActivity.drafts} drafts in OA`,
       tenkara ? `${tenkara.quoteCount} Tenkara quotes` : "no Tenkara record",
     ];
+  }
+
+  // Fill rep_sheet volume from internal material figures when the model left it blank.
+  if (!repSheet.volume && tenkara) {
+    const vols = tenkara.materials.filter((m) => m.volume).map((m) => `${m.label}: ${m.volume}`);
+    if (vols.length) repSheet.volume = vols.slice(0, 8).join("; ");
   }
 
   const now = new Date().toISOString();
@@ -259,6 +320,7 @@ export async function generateClientProfile(
       summary,
       highlights,
       sources,
+      rep_sheet: repSheet,
       profile: {
         tenkara: tenkara ?? null,
         oa_activity: oaActivity,

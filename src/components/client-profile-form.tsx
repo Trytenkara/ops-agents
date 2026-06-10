@@ -19,9 +19,22 @@ export interface ProfileValue {
   summary: string | null;
   highlights: string[];
   sources: { title: string; url: string }[];
+  rep_sheet: Record<string, string | null>;
   last_generated_at: string | null;
   manual_override: boolean;
 }
+
+// The supplier questions operators must be able to answer for a client.
+const REP_FIELDS: { key: string; label: string }[] = [
+  { key: "years_in_business", label: "Years in business" },
+  { key: "products", label: "Company / products" },
+  { key: "address", label: "Address" },
+  { key: "end_use", label: "End use of material" },
+  { key: "volume", label: "Volume needed (monthly/annual)" },
+  { key: "order_timing", label: "Order timing" },
+  { key: "intended_use", label: "Intended use (resale/distribution vs manufacturing)" },
+  { key: "can_meet_in_person", label: "Can meet in person" },
+];
 export interface SettingsValue extends ClientSettingsInput {}
 export interface UploadItem { id: string; kind: string; file_name: string | null; content_text: string | null; created_at: string }
 
@@ -74,6 +87,7 @@ export function ClientProfilePanel({
   return (
     <div className="space-y-6">
       <ProfileCard orgId={orgId} profile={profile} canEdit={canEdit} pending={pending} run={run} />
+      <RepSheetCard orgId={orgId} profile={profile} canEdit={canEdit} pending={pending} run={run} />
       <UploadsCard orgId={orgId} uploads={uploads} canEdit={canEdit} pending={pending} run={run} />
       <SettingsCard orgId={orgId} settings={settings} canEdit={canEdit} pending={pending} run={run} />
       {msg && <p className={msg.kind === "ok" ? "text-sm text-emerald-700" : "text-sm text-red-700"}>{msg.text}</p>}
@@ -92,6 +106,48 @@ function Section({ title, action, children }: { title: string; action?: React.Re
       </div>
       {children}
     </div>
+  );
+}
+
+function RepSheetCard({ orgId, profile, canEdit, pending, run }: { orgId: string; profile: ProfileValue | null; canEdit: boolean; pending: boolean; run: RunFn }) {
+  const sheet = profile?.rep_sheet ?? {};
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<Record<string, string>>(() =>
+    Object.fromEntries(REP_FIELDS.map((f) => [f.key, sheet[f.key] ?? ""]))
+  );
+
+  return (
+    <Section
+      title="Supplier rep sheet"
+      action={canEdit && profile && (
+        editing
+          ? <div className="flex gap-2">
+              <Button size="sm" disabled={pending} onClick={() => {
+                const cleaned = Object.fromEntries(REP_FIELDS.map((f) => [f.key, draft[f.key]?.trim() ? draft[f.key].trim() : null]));
+                run(() => editClientProfile(orgId, { rep_sheet: cleaned }), "Rep sheet saved."); setEditing(false);
+              }}>Save</Button>
+              <Button size="sm" variant="secondary" onClick={() => setEditing(false)}>Cancel</Button>
+            </div>
+          : <Button size="sm" variant="secondary" disabled={pending} onClick={() => {
+              setDraft(Object.fromEntries(REP_FIELDS.map((f) => [f.key, sheet[f.key] ?? ""])));
+              setEditing(true);
+            }}>Edit</Button>
+      )}
+    >
+      <p className="text-xs text-muted-foreground -mt-1">The questions suppliers ask about a client. Agent 12 fills what it can; complete the rest.</p>
+      <dl className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+        {REP_FIELDS.map((f) => (
+          <div key={f.key} className="flex flex-col">
+            <dt className="text-xs uppercase tracking-wider text-muted-foreground">{f.label}</dt>
+            {editing ? (
+              <Input value={draft[f.key]} onChange={(e) => setDraft((d) => ({ ...d, [f.key]: e.target.value }))} placeholder="—" />
+            ) : (
+              <dd className={sheet[f.key] ? "" : "text-muted-foreground italic"}>{sheet[f.key] || "— needs ops input"}</dd>
+            )}
+          </div>
+        ))}
+      </dl>
+    </Section>
   );
 }
 

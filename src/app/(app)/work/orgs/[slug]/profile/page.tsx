@@ -14,7 +14,7 @@ export default async function ClientProfilePage({ params }: { params: { slug: st
   const [profileRes, settingsRes, uploadsRes] = await Promise.all([
     admin
       .from("client_profiles")
-      .select("client_type, summary, highlights, sources, last_generated_at, manual_override")
+      .select("client_type, summary, highlights, sources, rep_sheet, last_generated_at, manual_override")
       .eq("org_id", org.id)
       .maybeSingle(),
     admin
@@ -37,6 +37,7 @@ export default async function ClientProfilePage({ params }: { params: { slug: st
         summary: p.summary ?? null,
         highlights: Array.isArray(p.highlights) ? p.highlights : [],
         sources: Array.isArray(p.sources) ? p.sources : [],
+        rep_sheet: p.rep_sheet && typeof p.rep_sheet === "object" ? p.rep_sheet : {},
         last_generated_at: p.last_generated_at ?? null,
         manual_override: !!p.manual_override,
       }

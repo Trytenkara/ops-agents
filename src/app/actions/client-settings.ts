@@ -70,7 +70,7 @@ export async function generateClientProfileAction(orgId: string, force = false):
 // Ops correction. Marks the profile manual_override so auto-refresh won't clobber it.
 export async function editClientProfile(
   orgId: string,
-  patch: { summary?: string; client_type?: "active" | "ghost" | "skip" | "prospect" }
+  patch: { summary?: string; client_type?: "active" | "ghost" | "skip" | "prospect"; rep_sheet?: Record<string, string | null> }
 ): Promise<Result> {
   const auth = await requireEditor();
   if (auth.error) return { ok: false, error: auth.error };
@@ -78,6 +78,7 @@ export async function editClientProfile(
   const update: Record<string, any> = { manual_override: true, updated_at: new Date().toISOString() };
   if (patch.summary !== undefined) update.summary = patch.summary;
   if (patch.client_type !== undefined) update.client_type = patch.client_type;
+  if (patch.rep_sheet !== undefined) update.rep_sheet = patch.rep_sheet;
   const { error } = await admin.from("client_profiles").update(update).eq("org_id", orgId);
   if (error) return { ok: false, error: error.message };
   revalidatePath(`/work/orgs`);
