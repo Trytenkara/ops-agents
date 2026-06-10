@@ -142,6 +142,7 @@ Rules:
 - Ground claims in the internal data and pages you actually visited via web_search. Do NOT fabricate URLs, figures, addresses, or dates.
 - For any rep_sheet field you can't determine from research or internal data, use null — do NOT guess. Operators will fill those in. order_timing, intended_use and can_meet_in_person often aren't public; leave null/'unknown' unless the data says otherwise.
 - Prefer the internal volume/material figures for "volume" and "end_use".
+- Do NOT include citation markup (e.g. <cite> tags), HTML, or footnote markers in any field — put real source links only in "sources".
 - Keep it operator-useful, not marketing fluff.`;
 
 function buildUserMessage(input: {
@@ -209,6 +210,13 @@ export const REP_FIELDS = [
 ] as const;
 export type RepSheet = Record<(typeof REP_FIELDS)[number]["key"], string | null>;
 
+// web_search makes the model emit inline citation markup like
+// <cite index="22-1">…</cite>. Strip those tags (keep the inner text) so the
+// stored profile is clean prose, not markup.
+function stripCitations(s: string): string {
+  return s.replace(/<\/?cite\b[^>]*>/gi, "").replace(/\s{2,}/g, " ").trim();
+}
+
 function emptyRepSheet(): RepSheet {
   return Object.fromEntries(REP_FIELDS.map((f) => [f.key, null])) as RepSheet;
 }
@@ -218,7 +226,7 @@ function sanitizeRepSheet(raw: any): RepSheet {
     for (const f of REP_FIELDS) {
       const v = raw[f.key];
       if (typeof v === "string") {
-        const t = v.trim();
+        const t = stripCitations(v);
         out[f.key] = t && !/^(null|n\/a|unknown|none)$/i.test(t) ? t : null;
       }
     }
@@ -285,10 +293,12 @@ export async function generateClientProfile(
       const res = await stream.finalMessage();
       const raw = res.content.map((b: any) => (b.type === "text" ? b.text : "")).join("");
       const parsed = extractJson(raw);
-      summary = typeof parsed.summary === "string" ? parsed.summary : "";
-      highlights = Array.isArray(parsed.highlights) ? parsed.highlights.filter((h: any) => typeof h === "string").slice(0, 6) : [];
+      summary = typeof parsed.summary === "string" ? stripCitations(parsed.summary) : "";
+      highlights = Array.isArray(parsed.highlights)
+        ? parsed.highlights.filter((h: any) => typeof h === "string").map((h: string) => stripCitations(h)).filter(Boolean).slice(0, 6)
+        : [];
       sources = Array.isArray(parsed.sources)
-        ? parsed.sources.filter((s: any) => s && typeof s.url === "string").map((s: any) => ({ title: String(s.title ?? s.url), url: s.url })).slice(0, 10)
+        ? parsed.sources.filter((s: any) => s && typeof s.url === "string").map((s: any) => ({ title: stripCitations(String(s.title ?? s.url)), url: s.url })).slice(0, 10)
         : [];
       repSheet = sanitizeRepSheet(parsed.rep_sheet);
     } catch (e: any) {
