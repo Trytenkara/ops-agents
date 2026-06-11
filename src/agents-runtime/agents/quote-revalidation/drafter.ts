@@ -76,9 +76,28 @@ export interface DraftUsage {
   outputTokens: number;
 }
 
-function systemPromptFor(mode: "active" | "ghost", clientName: string, ghostBrand?: string): string {
+// Prior email context for a supplier, sourced from supplier_email_context
+// (Agent 13). When present, the drafter writes a follow-up instead of a cold
+// initial email.
+export interface PriorContext {
+  threadState: string;            // they_replied | awaiting_their_reply | stale
+  lastContactedAt: string | null; // ISO
+  summary: string | null;
+  openAsk: string | null;
+}
+
+const FOLLOW_UP_BLOCK = `
+
+FOLLOW-UP MODE (this supplier already has an open thread with us — see PRIOR THREAD CONTEXT below):
+- Write a short follow-up, NOT a fresh cold intro. Do not reintroduce who we are or how we found them.
+- Reference the prior conversation naturally. If they owe us something (open ask), nudge politely; if we owe them, acknowledge briefly.
+- Still ask them to confirm or refresh the quote(s) listed. Keep the whole body under 110 words.
+- Never invent details that aren't in the provided context.`;
+
+function systemPromptFor(mode: "active" | "ghost", clientName: string, ghostBrand: string | undefined, followUp: boolean): string {
+  const base = SYSTEM_BASE + (followUp ? FOLLOW_UP_BLOCK : "");
   if (mode === "active") {
-    return SYSTEM_BASE + `
+    return base + `
 
 SIGN-OFF FOR THIS EMAIL (use exactly this format, blank lines included):
 Thanks,
@@ -86,7 +105,7 @@ Thanks,
 Procurement Team
 ${clientName}`;
   }
-  return SYSTEM_BASE + `
+  return base + `
 
 SIGN-OFF FOR THIS EMAIL (use exactly this format, blank lines included):
 Thanks,
@@ -113,8 +132,9 @@ export async function generateRevalidationEmail(opts: {
   clientName: string;
   ghostBrand?: string;
   userMessage: string;
+  priorContext?: PriorContext | null;
 }): Promise<{ draft: DraftPayload; usage: DraftUsage }> {
-  const system = systemPromptFor(opts.mode, opts.clientName, opts.ghostBrand);
+  const system = systemPromptFor(opts.mode, opts.clientName, opts.ghostBrand, !!opts.priorContext);
   const res = await anthropic().messages.create({
     model: MODEL,
     max_tokens: 1024,
@@ -158,7 +178,7 @@ export function formatUserMessage(group: {
     price: number | null;
     lead_time_days: number | null;
   }>;
-}, mode: "active" | "ghost", ghostBrand: string | undefined): string {
+}, mode: "active" | "ghost", ghostBrand: string | undefined, priorContext?: PriorContext | null): string {
   const materials = group.rows;
   const signoff = mode === "ghost"
     ? `${mode} (sign as ${ghostBrand} Sourcing)`
@@ -180,6 +200,19 @@ export function formatUserMessage(group: {
     const gradeStr = gradeToString(r.grade);
     const label = gradeStr ? `${r.material_name} (${gradeStr})` : r.material_name;
     lines.push(`  - ${label}, last quoted ${qd}${suffix}`);
+  }
+  if (priorContext) {
+    const when = priorContext.lastContactedAt
+      ? new Date(priorContext.lastContactedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+      : "unknown";
+    lines.push(
+      "",
+      "PRIOR THREAD CONTEXT (use to make this a follow-up; do not fabricate beyond it):",
+      `  - Thread state: ${priorContext.threadState}`,
+      `  - Last contacted: ${when}`,
+      `  - Summary: ${priorContext.summary ?? "—"}`,
+      `  - Open ask: ${priorContext.openAsk ?? "none"}`
+    );
   }
   return lines.join("\n") + "\n\nWrite the email.";
 }

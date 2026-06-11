@@ -16,6 +16,15 @@ import { postQrSummary } from "./slack-notifier";
 // regardless of whether the operator has sent it yet.
 const REDRAFT_DEBOUNCE_DAYS = 7;
 
+// Max materials bundled into one supplier email. Suppliers with more are split
+// into multiple drafts so a 90-material supplier doesn't become one mega-email.
+const MAX_MATERIALS_PER_EMAIL = 15;
+
+// Optional run scope: when set, only this client org is processed (others are
+// dropped like "skip"). Used to stage a single client's drafts in isolation
+// (e.g. a Bobber Labs test run) without editing ACTIVE_CLIENTS.
+const ONLY_ORG = process.env.QR_ONLY_ORG?.trim() || null;
+
 // Group key: (client_org × supplier).
 function groupKey(r: OverdueRow): string {
   return `${r.client_org_id}|${r.supplier_id}`;
@@ -81,6 +90,11 @@ registerAgent({
     const droppedOrgNames = new Set<string>();
     const classMap = new Map<string, { mode: OutreachMode; ghostBrand?: string }>();
     for (const r of overdue) {
+      if (ONLY_ORG && r.client_org_name !== ONLY_ORG) {
+        droppedRows.push(r);
+        droppedOrgNames.add(r.client_org_name);
+        continue;
+      }
       const c = classifyClient(r.client_org_name);
       if (c.mode === "skip") {
         droppedRows.push(r);
@@ -122,8 +136,38 @@ registerAgent({
       }
       g.rows.push(r);
     }
-    const groups = Array.from(groupsMap.values());
-    await ctx.log(`${groups.length} (client × supplier) groups → 1 draft each`, { step: "group" });
+    // Split oversized (client × supplier) groups into batches so a supplier with
+    // dozens of materials doesn't become one unreadable mega-email. Each batch is
+    // its own draft; debounce/draft_references are keyed per quote_id, so a quote
+    // lands in exactly one batch with no collision.
+    const groups = Array.from(groupsMap.values()).flatMap((g) => {
+      if (g.rows.length <= MAX_MATERIALS_PER_EMAIL) return [g];
+      const batches: Group[] = [];
+      for (let i = 0; i < g.rows.length; i += MAX_MATERIALS_PER_EMAIL) {
+        batches.push({ ...g, rows: g.rows.slice(i, i + MAX_MATERIALS_PER_EMAIL) });
+      }
+      return batches;
+    });
+    await ctx.log(`${groupsMap.size} (client × supplier) groups → ${groups.length} drafts (batched at ${MAX_MATERIALS_PER_EMAIL}/email)`, { step: "group" });
+
+    const admin = createAdminClient();
+
+    // Pull prior email context (Agent 13) for each supplier so we can switch to
+    // a follow-up tone when an open thread already exists.
+    const supplierEmails = Array.from(new Set(groups.map((g) => g.supplier_contact_email.toLowerCase())));
+    const contextByEmail = new Map<string, any>();
+    if (supplierEmails.length) {
+      const { data: ctxRows, error: ctxErr } = await admin
+        .from("supplier_email_context")
+        .select("supplier_email, thread_state, last_outbound_at, last_inbound_at, summary, open_ask")
+        .in("supplier_email", supplierEmails);
+      if (ctxErr) {
+        await ctx.log(`supplier_email_context lookup failed (drafting cold): ${ctxErr.message}`, { level: "warn", step: "context" });
+      } else {
+        for (const row of ctxRows ?? []) contextByEmail.set((row as any).supplier_email.toLowerCase(), row);
+        await ctx.log(`Loaded inbox context for ${contextByEmail.size}/${supplierEmails.length} suppliers`, { step: "context", data: { matched: contextByEmail.size, total: supplierEmails.length } });
+      }
+    }
 
     // Generate + stage drafts in parallel (5 at a time).
     const results: GroupResult[] = await pMap(groups, 5, async (group): Promise<GroupResult> => {
@@ -142,14 +186,25 @@ registerAgent({
         ghostBrand: group.ghostBrand,
       };
 
+      const ctxRow = contextByEmail.get(group.supplier_contact_email.toLowerCase());
+      const priorContext = ctxRow
+        ? {
+            threadState: ctxRow.thread_state,
+            lastContactedAt: ctxRow.last_outbound_at ?? ctxRow.last_inbound_at ?? null,
+            summary: ctxRow.summary ?? null,
+            openAsk: ctxRow.open_ask ?? null,
+          }
+        : null;
+
       let draft: { subject: string; body: string };
       try {
-        const userMsg = formatUserMessage(group, group.mode as "active" | "ghost", group.ghostBrand);
+        const userMsg = formatUserMessage(group, group.mode as "active" | "ghost", group.ghostBrand, priorContext);
         const { draft: d } = await generateRevalidationEmail({
           mode: group.mode as "active" | "ghost",
           clientName: group.client_org_name,
           ghostBrand: group.ghostBrand,
           userMessage: userMsg,
+          priorContext,
         });
         draft = d;
       } catch (e: any) {
@@ -178,7 +233,9 @@ registerAgent({
         } else {
           const m = await createMissiveDraft({
             subject: draft.subject,
-            body: draft.body,
+            // Missive renders the draft body as HTML — convert paragraphs/line
+            // breaks to <p>/<br> or it collapses into one blob.
+            body: bodyToHtml(draft.body),
             to_fields: [{
               name: group.supplier_contact_name ?? "",
               address: group.supplier_contact_email,
@@ -224,9 +281,8 @@ registerAgent({
     const failedResults = results.filter((r) => r.stage !== "ok");
     await ctx.log(`Drafts: ${okResults.length} staged, ${failedResults.length} failed`, { step: "stage-summary" });
 
-    // Register each successful draft in Tackle Box's draft_references via direct admin client.
-    // (This is an embedded agent — no need to go through the HTTP API.)
-    const admin = createAdminClient();
+    // Register each successful draft in Tackle Box's draft_references via the
+    // admin client created above.
     const tackleAgentId = await getAgentIdBySlug(admin, ctx.agentSlug);
     if (tackleAgentId) {
       let registered = 0;

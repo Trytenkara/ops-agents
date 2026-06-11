@@ -120,6 +120,17 @@ export interface MissiveConversation {
   external_authors: Array<{ name?: string; address: string }>;
 }
 
+export interface MissiveAttachment {
+  id: string;
+  filename: string;
+  extension: string | null;
+  // Signed, time-limited URL — fetch directly, no auth header needed.
+  url: string;
+  media_type: string | null; // "image" | "file" | ...
+  sub_type: string | null; // "png" | "pdf" | ...
+  size: number | null;
+}
+
 export interface MissiveMessage {
   id: string;
   created_at: number;
@@ -127,6 +138,7 @@ export interface MissiveMessage {
   preview?: string | null;
   from_field?: { name?: string; address?: string } | null;
   to_fields?: Array<{ name?: string; address?: string }>;
+  attachments?: MissiveAttachment[];
   // True for drafts — Agent 08 ignores these.
   draft?: boolean;
 }
@@ -147,6 +159,15 @@ async function missiveGet<T>(path: string): Promise<T> {
 export async function listTeamConversations(teamId: string, limit = 50): Promise<MissiveConversation[]> {
   const body = await missiveGet<{ conversations: MissiveConversation[] }>(
     `/conversations?team_all=${encodeURIComponent(teamId)}&limit=${limit}`
+  );
+  return body.conversations ?? [];
+}
+
+// Conversations tagged with a given shared label (used by Agent 13 to scope to
+// a single client's correspondence, e.g. the "Bobber Labs" label).
+export async function listLabelConversations(sharedLabelId: string, limit = 50): Promise<MissiveConversation[]> {
+  const body = await missiveGet<{ conversations: MissiveConversation[] }>(
+    `/conversations?shared_label=${encodeURIComponent(sharedLabelId)}&limit=${limit}`
   );
   return body.conversations ?? [];
 }

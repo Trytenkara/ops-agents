@@ -10,6 +10,7 @@ const sections = [
   { href: "/revalidation", label: "Expiries" },
   { href: "/leads", label: "Leads" },
   { href: "/price-changes", label: "Price Changes" },
+  { href: "/savings", label: "Savings" },
   { href: "/outreach", label: "Outreach" },
   { href: "/inbound", label: "Inbound" },
   { href: "/cases", label: "Cases" },

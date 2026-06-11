@@ -4,6 +4,8 @@ import { listTeamConversations, getConversationMessages } from "@/lib/missive";
 import { MISSIVE_TEAM_ID } from "../quote-revalidation/config";
 import { composeReply } from "./reply-drafter";
 import { stageDraft } from "@/lib/draft-staging";
+import { parseMessageAttachments } from "./attachment-parser";
+import { insertStagedQuotes, type StagedQuoteInput } from "@/lib/staged-quotes";
 
 // Agent 08 — Email Scanner (v1)
 //
@@ -200,8 +202,12 @@ registerAgent({
     let draftErrors = 0;
     let messagesScanned = 0;
     let conversationErrors = 0;
+    let stagedQuotesWritten = 0;
+    let attachmentsParsed = 0;
     let maxActivityAt = cursor;
     const matchedDraftIds = new Set<string>();
+    const attachmentParsedMessageIds = new Set<string>();
+    const canParseAttachments = !!process.env.ANTHROPIC_API_KEY;
     const orgNameById = new Map<string, string>();
     const canDraftReplies = !!process.env.ANTHROPIC_API_KEY;
 
@@ -228,6 +234,57 @@ registerAgent({
         if (!sender) continue;
         const matches = outreachByEmail.get(sender);
         if (!matches || !matches.length) continue;
+
+        // Parse any pricing attachments on this supplier message into
+        // staged_quotes for ops review. Done once per message; uses the first
+        // matched draft's org/supplier/material as context.
+        if (canParseAttachments && m.attachments?.length && !attachmentParsedMessageIds.has(m.id)) {
+          attachmentParsedMessageIds.add(m.id);
+          try {
+            const ctxRef = matches[0];
+            const parsed = await parseMessageAttachments(m.attachments);
+            const staged: StagedQuoteInput[] = [];
+            for (const { attachment, quotes } of parsed) {
+              attachmentsParsed++;
+              for (const q of quotes) {
+                staged.push({
+                  orgId: ctxRef.org_id,
+                  runId: ctx.runId,
+                  source: "attachment",
+                  sourceConversationId: conv.id,
+                  sourceMessageId: m.id,
+                  sourceAttachmentName: attachment.filename,
+                  sourceAttachmentUrl: attachment.url,
+                  supplierId: ctxRef.supplier_id,
+                  supplierName: q.supplier_name,
+                  materialId: ctxRef.material_id,
+                  materialName: q.material_name,
+                  price: q.price,
+                  caseSize: q.case_size,
+                  unitOfMeasurement: q.unit_of_measurement,
+                  currency: q.currency,
+                  confidence: q.confidence,
+                  extractionNotes: q.notes,
+                  rawExtract: q as any,
+                });
+              }
+            }
+            if (staged.length) {
+              const res = await insertStagedQuotes(admin, staged);
+              stagedQuotesWritten += res.inserted;
+              await ctx.log(
+                `Staged ${res.inserted} quote line${res.inserted === 1 ? "" : "s"} from ${parsed.length} attachment(s) on ${sender}` +
+                  (res.skippedDuplicates ? ` (${res.skippedDuplicates} dup skipped)` : ""),
+                { step: "attachment_quotes", data: { message_id: m.id, inserted: res.inserted } }
+              );
+            }
+          } catch (e: any) {
+            await ctx.log(`Attachment parse failed for message ${m.id}: ${e?.message ?? e}`, {
+              level: "warn",
+              step: "attachment_quotes",
+            });
+          }
+        }
 
         // Reply (or fresh inbound) from a supplier we have outreach to.
         for (const ref of matches) {
@@ -373,7 +430,7 @@ registerAgent({
     ctx.setItemsProcessed(repliesDetected);
     ctx.setStatus(conversationErrors > 0 && repliesDetected === 0 ? "partial" : "success");
     ctx.setSummary(
-      `Scanned ${fresh.length} fresh conversations · ${messagesScanned} messages · ${repliesDetected} supplier repl${repliesDetected === 1 ? "y" : "ies"} detected · ${repliesDrafted} reply draft${repliesDrafted === 1 ? "" : "s"} staged${draftErrors ? ` · ${draftErrors} draft errors` : ""}${conversationErrors ? ` · ${conversationErrors} conv errors` : ""}`
+      `Scanned ${fresh.length} fresh conversations · ${messagesScanned} messages · ${repliesDetected} supplier repl${repliesDetected === 1 ? "y" : "ies"} detected · ${repliesDrafted} reply draft${repliesDrafted === 1 ? "" : "s"} staged${stagedQuotesWritten ? ` · ${stagedQuotesWritten} attachment quote${stagedQuotesWritten === 1 ? "" : "s"} staged (${attachmentsParsed} file${attachmentsParsed === 1 ? "" : "s"})` : ""}${draftErrors ? ` · ${draftErrors} draft errors` : ""}${conversationErrors ? ` · ${conversationErrors} conv errors` : ""}`
     );
   },
 });

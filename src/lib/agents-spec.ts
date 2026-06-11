@@ -133,4 +133,14 @@ export const AGENT_SPECS: AgentSpec[] = [
     automatic: "Combs the open web (Anthropic web_search) and combines it with the client's Tenkara data, any settings ops entered, and uploaded info, then summarizes into the profile (summary + highlights + sources) and derives client_type. Runs on-demand and on upload; an hourly backstop re-researches a few stale profiles. OA writes only.",
     humanInput: "Click Generate on the org's Client Profile tab, upload any extra info, and edit the summary if something's wrong (your edit is preserved until you regenerate).",
   },
+  {
+    number: 13,
+    slug: "agent-13-inbox-context",
+    name: "Inbox Context",
+    status: "shipped",
+    cadence: "Daily — 06:45 America/New_York (ahead of Agent 02)",
+    purpose: "Read the Missive team inbox and build a per-supplier email-context row so Agent 02 reaches out with the right tone (follow-up vs cold).",
+    automatic: "Scans the team_inbox, matches messages to known supplier addresses, derives thread state (never_contacted / awaiting_their_reply / they_replied / stale) with last-outbound/last-inbound dates, summarizes replied threads, and upserts supplier_email_context. Read-only on Missive/Tenkara; writes OA only.",
+    humanInput: "None directly — context surfaces inside Agent 02's drafts as follow-up tone. Review the resulting drafts in Missive.",
+  },
 ];

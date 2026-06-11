@@ -116,6 +116,7 @@ function WorkNav({ orgs, session }: { orgs: OrgItem[]; session: SessionContext }
         <>
           <SectionLabel>Queues</SectionLabel>
           <NavLink href="/work/review" match="prefix">Review queue</NavLink>
+          <NavLink href="/work/price-pulse" match="prefix">Price Pulse</NavLink>
           <NavLink href="/work/exports" match="prefix">Exports (30d)</NavLink>
         </>
       )}

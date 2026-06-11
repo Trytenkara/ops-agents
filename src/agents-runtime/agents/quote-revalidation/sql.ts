@@ -1,10 +1,12 @@
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
 
-// One row per (material × supplier) latest expired quote, across every org.
+// One row per (material × supplier) latest expiring/expired quote, across every org.
 // Filters out:
-//   - quotes where status is 'active' or 'expired' (we only revalidate when status
-//     is null/draft/something-else, per the original workflow)
-//   - quotes with no supplier contact email
+//   - quotes where status is 'active' (a current, still-valid quote — nothing to
+//     revalidate). Everything else past its reanalyze date is in scope, including
+//     status 'expired': revalidation is exactly for expiring-soon/expired quotes.
+//   - quotes with no supplier contact email, or a malformed one (junk like
+//     'Online', a missing TLD, or two addresses crammed into one field)
 //   - non-latest quotes for the same material/supplier pair
 //
 // Direct port of automations/workflows/quote_revalidation.py:query_overdue_rows.
@@ -67,10 +69,16 @@ export async function queryOverdueRows(): Promise<OverdueRow[]> {
       LEFT JOIN users qa ON qa.id = mq.user_id
       LEFT JOIN operators_view ov ON ov.email = qa.email
       WHERE
-        (mq.status IS NULL OR mq.status::text NOT IN ('active', 'expired'))
-        AND mq.reanalyze < CURRENT_DATE
+        (mq.status IS NULL OR mq.status::text <> 'active')
+        AND mq.reanalyze < CURRENT_DATE + INTERVAL '7 days'
         AND s.poc_email IS NOT NULL
         AND s.poc_email <> ''
+        -- Drop contacts whose poc_email isn't a single valid address
+        -- (junk like 'Online', missing TLDs, or two addresses in one field).
+        AND s.poc_email ~ '^[^@[:space:];,]+@[^@[:space:];,]+\.[^@[:space:];,]+$'
+        -- Drop obvious test/placeholder supplier rows (e.g. 'test supplier').
+        AND s.name !~* '^test'
+        AND s.poc_email !~* '@(example|email|test)\.'
     )
     SELECT * FROM ranked WHERE rn = 1
     ORDER BY client_org_name, supplier_id, reanalyze
