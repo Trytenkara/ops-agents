@@ -1,7 +1,7 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { listTeamConversations, getConversationMessages } from "@/lib/missive";
-import { MISSIVE_TEAM_ID } from "../quote-revalidation/config";
+import { MISSIVE_TEAM_ID, MISSIVE_REPLY_SCAN_TEAM_IDS } from "../quote-revalidation/config";
 import { composeReply } from "./reply-drafter";
 import { stageDraft } from "@/lib/draft-staging";
 import { parseMessageAttachments } from "./attachment-parser";
@@ -186,20 +186,37 @@ registerAgent({
       return;
     }
 
-    // 3. Pull conversations.
-    let conversations;
-    try {
-      conversations = await listTeamConversations(teamId, MAX_CONVERSATIONS_PER_RUN);
-    } catch (e: any) {
-      await ctx.log(`Missive list conversations failed: ${e.message}`, { level: "error", step: "missive" });
+    // 3. Pull conversations across every reply-scan inbox. Missive routes a
+    //    supplier reply into a stage-based teamspace (1 Inquiries, 2 Quotes, …),
+    //    not the sandbox the draft was staged in, so we scan all of them and
+    //    dedup by conversation id. Matching is by sender email, so cross-client
+    //    threads in shared inboxes are ignored automatically.
+    const scanTeamIds = MISSIVE_REPLY_SCAN_TEAM_IDS.length ? MISSIVE_REPLY_SCAN_TEAM_IDS : [teamId];
+    const convById = new Map<string, Awaited<ReturnType<typeof listTeamConversations>>[number]>();
+    let listErrors = 0;
+    for (const tid of scanTeamIds) {
+      try {
+        const cs = await listTeamConversations(tid, MAX_CONVERSATIONS_PER_RUN);
+        for (const c of cs) {
+          const prev = convById.get(c.id);
+          if (!prev || c.last_activity_at > prev.last_activity_at) convById.set(c.id, c);
+        }
+      } catch (e: any) {
+        listErrors++;
+        await ctx.log(`Missive list failed for inbox ${tid}: ${e.message}`, { level: "warn", step: "missive" });
+      }
+    }
+    if (listErrors === scanTeamIds.length) {
+      await ctx.log(`Missive list failed for all ${scanTeamIds.length} inboxes`, { level: "error", step: "missive" });
       ctx.setStatus("failure");
-      ctx.setSummary(`Missive read failed: ${e.message}`);
+      ctx.setSummary("Missive read failed for all reply-scan inboxes.");
       return;
     }
+    const conversations = Array.from(convById.values());
     const fresh = conversations.filter((c) => c.last_activity_at > cursor);
     await ctx.log(
-      `Pulled ${conversations.length} conversations from team_inbox (${fresh.length} newer than cursor)`,
-      { step: "list", data: { total: conversations.length, fresh: fresh.length } }
+      `Pulled ${conversations.length} conversations across ${scanTeamIds.length} inboxes (${fresh.length} newer than cursor)`,
+      { step: "list", data: { total: conversations.length, fresh: fresh.length, inboxes: scanTeamIds.length } }
     );
 
     // 4. Scan fresh conversations for supplier-sent messages.
