@@ -150,8 +150,14 @@ registerAgent({
     const outreachByEmail = new Map<string, DraftRefRow[]>();
     for (const r of (refs ?? []) as any[]) {
       const leadId = (r.metadata as any)?.lead_id as string | undefined;
-      const ev = leadId ? leadEmailById.get(leadId) : null;
-      if (!ev) continue;
+      // Agent 04 (lead) drafts resolve the email via leads_in_flight; Agent 02
+      // (revalidation) drafts have no lead_id but stamp supplier_contact_email
+      // on metadata. Use whichever is available so both kinds are watched.
+      const metaEmail = (r.metadata as any)?.supplier_contact_email;
+      const ev = leadId
+        ? leadEmailById.get(leadId)
+        : (metaEmail ? { email: String(metaEmail).trim().toLowerCase(), orgId: r.org_id ?? null } : null);
+      if (!ev || !ev.email) continue;
       const arr = outreachByEmail.get(ev.email) ?? [];
       arr.push({
         id: r.id,

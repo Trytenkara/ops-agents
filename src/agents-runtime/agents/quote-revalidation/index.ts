@@ -330,6 +330,9 @@ registerAgent({
             assigned_operator: assignedOperator,
             metadata: {
               outreach_mode: r.mode,
+              // Supplier address we drafted to — Agent 08 matches replies on this
+              // (revalidation drafts have no lead_id, so this is their watch key).
+              supplier_contact_email: r.group.supplier_contact_email,
               suggested_signoff: r.mode === "active" ? `${r.group.client_org_name} Purchasing Team` : `${r.ghostBrand} Sourcing`,
               suggested_from_email: r.group.client_purchasing_email,
               ghost_brand: r.ghostBrand ?? null,
