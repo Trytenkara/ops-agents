@@ -37,6 +37,14 @@ import { insertStagedQuotes, type StagedQuoteInput } from "@/lib/staged-quotes";
 const DEFAULT_LOOKBACK_DAYS = 7;
 const MAX_CONVERSATIONS_PER_RUN = 50;
 
+// Our own outbound sender addresses — a message from one of these is our
+// outreach, not a supplier reply, so it never counts as a match (important now
+// that we also match by thread/domain). Override via MISSIVE_OUR_ADDRESSES (csv).
+const OUR_SENDER_ADDRESSES = new Set(
+  (process.env.MISSIVE_OUR_ADDRESSES?.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) ?? [])
+    .concat(["info@bobberlabs.com"])
+);
+
 interface CursorValue {
   last_activity_at: number; // unix seconds
   last_run_at: string; // iso
@@ -146,20 +154,26 @@ registerAgent({
       }
     }
 
-    // Map: lower(email) → DraftRefRow[]
+    // Watch maps. A supplier reply is matched three ways, in order:
+    //   1. exact sender email,
+    //   2. sender domain (the reply came from a different person at the same
+    //      company — e.g. andre@acme vs the sales@acme we wrote to),
+    //   3. the conversation thread our draft created (reply in-thread, from any
+    //      address). Thread match is the most reliable and is address-agnostic.
     const outreachByEmail = new Map<string, DraftRefRow[]>();
+    const outreachByDomain = new Map<string, DraftRefRow[]>();
+    const outreachByThread = new Map<string, DraftRefRow[]>();
+    const FREE_EMAIL_DOMAINS = new Set([
+      "gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com",
+      "icloud.com", "me.com", "proton.me", "protonmail.com", "live.com", "msn.com",
+    ]);
+    const pushTo = (map: Map<string, DraftRefRow[]>, key: string, row: DraftRefRow) => {
+      const arr = map.get(key) ?? [];
+      arr.push(row);
+      map.set(key, arr);
+    };
     for (const r of (refs ?? []) as any[]) {
-      const leadId = (r.metadata as any)?.lead_id as string | undefined;
-      // Agent 04 (lead) drafts resolve the email via leads_in_flight; Agent 02
-      // (revalidation) drafts have no lead_id but stamp supplier_contact_email
-      // on metadata. Use whichever is available so both kinds are watched.
-      const metaEmail = (r.metadata as any)?.supplier_contact_email;
-      const ev = leadId
-        ? leadEmailById.get(leadId)
-        : (metaEmail ? { email: String(metaEmail).trim().toLowerCase(), orgId: r.org_id ?? null } : null);
-      if (!ev || !ev.email) continue;
-      const arr = outreachByEmail.get(ev.email) ?? [];
-      arr.push({
+      const row: DraftRefRow = {
         id: r.id,
         org_id: r.org_id,
         supplier_id: r.supplier_id,
@@ -168,16 +182,29 @@ registerAgent({
         status: r.status,
         subject: r.subject ?? null,
         assigned_operator: r.assigned_operator ?? null,
-      });
-      outreachByEmail.set(ev.email, arr);
+      };
+      // Email (and domain) keys. Agent 04 (lead) drafts resolve the email via
+      // leads_in_flight; Agent 02 (revalidation) drafts stamp it on metadata.
+      const leadId = (r.metadata as any)?.lead_id as string | undefined;
+      const metaEmail = (r.metadata as any)?.supplier_contact_email;
+      const ev = leadId
+        ? leadEmailById.get(leadId)
+        : (metaEmail ? { email: String(metaEmail).trim().toLowerCase(), orgId: r.org_id ?? null } : null);
+      if (ev?.email) {
+        pushTo(outreachByEmail, ev.email, row);
+        const dom = ev.email.split("@")[1];
+        if (dom && !FREE_EMAIL_DOMAINS.has(dom)) pushTo(outreachByDomain, dom, row);
+      }
+      // Thread key — match an in-thread reply regardless of sender address.
+      if (r.thread_id) pushTo(outreachByThread, String(r.thread_id), row);
     }
 
-    await ctx.log(`Watching ${outreachByEmail.size} unique supplier email${outreachByEmail.size === 1 ? "" : "s"} across ${refs?.length ?? 0} drafts`, {
+    await ctx.log(`Watching ${outreachByEmail.size} emails / ${outreachByDomain.size} domains / ${outreachByThread.size} threads across ${refs?.length ?? 0} drafts`, {
       step: "watchlist",
-      data: { emails: outreachByEmail.size, refs: refs?.length ?? 0 },
+      data: { emails: outreachByEmail.size, domains: outreachByDomain.size, threads: outreachByThread.size, refs: refs?.length ?? 0 },
     });
 
-    if (outreachByEmail.size === 0) {
+    if (outreachByEmail.size === 0 && outreachByThread.size === 0 && outreachByDomain.size === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
       ctx.setSummary("No outreach to watch for replies yet.");
@@ -255,7 +282,16 @@ registerAgent({
         if (!m.created_at || m.created_at <= cursor) continue;
         const sender = m.from_field?.address?.toLowerCase();
         if (!sender) continue;
-        const matches = outreachByEmail.get(sender);
+        if (OUR_SENDER_ADDRESSES.has(sender)) continue; // our own outbound, not a reply
+        // Match by email → domain → thread (most permissive last).
+        let matches = outreachByEmail.get(sender);
+        if (!matches || !matches.length) {
+          const dom = sender.split("@")[1];
+          if (dom) matches = outreachByDomain.get(dom);
+        }
+        if (!matches || !matches.length) {
+          matches = outreachByThread.get(conv.id);
+        }
         if (!matches || !matches.length) continue;
 
         // Parse any pricing attachments on this supplier message into
