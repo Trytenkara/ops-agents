@@ -332,7 +332,7 @@ registerAgent({
         to, subject: cls.subject || `Re: ${head.subject ?? "your quote"}`, body: finalBody,
         assignedOperator: head.assigned_operator ?? null,
         emailClient: "missive",
-        metadata: { outreach_mode: "ghost", ghost_brand: "Bobber Labs", supplier_contact_email: replyAddr, draft_kind: "reply_manager_response", reply_category: cls.category, staged_via: "agent-15" },
+        metadata: { outreach_mode: "ghost", ghost_brand: "Bobber Labs", supplier_contact_email: replyAddr, draft_kind: "reply_manager_response", reply_category: cls.category, staged_via: "agent-15", agent_version: "rm-v27", ask_present: /\?/.test(finalBody) },
       });
       if (staged.ok) {
         await setStatus(admin, rows, cls.category === "declined" ? "closed_declined" : "responded", {
