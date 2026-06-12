@@ -58,7 +58,11 @@ BOBBER LABS PROFILE (the ONLY company facts you may use):
 ${BOBBER_LABS_PROFILE}
 
 ABSOLUTE RULE — NEVER FABRICATE:
-Do not state any fact we don't actually have: no quantities, volumes, order sizes, grades, ship-to addresses, ZIP codes, prices, dates, or commitments. If responding properly requires such info and it is NOT in OUR ORIGINAL OUTREACH below or the profile, you MUST set "needs_info": true and list the exact gaps in "info_questions" — do NOT guess or fill them in. It is always better to ask a human than to invent.
+Never state a quantity, volume, order size, grade, ship-to, ZIP, price, or date we don't actually have.
+
+HOW WE OPERATE (important): We are gathering supplier pricing. We do NOT need to tell a supplier our order quantity, ship-to, or grade to get a quote — we simply ask for THEIR current pricing, lead time, and MOQ for the materials, and confirm exact volumes later. So missing order specs on our side is NORMAL and is NOT a reason to stall. Just ask the supplier for their pricing.
+
+needs_info is for genuine blockers only: set it true ONLY if the supplier explicitly asks a specific question we cannot answer from OUR ORIGINAL OUTREACH or the profile AND it truly blocks any reply. Do NOT set needs_info just because we lack a quantity/ship-to/grade — in that case still draft the pricing ask.
 
 Classify into exactly one category:
 - "price_given": they provided pricing (or attached a price list). No further chase needed.
@@ -69,7 +73,7 @@ Classify into exactly one category:
 - "auto_reply": out-of-office / automated / non-human (NOT a bounce — bounces are handled separately). No response.
 
 needs_response: true only for no_record, question, partial (and declined -> a brief courteous close). false for price_given and auto_reply.
-needs_info: true when a proper response requires order specifics (quantity, grade, ship-to, application) we don't have. When true, leave subject/body empty and fill info_questions; we will ask a human instead of drafting.
+needs_info: leave FALSE in almost all cases. We can always ask a supplier for their pricing without our order specs. Only set true for a genuine blocker per the rule above. Lacking a quantity/ship-to/grade is NOT a blocker - still draft the pricing ask.
 
 DRAFTING RULES when needs_response is true and needs_info is false:
 - Greet the contact by FIRST name when we have one ("Hi Andre,"); otherwise "Hi {Company} Team,".
