@@ -64,7 +64,7 @@ function ensurePricingAsk(body: string, materials: string[]): string {
       : materials.length === 1
         ? materials[0]
         : `${materials.slice(0, -1).join(", ")} and ${materials[materials.length - 1]}`;
-  const ask = `Could you share your current pricing, lead time, and MOQ for ${list}? We can confirm exact volumes as we go.`;
+  const ask = `Could you share your tiered pricing (volume price breaks), lead time, and MOQ for ${list}? We can confirm exact volumes as we go.`;
   const idx = body.search(/\n\s*Thanks,/i);
   if (idx >= 0) return `${body.slice(0, idx).trimEnd()}\n\n${ask}\n\n${body.slice(idx).replace(/^\n+/, "")}`;
   return `${body.trimEnd()}\n\n${ask}`;
@@ -96,8 +96,8 @@ needs_info: leave FALSE in almost all cases. We can always ask a supplier for th
 DRAFTING RULES when needs_response is true and needs_info is false:
 - Greet the contact by FIRST name when we have one ("Hi Andre,"); otherwise "Hi {Company} Team,".
 - Respond to what they ACTUALLY said (e.g. drop a material they don't carry), not a template.
-- The draft is INVALID unless its closing paragraph is an explicit pricing ask that NAMES the materials they can supply. Required form: "Could you share your current pricing, lead time, and MOQ for <Material A> and <Material B>?" Vague closers ("we can nail down details", "happy to work from your terms", "once we see what works") are forbidden.
-- You may reference our prior pricing (in OUR ORIGINAL OUTREACH) lightly, never insist on it.
+- The draft is INVALID unless its closing paragraph is an explicit pricing ask that NAMES the materials they can supply. Required form: "Could you share your tiered pricing (volume price breaks), lead time, and MOQ for <Material A> and <Material B>?" Always ask for TIERED / volume pricing, not a single number. Vague closers ("we can nail down details", "happy to work from your terms", "once we see what works") are forbidden.
+- Use the CLIENT PROFILE below for real facts (ship-to, typical pack sizes, pricing preference). You may mention our typical pack size for a material if it's in the profile, but never invent one.
 
 GOOD EXAMPLE (supplier says no record + doesn't carry Cetearyl):
 Hi Andre,
@@ -106,7 +106,7 @@ Thanks for the quick reply, and no problem on the records.
 
 Good to know you don't carry Cetearyl Alcohol, we will take that one off our list.
 
-Could you share your current pricing, lead time, and MOQ for Acetone and Citric Acid? We can confirm exact volumes as we go.
+Could you share your tiered pricing (volume price breaks), lead time, and MOQ for Acetone and Citric Acid? For reference we typically order Acetone in 55 lb and Citric Acid in 50 lb, shipping to Melbourne, FL 32901.
 
 Thanks,
 
@@ -137,11 +137,15 @@ async function classifyAndDraft(opts: {
   ourOutreach: string | null;
   theirSubject: string | null;
   theirBody: string | null;
+  clientNotes: string | null;
 }): Promise<Classification | null> {
   const user = [
     `Supplier company: ${opts.supplierName ?? "(unknown)"}`,
     `Their contact name: ${opts.contactName ?? "(unknown)"}`,
     `Materials in our outreach: ${opts.materials.join(", ") || "(unspecified)"}`,
+    "",
+    "CLIENT PROFILE / SOURCING SETTINGS (authoritative facts only — ship-to, pack sizes, pricing preference. Never state anything not here):",
+    opts.clientNotes || BOBBER_LABS_PROFILE,
     "",
     "OUR ORIGINAL OUTREACH (includes any prior pricing we have on file):",
     opts.ourOutreach ?? "(not available)",
@@ -197,6 +201,17 @@ registerAgent({
       ctx.setStatus("failure");
       ctx.setSummary(`Pull failed: ${error.message}`);
       return;
+    }
+
+    // Cache client sourcing notes per org (ship-to, pack sizes, pricing prefs).
+    const clientNotesByOrg = new Map<string, string | null>();
+    async function getClientNotes(orgId: string | null): Promise<string | null> {
+      if (!orgId) return null;
+      if (clientNotesByOrg.has(orgId)) return clientNotesByOrg.get(orgId)!;
+      const { data } = await admin.from("client_settings").select("sourcing_notes").eq("org_id", orgId).maybeSingle();
+      const notes = (data as any)?.sourcing_notes ?? null;
+      clientNotesByOrg.set(orgId, notes);
+      return notes;
     }
 
     const byThread = new Map<string, any[]>();
@@ -281,6 +296,7 @@ registerAgent({
       }
 
       const materials = Array.from(new Set(rows.map((r) => (r.metadata as any)?.material_name).filter(Boolean)));
+      const clientNotes = await getClientNotes(head.org_id ?? null);
       const cls = await classifyAndDraft({
         supplierName: meta.supplier_name ?? null,
         contactName,
@@ -289,6 +305,7 @@ registerAgent({
         ourOutreach: head.body_preview ?? null,
         theirSubject,
         theirBody,
+        clientNotes,
       });
       if (!cls) { skipped++; continue; }
 
