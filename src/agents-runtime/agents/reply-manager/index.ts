@@ -47,9 +47,26 @@ interface Classification {
   needs_response: boolean;
   needs_info: boolean;        // responding requires info we don't have -> ask a human
   info_questions: string[];   // the specific gaps to ask the human
+  supplyable_materials: string[]; // materials they CAN supply (dropped ones they don't carry)
   subject: string;
   body: string;
   reason: string;
+}
+
+// Deterministic safety net: the model keeps "forgetting" the ask, so if a
+// response doesn't contain an explicit pricing question, we append one built
+// from the materials they can supply, before the sign-off.
+function ensurePricingAsk(body: string, materials: string[]): string {
+  const hasAsk = /\?/.test(body) && /(pricing|price|lead time|moq|quote)/i.test(body);
+  if (hasAsk || materials.length === 0) return body;
+  const list =
+    materials.length === 1
+      ? materials[0]
+      : `${materials.slice(0, -1).join(", ")} and ${materials[materials.length - 1]}`;
+  const ask = `Could you share your current pricing, lead time, and MOQ for ${list}? We can confirm exact volumes as we go.`;
+  const idx = body.search(/\n\s*Thanks,/i);
+  if (idx >= 0) return `${body.slice(0, idx).trimEnd()}\n\n${ask}\n${body.slice(idx).replace(/^\n+/, "")}`;
+  return `${body.trimEnd()}\n\n${ask}`;
 }
 
 const SYSTEM = `You manage a procurement team's supplier email thread for Bobber Labs. We previously asked a supplier to confirm/refresh pricing. Given their latest reply, classify it and, when useful, draft our next message. The operator reviews and SENDS it.
@@ -101,7 +118,7 @@ Thanks,
 Procurement Team
 Bobber Labs
 
-Return ONLY JSON: {"category":"...","needs_response":true|false,"needs_info":true|false,"info_questions":["..."],"subject":"...","body":"...","reason":"<one line>"}. If needs_response is false or needs_info is true, subject/body may be empty strings.`;
+Return ONLY JSON: {"category":"...","needs_response":true|false,"needs_info":true|false,"info_questions":["..."],"supplyable_materials":["Acetone","Citric Acid"],"subject":"...","body":"...","reason":"<one line>"}. supplyable_materials = the materials they CAN supply (drop any they said they don't carry). If needs_response is false or needs_info is true, subject/body may be empty strings.`;
 
 const sani = (s: string) => s.replace(/\s*[—–]\s*/g, ", ").replace(/\n{3,}/g, "\n\n").trim();
 
@@ -145,6 +162,7 @@ async function classifyAndDraft(opts: {
       needs_response: !!p.needs_response,
       needs_info: !!p.needs_info,
       info_questions: Array.isArray(p.info_questions) ? p.info_questions.map(String) : [],
+      supplyable_materials: Array.isArray(p.supplyable_materials) ? p.supplyable_materials.map(String) : [],
       subject: sani(String(p.subject ?? "")),
       body: sani(String(p.body ?? "")),
       reason: String(p.reason ?? ""),
@@ -302,10 +320,11 @@ registerAgent({
         }
         await ctx.log(`Updated contact for ${meta.supplier_name ?? threadId} -> ${senderAddr}`, { step: "contact-update" });
       }
+      const finalBody = sani(ensurePricingAsk(cls.body, cls.supplyable_materials.length ? cls.supplyable_materials : materials));
       const staged = await stageDraft({
         admin, agentId: ctx.agentId, runId: ctx.runId, orgId: head.org_id,
         supplierId: head.supplier_id, materialId: head.material_id,
-        to, subject: cls.subject || `Re: ${head.subject ?? "your quote"}`, body: cls.body,
+        to, subject: cls.subject || `Re: ${head.subject ?? "your quote"}`, body: finalBody,
         assignedOperator: head.assigned_operator ?? null,
         emailClient: "missive",
         metadata: { outreach_mode: "ghost", ghost_brand: "Bobber Labs", supplier_contact_email: replyAddr, draft_kind: "reply_manager_response", reply_category: cls.category, staged_via: "agent-15" },
