@@ -26,7 +26,6 @@ const ALERT_USER_ID = process.env.OPS_ALERT_SLACK_USER_ID || "U09PNM3K0QH";
 // board can show where every thread is, all the way to a finalized price.
 
 const MODEL = "claude-opus-4-5";
-const MAX_FOLLOW_UPS = 1; // "light" persistence per ops decision
 
 // flow_status lifecycle (stored on draft_references.metadata.flow_status):
 //   outreach_sent -> reply_received -> responded -> price_captured -> finalized
@@ -58,14 +57,16 @@ interface Classification {
 // from the materials they can supply, before the sign-off.
 function ensurePricingAsk(body: string, materials: string[]): string {
   const hasAsk = /\?/.test(body) && /(pricing|price|lead time|moq|quote)/i.test(body);
-  if (hasAsk || materials.length === 0) return body;
+  if (hasAsk) return body;
   const list =
-    materials.length === 1
-      ? materials[0]
-      : `${materials.slice(0, -1).join(", ")} and ${materials[materials.length - 1]}`;
+    materials.length === 0
+      ? "the materials listed"
+      : materials.length === 1
+        ? materials[0]
+        : `${materials.slice(0, -1).join(", ")} and ${materials[materials.length - 1]}`;
   const ask = `Could you share your current pricing, lead time, and MOQ for ${list}? We can confirm exact volumes as we go.`;
   const idx = body.search(/\n\s*Thanks,/i);
-  if (idx >= 0) return `${body.slice(0, idx).trimEnd()}\n\n${ask}\n${body.slice(idx).replace(/^\n+/, "")}`;
+  if (idx >= 0) return `${body.slice(0, idx).trimEnd()}\n\n${ask}\n\n${body.slice(idx).replace(/^\n+/, "")}`;
   return `${body.trimEnd()}\n\n${ask}`;
 }
 
@@ -229,16 +230,20 @@ registerAgent({
         continue;
       }
 
-      const followUps = Number(meta.reply_followups ?? 0);
-      if (followUps >= MAX_FOLLOW_UPS) {
-        await setStatus(admin, rows, "stale", { note: `no price after ${followUps} follow-up(s)` });
+      // Turn-taking: respond once per NEW supplier reply and keep going back and
+      // forth until a price lands or a hard no. Skip if we already answered this
+      // exact reply; a sanity cap stops a runaway thread.
+      const MAX_TURNS = 8;
+      const replyMsgId = meta.reply_detected?.reply_message_id as string | undefined;
+      if (replyMsgId && meta.last_handled_reply_msg_id === replyMsgId) { skipped++; continue; }
+      if (Number(meta.reply_turns ?? 0) >= MAX_TURNS) {
+        await setStatus(admin, rows, "stale", { note: `max ${MAX_TURNS} turns without a price` });
         stale++;
         continue;
       }
 
       // Read the supplier's FULL reply (single-message endpoint returns the body;
       // the conversation list only has a preview).
-      const replyMsgId = meta.reply_detected?.reply_message_id as string | undefined;
       let theirBody: string | null = meta.reply_detected?.reply_preview ?? null;
       let theirSubject: string | null = meta.reply_detected?.reply_subject ?? null;
       let contactName: string | null = meta.reply_detected?.reply_sender_name ?? null;
@@ -332,7 +337,8 @@ registerAgent({
       if (staged.ok) {
         await setStatus(admin, rows, cls.category === "declined" ? "closed_declined" : "responded", {
           note: `${cls.category}: ${cls.reason}`,
-          incrementFollowup: cls.category !== "declined",
+          incrementTurns: cls.category !== "declined",
+          extra: { last_handled_reply_msg_id: replyMsgId ?? null, supplier_contact_email: replyAddr },
         });
         if (cls.category === "declined") closed++; else responded++;
         await ctx.log(`Responded to ${meta.supplier_name ?? to.address} (${cls.category})`, { step: "respond", data: { category: cls.category } });
@@ -361,17 +367,18 @@ async function setStatus(
   admin: ReturnType<typeof createAdminClient>,
   rows: any[],
   status: FlowStatus,
-  opts: { note?: string; incrementFollowup?: boolean }
+  opts: { note?: string; incrementTurns?: boolean; extra?: Record<string, any> }
 ) {
   for (const r of rows) {
     const meta = r.metadata ?? {};
     const history = Array.isArray(meta.flow_history) ? meta.flow_history : [];
     const patch: Record<string, any> = {
       ...meta,
+      ...(opts.extra ?? {}),
       flow_status: status,
-      flow_history: [...history, { status, at: new Date().toISOString(), note: opts.note ?? null }].slice(-12),
+      flow_history: [...history, { status, at: new Date().toISOString(), note: opts.note ?? null }].slice(-16),
     };
-    if (opts.incrementFollowup) patch.reply_followups = Number(meta.reply_followups ?? 0) + 1;
+    if (opts.incrementTurns) patch.reply_turns = Number(meta.reply_turns ?? 0) + 1;
     await admin.from("draft_references").update({ metadata: patch }).eq("id", r.id);
   }
 }
