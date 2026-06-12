@@ -187,3 +187,28 @@ export async function getConversationMessages(conversationId: string, limit = 10
   );
   return body.messages ?? [];
 }
+
+// Full single message — unlike the conversation-list endpoint (preview only),
+// this returns the complete `body` (HTML). Use it to actually read a reply.
+export interface MissiveFullMessage extends MissiveMessage {
+  body?: string | null;
+  conversation?: string;
+}
+export async function getMessage(messageId: string): Promise<MissiveFullMessage | null> {
+  const body = await missiveGet<{ messages: MissiveFullMessage }>(`/messages/${encodeURIComponent(messageId)}`);
+  return body.messages ?? null;
+}
+
+// Strip an HTML email body down to readable plain text for the LLM.
+export function htmlToText(html: string | null | undefined): string {
+  if (!html) return "";
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<\/(p|div|br|tr|li|h[1-6])>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}

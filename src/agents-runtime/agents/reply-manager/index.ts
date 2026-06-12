@@ -1,6 +1,6 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getConversationMessages } from "@/lib/missive";
+import { getConversationMessages, getMessage, htmlToText } from "@/lib/missive";
 import { stageDraft } from "@/lib/draft-staging";
 import Anthropic from "@anthropic-ai/sdk";
 
@@ -50,6 +50,12 @@ Classify into exactly one category:
 
 needs_response: true only for no_record, question, partial (and declined -> a brief courteous close). false for price_given and auto_reply.
 
+DRAFTING RULES when needs_response is true:
+- Greet the supplier contact by FIRST name when we have one ("Hi Andre,"); otherwise "Hi {Company} Team,".
+- Read their actual message and respond to what they SAID, not a template.
+- ALWAYS end with one explicit, concrete ask: their current pricing, lead time, and MOQ for the specific materials (list them). Never leave the ask vague ("happy to work from your terms" is NOT acceptable).
+- When we have prior pricing on file (shown in OUR ORIGINAL OUTREACH below), you may reference it lightly as a starting point, but never insist on it.
+
 VOICE (match exactly): warm, lightly informal, professional. Every thought its own short paragraph with a blank line between. Body under 120 words. NEVER use em or en dashes. Never fabricate prior calls. Sign off EXACTLY:
 Thanks,
 
@@ -70,19 +76,26 @@ function ai(): Anthropic {
 
 async function classifyAndDraft(opts: {
   supplierName: string | null;
+  contactName: string | null;
   materials: string[];
   ourSubject: string | null;
+  ourOutreach: string | null;
   theirSubject: string | null;
   theirBody: string | null;
 }): Promise<Classification | null> {
   const user = [
-    `Supplier: ${opts.supplierName ?? "(unknown)"}`,
+    `Supplier company: ${opts.supplierName ?? "(unknown)"}`,
+    `Their contact name: ${opts.contactName ?? "(unknown)"}`,
     `Materials in our outreach: ${opts.materials.join(", ") || "(unspecified)"}`,
-    `Our subject: ${opts.ourSubject ?? ""}`,
-    `Their reply subject: ${opts.theirSubject ?? ""}`,
-    `Their reply: ${opts.theirBody ?? "(no text captured)"}`,
     "",
-    "Classify and, if needed, draft our next message.",
+    "OUR ORIGINAL OUTREACH (includes any prior pricing we have on file):",
+    opts.ourOutreach ?? "(not available)",
+    "",
+    `Their reply subject: ${opts.theirSubject ?? ""}`,
+    "THEIR FULL REPLY:",
+    opts.theirBody ?? "(no text captured)",
+    "",
+    "Classify their reply and, if needed, draft our next message per the rules.",
   ].join("\n");
   const res = await ai().messages.create({ model: MODEL, max_tokens: 900, system: SYSTEM, messages: [{ role: "user", content: user }] });
   const text = res.content.map((b) => (b.type === "text" ? b.text : "")).join("");
@@ -119,7 +132,7 @@ registerAgent({
     // conversation so we act once per thread, not once per material row.
     const { data: refs, error } = await admin
       .from("draft_references")
-      .select("id, org_id, supplier_id, material_id, thread_id, subject, assigned_operator, metadata")
+      .select("id, org_id, supplier_id, material_id, thread_id, subject, body_preview, assigned_operator, metadata")
       .not("metadata->reply_detected", "is", null);
     if (error) {
       await ctx.log(`draft_references pull failed: ${error.message}`, { level: "error", step: "pull" });
@@ -166,24 +179,38 @@ registerAgent({
         continue;
       }
 
-      // Fetch the supplier's reply text from Missive for classification.
-      const convId = meta.reply_detected?.reply_conversation_id ?? threadId;
+      // Read the supplier's FULL reply (single-message endpoint returns the body;
+      // the conversation list only has a preview).
+      const replyMsgId = meta.reply_detected?.reply_message_id as string | undefined;
       let theirBody: string | null = meta.reply_detected?.reply_preview ?? null;
       let theirSubject: string | null = meta.reply_detected?.reply_subject ?? null;
+      let contactName: string | null = meta.reply_detected?.reply_sender_name ?? null;
       try {
-        const msgs = await getConversationMessages(convId, 10);
-        const inbound = msgs.filter((m) => !m.draft && m.from_field?.address && m.from_field.address.toLowerCase() !== "info@bobberlabs.com");
-        const latest = inbound.sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))[0];
-        if (latest) { theirBody = latest.preview ?? theirBody; theirSubject = latest.subject ?? theirSubject; }
+        if (replyMsgId) {
+          const full = await getMessage(replyMsgId);
+          if (full) {
+            theirBody = htmlToText(full.body) || full.preview || theirBody;
+            theirSubject = full.subject ?? theirSubject;
+            contactName = full.from_field?.name ?? contactName;
+          }
+        } else {
+          const convId = meta.reply_detected?.reply_conversation_id ?? threadId;
+          const msgs = await getConversationMessages(convId, 10);
+          const inbound = msgs.filter((m) => !m.draft && m.from_field?.address && m.from_field.address.toLowerCase() !== "info@bobberlabs.com");
+          const latest = inbound.sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))[0];
+          if (latest) { theirBody = latest.preview ?? theirBody; theirSubject = latest.subject ?? theirSubject; contactName = latest.from_field?.name ?? contactName; }
+        }
       } catch (e: any) {
-        await ctx.log(`Missive fetch failed for ${convId}: ${e.message}`, { level: "warn", step: "fetch" });
+        await ctx.log(`Missive fetch failed for ${replyMsgId ?? threadId}: ${e.message}`, { level: "warn", step: "fetch" });
       }
 
       const materials = Array.from(new Set(rows.map((r) => (r.metadata as any)?.material_name).filter(Boolean)));
       const cls = await classifyAndDraft({
         supplierName: meta.supplier_name ?? null,
+        contactName,
         materials,
         ourSubject: head.subject ?? null,
+        ourOutreach: head.body_preview ?? null,
         theirSubject,
         theirBody,
       });
