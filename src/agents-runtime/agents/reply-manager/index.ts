@@ -98,6 +98,7 @@ DRAFTING RULES when needs_response is true and needs_info is false:
 - Respond to what they ACTUALLY said (e.g. drop a material they don't carry), not a template.
 - The draft is INVALID unless its closing paragraph is an explicit pricing ask that NAMES the materials they can supply. Required form: "Could you share your tiered pricing (volume price breaks), lead time, and MOQ for <Material A> and <Material B>?" Always ask for TIERED / volume pricing, not a single number. Vague closers ("we can nail down details", "happy to work from your terms", "once we see what works") are forbidden.
 - Use the CLIENT PROFILE below for real facts (ship-to, typical pack sizes, pricing preference). You may mention our typical pack size for a material if it's in the profile, but never invent one.
+- Do NOT state a material GRADE (e.g. "Industrial", "Food grade", "USP") unless that exact grade is written in the CLIENT PROFILE or OUR ORIGINAL OUTREACH. If grade isn't given, omit it entirely — do not guess a "typical" grade.
 
 GOOD EXAMPLE (supplier says no record + doesn't carry Cetearyl):
 Hi Andre,
