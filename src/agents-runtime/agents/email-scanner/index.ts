@@ -259,7 +259,10 @@ registerAgent({
     const attachmentParsedMessageIds = new Set<string>();
     const canParseAttachments = !!process.env.ANTHROPIC_API_KEY;
     const orgNameById = new Map<string, string>();
-    const canDraftReplies = !!process.env.ANTHROPIC_API_KEY;
+    // Agent 15 (Reply Manager) now owns drafting responses (with classification
+    // + the email workflow). Agent 08 only detects + parses pricing. Set
+    // EMAIL_SCANNER_DRAFT_REPLIES=true to fall back to 08's generic reply draft.
+    const canDraftReplies = !!process.env.ANTHROPIC_API_KEY && process.env.EMAIL_SCANNER_DRAFT_REPLIES === "true";
 
     for (const conv of fresh) {
       if (conv.last_activity_at > maxActivityAt) maxActivityAt = conv.last_activity_at;
@@ -352,6 +355,11 @@ registerAgent({
 
           const newMetadata = {
             ...(ref.metadata ?? {}),
+            // Advance the pipeline board status. Agent 15 (Reply Manager) takes
+            // it from here unless it's already further along.
+            flow_status: ["responded", "price_captured", "finalized", "closed_declined"].includes((ref.metadata as any)?.flow_status)
+              ? (ref.metadata as any).flow_status
+              : "reply_received",
             reply_detected: {
               detected_at: new Date().toISOString(),
               detected_by_run_id: ctx.runId,

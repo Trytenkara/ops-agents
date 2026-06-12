@@ -143,4 +143,14 @@ export const AGENT_SPECS: AgentSpec[] = [
     automatic: "Scans the team_inbox, matches messages to known supplier addresses, derives thread state (never_contacted / awaiting_their_reply / they_replied / stale) with last-outbound/last-inbound dates, summarizes replied threads, and upserts supplier_email_context. Read-only on Missive/Tenkara; writes OA only.",
     humanInput: "None directly — context surfaces inside Agent 02's drafts as follow-up tone. Review the resulting drafts in Missive.",
   },
+  {
+    number: 15,
+    slug: "agent-15-reply-manager",
+    name: "Supplier Reply Manager",
+    status: "shipped",
+    cadence: "Every 30 min · America/New_York (after Agent 08)",
+    purpose: "Own the supplier conversation after a reply lands — classify it and draft the right next message (answer, reframe a no-record reply as a fresh pricing ask, or nudge) until a price is captured.",
+    automatic: "For each thread with a detected reply and no finalized price, classifies the supplier's reply (price_given / no_record / question / partial / declined / auto_reply), drafts a workflow-appropriate response staged in Missive, and advances flow_status. Light persistence: one follow-up, then hands stale threads to ops. Never sends.",
+    humanInput: "Review the staged reply in Missive and Send. Track each thread to a finalized price on the Pricing Pipeline board.",
+  },
 ];

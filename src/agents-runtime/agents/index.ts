@@ -15,4 +15,5 @@ import "./email-scanner";
 import "./client-profile";
 import "./inbox-context";
 import "./qa-watchdog";
+import "./reply-manager";
 import "./fleet-summary";

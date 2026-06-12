@@ -1,0 +1,247 @@
+import { registerAgent } from "../../registry";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { getConversationMessages } from "@/lib/missive";
+import { stageDraft } from "@/lib/draft-staging";
+import Anthropic from "@anthropic-ai/sdk";
+
+// Agent 15 - Supplier Reply Manager.
+// Owns the supplier-facing conversation AFTER Agent 08 detects a reply. For each
+// thread with a reply and no finalized price, it classifies the reply and drafts
+// the right next message per our email workflow (answer a question, reframe a
+// "no record" reply as a fresh pricing ask, or nudge for the missing price),
+// staged as a Missive draft for a human to send. Persistence is light: one
+// follow-up, then the thread is handed to ops. It never sends.
+//
+// It also maintains flow_status on each draft_references row so the pipeline
+// board can show where every thread is, all the way to a finalized price.
+
+const MODEL = "claude-opus-4-5";
+const MAX_FOLLOW_UPS = 1; // "light" persistence per ops decision
+
+// flow_status lifecycle (stored on draft_references.metadata.flow_status):
+//   outreach_sent -> reply_received -> responded -> price_captured -> finalized
+//   plus terminal: stale (no price after the follow-up budget) / closed_declined.
+type FlowStatus =
+  | "outreach_sent"
+  | "reply_received"
+  | "responded"
+  | "price_captured"
+  | "finalized"
+  | "stale"
+  | "closed_declined";
+
+interface Classification {
+  category: "price_given" | "no_record" | "question" | "partial" | "declined" | "auto_reply";
+  needs_response: boolean;
+  subject: string;
+  body: string;
+  reason: string;
+}
+
+const SYSTEM = `You manage a procurement team's supplier email thread. We previously asked a supplier to confirm/refresh pricing. Given their latest reply, classify it and, when useful, draft our next message. The operator reviews and SENDS it, so never invent prices, quantities, ship dates, or commitments.
+
+Classify into exactly one category:
+- "price_given": they provided pricing (or attached a price list). No further chase needed.
+- "no_record": they say they have no record / can't tie our quote back. Reframe: politely drop the old-quote angle and ask for their CURRENT pricing, lead time, and MOQ for the listed materials.
+- "question": they asked us something (quantity, specs, MOQ, application). Answer only from the context given; if we don't have it, ask them to share their standard terms so we can proceed.
+- "partial": they replied but the price is missing/incomplete. Nudge specifically for the missing pricing.
+- "declined": they can't or won't supply. Acknowledge and close gracefully.
+- "auto_reply": out-of-office / automated / bounce / non-human. No response.
+
+needs_response: true only for no_record, question, partial (and declined -> a brief courteous close). false for price_given and auto_reply.
+
+VOICE (match exactly): warm, lightly informal, professional. Every thought its own short paragraph with a blank line between. Body under 120 words. NEVER use em or en dashes. Never fabricate prior calls. Sign off EXACTLY:
+Thanks,
+
+Procurement Team
+Bobber Labs
+
+Never name any underlying client other than Bobber Labs.
+
+Return ONLY JSON: {"category": "...", "needs_response": true|false, "subject": "...", "body": "...", "reason": "<one line>"}. If needs_response is false, subject/body may be empty strings.`;
+
+const sani = (s: string) => s.replace(/\s*[—–]\s*/g, ", ").replace(/\n{3,}/g, "\n\n").trim();
+
+let anthro: Anthropic | null = null;
+function ai(): Anthropic {
+  if (!anthro) anthro = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  return anthro;
+}
+
+async function classifyAndDraft(opts: {
+  supplierName: string | null;
+  materials: string[];
+  ourSubject: string | null;
+  theirSubject: string | null;
+  theirBody: string | null;
+}): Promise<Classification | null> {
+  const user = [
+    `Supplier: ${opts.supplierName ?? "(unknown)"}`,
+    `Materials in our outreach: ${opts.materials.join(", ") || "(unspecified)"}`,
+    `Our subject: ${opts.ourSubject ?? ""}`,
+    `Their reply subject: ${opts.theirSubject ?? ""}`,
+    `Their reply: ${opts.theirBody ?? "(no text captured)"}`,
+    "",
+    "Classify and, if needed, draft our next message.",
+  ].join("\n");
+  const res = await ai().messages.create({ model: MODEL, max_tokens: 900, system: SYSTEM, messages: [{ role: "user", content: user }] });
+  const text = res.content.map((b) => (b.type === "text" ? b.text : "")).join("");
+  const s = text.indexOf("{"), e = text.lastIndexOf("}");
+  if (s < 0 || e <= s) return null;
+  try {
+    const p = JSON.parse(text.slice(s, e + 1));
+    return {
+      category: p.category,
+      needs_response: !!p.needs_response,
+      subject: sani(String(p.subject ?? "")),
+      body: sani(String(p.body ?? "")),
+      reason: String(p.reason ?? ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
+registerAgent({
+  slug: "agent-15-reply-manager",
+  displayName: "Agent 15 - Supplier Reply Manager",
+  description:
+    "Owns the supplier conversation after a reply is detected: classifies the reply and drafts the right next message (answer, reframe a no-record reply as a fresh pricing ask, or nudge for the missing price), staged for a human to send. Light persistence (1 follow-up). Tracks flow_status to a finalized price. Never sends.",
+  async run(ctx) {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      ctx.setStatus("failure");
+      ctx.setSummary("ANTHROPIC_API_KEY missing.");
+      return;
+    }
+    const admin = createAdminClient();
+
+    // Threads with a detected reply that aren't finalized/closed yet. Group by
+    // conversation so we act once per thread, not once per material row.
+    const { data: refs, error } = await admin
+      .from("draft_references")
+      .select("id, org_id, supplier_id, material_id, thread_id, subject, assigned_operator, metadata")
+      .not("metadata->reply_detected", "is", null);
+    if (error) {
+      await ctx.log(`draft_references pull failed: ${error.message}`, { level: "error", step: "pull" });
+      ctx.setStatus("failure");
+      ctx.setSummary(`Pull failed: ${error.message}`);
+      return;
+    }
+
+    const byThread = new Map<string, any[]>();
+    for (const r of refs ?? []) {
+      const key = (r as any).thread_id ?? (r as any).id;
+      const arr = byThread.get(key) ?? [];
+      arr.push(r);
+      byThread.set(key, arr);
+    }
+
+    let responded = 0, priced = 0, stale = 0, closed = 0, skipped = 0;
+    for (const [threadId, rows] of byThread) {
+      const head: any = rows[0];
+      const meta = head.metadata ?? {};
+      const status: FlowStatus = meta.flow_status ?? "reply_received";
+      if (["price_captured", "finalized", "stale", "closed_declined"].includes(status)) { skipped++; continue; }
+
+      // If a price already landed for this thread, mark it and move on.
+      const supplierIds = rows.map((r) => r.supplier_id).filter(Boolean);
+      let hasPrice = false;
+      if (supplierIds.length) {
+        const { count } = await admin
+          .from("staged_quotes")
+          .select("id", { count: "exact", head: true })
+          .in("supplier_id", supplierIds as string[]);
+        hasPrice = (count ?? 0) > 0;
+      }
+      if (hasPrice) {
+        await setStatus(admin, rows, "price_captured", { note: "staged_quote present" });
+        priced++;
+        continue;
+      }
+
+      const followUps = Number(meta.reply_followups ?? 0);
+      if (followUps >= MAX_FOLLOW_UPS) {
+        await setStatus(admin, rows, "stale", { note: `no price after ${followUps} follow-up(s)` });
+        stale++;
+        continue;
+      }
+
+      // Fetch the supplier's reply text from Missive for classification.
+      const convId = meta.reply_detected?.reply_conversation_id ?? threadId;
+      let theirBody: string | null = meta.reply_detected?.reply_preview ?? null;
+      let theirSubject: string | null = meta.reply_detected?.reply_subject ?? null;
+      try {
+        const msgs = await getConversationMessages(convId, 10);
+        const inbound = msgs.filter((m) => !m.draft && m.from_field?.address && m.from_field.address.toLowerCase() !== "info@bobberlabs.com");
+        const latest = inbound.sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))[0];
+        if (latest) { theirBody = latest.preview ?? theirBody; theirSubject = latest.subject ?? theirSubject; }
+      } catch (e: any) {
+        await ctx.log(`Missive fetch failed for ${convId}: ${e.message}`, { level: "warn", step: "fetch" });
+      }
+
+      const materials = Array.from(new Set(rows.map((r) => (r.metadata as any)?.material_name).filter(Boolean)));
+      const cls = await classifyAndDraft({
+        supplierName: meta.supplier_name ?? null,
+        materials,
+        ourSubject: head.subject ?? null,
+        theirSubject,
+        theirBody,
+      });
+      if (!cls) { skipped++; continue; }
+
+      if (cls.category === "price_given") { await setStatus(admin, rows, "price_captured", { note: "supplier provided price (await extraction)" }); priced++; continue; }
+      if (cls.category === "auto_reply") { skipped++; continue; }
+      if (!cls.needs_response || !cls.body) {
+        if (cls.category === "declined") { await setStatus(admin, rows, "closed_declined", { note: cls.reason }); closed++; }
+        else skipped++;
+        continue;
+      }
+
+      // Stage the response as a Missive reply draft (human sends).
+      const to = { name: meta.supplier_name ?? null, address: (meta.supplier_contact_email ?? "").toString() };
+      if (!to.address) { skipped++; continue; }
+      const staged = await stageDraft({
+        admin, agentId: ctx.agentId, runId: ctx.runId, orgId: head.org_id,
+        supplierId: head.supplier_id, materialId: head.material_id,
+        to, subject: cls.subject || `Re: ${head.subject ?? "your quote"}`, body: cls.body,
+        assignedOperator: head.assigned_operator ?? null,
+        emailClient: "missive",
+        metadata: { outreach_mode: "ghost", ghost_brand: "Bobber Labs", supplier_contact_email: to.address, draft_kind: "reply_manager_response", reply_category: cls.category, staged_via: "agent-15" },
+      });
+      if (staged.ok) {
+        await setStatus(admin, rows, cls.category === "declined" ? "closed_declined" : "responded", {
+          note: `${cls.category}: ${cls.reason}`,
+          incrementFollowup: cls.category !== "declined",
+        });
+        if (cls.category === "declined") closed++; else responded++;
+        await ctx.log(`Responded to ${meta.supplier_name ?? to.address} (${cls.category})`, { step: "respond", data: { category: cls.category } });
+      } else {
+        skipped++;
+        await ctx.log(`Stage failed for ${to.address}: ${staged.error}`, { level: "warn", step: "respond" });
+      }
+    }
+
+    ctx.setItemsProcessed(responded + priced + stale + closed);
+    ctx.setStatus("success");
+    ctx.setSummary(`Threads: ${byThread.size} · ${responded} responded · ${priced} priced · ${stale} stale · ${closed} closed · ${skipped} skipped`);
+  },
+});
+
+async function setStatus(
+  admin: ReturnType<typeof createAdminClient>,
+  rows: any[],
+  status: FlowStatus,
+  opts: { note?: string; incrementFollowup?: boolean }
+) {
+  for (const r of rows) {
+    const meta = r.metadata ?? {};
+    const history = Array.isArray(meta.flow_history) ? meta.flow_history : [];
+    const patch: Record<string, any> = {
+      ...meta,
+      flow_status: status,
+      flow_history: [...history, { status, at: new Date().toISOString(), note: opts.note ?? null }].slice(-12),
+    };
+    if (opts.incrementFollowup) patch.reply_followups = Number(meta.reply_followups ?? 0) + 1;
+    await admin.from("draft_references").update({ metadata: patch }).eq("id", r.id);
+  }
+}
