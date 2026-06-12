@@ -44,9 +44,10 @@ Return ONLY a JSON object (no prose):
 
 Rules:
 - price must be numeric or null. Strip "$", "USD", commas.
-- If the price is per-unit and no case size is given, set case_size = 1 and unit_of_measurement to that unit.
+- ALWAYS populate case_size and unit_of_measurement so a PER-UNIT price (price / case_size) can be computed. If the price is already per-unit, set case_size = 1 and unit_of_measurement to that unit. Only leave case_size null if there is genuinely no quantity context at all.
+- Capture EVERY pack size and EVERY tiered price break as its OWN line. If a material is offered in multiple pack sizes (e.g. 50 lb and 55 lb), output one line per pack size. If there are volume price breaks (e.g. $X/lb at 100 lb, $Y/lb at 500 lb), output one line per break and put the quantity threshold in notes (e.g. "tier: >=500 lb"). This is how available pack sizes per material get recorded.
 - confidence "low" when the unit/case size is guessed or the figure might be an MOQ/sample price rather than a real quote.
-- Never invent materials. If the document has no extractable price lines, return {"quotes": []}.`;
+- Never invent materials, pack sizes, or prices. If the document has no extractable price lines, return {"quotes": []}.`;
 
 let _client: Anthropic | null = null;
 function anthropic(): Anthropic {
