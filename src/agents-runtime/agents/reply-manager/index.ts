@@ -290,16 +290,25 @@ registerAgent({
         continue;
       }
 
-      // Stage the response as a Missive reply draft (human sends).
-      const to = { name: meta.supplier_name ?? null, address: (meta.supplier_contact_email ?? "").toString() };
+      // Reply to the address they actually replied FROM (often different from the
+      // mailbox we wrote to — e.g. andre@ vs sales@). Store it as the contact
+      // going forward so future outreach uses the live address.
+      const replyAddr = (senderAddr || meta.supplier_contact_email || "").toString();
+      const to = { name: contactName ?? meta.supplier_name ?? null, address: replyAddr };
       if (!to.address) { skipped++; continue; }
+      if (senderAddr && senderAddr.toLowerCase() !== (meta.supplier_contact_email ?? "").toLowerCase()) {
+        for (const r of rows) {
+          r.metadata = { ...(r.metadata ?? {}), supplier_contact_email: senderAddr, supplier_contact_name: contactName ?? (r.metadata as any)?.supplier_contact_name, prior_contact_email: (r.metadata as any)?.supplier_contact_email };
+        }
+        await ctx.log(`Updated contact for ${meta.supplier_name ?? threadId} -> ${senderAddr}`, { step: "contact-update" });
+      }
       const staged = await stageDraft({
         admin, agentId: ctx.agentId, runId: ctx.runId, orgId: head.org_id,
         supplierId: head.supplier_id, materialId: head.material_id,
         to, subject: cls.subject || `Re: ${head.subject ?? "your quote"}`, body: cls.body,
         assignedOperator: head.assigned_operator ?? null,
         emailClient: "missive",
-        metadata: { outreach_mode: "ghost", ghost_brand: "Bobber Labs", supplier_contact_email: to.address, draft_kind: "reply_manager_response", reply_category: cls.category, staged_via: "agent-15" },
+        metadata: { outreach_mode: "ghost", ghost_brand: "Bobber Labs", supplier_contact_email: replyAddr, draft_kind: "reply_manager_response", reply_category: cls.category, staged_via: "agent-15" },
       });
       if (staged.ok) {
         await setStatus(admin, rows, cls.category === "declined" ? "closed_declined" : "responded", {
