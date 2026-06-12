@@ -33,7 +33,8 @@ export function Shell({
       <aside className="w-64 shrink-0 border-r border-border bg-background flex flex-col">
         <div className="px-5 pt-6 pb-4">
           <Link href="/" className="flex items-center gap-2.5">
-            <TenkaraMark className="h-8 w-8 shrink-0" />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/tenkara-mark.png" alt="Tenkara" className="h-8 w-8 shrink-0" />
             <div>
               <div className="font-serif text-2xl tracking-tight leading-none">Control Room</div>
               <div className="text-xs text-muted-foreground mt-1">Tenkara sourcing</div>
@@ -90,23 +91,6 @@ export function Shell({
         <div className="px-10 py-8 max-w-6xl">{children}</div>
       </main>
     </div>
-  );
-}
-
-// Tenkara interlocking-loop mark (figure-eight knot) in brand blue + cream.
-// Faithful recreation of the media-kit mark; swap the official SVG 1:1 if exported.
-function TenkaraMark({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 64 64" className={className} fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <rect width="64" height="64" rx="14" fill="#0011FF" />
-      <path
-        d="M32 32 C 27 22.5, 13 22.5, 13 32 C 13 41.5, 27 41.5, 32 32 C 37 22.5, 51 22.5, 51 32 C 51 41.5, 37 41.5, 32 32 Z"
-        stroke="#F7F6F5"
-        strokeWidth="5"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-    </svg>
   );
 }
 
