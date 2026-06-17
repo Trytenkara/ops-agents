@@ -12,6 +12,7 @@ const sections = [
   { href: "/price-changes", label: "Price Changes" },
   { href: "/savings", label: "Savings" },
   { href: "/outreach", label: "Outreach" },
+  { href: "/pipeline", label: "Pipeline" },
   { href: "/inbound", label: "Inbound" },
   { href: "/cases", label: "Cases" },
   { href: "/approvals", label: "Approvals" },
