@@ -1,16 +1,14 @@
 import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { OrgSubnav } from "@/components/org-subnav";
-import { WorkflowStepper } from "@/components/workflow-stepper";
 
 export const dynamic = "force-dynamic";
 
 const sections = [
   { href: "", label: "Overview" },
-  { href: "/work", label: "Sourcing" },
-  { href: "/materials", label: "Materials" },
+  { href: "/work", label: "Work" },
+  { href: "/queue", label: "Queue" },
   { href: "/documents", label: "Documents" },
-  { href: "/queue", label: "Needs You" },
   { href: "/settings", label: "Settings" },
 ];
 
@@ -48,7 +46,6 @@ export default async function ClientLayout({
         </div>
         <p className="text-xs text-muted-foreground mt-3">Materials sourcing · supplier responses · documents</p>
       </header>
-      <WorkflowStepper base={base} currentStage="source" />
       <OrgSubnav base={base} sections={sections} />
       <div>{children}</div>
     </div>
