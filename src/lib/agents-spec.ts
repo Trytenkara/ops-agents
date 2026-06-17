@@ -106,7 +106,7 @@ export const AGENT_SPECS: AgentSpec[] = [
   {
     number: 10,
     slug: "agent-10-qa-outreach",
-    name: "QA Outreach",
+    name: "Draft QA",
     status: "shipped",
     cadence: "Called inline when 02/03/08 stage a draft — not independently scheduled",
     purpose: "Lint drafts for placeholders, missing operators, empty bodies, and ghost-mode brand leaks.",

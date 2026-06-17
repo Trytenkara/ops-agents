@@ -22,7 +22,7 @@ const MAX_DRAFTS_PER_RUN = 100;
 
 registerAgent({
   slug: "agent-10-qa-outreach",
-  displayName: "Agent 10 - QA Outreach",
+  displayName: "Agent 10 - Draft QA",
   description:
     "Lints staged outreach drafts for placeholders, broken templates, missing operators, and ghost-mode brand leaks. Writes findings into draft_references.metadata.qa_findings.",
   async run(ctx) {
