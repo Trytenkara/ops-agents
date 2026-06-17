@@ -142,6 +142,7 @@ export default async function OrgSavingsPage({ params }: { params: { slug: strin
         <TableHeader>
           <TableRow>
             <TableHead>Material</TableHead>
+            <TableHead>Grade</TableHead>
             <TableHead>Unit</TableHead>
             <TableHead className="text-right">Their price</TableHead>
             <TableHead className="text-right">Best Tenkara</TableHead>
@@ -154,7 +155,7 @@ export default async function OrgSavingsPage({ params }: { params: { slug: strin
         <TableBody>
           {report.lines.length === 0 && (
             <TableRow>
-              <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+              <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
                 No approved quotes to benchmark for this client yet.
               </TableCell>
             </TableRow>
@@ -164,6 +165,13 @@ export default async function OrgSavingsPage({ params }: { params: { slug: strin
             return (
               <TableRow key={`${l.material_id}-${l.unit}`}>
                 <TableCell className="font-medium">{l.material_name}</TableCell>
+                <TableCell className="text-sm">
+                  {l.grade ? (
+                    <span className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-xs">{l.grade}</span>
+                  ) : (
+                    <span className="text-amber-700 dark:text-amber-400 text-xs" title="No grade set on this material in Tenkara.">missing</span>
+                  )}
+                </TableCell>
                 <TableCell className="text-muted-foreground">{l.unit}</TableCell>
                 <TableCell className="text-right tabular-nums">{money(l.their_unit_price)}</TableCell>
                 <TableCell className="text-right tabular-nums">{money(l.best_unit_price)}</TableCell>

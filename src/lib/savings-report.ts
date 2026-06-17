@@ -11,6 +11,7 @@ import { getClientBenchmark, type ClientBenchmark } from "@/lib/price-pulse";
 export interface SavingsLine {
   material_id: string;
   material_name: string;
+  grade: string | null;
   unit: string;
   their_unit_price: number;
   best_unit_price: number;
@@ -39,6 +40,7 @@ function toLine(b: ClientBenchmark): SavingsLine {
   return {
     material_id: b.material_id,
     material_name: b.material_name,
+    grade: b.grade,
     unit: b.unit,
     their_unit_price: b.client_unit_price,
     best_unit_price: b.min_unit_price,
@@ -73,6 +75,7 @@ export async function buildSavingsReport(
 // CSV rows for a client-facing savings report. Pairs with lib/csv toCsv().
 export const SAVINGS_CSV_HEADERS = [
   "material",
+  "grade",
   "unit",
   "their_price_per_unit",
   "best_tenkara_price_per_unit",
@@ -87,6 +90,7 @@ export const SAVINGS_CSV_HEADERS = [
 export function savingsCsvRows(report: SavingsReport): (string | number)[][] {
   return report.lines.map((l) => [
     l.material_name,
+    l.grade ?? "",
     l.unit,
     round(l.their_unit_price),
     round(l.best_unit_price),
