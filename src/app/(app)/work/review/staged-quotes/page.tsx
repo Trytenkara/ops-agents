@@ -2,9 +2,9 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
+import { Table, TableHeader, TableBody, TableRow, TableCell } from "@/components/ui/table";
 import { getAssignedOrgIds, seesAllOrgs } from "@/lib/org-access";
-import { StagedQuoteRowActions } from "@/components/staged-quote-row-actions";
+import { StagedQuoteRow, StagedQuoteHeaders, stagedQuoteColSpan, STAGED_CONF_ORDER } from "@/components/staged-quote-row";
 import { StagedQuotesExportCsvButton } from "@/components/staged-quotes-export-csv-button";
 import { ListPageHeader } from "@/components/list-page-header";
 
@@ -35,13 +35,6 @@ interface StagedRow {
   orgs: { slug: string; name: string } | null;
 }
 
-const CONF_ORDER: Record<string, number> = { needs_review: 0, low: 1, medium: 2, high: 3 };
-
-function fmt(n: number | null): string {
-  if (n == null) return "—";
-  return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
-}
-
 export default async function StagedQuotesPage({
   searchParams,
 }: {
@@ -69,7 +62,7 @@ export default async function StagedQuotesPage({
   const { data: rows, error } = await q;
   let staged = (rows ?? []) as unknown as StagedRow[];
   // Lowest-confidence first so ops triages the riskiest extractions up top.
-  staged = staged.sort((a, b) => (CONF_ORDER[a.confidence] ?? 9) - (CONF_ORDER[b.confidence] ?? 9));
+  staged = staged.sort((a, b) => (STAGED_CONF_ORDER[a.confidence] ?? 9) - (STAGED_CONF_ORDER[b.confidence] ?? 9));
 
   const canAct = seesAllOrgs(session) || (assigned !== null && assigned.length > 0);
 
@@ -116,23 +109,12 @@ export default async function StagedQuotesPage({
 
       <Table>
         <TableHeader>
-          <TableRow>
-            <TableHead>Supplier</TableHead>
-            <TableHead>Material</TableHead>
-            <TableHead className="text-right">Price</TableHead>
-            <TableHead className="text-right">Case</TableHead>
-            <TableHead>Unit</TableHead>
-            <TableHead className="text-right">Per-unit</TableHead>
-            <TableHead>Source</TableHead>
-            <TableHead>Conf.</TableHead>
-            <TableHead>Org</TableHead>
-            <TableHead className="text-right">Action</TableHead>
-          </TableRow>
+          <StagedQuoteHeaders />
         </TableHeader>
         <TableBody>
           {staged.length === 0 && (
             <TableRow>
-              <TableCell colSpan={10} className="text-center text-muted-foreground py-10">
+              <TableCell colSpan={stagedQuoteColSpan()} className="text-center text-muted-foreground py-10">
                 {error ? (
                   <span className="text-destructive">Query failed: {error.message}</span>
                 ) : status === "pending_review" ? (
@@ -147,34 +129,7 @@ export default async function StagedQuotesPage({
             </TableRow>
           )}
           {staged.map((r) => (
-            <TableRow key={r.id}>
-              <TableCell className="font-medium align-top">{r.supplier_name ?? <span className="text-destructive">— missing —</span>}</TableCell>
-              <TableCell className="align-top">{r.material_name ?? <span className="text-destructive">— missing —</span>}</TableCell>
-              <TableCell className="text-right align-top">{fmt(r.price)}</TableCell>
-              <TableCell className="text-right align-top">{fmt(r.case_size)}</TableCell>
-              <TableCell className="align-top">{r.unit_of_measurement ?? "—"}</TableCell>
-              <TableCell className="text-right align-top">{fmt(r.unit_price)}</TableCell>
-              <TableCell className="align-top text-xs text-muted-foreground">
-                {r.source === "attachment" ? (r.source_attachment_name ?? "attachment") : "email body"}
-              </TableCell>
-              <TableCell className="align-top text-xs">{r.confidence.replace("_", " ")}</TableCell>
-              <TableCell className="align-top text-xs">{r.orgs?.name ?? "—"}</TableCell>
-              <TableCell className="text-right align-top">
-                <StagedQuoteRowActions
-                  stagedId={r.id}
-                  status={r.status}
-                  disabled={!canAct}
-                  initial={{
-                    supplier_name: r.supplier_name,
-                    material_name: r.material_name,
-                    price: r.price,
-                    case_size: r.case_size,
-                    unit_of_measurement: r.unit_of_measurement,
-                    currency: r.currency,
-                  }}
-                />
-              </TableCell>
-            </TableRow>
+            <StagedQuoteRow key={r.id} r={r} canAct={canAct} />
           ))}
         </TableBody>
       </Table>
