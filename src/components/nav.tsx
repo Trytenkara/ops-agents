@@ -5,6 +5,7 @@ import { hasAnyRole } from "@/lib/auth";
 import { seesAllOrgs } from "@/lib/org-access";
 import { SignOutButton } from "@/components/sign-out-button";
 import { NavLink } from "@/components/nav-link";
+import { RunbookAssistant } from "@/components/runbook-assistant";
 import { cn } from "@/lib/utils";
 
 export interface OrgItem {
@@ -69,6 +70,7 @@ export function Shell({
         </nav>
 
         <div className="mt-auto border-t border-border px-5 py-4 space-y-2">
+          <RunbookAssistant />
           <Link href="/settings/profile" className="block text-sm hover:underline">
             <div className="font-medium">{session.displayName ?? session.email}</div>
             <div className="text-xs text-muted-foreground truncate">{session.email}</div>
