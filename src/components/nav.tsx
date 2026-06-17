@@ -64,11 +64,6 @@ export function Shell({
           )}
 
           <div className="pt-4">
-            <SectionLabel>Ops tools</SectionLabel>
-            <NavLink href="/work/review" match="prefix">Review queue</NavLink>
-          </div>
-
-          <div className="pt-4">
             <NavLink href="/settings" match="prefix">Settings</NavLink>
           </div>
         </nav>

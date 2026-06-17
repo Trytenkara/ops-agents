@@ -43,7 +43,7 @@ export default function LoginForm() {
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle className="font-serif text-2xl">Control Room</CardTitle>
-          <CardDescription>Tenkara sourcing operations. Access requires a provisioned account.</CardDescription>
+          <CardDescription>Tenkara sourcing operations. Sign in, or create an account with your @trytenkara.com email.</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={onSubmit} className="space-y-3">
@@ -61,6 +61,12 @@ export default function LoginForm() {
             >
               {mode === "signin" ? "Use a magic link instead" : "Use password instead"}
             </button>
+            <a
+              href={`/signup?next=${encodeURIComponent(next)}`}
+              className="text-xs text-muted-foreground hover:underline w-full text-center block"
+            >
+              Need an account? Sign up
+            </a>
             {msg && <p className="text-sm text-muted-foreground">{msg}</p>}
           </form>
         </CardContent>
