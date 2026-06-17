@@ -60,7 +60,7 @@ export default function SetPasswordForm() {
     <div className="min-h-screen flex items-center justify-center px-4 bg-background">
       <Card className="w-full max-w-md tb-surface shadow-none">
         <CardHeader>
-          <CardTitle className="font-serif text-2xl">Welcome to Tackle Box</CardTitle>
+          <CardTitle className="font-serif text-2xl">Welcome to Control Room</CardTitle>
           <CardDescription>
             {loading ? "Verifying your invite…"
               : email ? <>Set a password for <strong>{email}</strong>.</>

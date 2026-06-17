@@ -6,8 +6,8 @@ const sans = Inter({ subsets: ["latin"], variable: "--font-sans", display: "swap
 const serif = Source_Serif_4({ subsets: ["latin"], variable: "--font-serif", display: "swap", weight: ["400", "600", "700"] });
 
 export const metadata: Metadata = {
-  title: "Tackle Box",
-  description: "Tenkara ops + agents, in one place.",
+  title: "Control Room",
+  description: "Tenkara sourcing operations.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

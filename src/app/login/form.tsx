@@ -42,8 +42,8 @@ export default function LoginForm() {
     <div className="min-h-screen flex items-center justify-center px-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
-          <CardTitle className="font-serif text-2xl">Tackle Box</CardTitle>
-          <CardDescription>The Tenkara ops hub. Access requires a provisioned account.</CardDescription>
+          <CardTitle className="font-serif text-2xl">Control Room</CardTitle>
+          <CardDescription>Tenkara sourcing operations. Access requires a provisioned account.</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={onSubmit} className="space-y-3">
