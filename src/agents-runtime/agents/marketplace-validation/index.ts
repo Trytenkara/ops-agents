@@ -179,6 +179,11 @@ registerAgent({
       const classification = classify(q.price, result.current_price, result);
       counts[classification as keyof typeof counts]++;
 
+      // Prices that match baseline carry no signal — auto-resolve them so the
+      // human review queue only holds actionable findings (diverges / needs_review
+      // / link_broken). They stay in the table as a dismissed audit record.
+      const autoResolved = classification === "signal_matches_baseline";
+
       const { error: insErr } = await admin.from("marketplace_check_findings").insert({
         org_id: oaOrgId,
         run_id: ctx.runId,
@@ -195,7 +200,8 @@ registerAgent({
         source_url: result.source_url,
         source_citations: result.source_citations,
         notes: result.notes,
-        status: "pending_review",
+        status: autoResolved ? "dismissed" : "pending_review",
+        dismissed_at: autoResolved ? new Date().toISOString() : null,
       });
 
       if (insErr) {
