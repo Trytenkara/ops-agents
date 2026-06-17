@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 // Sourcing-flow stepper shown on every client tab. Each stage links to the tab
-// where that work happens, so the nav itself communicates the workflow order.
-// currentStage is a prop for now (static "source" — only Sourcing runs in
-// Control Room today). Deriving real per-client stage is a follow-up.
+// where that work happens, and the active stage is derived from the current
+// route so the highlight follows you as you click through the tabs.
 type StageKey = "onboard" | "source" | "quote" | "order" | "export";
 
 const STAGES: { key: StageKey; label: string; href: string; blurb: string }[] = [
@@ -17,8 +17,27 @@ const STAGES: { key: StageKey; label: string; href: string; blurb: string }[] = 
   { key: "export", label: "Export", href: "/quotes", blurb: "Finalized quotes & CSV export" },
 ];
 
-export function WorkflowStepper({ base, currentStage = "source" }: { base: string; currentStage?: StageKey }) {
-  const currentIdx = STAGES.findIndex((s) => s.key === currentStage);
+// Which tab route (suffix after the org base) maps to which workflow stage.
+// Tabs not listed (Overview, Suppliers, Inbound, Cases, Approvals) sit outside
+// the linear flow and leave the stepper neutral.
+const SUFFIX_STAGE: { suffix: string; stage: StageKey }[] = [
+  { suffix: "/profile", stage: "onboard" },
+  { suffix: "/leads", stage: "source" },
+  { suffix: "/outreach", stage: "source" },
+  { suffix: "/pipeline", stage: "quote" },
+  { suffix: "/materials", stage: "order" },
+  { suffix: "/revalidation", stage: "order" },
+  { suffix: "/quotes", stage: "export" },
+  { suffix: "/savings", stage: "export" },
+  { suffix: "/price-changes", stage: "export" },
+];
+
+export function WorkflowStepper({ base, currentStage }: { base: string; currentStage?: StageKey }) {
+  const pathname = usePathname() ?? "";
+  const suffix = pathname.startsWith(base) ? pathname.slice(base.length) : "";
+  const matched = SUFFIX_STAGE.find((r) => suffix === r.suffix || suffix.startsWith(r.suffix + "/"));
+  const activeStage = matched?.stage ?? currentStage;
+  const currentIdx = activeStage ? STAGES.findIndex((s) => s.key === activeStage) : -1;
   return (
     <div className="rounded-lg border border-border bg-secondary/30 px-4 py-3">
       <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Sourcing workflow</div>
@@ -39,7 +58,6 @@ export function WorkflowStepper({ base, currentStage = "source" }: { base: strin
               >
                 {state === "done" && <span className="mr-1 text-[10px]">✓</span>}
                 {stage.label}
-                {state === "live" && <span className="ml-1.5 text-[9px] uppercase tracking-wide">live</span>}
               </Link>
               {i < STAGES.length - 1 && <span className="text-muted-foreground/40 text-xs">→</span>}
             </div>

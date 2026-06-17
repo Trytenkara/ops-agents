@@ -5,21 +5,24 @@ import { WorkflowStepper } from "@/components/workflow-stepper";
 
 export const dynamic = "force-dynamic";
 
+// Ordered to follow the sourcing flow left-to-right: client demand/reference
+// first, then the discover → outreach → pipeline → quotes line, then
+// analysis, then supplier/exception surfaces.
 const sections = [
   { href: "", label: "Overview" },
   { href: "/profile", label: "Client Profile" },
   { href: "/materials", label: "Materials" },
   { href: "/revalidation", label: "Expiries" },
   { href: "/leads", label: "Leads" },
-  { href: "/price-changes", label: "Price Changes" },
-  { href: "/savings", label: "Savings" },
   { href: "/outreach", label: "Outreach" },
   { href: "/pipeline", label: "Pipeline" },
+  { href: "/quotes", label: "Quotes" },
+  { href: "/savings", label: "Savings" },
+  { href: "/price-changes", label: "Price Changes" },
+  { href: "/suppliers", label: "Suppliers" },
   { href: "/inbound", label: "Inbound" },
   { href: "/cases", label: "Cases" },
   { href: "/approvals", label: "Approvals" },
-  { href: "/suppliers", label: "Suppliers" },
-  { href: "/quotes", label: "Quotes" },
 ];
 
 export default async function OrgLayout({
@@ -46,7 +49,7 @@ export default async function OrgLayout({
           </p>
         </div>
       </header>
-      <WorkflowStepper base={base} currentStage="source" />
+      <WorkflowStepper base={base} />
       <OrgSubnav base={base} sections={sections} />
       <div>{children}</div>
     </div>
