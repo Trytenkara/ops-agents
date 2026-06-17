@@ -102,7 +102,7 @@ export async function uploadAndParsePO(orgId: string, form: FormData): Promise<R
   const { error } = await admin.from("client_material_orders").insert(rows);
   if (error) return { ok: false, error: error.message };
 
-  revalidatePath(`/clients/[slug]/materials`, "page");
+  revalidatePath(`/work/orgs/[slug]/materials`, "page");
   return { ok: true, parsed: rows.length };
 }
 
@@ -112,7 +112,7 @@ export async function confirmOrder(orderId: string): Promise<Result> {
   const admin = createAdminClient();
   const { error } = await admin.from("client_material_orders").update({ status: "confirmed" }).eq("id", orderId);
   if (error) return { ok: false, error: error.message };
-  revalidatePath(`/clients/[slug]/materials`, "page");
+  revalidatePath(`/work/orgs/[slug]/materials`, "page");
   return { ok: true };
 }
 
@@ -135,7 +135,7 @@ export async function editOrder(orderId: string, patch: OrderEdit): Promise<Resu
   const admin = createAdminClient();
   const { error } = await admin.from("client_material_orders").update(patch).eq("id", orderId);
   if (error) return { ok: false, error: error.message };
-  revalidatePath(`/clients/[slug]/materials`, "page");
+  revalidatePath(`/work/orgs/[slug]/materials`, "page");
   return { ok: true };
 }
 
@@ -145,6 +145,6 @@ export async function deleteOrder(orderId: string): Promise<Result> {
   const admin = createAdminClient();
   const { error } = await admin.from("client_material_orders").delete().eq("id", orderId);
   if (error) return { ok: false, error: error.message };
-  revalidatePath(`/clients/[slug]/materials`, "page");
+  revalidatePath(`/work/orgs/[slug]/materials`, "page");
   return { ok: true };
 }

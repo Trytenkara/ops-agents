@@ -10,11 +10,11 @@ import { cn } from "@/lib/utils";
 type StageKey = "onboard" | "source" | "quote" | "order" | "export";
 
 const STAGES: { key: StageKey; label: string; href: string; blurb: string }[] = [
-  { key: "onboard", label: "Onboard", href: "/settings", blurb: "Client setup, contacts, sourcing config" },
-  { key: "source", label: "Source", href: "/work", blurb: "Discover suppliers, build the drop, send outreach" },
-  { key: "quote", label: "Quote", href: "/queue", blurb: "Replies & quotes come back for ops review" },
+  { key: "onboard", label: "Onboard", href: "/profile", blurb: "Client setup, contacts, sourcing config" },
+  { key: "source", label: "Source", href: "/leads", blurb: "Discover suppliers, build the drop, send outreach" },
+  { key: "quote", label: "Quote", href: "/pipeline", blurb: "Replies & quotes come back for ops review" },
   { key: "order", label: "Order", href: "/materials", blurb: "Track POs, actual vs required, expiry limits" },
-  { key: "export", label: "Export", href: "/documents", blurb: "Export the CSV and keep order records" },
+  { key: "export", label: "Export", href: "/quotes", blurb: "Finalized quotes & CSV export" },
 ];
 
 export function WorkflowStepper({ base, currentStage = "source" }: { base: string; currentStage?: StageKey }) {
