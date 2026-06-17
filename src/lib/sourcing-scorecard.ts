@@ -39,56 +39,6 @@ export interface SourcingScorecard {
   materials_beating_client: number;
 }
 
-export interface SourcingHeadline {
-  clients_sourcing: number;
-  materials_sourcing: number;
-  materials_beating_client: number;
-  perClient: { slug: string; name: string; sourcing: number; beating: number }[];
-}
-
-// Cross-client headline for the dashboard. Only runs the (Tenkara) benchmark
-// for clients that actually have in-flight sourced quotes, so the home page
-// doesn't fan out a benchmark query per client.
-export async function buildSourcingHeadline(
-  admin: SupabaseClient,
-  orgs: { id: string; slug: string; name: string; tenkara_org_id: string | null }[],
-  opts?: { statuses?: string[] }
-): Promise<SourcingHeadline> {
-  const statuses = opts?.statuses ?? ["pending_review"];
-  const orgIds = orgs.map((o) => o.id);
-  const empty: SourcingHeadline = { clients_sourcing: 0, materials_sourcing: 0, materials_beating_client: 0, perClient: [] };
-  if (orgIds.length === 0) return empty;
-
-  // Which of these orgs have any in-flight sourced quotes at all?
-  const { data: active } = await admin
-    .from("staged_quotes")
-    .select("org_id")
-    .in("org_id", orgIds)
-    .in("status", statuses);
-  const activeOrgIds = new Set((active ?? []).map((r: any) => r.org_id));
-  const activeOrgs = orgs.filter((o) => activeOrgIds.has(o.id) && o.tenkara_org_id);
-  if (activeOrgs.length === 0) return empty;
-
-  const perClient = await Promise.all(
-    activeOrgs.map(async (o) => {
-      const sc = await buildSourcingScorecard(admin, o.id, o.tenkara_org_id, opts).catch(() => null);
-      return {
-        slug: o.slug,
-        name: o.name,
-        sourcing: sc?.materials_sourcing ?? 0,
-        beating: sc?.materials_beating_client ?? 0,
-      };
-    })
-  );
-  const withWork = perClient.filter((c) => c.sourcing > 0).sort((a, b) => b.beating - a.beating);
-  return {
-    clients_sourcing: withWork.length,
-    materials_sourcing: withWork.reduce((s, c) => s + c.sourcing, 0),
-    materials_beating_client: withWork.reduce((s, c) => s + c.beating, 0),
-    perClient: withWork,
-  };
-}
-
 function normUnit(u: string | null | undefined): string | null {
   const t = (u ?? "").trim().toLowerCase();
   return t === "" ? null : t;

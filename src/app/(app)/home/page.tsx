@@ -3,8 +3,6 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { roleLabel } from "@/lib/roles";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { HomeBoard, type WorkType, type ClientRow } from "@/components/home-board";
-import { buildSourcingHeadline } from "@/lib/sourcing-scorecard";
-import Link from "next/link";
 
 export const dynamic = "force-dynamic";
 
@@ -24,10 +22,8 @@ export default async function HomePage() {
     scope(admin.from("marketplace_check_findings").select("org_id, created_at").eq("status", "pending_review")),
     scope(admin.from("cases").select("org_id, created_at").in("status", ["open", "in_progress"])),
     scope(admin.from("leads_in_flight").select("org_id, created_at").eq("stage", "ready_for_approval").eq("status", "active")),
-    orgIds ? admin.from("orgs").select("id, slug, name, tenkara_org_id").in("id", orgIds) : admin.from("orgs").select("id, slug, name, tenkara_org_id"),
+    orgIds ? admin.from("orgs").select("id, slug, name").in("id", orgIds) : admin.from("orgs").select("id, slug, name"),
   ]);
-
-  const sourcing = await buildSourcingHeadline(admin, (orgsRes.data ?? []) as any[]);
 
   const now = Date.now();
   const acc = new Map<string, ClientRow & { _oldest: number }>();
@@ -79,45 +75,6 @@ export default async function HomePage() {
       </header>
 
       <HomeBoard counts={counts} rows={rows} />
-
-      {sourcing.materials_sourcing > 0 && (
-        <section>
-          <h2 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Live sourcing</h2>
-          <div className="rounded-lg border border-border bg-background p-4">
-            <div className="flex gap-8 text-sm">
-              <div>
-                <div className="text-2xl font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
-                  {sourcing.materials_beating_client}
-                </div>
-                <div className="text-muted-foreground">materials beating client price</div>
-              </div>
-              <div>
-                <div className="text-2xl font-semibold tabular-nums">{sourcing.materials_sourcing}</div>
-                <div className="text-muted-foreground">materials being sourced</div>
-              </div>
-              <div>
-                <div className="text-2xl font-semibold tabular-nums">{sourcing.clients_sourcing}</div>
-                <div className="text-muted-foreground">clients with active sourcing</div>
-              </div>
-            </div>
-            {sourcing.perClient.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {sourcing.perClient.map((c) => (
-                  <Link
-                    key={c.slug}
-                    href={`/work/orgs/${c.slug}/savings`}
-                    className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-1 text-xs hover:bg-secondary/60"
-                  >
-                    <span className="font-medium">{c.name}</span>
-                    <span className="text-emerald-600 dark:text-emerald-400 tabular-nums">{c.beating}</span>
-                    <span className="text-muted-foreground tabular-nums">/ {c.sourcing}</span>
-                  </Link>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-      )}
 
       <section>
         <h2 className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-2">Market reference</h2>
