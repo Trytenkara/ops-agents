@@ -41,6 +41,7 @@ export interface FrequencyResult {
 export interface MaterialProfileRow {
   tenkaraMaterialId: string | null;
   label: string;
+  grade: string | null;
   annualVolume: number | null;
   volumeUnit: string | null;
   needType: string | null;
@@ -139,6 +140,8 @@ export async function getMaterialProfile(orgId: string): Promise<MaterialProfile
     tenkaraMaterials = await tenkaraQuery<any>(
       `select m.id::text as id,
               coalesce(m.trade_name, m.name) as label,
+              (select string_agg(g->>'grade_name', ', ')
+                 from jsonb_array_elements(coalesce(m.grade, '[]'::jsonb)) g) as grade,
               m.annual_volume_expected, m.volume_unit, m.need_type, m.accepts_blanket_orders,
               q.product_expiry::text as current_quote_expiry, q.lead_time_days
          from public.materials m
@@ -172,6 +175,7 @@ export async function getMaterialProfile(orgId: string): Promise<MaterialProfile
     return {
       tenkaraMaterialId: m.id,
       label: m.label,
+      grade: m.grade ?? null,
       annualVolume,
       volumeUnit: m.volume_unit ?? null,
       needType: m.need_type ?? null,

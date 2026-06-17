@@ -55,12 +55,12 @@ export function MaterialsPanel({ orgId, profile, canEdit }: { orgId: string; pro
           <CardContent className="py-4 flex flex-wrap items-center gap-3">
             <div className="text-sm">
               <div className="font-medium">Upload a PO</div>
-              <div className="text-xs text-muted-foreground">PDF or CSV — parsed into order lines (actual vs PO qty, expiries).</div>
+              <div className="text-xs text-muted-foreground">PDF, CSV or Excel — parsed into order lines (actual vs PO qty, expiries).</div>
             </div>
             <input
               ref={fileRef}
               type="file"
-              accept=".pdf,.csv,.txt,application/pdf,text/csv"
+              accept=".pdf,.csv,.txt,.xlsx,application/pdf,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -105,6 +105,7 @@ export function MaterialsPanel({ orgId, profile, canEdit }: { orgId: string; pro
               <TableHeader>
                 <TableRow>
                   <TableHead>Material</TableHead>
+                  <TableHead>Grade</TableHead>
                   <TableHead>Annual req.</TableHead>
                   <TableHead>Frequency</TableHead>
                   <TableHead>Avg order</TableHead>
@@ -168,6 +169,7 @@ function MaterialRow({
           {m.label}
           {m.orders.length > 0 && <span className="ml-2 text-xs text-muted-foreground">{open ? "▾" : "▸"} {m.orders.length}</span>}
         </TableCell>
+        <TableCell>{m.grade ? <Badge variant="secondary">{m.grade}</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
         <TableCell>{m.annualVolume != null ? `${m.annualVolume.toLocaleString()}${m.volumeUnit ? ` ${m.volumeUnit}` : ""}/yr` : "—"}</TableCell>
         <TableCell>
           <Badge variant={FREQ_VARIANT[m.frequency.label]}>{m.frequency.label}</Badge>
@@ -183,7 +185,7 @@ function MaterialRow({
       </TableRow>
       {open && m.orders.length > 0 && (
         <TableRow>
-          <TableCell colSpan={6} className="bg-secondary/20">
+          <TableCell colSpan={7} className="bg-secondary/20">
             <OrderList orders={m.orders} canEdit={canEdit} pending={pending} run={run} />
           </TableCell>
         </TableRow>
