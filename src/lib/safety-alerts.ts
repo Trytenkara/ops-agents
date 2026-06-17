@@ -117,7 +117,7 @@ export async function alertExportFailed72h(opts: {
   generatedAt: string;
 }): Promise<void> {
   await send("export_failed_72h", [
-    `Lead Scanner export marked *failed* (Andrew no-ack for 72h)`,
+    `Lead Scanner export marked *failed* (no upload confirmation for 72h)`,
     `supplier: ${opts.supplierName ?? opts.supplierId ?? "—"}`,
     `generated: ${opts.generatedAt}`,
     `Re-trigger from ${deepLink("/agents/health")}`,
