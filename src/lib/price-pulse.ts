@@ -20,6 +20,7 @@ import { tenkaraQuery } from "@/lib/tenkara-readonly";
 export interface PricePulseStat {
   material_id: string;
   material_name: string;
+  grade: string | null;
   unit: string;
   n_quotes: number;
   n_suppliers: number;
@@ -114,6 +115,8 @@ export async function getPricePulse(opts?: {
     )
     select a.material_id,
            m.name as material_name,
+           (select string_agg(g->>'grade_name', ', ')
+              from jsonb_array_elements(coalesce(m.grade, '[]'::jsonb)) g) as grade,
            a.unit,
            a.n_quotes,
            a.n_suppliers,

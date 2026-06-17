@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getAssignedOrgIds } from "@/lib/org-access";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { getPricePulse } from "@/lib/price-pulse";
+import { PricePulseFilters } from "@/components/price-pulse-filters";
 
 export const dynamic = "force-dynamic";
 
@@ -58,50 +59,19 @@ export default async function PricePulsePage({
         </p>
       </div>
 
-      <form className="flex flex-wrap items-end gap-3 text-sm" action="/work/price-pulse" method="get">
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">Client</span>
-          <select
-            name="client"
-            defaultValue={clientSlug}
-            className="rounded border border-border bg-background px-2 py-1 text-sm w-52"
-          >
-            <option value="">All clients</option>
-            {clientOptions.map((o) => (
-              <option key={o.slug} value={o.slug}>
-                {o.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">Material</span>
-          <input
-            name="q"
-            defaultValue={searchParams.q ?? ""}
-            placeholder="Filter materials…"
-            className="rounded border border-border bg-background px-2 py-1 text-sm w-56"
-          />
-        </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground" title="Hide materials with fewer than this many quotes — filters out thin, noisy data.">
-            Min quotes
-          </span>
-          <input
-            name="min"
-            defaultValue={String(minQuotes)}
-            inputMode="numeric"
-            className="rounded border border-border bg-background px-2 py-1 text-sm w-20"
-          />
-        </label>
-        <button type="submit" className="rounded border border-border px-3 py-1 hover:bg-secondary h-[34px]">Apply</button>
-      </form>
+      <PricePulseFilters
+        clients={clientOptions.map((o) => ({ slug: o.slug, name: o.name }))}
+        selectedClient={clientSlug}
+        material={searchParams.q ?? ""}
+        minQuotes={minQuotes}
+      />
 
       <Table>
         <TableHeader>
           <TableRow>
             <TableHead>Client</TableHead>
             <TableHead>Material</TableHead>
+            <TableHead>Grade</TableHead>
             <TableHead>Unit</TableHead>
             <TableHead className="text-right">Min</TableHead>
             <TableHead className="text-right">Avg</TableHead>
@@ -114,7 +84,7 @@ export default async function PricePulsePage({
         <TableBody>
           {pulse.length === 0 && (
             <TableRow>
-              <TableCell colSpan={9} className="text-center py-10 text-muted-foreground">
+              <TableCell colSpan={10} className="text-center py-10 text-muted-foreground">
                 No materials meet the threshold.
               </TableCell>
             </TableRow>
@@ -123,6 +93,13 @@ export default async function PricePulsePage({
             <TableRow key={`${p.material_id}-${p.unit}`}>
               <TableCell className="text-sm text-muted-foreground">{p.org_name ?? "—"}</TableCell>
               <TableCell className="font-medium">{p.material_name}</TableCell>
+              <TableCell className="text-sm">
+                {p.grade ? (
+                  <span className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-xs">{p.grade}</span>
+                ) : (
+                  <span className="text-amber-700 dark:text-amber-400 text-xs" title="No grade set on this material in Tenkara.">missing</span>
+                )}
+              </TableCell>
               <TableCell className="text-muted-foreground">{p.unit}</TableCell>
               <TableCell className="text-right tabular-nums">{money(p.min_unit_price)}</TableCell>
               <TableCell className="text-right tabular-nums">{money(p.avg_unit_price)}</TableCell>
