@@ -6,7 +6,7 @@ import { relativeTime } from "@/lib/utils";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { LeadsExportCsvButton } from "@/components/leads-export-csv-button";
-import { LeadRichRow, LeadRichHeaders, leadRichColSpan } from "@/components/lead-rich-row";
+import { LeadsList } from "@/components/leads-list";
 import { resolveMaterialGrades } from "@/lib/tenkara-names";
 import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
 
@@ -62,19 +62,11 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
         </p>
         <LeadsExportCsvButton disabled={leads.length === 0} count={leads.length} filters={{ org: org.slug }} />
       </div>
-      <Table>
-        <TableHeader>
-          <LeadRichHeaders showOrg={false} />
-        </TableHeader>
-        <TableBody>
-          {leads.map((r: any) => (
-            <LeadRichRow key={r.id} r={r} canAct={canAct} showOrg={false} />
-          ))}
-          {leads.length === 0 && (
-            <TableRow><TableCell colSpan={leadRichColSpan(false)} className="text-center py-8 text-muted-foreground">No active leads for this org.</TableCell></TableRow>
-          )}
-        </TableBody>
-      </Table>
+      {leads.length === 0 ? (
+        <p className="text-sm text-muted-foreground py-4">No active leads for this org.</p>
+      ) : (
+        <LeadsList rows={leads} canAct={canAct} />
+      )}
 
       <section className="space-y-2 pt-2">
         <h2 className="text-sm uppercase tracking-wider text-muted-foreground font-medium">

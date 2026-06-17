@@ -1,11 +1,6 @@
 import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { Table, TableHeader, TableBody, TableRow, TableCell } from "@/components/ui/table";
-import {
-  MarketplaceFindingRow,
-  MarketplaceFindingHeaders,
-  marketplaceFindingColSpan,
-} from "@/components/marketplace-finding-row";
+import { MarketplaceFindingsList } from "@/components/marketplace-findings-list";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 
@@ -37,19 +32,11 @@ export default async function OrgPriceChangesPage({ params }: { params: { slug: 
       <p className="text-sm text-muted-foreground">
         Marketplace price changes Agent 05 flagged for {org.name}. Approve the ones worth applying, then update the Tenkara platform manually.
       </p>
-      <Table>
-        <TableHeader>
-          <MarketplaceFindingHeaders showOrg={false} />
-        </TableHeader>
-        <TableBody>
-          {findings.map((r: any) => (
-            <MarketplaceFindingRow key={r.id} r={r} canAct={canAct} showOrg={false} />
-          ))}
-          {findings.length === 0 && (
-            <TableRow><TableCell colSpan={marketplaceFindingColSpan(false)} className="text-center py-8 text-muted-foreground">No price changes pending review.</TableCell></TableRow>
-          )}
-        </TableBody>
-      </Table>
+      {findings.length === 0 ? (
+        <p className="text-sm text-muted-foreground py-4">No price changes pending review.</p>
+      ) : (
+        <MarketplaceFindingsList rows={findings} canAct={canAct} />
+      )}
     </div>
   );
 }

@@ -1,14 +1,9 @@
 import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { Table, TableHeader, TableBody, TableRow, TableCell } from "@/components/ui/table";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
-import {
-  StagedQuoteRow,
-  StagedQuoteHeaders,
-  stagedQuoteColSpan,
-  STAGED_CONF_ORDER,
-} from "@/components/staged-quote-row";
+import { STAGED_CONF_ORDER } from "@/components/staged-quote-row";
+import { StagedQuotesList } from "@/components/staged-quotes-list";
 import { resolveMaterialGrades } from "@/lib/tenkara-names";
 
 export const dynamic = "force-dynamic";
@@ -82,32 +77,19 @@ export default async function OrgQuotesPage({
         ))}
       </div>
 
-      <Table>
-        <TableHeader>
-          <StagedQuoteHeaders showOrg={false} />
-        </TableHeader>
-        <TableBody>
-          {staged.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={stagedQuoteColSpan(false)} className="text-center text-muted-foreground py-10">
-                {error ? (
-                  <span className="text-destructive">Query failed: {error.message}</span>
-                ) : status === "pending_review" ? (
-                  <>
-                    <div className="font-medium text-foreground mb-1">No staged quotes yet.</div>
-                    The Email Scanner populates this when it finds prices in this client&apos;s supplier replies.
-                  </>
-                ) : (
-                  <>No {status.replace("_", " ")} staged quotes.</>
-                )}
-              </TableCell>
-            </TableRow>
+      {staged.length === 0 ? (
+        <p className="text-sm text-muted-foreground py-4">
+          {error ? (
+            <span className="text-destructive">Query failed: {error.message}</span>
+          ) : status === "pending_review" ? (
+            "No staged quotes yet. The Email Scanner populates this when it finds prices in this client's supplier replies."
+          ) : (
+            `No ${status.replace("_", " ")} staged quotes.`
           )}
-          {staged.map((r) => (
-            <StagedQuoteRow key={r.id} r={r} canAct={canAct} showOrg={false} />
-          ))}
-        </TableBody>
-      </Table>
+        </p>
+      ) : (
+        <StagedQuotesList rows={staged} canAct={canAct} />
+      )}
     </div>
   );
 }
