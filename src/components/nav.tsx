@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { roleLabel, ROLE_CHIP } from "@/lib/roles";
 import type { SessionContext } from "@/lib/auth";
-import { hasAnyRole } from "@/lib/auth";
+import { hasAnyRole, canSeeAgentTab } from "@/lib/auth";
 import { seesAllOrgs } from "@/lib/org-access";
 import { SignOutButton } from "@/components/sign-out-button";
 import { NavLink } from "@/components/nav-link";
@@ -27,6 +27,8 @@ export function Shell({
   children: React.ReactNode;
 }) {
   const allOrgs = seesAllOrgs(session);
+  const showAgents = canSeeAgentTab(session);
+  const canManageOperators = hasAnyRole(session, ["admin", "ops_lead"]);
 
   return (
     <div className="flex min-h-screen">
@@ -50,7 +52,7 @@ export function Shell({
           </Link>
           {orgs.length === 0 && <div className="text-xs text-muted-foreground px-3">No clients assigned yet</div>}
           {orgs.slice(0, CLIENT_CAP).map((o) => (
-            <NavLink key={o.slug} href={`/clients/${o.slug}`} match="prefix">
+            <NavLink key={o.slug} href={`/work/orgs/${o.slug}`} match="prefix">
               <span className={o.isInternal ? "text-muted-foreground" : ""}>
                 {o.name}
                 {o.isInternal && <span className="ml-2 text-[9px] uppercase tracking-wider bg-secondary text-muted-foreground px-1.5 py-0.5 rounded">Internal</span>}
@@ -61,6 +63,24 @@ export function Shell({
             <Link href="/clients" className="block px-3 py-1.5 ml-3.5 text-xs text-primary hover:underline">
               View all {orgs.length} clients →
             </Link>
+          )}
+
+          <div className="pt-4">
+            <SectionLabel>Ops tools</SectionLabel>
+            <NavLink href="/work/review" match="prefix">Review queue</NavLink>
+            <NavLink href="/work/price-pulse" match="prefix">Price Pulse</NavLink>
+            <NavLink href="/work/exports" match="prefix">Exports</NavLink>
+            {canManageOperators && <NavLink href="/operators" match="prefix">Operators</NavLink>}
+          </div>
+
+          {showAgents && (
+            <div className="pt-4">
+              <SectionLabel>Agents</SectionLabel>
+              <NavLink href="/agents" match="prefix">Activity feed</NavLink>
+              <NavLink href="/agents/health" match="prefix">System health</NavLink>
+              <NavLink href="/agents/config" match="prefix">Configuration</NavLink>
+              <NavLink href="/agents/audit" match="prefix">Audit log</NavLink>
+            </div>
           )}
 
           <div className="pt-4">

@@ -116,7 +116,7 @@ export function HomeBoard({ counts, rows }: { counts: Record<WorkType, number>; 
                       {r.oldestDays === 0 ? "today" : `${r.oldestDays}d`}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Link href={`/clients/${r.slug}`} className="text-primary hover:underline text-sm">Open →</Link>
+                      <Link href={`/work/orgs/${r.slug}`} className="text-primary hover:underline text-sm">Open →</Link>
                     </TableCell>
                   </TableRow>
                 ))}

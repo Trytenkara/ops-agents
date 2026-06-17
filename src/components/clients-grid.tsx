@@ -34,7 +34,7 @@ export function ClientsGrid({ orgs }: { orgs: Org[] }) {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((o) => (
-            <Link key={o.slug} href={`/clients/${o.slug}`}>
+            <Link key={o.slug} href={`/work/orgs/${o.slug}`}>
               <Card className="tb-surface shadow-none transition-colors hover:border-foreground/30">
                 <CardContent className="py-5">
                   <div className="font-medium">{o.name}</div>
