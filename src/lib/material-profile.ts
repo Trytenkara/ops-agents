@@ -117,6 +117,71 @@ export function flagShortShelfLife(quoteExpiry: string | null, recommendedMonths
   return monthsToExpiry < recommendedMonths;
 }
 
+// --- material matching ---
+
+export interface MatchCandidate {
+  id: string;
+  label: string;
+  grade: string | null;
+}
+
+function matchTokens(s: string): string[] {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+}
+
+// Match a parsed PO line to exactly one Tenkara material using the material name
+// plus grade identifiers (e.g. "#5", "Quick", "Regular"). Clients often have
+// several materials sharing one base name (Nutripro has five "Oats"); a name-only
+// match is ambiguous, so grade tokens are what disambiguate them. Returns null
+// when there is no confident single match, leaving the line in the manual review
+// queue rather than mis-filing it under the wrong material.
+export function matchOrderToMaterial(label: string, materials: MatchCandidate[]): string | null {
+  const lineTokens = new Set(matchTokens(label));
+  if (lineTokens.size === 0) return null;
+
+  // Candidates: every token of the material's name appears in the line.
+  const candidates = materials.filter((m) => {
+    const nameToks = matchTokens(m.label);
+    return nameToks.length > 0 && nameToks.every((t) => lineTokens.has(t));
+  });
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0].id;
+
+  // Multiple base-name matches → disambiguate by grade-token overlap. Require a
+  // unique winner with at least one grade hit, else treat as ambiguous.
+  let bestId: string | null = null;
+  let bestScore = -1;
+  let tie = false;
+  for (const m of candidates) {
+    const score = matchTokens(m.grade ?? "").reduce((n, t) => n + (lineTokens.has(t) ? 1 : 0), 0);
+    if (score > bestScore) {
+      bestScore = score;
+      bestId = m.id;
+      tie = false;
+    } else if (score === bestScore) {
+      tie = true;
+    }
+  }
+  if (tie || bestScore <= 0) return null;
+  return bestId;
+}
+
+// Load an org's Tenkara materials as match candidates (id + name + grade tokens).
+export async function loadMatchCandidates(tenkaraOrgId: string): Promise<MatchCandidate[]> {
+  const rows = await tenkaraQuery<any>(
+    `select m.id::text as id,
+            coalesce(m.trade_name, m.name) as label,
+            (select string_agg(g->>'grade_name', ' ')
+               from jsonb_array_elements(coalesce(m.grade, '[]'::jsonb)) g) as grade
+       from public.materials m
+       join public.users u on u.id = m.user_id
+      where u.organization_id = $1::uuid
+        and coalesce(m.trade_name, m.name) is not null`,
+    [tenkaraOrgId]
+  );
+  return rows.map((r) => ({ id: r.id, label: r.label, grade: r.grade ?? null }));
+}
+
 // --- data layer ---
 
 export async function getMaterialProfile(orgId: string): Promise<MaterialProfile> {

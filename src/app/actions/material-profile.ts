@@ -1,8 +1,8 @@
 "use server";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { tenkaraQuery } from "@/lib/tenkara-readonly";
 import { parsePoDocument } from "@/lib/po-parse";
+import { loadMatchCandidates, matchOrderToMaterial } from "@/lib/material-profile";
 import { revalidatePath } from "next/cache";
 
 interface Result { ok: boolean; error?: string; parsed?: number }
@@ -17,21 +17,6 @@ async function requireEditor() {
   return { session };
 }
 
-function normalize(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-}
-
-// Best-effort match of a parsed label to a Tenkara material id. Returns null
-// unless the normalized label clearly corresponds to exactly one material.
-function matchMaterial(label: string, materials: { id: string; label: string }[]): string | null {
-  const n = normalize(label);
-  if (!n) return null;
-  const hits = materials.filter((m) => {
-    const mn = normalize(m.label);
-    return mn === n || mn.includes(n) || n.includes(mn);
-  });
-  return hits.length === 1 ? hits[0].id : null;
-}
 
 export async function uploadAndParsePO(orgId: string, form: FormData): Promise<Result> {
   const auth = await requireEditor();
@@ -66,24 +51,18 @@ export async function uploadAndParsePO(orgId: string, form: FormData): Promise<R
   }
   if (lines.length === 0) return { ok: true, parsed: 0 };
 
-  // Load Tenkara materials for this org to attempt id matching.
-  let materials: { id: string; label: string }[] = [];
+  // Load Tenkara materials for this org to attempt id matching (name + grade).
+  let materials: Awaited<ReturnType<typeof loadMatchCandidates>> = [];
   const { data: org } = await admin.from("orgs").select("tenkara_org_id").eq("id", orgId).maybeSingle();
   if (org?.tenkara_org_id) {
     try {
-      const rows = await tenkaraQuery<any>(
-        `select m.id::text as id, coalesce(m.trade_name, m.name) as label
-           from public.materials m join public.users u on u.id = m.user_id
-          where u.organization_id = $1::uuid and coalesce(m.trade_name, m.name) is not null`,
-        [org.tenkara_org_id]
-      );
-      materials = rows.map((r) => ({ id: r.id, label: r.label }));
+      materials = await loadMatchCandidates(org.tenkara_org_id);
     } catch { /* matching is best-effort */ }
   }
 
   const rows = lines.map((l) => ({
     org_id: orgId,
-    tenkara_material_id: matchMaterial(l.material_label, materials),
+    tenkara_material_id: matchOrderToMaterial(l.material_label, materials),
     material_label: l.material_label,
     supplier_name: l.supplier_name,
     order_date: l.order_date,
@@ -104,6 +83,45 @@ export async function uploadAndParsePO(orgId: string, form: FormData): Promise<R
 
   revalidatePath(`/work/orgs/[slug]/materials`, "page");
   return { ok: true, parsed: rows.length };
+}
+
+// Re-run name + grade matching against the org's current Tenkara materials for
+// every order that isn't yet linked, and persist any newly-resolved ids.
+export async function rematchOrders(orgId: string): Promise<Result> {
+  const auth = await requireEditor();
+  if (auth.error) return { ok: false, error: auth.error };
+  const admin = createAdminClient();
+
+  const { data: org } = await admin.from("orgs").select("tenkara_org_id").eq("id", orgId).maybeSingle();
+  if (!org?.tenkara_org_id) return { ok: false, error: "client not linked to a Tenkara org" };
+
+  let materials: Awaited<ReturnType<typeof loadMatchCandidates>>;
+  try {
+    materials = await loadMatchCandidates(org.tenkara_org_id);
+  } catch (e: any) {
+    return { ok: false, error: `could not load materials: ${e?.message ?? "unknown"}` };
+  }
+
+  const { data: unmatched, error: loadErr } = await admin
+    .from("client_material_orders")
+    .select("id, material_label")
+    .eq("org_id", orgId)
+    .is("tenkara_material_id", null);
+  if (loadErr) return { ok: false, error: loadErr.message };
+
+  let matched = 0;
+  for (const o of unmatched ?? []) {
+    const id = matchOrderToMaterial(o.material_label, materials);
+    if (!id) continue;
+    const { error } = await admin
+      .from("client_material_orders")
+      .update({ tenkara_material_id: id })
+      .eq("id", o.id);
+    if (!error) matched++;
+  }
+
+  revalidatePath(`/work/orgs/[slug]/materials`, "page");
+  return { ok: true, parsed: matched };
 }
 
 export async function confirmOrder(orderId: string): Promise<Result> {

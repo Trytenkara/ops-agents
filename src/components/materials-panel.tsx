@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import type { MaterialProfile, MaterialProfileRow, OrderLineRow } from "@/lib/material-profile";
-import { uploadAndParsePO, confirmOrder, deleteOrder } from "@/app/actions/material-profile";
+import { uploadAndParsePO, confirmOrder, deleteOrder, rematchOrders } from "@/app/actions/material-profile";
 
 function fmtQty(qty: number | null, unit: string | null): string {
   if (qty == null) return "—";
@@ -125,14 +125,25 @@ export function MaterialsPanel({ orgId, profile, canEdit }: { orgId: string; pro
 
       {profile.unmatchedOrders.length > 0 && (
         <Card className="tb-surface shadow-none">
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between gap-3">
             <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">
               Unmatched orders ({profile.unmatchedOrders.length})
             </CardTitle>
+            {canEdit && (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={pending}
+                onClick={() => run(() => rematchOrders(orgId), "Re-matched")}
+              >
+                {pending ? "Working…" : "Re-match by name + grade"}
+              </Button>
+            )}
           </CardHeader>
           <CardContent>
             <p className="text-xs text-muted-foreground mb-3">
-              Parsed from POs but not matched to a Tenkara material. Confirm or delete each.
+              Parsed from POs but not matched to a Tenkara material. Re-match attempts name + grade
+              identifiers automatically; confirm or delete the rest.
             </p>
             <OrderList orders={profile.unmatchedOrders} canEdit={canEdit} pending={pending} run={run} />
           </CardContent>
