@@ -66,7 +66,10 @@ export interface MaterialProfile {
 export function computeFrequency(orders: { order_date: string | null }[]): FrequencyResult {
   const dates = orders.map((o) => o.order_date).filter((d): d is string => !!d).map((d) => new Date(d).getTime()).filter((t) => !Number.isNaN(t));
   const orderCount = orders.length;
-  if (dates.length < 1) return { orderCount, ordersPerYear: null, label: "No data" };
+  if (dates.length === 0) return { orderCount, ordersPerYear: null, label: "No data" };
+  // A single dated order can't establish a recurrence rate — don't let a zero
+  // span floor up to "Monthly+". Need at least two dated orders for a rate.
+  if (dates.length === 1) return { orderCount, ordersPerYear: null, label: "Infrequent" };
   const min = Math.min(...dates);
   const max = Math.max(...dates);
   const msPerYear = 365.25 * 24 * 3600 * 1000;
@@ -139,31 +142,34 @@ export function matchOrderToMaterial(label: string, materials: MatchCandidate[])
   const lineTokens = new Set(matchTokens(label));
   if (lineTokens.size === 0) return null;
 
-  // Candidates: every token of the material's name appears in the line.
-  const candidates = materials.filter((m) => {
+  // Score every material by how much of its name appears in the (often
+  // abbreviated) PO line. A candidate must have at least half its name tokens
+  // present — this catches abbreviations like "Organic Quinoa" → "Quinoa Flakes
+  // Organic" without matching on a single shared word. Grade tokens then
+  // disambiguate clients that have several materials sharing a base name.
+  const scored: { id: string; nameOverlap: number; nameCoverage: number; gradeOverlap: number }[] = [];
+  for (const m of materials) {
     const nameToks = matchTokens(m.label);
-    return nameToks.length > 0 && nameToks.every((t) => lineTokens.has(t));
-  });
-  if (candidates.length === 0) return null;
-  if (candidates.length === 1) return candidates[0].id;
-
-  // Multiple base-name matches → disambiguate by grade-token overlap. Require a
-  // unique winner with at least one grade hit, else treat as ambiguous.
-  let bestId: string | null = null;
-  let bestScore = -1;
-  let tie = false;
-  for (const m of candidates) {
-    const score = matchTokens(m.grade ?? "").reduce((n, t) => n + (lineTokens.has(t) ? 1 : 0), 0);
-    if (score > bestScore) {
-      bestScore = score;
-      bestId = m.id;
-      tie = false;
-    } else if (score === bestScore) {
-      tie = true;
-    }
+    if (nameToks.length === 0) continue;
+    const nameOverlap = nameToks.reduce((n, t) => n + (lineTokens.has(t) ? 1 : 0), 0);
+    if (nameOverlap === 0) continue;
+    const nameCoverage = nameOverlap / nameToks.length;
+    if (nameCoverage < 0.5) continue;
+    const gradeOverlap = matchTokens(m.grade ?? "").reduce((n, t) => n + (lineTokens.has(t) ? 1 : 0), 0);
+    scored.push({ id: m.id, nameOverlap, nameCoverage, gradeOverlap });
   }
-  if (tie || bestScore <= 0) return null;
-  return bestId;
+  if (scored.length === 0) return null;
+  if (scored.length === 1) return scored[0].id;
+
+  // Rank by name match, then grade disambiguation, then coverage. Only commit to
+  // a match when the top candidate is strictly better on name or grade overlap;
+  // a genuine tie stays unmatched for manual assignment rather than mis-filed.
+  scored.sort(
+    (a, b) => b.nameOverlap - a.nameOverlap || b.gradeOverlap - a.gradeOverlap || b.nameCoverage - a.nameCoverage
+  );
+  const [first, second] = scored;
+  const decisive = first.nameOverlap > second.nameOverlap || first.gradeOverlap > second.gradeOverlap;
+  return decisive ? first.id : null;
 }
 
 // Load an org's Tenkara materials as match candidates (id + name + grade tokens).

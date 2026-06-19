@@ -6,8 +6,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
+import { Select, type SelectOption } from "@/components/ui/select";
 import type { MaterialProfile, MaterialProfileRow, OrderLineRow } from "@/lib/material-profile";
-import { uploadAndParsePO, confirmOrder, deleteOrder, rematchOrders } from "@/app/actions/material-profile";
+import { uploadAndParsePO, confirmOrder, deleteOrder, rematchOrders, editOrder } from "@/app/actions/material-profile";
 
 function fmtQty(qty: number | null, unit: string | null): string {
   if (qty == null) return "—";
@@ -47,6 +48,11 @@ export function MaterialsPanel({ orgId, profile, canEdit }: { orgId: string; pro
   const parsedToReview = [...profile.materials.flatMap((m) => m.orders), ...profile.unmatchedOrders].filter(
     (o) => o.status === "parsed"
   );
+
+  // Options for manually filing an unmatched order under the right material.
+  const assignOptions: SelectOption[] = profile.materials
+    .filter((m) => m.tenkaraMaterialId)
+    .map((m) => ({ value: m.tenkaraMaterialId as string, label: m.grade ? `${m.label} — ${m.grade}` : m.label }));
 
   return (
     <div className="space-y-5 max-w-6xl">
@@ -145,7 +151,7 @@ export function MaterialsPanel({ orgId, profile, canEdit }: { orgId: string; pro
               Parsed from POs but not matched to a Tenkara material. Re-match attempts name + grade
               identifiers automatically; confirm or delete the rest.
             </p>
-            <OrderList orders={profile.unmatchedOrders} canEdit={canEdit} pending={pending} run={run} />
+            <OrderList orders={profile.unmatchedOrders} canEdit={canEdit} pending={pending} run={run} assignOptions={assignOptions} />
           </CardContent>
         </Card>
       )}
@@ -210,11 +216,13 @@ function OrderList({
   canEdit,
   pending,
   run,
+  assignOptions,
 }: {
   orders: OrderLineRow[];
   canEdit: boolean;
   pending: boolean;
   run: (fn: () => Promise<{ ok: boolean; error?: string; parsed?: number }>, okText: string) => void;
+  assignOptions?: SelectOption[];
 }) {
   return (
     <div className="space-y-1.5 py-1">
@@ -230,7 +238,19 @@ function OrderList({
           {o.material_expiry && <span className="text-muted-foreground">mat exp {fmtDate(o.material_expiry)}</span>}
           {o.status === "parsed" && <Badge variant="secondary">parsed</Badge>}
           {canEdit && (
-            <span className="ml-auto flex gap-2">
+            <span className="ml-auto flex items-center gap-2">
+              {assignOptions && assignOptions.length > 0 && (
+                <Select
+                  size="sm"
+                  className="min-w-[12rem]"
+                  ariaLabel="Assign to material"
+                  placeholder="Assign to material…"
+                  value=""
+                  disabled={pending}
+                  options={assignOptions}
+                  onValueChange={(v) => v && run(() => editOrder(o.id, { tenkara_material_id: v }), "Order assigned")}
+                />
+              )}
               {o.status === "parsed" && (
                 <button className="text-green-700 hover:underline" disabled={pending} onClick={() => run(() => confirmOrder(o.id), "Order confirmed")}>
                   confirm
