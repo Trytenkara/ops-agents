@@ -1,7 +1,7 @@
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
 
 // Per-campaign supplier relay for the material-page "vendors validating" state.
-// Reads the Tenkara prod DB (read-only) and buckets suppliers into the lifecycle:
+// Buckets suppliers into the lifecycle:
 //   discovered -> being_validated -> approved -> active, plus archived (denied).
 //
 //   discovered      surfaced by the agent's trace, not yet in the supplier DB
@@ -9,10 +9,20 @@ import { tenkaraQuery } from "@/lib/tenkara-readonly";
 //   approved        approval = approved, but not yet qualified for this client
 //   active          approved AND is_qualified[org] = true (qualified for client)
 //   archived        approval = denied
+//
+// Two data sources:
+//   prod (default) — Tenkara prod via the read-only tenkaraQuery (pg, mcp_readonly)
+//   dev            — Tenkara dev via the Supabase REST API (test data; has the
+//                    discovery campaigns that prod doesn't have yet)
 
 export type Group = "discovered" | "being_validated" | "approved" | "active" | "archived";
+export type Source = "prod" | "dev";
 export const CAMPAIGN_GROUPS: Group[] = ["discovered", "being_validated", "approved", "active", "archived"];
 export const ORG_GROUPS: Group[] = ["being_validated", "approved", "active", "archived"];
+
+export function resolveSource(raw: string | null | undefined): Source {
+  return raw === "dev" ? "dev" : "prod";
+}
 
 interface SupplierRow {
   id: string;
@@ -28,13 +38,67 @@ interface SupplierRow {
   updated_at: string;
 }
 
+const SUPPLIER_COLS =
+  "id, name, website, poc_name, poc_email, city, state, approval, is_qualified, organization_ids, updated_at";
+const SUPPLIER_COLS_REST = SUPPLIER_COLS.replace(/\s/g, "");
+const SCANJOB_COLS = "id, organization_id, type, status, input, items_total, items_completed, created_at, completed_at";
+const SCANJOB_COLS_REST = SCANJOB_COLS.replace(/\s/g, "");
+
+// --- dev: Supabase REST ---
+async function devRest(path: string): Promise<any[]> {
+  const url = process.env.SUPABASE_DEV_URL;
+  const key = process.env.SUPABASE_DEV_SERVICE_KEY;
+  if (!url || !key) throw new Error("dev source not configured (SUPABASE_DEV_URL / SUPABASE_DEV_SERVICE_KEY)");
+  const res = await fetch(`${url}/rest/v1/${path}`, {
+    headers: { apikey: key, Authorization: `Bearer ${key}` },
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`supabase dev ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+// --- data access: branch on source, return identical row shapes ---
+async function qScanJobs(source: Source, orgId?: string): Promise<any[]> {
+  if (source === "dev") {
+    const f = orgId ? `&organization_id=eq.${orgId}` : "";
+    return devRest(`scan_jobs?select=${SCANJOB_COLS_REST}&order=created_at.desc${f}`);
+  }
+  return orgId
+    ? tenkaraQuery(`select ${SCANJOB_COLS} from scan_jobs where organization_id = $1 order by created_at desc`, [orgId])
+    : tenkaraQuery(`select ${SCANJOB_COLS} from scan_jobs order by created_at desc`);
+}
+
+async function qScanJobById(source: Source, id: string): Promise<any | null> {
+  if (source === "dev") {
+    const rows = await devRest(`scan_jobs?id=eq.${id}&select=${SCANJOB_COLS_REST}`);
+    return rows[0] ?? null;
+  }
+  const rows = await tenkaraQuery(`select ${SCANJOB_COLS} from scan_jobs where id = $1`, [id]);
+  return rows[0] ?? null;
+}
+
+async function qScansByJob(source: Source, jobId: string): Promise<any[]> {
+  if (source === "dev") {
+    return devRest(`manufacturer_scans?job_id=eq.${jobId}&select=supplier_source,status,input,result`);
+  }
+  return tenkaraQuery(`select supplier_source, status, input, result from manufacturer_scans where job_id = $1`, [jobId]);
+}
+
+async function qSuppliersByOrg(source: Source, orgId: string): Promise<SupplierRow[]> {
+  if (source === "dev") {
+    return devRest(`suppliers?organization_ids=cs.{${orgId}}&select=${SUPPLIER_COLS_REST}`) as Promise<SupplierRow[]>;
+  }
+  return tenkaraQuery(`select ${SUPPLIER_COLS} from suppliers where $1 = any(organization_ids)`, [orgId]) as Promise<SupplierRow[]>;
+}
+
+// --- grouping ---
 export function groupFor(s: SupplierRow, orgId: string | null): Group {
   if (s.approval === "denied") return "archived";
   if (s.approval === "approved") {
     const qualified = !!(orgId && s.is_qualified && s.is_qualified[orgId]);
     return qualified ? "active" : "approved";
   }
-  return "being_validated"; // draft, pending_review, anything in-progress
+  return "being_validated";
 }
 
 function normalize(name: string): string {
@@ -95,26 +159,15 @@ function supplierObject(s: SupplierRow, orgId: string | null, group: Group, extr
   };
 }
 
-const SUPPLIER_COLS =
-  "id, name, website, poc_name, poc_email, city, state, approval, is_qualified, organization_ids, updated_at";
-
 function materialsOf(input: any): string[] {
   return (input?.distributors || [])
     .map((d: any) => d.materialFilter)
     .filter((m: string, i: number, a: string[]) => m && a.indexOf(m) === i);
 }
 
-export async function listCampaigns(orgId?: string) {
-  const rows = orgId
-    ? await tenkaraQuery(
-        `select id, organization_id, type, status, input, items_total, items_completed, created_at, completed_at
-         from scan_jobs where organization_id = $1 order by created_at desc`,
-        [orgId]
-      )
-    : await tenkaraQuery(
-        `select id, organization_id, type, status, input, items_total, items_completed, created_at, completed_at
-         from scan_jobs order by created_at desc`
-      );
+// --- public API ---
+export async function listCampaigns(source: Source, orgId?: string) {
+  const rows = await qScanJobs(source, orgId);
   return rows.map((j: any) => ({
     campaign_id: j.id,
     org_id: j.organization_id,
@@ -128,34 +181,23 @@ export async function listCampaigns(orgId?: string) {
   }));
 }
 
-export async function getCampaignSuppliers(scanJobId: string) {
-  const jobs = await tenkaraQuery(
-    `select id, organization_id, type, status, input, items_total, items_completed, created_at, completed_at
-     from scan_jobs where id = $1`,
-    [scanJobId]
-  );
-  const job: any = jobs[0];
+export async function getCampaignSuppliers(source: Source, scanJobId: string) {
+  const job = await qScanJobById(source, scanJobId);
   if (!job) return null;
   const orgId: string = job.organization_id;
 
-  const scans = await tenkaraQuery(
-    `select supplier_source, status, input, result from manufacturer_scans where job_id = $1`,
-    [scanJobId]
-  );
+  const scans = await qScansByJob(source, scanJobId);
 
   const discovered: TraceCompany[] = [];
   const seen = new Set<string>();
-  for (const scan of scans as any[]) {
+  for (const scan of scans) {
     const material = scan?.input?.materialFilter || "";
     for (const r of scan?.result?.trace?.results || []) {
       if (r?.trace?.root) collectTraceCompanies(r.trace.root, material, discovered, seen);
     }
   }
 
-  const orgSuppliers = (await tenkaraQuery(
-    `select ${SUPPLIER_COLS} from suppliers where $1 = any(organization_ids)`,
-    [orgId]
-  )) as SupplierRow[];
+  const orgSuppliers = await qSuppliersByOrg(source, orgId);
   const byName = new Map<string, SupplierRow>();
   for (const s of orgSuppliers) byName.set(normalize(s.name), s);
 
@@ -213,11 +255,8 @@ export async function getCampaignSuppliers(scanJobId: string) {
   };
 }
 
-export async function getOrgSuppliers(orgId: string) {
-  const list = (await tenkaraQuery(
-    `select ${SUPPLIER_COLS} from suppliers where $1 = any(organization_ids)`,
-    [orgId]
-  )) as SupplierRow[];
+export async function getOrgSuppliers(source: Source, orgId: string) {
+  const list = await qSuppliersByOrg(source, orgId);
   const groups: Record<string, any[]> = { being_validated: [], approved: [], active: [], archived: [] };
   for (const s of list) {
     const grp = groupFor(s, orgId);
