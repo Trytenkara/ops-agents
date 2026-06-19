@@ -9,6 +9,45 @@ import { LeadRowActions } from "@/components/lead-row-actions";
 // site-type, pricing, signal, completeness, catalog drift) can't drift
 // between the two surfaces.
 
+// Lead origin badge. Maps the stored source to the ops-facing label/colour:
+// platform DB vs Scout (AI discovery) vs Sourcing Index (catalog archive) vs
+// ops bulk upload.
+const SOURCE_BADGE: Record<string, { label: string; cls: string; title: string }> = {
+  existing_db: {
+    label: "Platform DB",
+    cls: "bg-secondary text-secondary-foreground",
+    title: "From the Tenkara platform database (existing supplier history).",
+  },
+  marketplace: {
+    label: "Sourcing Index",
+    cls: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300",
+    title: "Matched from the Sourcing Index catalog archive.",
+  },
+  ai_discovery: {
+    label: "Scout",
+    cls: "bg-yellow-500/15 text-yellow-700 dark:text-yellow-400",
+    title: "Discovered by Agent 03 (Scout) via web search — verify before promoting.",
+  },
+  human_bulk_upload: {
+    label: "Ops upload",
+    cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+    title: "Added by ops via the suppliers CSV upload.",
+  },
+};
+
+export function LeadSourceBadge({ source }: { source: string | null | undefined }) {
+  const s = source ? SOURCE_BADGE[source] : undefined;
+  if (!s) return <span className="text-muted-foreground">{source ?? "—"}</span>;
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${s.cls}`}
+      title={s.title}
+    >
+      {s.label}
+    </span>
+  );
+}
+
 export function ConfidenceBadge({ value }: { value: number | null }) {
   if (value == null) return <span className="text-muted-foreground">—</span>;
   const pct = `${(value * 100).toFixed(0)}%`;
@@ -168,7 +207,7 @@ export function LeadRichRow({
           </div>
         )}
       </TableCell>
-      <TableCell className="text-muted-foreground align-top">{r.source ?? "—"}</TableCell>
+      <TableCell className="align-top"><LeadSourceBadge source={r.source} /></TableCell>
       {showOrg && (
         <TableCell className="text-muted-foreground">
           {r.orgs?.name ?? <span className="italic text-xs">cross-org</span>}
