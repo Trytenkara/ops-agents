@@ -1,13 +1,8 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { relativeTime } from "@/lib/utils";
-import { OperatorChip } from "@/components/operator-chip";
 import { operatorRoles, primaryRole } from "@/lib/operator";
 import { resolveSupplierNamesWithFallback, resolveMaterialNames } from "@/lib/tenkara-names";
-import { DraftSignals } from "@/components/draft-signals";
+import { OutreachList, type DraftRow } from "@/components/outreach-list";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +33,21 @@ export default async function OutreachPage({ params }: { params: { slug: string 
     // Fall back to UUID prefixes if Tenkara is unreachable.
   }
 
+  const draftRows: DraftRow[] = rows.map((d: any) => ({
+    id: d.id,
+    subject: d.subject ?? null,
+    supplierId: d.supplier_id ?? null,
+    supplierName: d.supplier_id ? supplierNames.get(d.supplier_id) ?? null : null,
+    materialId: d.material_id ?? null,
+    materialName: d.material_id ? materialNames.get(d.material_id) ?? null : null,
+    status: d.status,
+    createdAt: d.created_at ?? null,
+    metadata: d.metadata,
+    assignedName: d.users?.display_name ?? null,
+    assignedEmail: d.users?.email ?? null,
+    assignedRole: primaryRole(operatorRoles(d.users)),
+  }));
+
   return (
     <div className="space-y-4">
       <div>
@@ -53,50 +63,11 @@ export default async function OutreachPage({ params }: { params: { slug: string 
         QA findings come from Agent 10 (lint pass); reply detections come from Agent 08.
       </div>
 
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Subject</TableHead>
-            <TableHead>Supplier</TableHead>
-            <TableHead>Material</TableHead>
-            <TableHead>Signals</TableHead>
-            <TableHead>Assigned</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Staged</TableHead>
-            <TableHead></TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((d: any) => {
-            const supplierName = d.supplier_id ? supplierNames.get(d.supplier_id) : null;
-            const materialName = d.material_id ? materialNames.get(d.material_id) : null;
-            return (
-              <TableRow key={d.id}>
-                <TableCell className="font-medium">{d.subject ?? "(no subject)"}</TableCell>
-                <TableCell title={d.supplier_id ?? undefined}>
-                  {supplierName ?? (d.supplier_id ? <code className="text-xs text-muted-foreground">{d.supplier_id.slice(0, 8)}…</code> : "—")}
-                </TableCell>
-                <TableCell title={d.material_id ?? undefined}>
-                  {materialName ?? (d.material_id ? <code className="text-xs text-muted-foreground">{d.material_id.slice(0, 8)}…</code> : "—")}
-                </TableCell>
-                <TableCell><DraftSignals metadata={d.metadata} /></TableCell>
-                <TableCell><OperatorChip name={d.users?.display_name} email={d.users?.email} role={primaryRole(operatorRoles(d.users))} /></TableCell>
-                <TableCell><StatusBadge status={d.status} /></TableCell>
-                <TableCell className="text-muted-foreground">{relativeTime(d.created_at)}</TableCell>
-                <TableCell><Link href={`/work/drafts/${d.id}`} className="text-primary hover:underline text-sm">Open →</Link></TableCell>
-              </TableRow>
-            );
-          })}
-          {rows.length === 0 && (
-            <TableRow><TableCell colSpan={8} className="text-center text-muted-foreground py-8">No outreach drafts yet. Promote an enriched lead on Leads in Flight to stage one.</TableCell></TableRow>
-          )}
-        </TableBody>
-      </Table>
+      {rows.length === 0 ? (
+        <p className="text-center text-muted-foreground py-8 text-sm">No outreach drafts yet. Promote an enriched lead on Leads in Flight to stage one.</p>
+      ) : (
+        <OutreachList rows={draftRows} slug={params.slug} />
+      )}
     </div>
   );
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const v = status === "staged" ? "warn" : status === "reviewed" ? "success" : status === "sent" ? "default" : "secondary";
-  return <Badge variant={v as any}>{status}</Badge>;
 }

@@ -10,10 +10,10 @@ import { cn } from "@/lib/utils";
 type Msg = { role: "user" | "assistant"; content: string };
 
 const EXAMPLES = [
-  "What does the “enriched” stage mean?",
-  "What's assigned to me right now?",
-  "What do I do with a blocked lead?",
-  "How many leads are in each stage?",
+  "What's waiting for me right now?",
+  "Do I have any stalled exercises?",
+  "Where do I export a CSV?",
+  "What does “Ready for client review” mean?",
 ];
 
 export function RunbookAssistant() {
@@ -91,7 +91,7 @@ export function RunbookAssistant() {
         className="flex w-full items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:underline"
       >
         <HelpGlyph className="h-3.5 w-3.5" />
-        Ask the runbook
+        Ask the assistant
       </button>
 
       {open && (
@@ -117,7 +117,7 @@ export function RunbookAssistant() {
               {messages.length === 0 ? (
                 <div className="space-y-3">
                   <p className="text-sm text-muted-foreground">
-                    Ask how Tackle Box works, what a stage means, or about your own queue. Answers about your work are scoped to your orgs.
+                    Ask how Control Room works, what a status means, or what's waiting for you. Answers about your work are scoped to your clients.
                   </p>
                   <div className="space-y-1.5">
                     {EXAMPLES.map((ex) => (

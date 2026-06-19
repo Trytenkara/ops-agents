@@ -18,7 +18,7 @@ export default async function OrgPipelinePage({ params }: { params: { slug: stri
         Every supplier thread for {org.name}, from outreach to a finalized price. Threads marked{" "}
         <span className="text-foreground font-medium">Stale</span> need an ops nudge.
       </p>
-      <PricingPipelineTable data={data} emptyReason="No tracked threads yet. They appear here once outreach is staged for this client." />
+      <PricingPipelineTable data={data} emptyReason="No tracked threads yet. They appear here once outreach is staged for this client." slug={params.slug} />
     </div>
   );
 }

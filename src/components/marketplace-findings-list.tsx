@@ -7,8 +7,10 @@ import {
   marketplaceFindingColSpan,
 } from "@/components/marketplace-finding-row";
 import { useListFilter, byString, byNumberDesc, byDateDesc } from "@/components/use-list-filter";
+import { ListCsvButton } from "@/components/list-csv-button";
+import { filenameFor } from "@/lib/csv";
 
-export function MarketplaceFindingsList({ rows, canAct }: { rows: any[]; canAct: boolean }) {
+export function MarketplaceFindingsList({ rows, canAct, slug = "all" }: { rows: any[]; canAct: boolean; slug?: string }) {
   const { filtered, controls } = useListFilter(rows, {
     searchText: (r) => `${r.supplier_name ?? ""} ${r.material_name ?? ""}`,
     searchPlaceholder: "supplier or material…",
@@ -20,9 +22,26 @@ export function MarketplaceFindingsList({ rows, canAct }: { rows: any[]; canAct:
     ],
   });
 
+  const csvRows = filtered.map((r: any) => [
+    r.supplier_name ?? "",
+    r.material_name ?? "",
+    r.baseline_price ?? "",
+    r.current_price ?? "",
+    r.currency ?? "",
+    r.pct_change != null ? `${r.pct_change}%` : "",
+    r.created_at ?? "",
+  ]);
+
   return (
     <div className="space-y-3">
-      {controls}
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        {controls}
+        <ListCsvButton
+          filename={filenameFor(slug, "price-changes")}
+          headers={["Supplier", "Material", "Previous", "Current", "Currency", "Change", "Found"]}
+          rows={csvRows}
+        />
+      </div>
       <Table>
         <TableHeader>
           <MarketplaceFindingHeaders showOrg={false} />

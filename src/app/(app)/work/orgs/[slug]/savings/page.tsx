@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
@@ -6,6 +7,9 @@ import { redirect } from "next/navigation";
 import { buildSavingsReport } from "@/lib/savings-report";
 import { buildSourcingScorecard, type SourcingStatus } from "@/lib/sourcing-scorecard";
 import { SavingsExportCsvButton } from "@/components/savings-export-csv-button";
+import { SavingsReportView } from "@/components/savings-report-view";
+import { CustomReportBox } from "@/components/custom-report-box";
+import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
@@ -14,9 +18,16 @@ function money(n: number | null): string {
   return "$" + n.toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
-export default async function OrgSavingsPage({ params }: { params: { slug: string } }) {
+export default async function OrgSavingsPage({
+  params,
+  searchParams,
+}: {
+  params: { slug: string };
+  searchParams?: { view?: string };
+}) {
   const session = (await getSession())!;
   if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator", "monitor"])) redirect("/work");
+  const view = searchParams?.view === "report" ? "report" : "table";
 
   const admin = createAdminClient();
   const { data: org } = await admin
@@ -39,8 +50,21 @@ export default async function OrgSavingsPage({ params }: { params: { slug: strin
   const withSavings = report.lines.filter((l) => l.savings_per_unit > 0);
   const scorecard = await buildSourcingScorecard(admin, org.id, org.tenkara_org_id);
 
+  if (view === "report") {
+    return (
+      <div className="space-y-6">
+        <ViewToggle slug={org.slug} view={view} />
+        <div className="mx-auto max-w-3xl">
+          <CustomReportBox slug={org.slug} />
+        </div>
+        <SavingsReportView report={report} clientName={org.name} />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8">
+      <ViewToggle slug={org.slug} view={view} />
       {scorecard.materials_sourcing > 0 && (
         <section className="space-y-3">
           <div>
@@ -189,6 +213,27 @@ export default async function OrgSavingsPage({ params }: { params: { slug: strin
         </TableBody>
       </Table>
       </section>
+    </div>
+  );
+}
+
+function ViewToggle({ slug, view }: { slug: string; view: "table" | "report" }) {
+  const base = `/work/orgs/${slug}/savings`;
+  const tab = (key: "table" | "report", label: string, href: string) => (
+    <Link
+      href={href}
+      className={cn(
+        "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+        view === key ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+      )}
+    >
+      {label}
+    </Link>
+  );
+  return (
+    <div className="inline-flex rounded-lg border bg-muted/40 p-1 print:hidden">
+      {tab("table", "Worksheet", base)}
+      {tab("report", "Savings report", `${base}?view=report`)}
     </div>
   );
 }

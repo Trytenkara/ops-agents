@@ -1,12 +1,10 @@
 import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/lib/utils";
-import { OperatorChip } from "@/components/operator-chip";
 import { operatorRoles, primaryRole } from "@/lib/operator";
-import { CaseResolve } from "@/components/case-resolve";
 import { ListPageHeader } from "@/components/list-page-header";
+import { CasesList, type CaseRow } from "@/components/cases-list";
 
 export const dynamic = "force-dynamic";
 
@@ -43,45 +41,24 @@ export default async function CasesPage({ params }: { params: { slug: string } }
         }
       />
 
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Supplier</TableHead>
-            <TableHead>Recommended action</TableHead>
-            <TableHead>Stale</TableHead>
-            <TableHead>Assigned</TableHead>
-            <TableHead>Opened</TableHead>
-            <TableHead className="text-right">Action</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {(openCases ?? []).map((c: any) => {
-            const supplierName = c.metadata?.supplier_name as string | undefined;
-            const staleDays = c.metadata?.stale_days as number | undefined;
-            return (
-              <TableRow key={c.id}>
-                <TableCell className="font-medium" title={c.supplier_id ?? undefined}>
-                  {supplierName ?? (c.supplier_id ? <code className="text-xs">{c.supplier_id.slice(0, 8)}…</code> : "—")}
-                </TableCell>
-                <TableCell className="max-w-md">{c.recommended_action ?? "—"}</TableCell>
-                <TableCell className="text-muted-foreground text-xs">
-                  {staleDays != null ? `${staleDays}d` : "—"}
-                </TableCell>
-                <TableCell>
-                  <OperatorChip name={c.users?.display_name} email={c.users?.email} role={primaryRole(operatorRoles(c.users))} />
-                </TableCell>
-                <TableCell className="text-muted-foreground text-xs">{relativeTime(c.created_at)}</TableCell>
-                <TableCell className="text-right"><CaseResolve caseId={c.id} /></TableCell>
-              </TableRow>
-            );
-          })}
-          {(!openCases || openCases.length === 0) && (
-            <TableRow>
-              <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No open cases.</TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
+      {(() => {
+        const caseRows: CaseRow[] = (openCases ?? []).map((c: any) => ({
+          id: c.id,
+          supplierId: c.supplier_id ?? null,
+          supplierName: (c.metadata?.supplier_name as string | undefined) ?? null,
+          recommendedAction: c.recommended_action ?? null,
+          staleDays: (c.metadata?.stale_days as number | undefined) ?? null,
+          assignedName: c.users?.display_name ?? null,
+          assignedEmail: c.users?.email ?? null,
+          assignedRole: primaryRole(operatorRoles(c.users)),
+          createdAt: c.created_at ?? null,
+        }));
+        return caseRows.length === 0 ? (
+          <p className="text-center text-muted-foreground py-8 text-sm">No open cases.</p>
+        ) : (
+          <CasesList rows={caseRows} slug={params.slug} />
+        );
+      })()}
 
       {resolvedRecent && resolvedRecent.length > 0 && (
         <div className="space-y-2">

@@ -35,7 +35,7 @@ export default async function OrgPriceChangesPage({ params }: { params: { slug: 
       {findings.length === 0 ? (
         <p className="text-sm text-muted-foreground py-4">No price changes pending review.</p>
       ) : (
-        <MarketplaceFindingsList rows={findings} canAct={canAct} />
+        <MarketplaceFindingsList rows={findings} canAct={canAct} slug={params.slug} />
       )}
     </div>
   );

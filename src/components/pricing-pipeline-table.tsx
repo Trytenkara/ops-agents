@@ -4,6 +4,8 @@ import Link from "next/link";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { PIPELINE_STAGES, type PipelineData, type PipelineThread } from "@/lib/pricing-pipeline";
 import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
+import { ListCsvButton } from "@/components/list-csv-button";
+import { filenameFor } from "@/lib/csv";
 
 const STAGE_INDEX: Record<string, number> = Object.fromEntries(PIPELINE_STAGES.map((s, i) => [s.key, i]));
 
@@ -17,7 +19,7 @@ function relTime(iso: string | null): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-export function PricingPipelineTable({ data, emptyReason }: { data: PipelineData; emptyReason?: string }) {
+export function PricingPipelineTable({ data, emptyReason, slug = "all" }: { data: PipelineData; emptyReason?: string; slug?: string }) {
   const { threads, counts } = data;
   const { filtered, controls } = useListFilter(threads, {
     searchText: (t: PipelineThread) => `${t.supplier} ${t.materials.join(" ")}`,
@@ -52,7 +54,19 @@ export function PricingPipelineTable({ data, emptyReason }: { data: PipelineData
         </div>
       ) : (
         <>
-          {controls}
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            {controls}
+            <ListCsvButton
+              filename={filenameFor(slug, "pricing-pipeline")}
+              headers={["Supplier", "Materials", "Status", "Last update"]}
+              rows={filtered.map((t) => [
+                t.supplier,
+                t.materials.join("; "),
+                PIPELINE_STAGES.find((s) => s.key === t.status)?.label ?? t.status,
+                t.updatedAt ?? "",
+              ])}
+            />
+          </div>
           <Table>
             <TableHeader>
               <TableRow>
