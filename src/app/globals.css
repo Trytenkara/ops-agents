@@ -52,3 +52,31 @@
   border: 1px solid hsl(var(--border));
   box-shadow: 0 1px 0 hsl(var(--border));
 }
+
+/* Print isolation — print only the active report region, never the app chrome.
+   A print button sets data-printing on <body>; everything else is hidden via
+   visibility (keeps layout intact) and the target is lifted to the page origin. */
+@media print {
+  body[data-printing] * {
+    visibility: hidden !important;
+  }
+  body[data-printing="report"] .print-report,
+  body[data-printing="report"] .print-report *,
+  body[data-printing="custom"] .print-custom,
+  body[data-printing="custom"] .print-custom * {
+    visibility: visible !important;
+  }
+  body[data-printing="report"] .print-report,
+  body[data-printing="custom"] .print-custom {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+  }
+  body[data-printing] .no-print,
+  body[data-printing] .no-print * {
+    display: none !important;
+  }
+}

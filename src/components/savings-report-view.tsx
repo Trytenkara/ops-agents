@@ -32,9 +32,9 @@ export function SavingsReportView({ report, clientName }: { report: SavingsRepor
       : 0;
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <div className="flex justify-end print:hidden">
-        <PrintReportButton />
+    <div className="print-report mx-auto max-w-3xl space-y-6">
+      <div className="flex justify-end no-print print:hidden">
+        <PrintReportButton target="report" />
       </div>
 
       {/* Header */}
