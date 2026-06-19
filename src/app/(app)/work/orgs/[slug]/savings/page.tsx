@@ -7,8 +7,7 @@ import { redirect } from "next/navigation";
 import { buildSavingsReport } from "@/lib/savings-report";
 import { buildSourcingScorecard, type SourcingStatus } from "@/lib/sourcing-scorecard";
 import { SavingsExportCsvButton } from "@/components/savings-export-csv-button";
-import { SavingsReportView } from "@/components/savings-report-view";
-import { CustomReportBox } from "@/components/custom-report-box";
+import { SavingsReportInteractive } from "@/components/savings-report-interactive";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -54,10 +53,7 @@ export default async function OrgSavingsPage({
     return (
       <div className="space-y-6">
         <ViewToggle slug={org.slug} view={view} />
-        <div className="mx-auto max-w-3xl">
-          <CustomReportBox slug={org.slug} />
-        </div>
-        <SavingsReportView report={report} clientName={org.name} />
+        <SavingsReportInteractive report={report} clientName={org.name} slug={org.slug} />
       </div>
     );
   }

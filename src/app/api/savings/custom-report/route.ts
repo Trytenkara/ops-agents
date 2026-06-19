@@ -7,7 +7,6 @@ import { buildSavingsReport } from "@/lib/savings-report";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// Opus for report-quality prose; this is not latency-sensitive.
 const MODEL = "claude-opus-4-8";
 
 let client: Anthropic | null = null;
@@ -19,9 +18,37 @@ function anthropic(): Anthropic {
   return client;
 }
 
+const SELECT_TOOL: Anthropic.Tool = {
+  name: "select_materials",
+  description:
+    "Choose which materials appear in the client savings report and in what order, based on the operator's request.",
+  input_schema: {
+    type: "object",
+    properties: {
+      title: {
+        type: "string",
+        description: "Optional short subtitle for the report reflecting the request (e.g. 'Top 5 cost savings').",
+      },
+      note: {
+        type: "string",
+        description: "Optional one-sentence note if the request can't be fully met (e.g. fewer matches than asked).",
+      },
+      material_keys: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "The keys of the materials to include, in the exact display order desired. Use only keys from the provided list.",
+      },
+    },
+    required: ["material_keys"],
+  },
+};
+
 // POST /api/savings/custom-report  { slug, prompt }
-// Ad-hoc savings report: hands the client's per-material savings data to Claude
-// along with the operator's free-form formatting request, returns markdown.
+// The operator's prompt reshapes the branded savings report: Claude only
+// selects/orders which existing materials appear (never invents numbers).
+// Returns the validated keys + optional title/note; the client renders the
+// same card report filtered to those keys.
 export async function POST(req: NextRequest) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
@@ -45,47 +72,59 @@ export async function POST(req: NextRequest) {
   if (!org.tenkara_org_id) return NextResponse.json({ error: "org not linked to Tenkara" }, { status: 400 });
 
   const report = await buildSavingsReport(org.tenkara_org_id);
-  const rows = report.lines.map((l) => ({
+  const keyOf = (l: { material_id: string; unit: string }) => `${l.material_id}|${l.unit}`;
+  const validKeys = new Set(report.lines.map(keyOf));
+  const catalog = report.lines.map((l) => ({
+    key: keyOf(l),
     material: l.material_name,
     grade: l.grade,
     unit: l.unit,
     their_price: round(l.their_unit_price),
     best_tenkara_price: round(l.best_unit_price),
-    recommended_supplier: l.recommended_supplier_name,
-    savings_per_unit: round(l.savings_per_unit),
     savings_pct: round(l.savings_pct, 1),
-    market_avg: round(l.market_avg_unit_price),
-    quotes: l.n_quotes,
-    suppliers: l.n_suppliers,
+    has_savings: l.savings_per_unit > 0,
   }));
 
   const system =
-    "You are a procurement analyst at Tenkara producing a client-facing sourcing report. " +
-    "You are given a client's per-material savings data (their current price vs the cheapest Tenkara-sourced supplier, normalized per unit) as JSON. " +
-    "Produce a clear, well-structured report in Markdown that fulfills the operator's request. " +
-    "Only use the numbers provided — never invent prices, suppliers, freight, or savings. " +
-    "If the request asks for data you don't have, say so briefly rather than fabricating it.";
+    "You shape a client savings report by choosing which materials to show and in what order. " +
+    "Call select_materials with material_keys drawn ONLY from the provided catalog — never invent materials, prices, or savings. " +
+    "Interpret the operator's request (e.g. 'top 5 cost savings', 'only >10% savings', 'sort by grade'). " +
+    "If fewer materials match than requested, include the ones that do and add a brief note. " +
+    "If the request is unclear, include all materials in a sensible order.";
 
   const userContent =
-    `Client: ${org.name}\n` +
-    `Savings data (JSON): ${JSON.stringify(rows)}\n\n` +
-    `Operator request: ${prompt}`;
+    `Client: ${org.name}\nCatalog (JSON): ${JSON.stringify(catalog)}\n\nOperator request: ${prompt}`;
 
   try {
     const msg = await anthropic().messages.create({
       model: MODEL,
-      max_tokens: 4000,
+      max_tokens: 1500,
       system,
+      tools: [SELECT_TOOL],
+      tool_choice: { type: "tool", name: "select_materials" },
       messages: [{ role: "user", content: userContent }],
     });
-    if (msg.stop_reason === "refusal") {
-      return NextResponse.json({ error: "request was declined" }, { status: 422 });
+
+    const toolUse = msg.content.find(
+      (b): b is Anthropic.ToolUseBlock => b.type === "tool_use" && b.name === "select_materials"
+    );
+    const input = (toolUse?.input ?? {}) as { title?: string; note?: string; material_keys?: unknown };
+    const keys = Array.isArray(input.material_keys)
+      ? input.material_keys.filter((k): k is string => typeof k === "string" && validKeys.has(k))
+      : [];
+
+    if (keys.length === 0) {
+      return NextResponse.json({ error: "No matching materials for that request." }, { status: 422 });
     }
-    const markdown = msg.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("");
-    return NextResponse.json({ markdown });
+    // De-dup while preserving order.
+    const seen = new Set<string>();
+    const ordered = keys.filter((k) => (seen.has(k) ? false : (seen.add(k), true)));
+
+    return NextResponse.json({
+      keys: ordered,
+      title: typeof input.title === "string" ? input.title.slice(0, 120) : null,
+      note: typeof input.note === "string" ? input.note.slice(0, 300) : null,
+    });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "generation failed" }, { status: 500 });
   }

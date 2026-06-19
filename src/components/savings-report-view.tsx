@@ -23,7 +23,15 @@ function todayLabel(): string {
   });
 }
 
-export function SavingsReportView({ report, clientName }: { report: SavingsReport; clientName: string }) {
+export function SavingsReportView({
+  report,
+  clientName,
+  subtitle,
+}: {
+  report: SavingsReport;
+  clientName: string;
+  subtitle?: string | null;
+}) {
   const lines = report.lines;
   const withSavings = lines.filter((l) => l.savings_per_unit > 0);
   const avgSavingsPct =
@@ -44,6 +52,7 @@ export function SavingsReportView({ report, clientName }: { report: SavingsRepor
           <span>Tenkara</span>
         </div>
         <h1 className="mt-5 font-serif text-4xl tracking-tight">{clientName}</h1>
+        {subtitle ? <p className="mt-1 text-sm font-medium">{subtitle}</p> : null}
         <p className="mt-2 text-xs text-muted-foreground">Savings Report · {todayLabel()}</p>
       </div>
 
