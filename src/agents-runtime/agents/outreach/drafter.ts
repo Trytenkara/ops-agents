@@ -30,13 +30,39 @@ function greeting(contactName: string | null, supplierCompany: string | null | u
   return "Hi there,";
 }
 
+// Subject variation: ops flagged that every outreach used an identical subject.
+// Vary it deterministically by a stable hash of the recipient + material, so a
+// campaign isn't a wall of identical subjects, while staying idempotent (the
+// same draft re-renders to the same subject).
+const SUBJECT_TEMPLATES: ((m: string) => string)[] = [
+  (m) => `Sourcing inquiry: ${m}`,
+  (m) => `${m} — pricing and availability?`,
+  (m) => `Do you supply ${m}?`,
+  (m) => `Quote request: ${m}`,
+  (m) => `Looking for a ${m} supplier`,
+  (m) => `${m}: current pricing and MOQ?`,
+  (m) => `RFQ — ${m}`,
+];
+
+function stableHash(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+
+function pickSubject(input: DraftInput): string {
+  const seed = `${input.supplierCompanyName ?? input.supplierContactName ?? ""}|${input.materialName}`;
+  const tpl = SUBJECT_TEMPLATES[stableHash(seed) % SUBJECT_TEMPLATES.length];
+  return tpl(input.materialName);
+}
+
 export function composeOutreachDraft(input: DraftInput): ComposedDraft {
   const senderOrg = input.mode === "ghost" ? input.ghostBrand! : input.clientOrgName;
   const materialLabel = input.inciName
     ? `${input.materialName} (INCI: ${input.inciName})`
     : input.materialName;
 
-  const subject = `Sourcing inquiry: ${input.materialName}`;
+  const subject = pickSubject(input);
   const body = [
     greeting(input.supplierContactName, input.supplierCompanyName),
     "",
