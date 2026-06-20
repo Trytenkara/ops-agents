@@ -19,10 +19,11 @@ export default async function OrgOverview({ params }: { params: { slug: string }
     .maybeSingle();
   if (!org) notFound();
 
-  const [draftsRes, casesRes, approvalsRes, opsRes, candidatesRes] = await Promise.all([
+  const [draftsRes, casesRes, approvalsRes, quotesRes, opsRes, candidatesRes] = await Promise.all([
     admin.from("draft_references").select("id, status").eq("org_id", org.id),
     admin.from("cases").select("id, status").eq("org_id", org.id).eq("status", "open"),
     admin.from("pending_approvals").select("id").eq("org_id", org.id).eq("status", "pending"),
+    admin.from("staged_quotes").select("id", { count: "exact", head: true }).eq("org_id", org.id).eq("status", "pending_review"),
     admin
       .from("org_default_operators")
       .select(
@@ -89,6 +90,7 @@ export default async function OrgOverview({ params }: { params: { slug: string }
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         <Metric label="New leads" value={nudges.newLeads} note="to review" href={`${base}/leads`} />
         <Metric label="Drafts to send" value={staged} note={`${reviewed} reviewed`} href={`${base}/threads`} />
+        <Metric label="Quotes to approve" value={quotesRes.count ?? 0} note="pending review" href={`${base}/quotes`} />
         <Metric label="Price changes" value={nudges.priceChanges} note="pending review" href={`${base}/price-changes`} />
         <Metric label="Open cases" value={casesRes.data?.length ?? 0} href={`${base}/cases`} />
         <Metric label="Pending approvals" value={approvalsRes.data?.length ?? 0} href={`${base}/approvals`} />

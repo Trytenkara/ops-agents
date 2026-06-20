@@ -36,6 +36,15 @@ const COLS: { key: WorkType; label: string }[] = [
   { key: "leads", label: "Leads" },
 ];
 
+// Deep-link a filtered row straight to the tab where that work lives.
+const TYPE_TAB: Record<WorkType, string> = {
+  drafts: "/threads",
+  quotes: "/quotes",
+  changes: "/price-changes",
+  cases: "/cases",
+  leads: "/leads",
+};
+
 export function HomeBoard({ counts, rows }: { counts: Record<WorkType, number>; rows: ClientRow[] }) {
   const [active, setActive] = useState<WorkType | null>(null);
 
@@ -116,7 +125,12 @@ export function HomeBoard({ counts, rows }: { counts: Record<WorkType, number>; 
                       {r.oldestDays === 0 ? "today" : `${r.oldestDays}d`}
                     </TableCell>
                     <TableCell className="text-right">
-                      <Link href={`/work/orgs/${r.slug}`} className="text-primary hover:underline text-sm">Open →</Link>
+                      <Link
+                        href={`/work/orgs/${r.slug}${active ? TYPE_TAB[active] : ""}`}
+                        className="text-primary hover:underline text-sm"
+                      >
+                        Open →
+                      </Link>
                     </TableCell>
                   </TableRow>
                 ))}
