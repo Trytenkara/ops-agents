@@ -88,7 +88,7 @@ export default async function OrgOverview({ params }: { params: { slug: string }
     <div className="space-y-6">
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         <Metric label="New leads" value={nudges.newLeads} note="to review" href={`${base}/leads`} />
-        <Metric label="Drafts to send" value={staged} note={`${reviewed} reviewed`} href={`${base}/outreach`} />
+        <Metric label="Drafts to send" value={staged} note={`${reviewed} reviewed`} href={`${base}/threads`} />
         <Metric label="Price changes" value={nudges.priceChanges} note="pending review" href={`${base}/price-changes`} />
         <Metric label="Open cases" value={casesRes.data?.length ?? 0} href={`${base}/cases`} />
         <Metric label="Pending approvals" value={approvalsRes.data?.length ?? 0} href={`${base}/approvals`} />

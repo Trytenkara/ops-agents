@@ -18,15 +18,14 @@ const STAGES: { key: StageKey; label: string; href: string; blurb: string }[] = 
 ];
 
 // Which tab route (suffix after the org base) maps to which workflow stage.
-// Tabs not listed (Overview, Suppliers, Inbound, Cases, Approvals) sit outside
-// the linear flow and leave the stepper neutral.
+// Tabs not listed (Overview, Suppliers, Cases, Approvals) sit outside the
+// linear flow and leave the stepper neutral.
 const SUFFIX_STAGE: { suffix: string; stage: StageKey }[] = [
   { suffix: "/profile", stage: "onboard" },
   { suffix: "/leads", stage: "source" },
-  { suffix: "/outreach", stage: "source" },
+  { suffix: "/threads", stage: "source" },
   { suffix: "/pipeline", stage: "quote" },
   { suffix: "/materials", stage: "order" },
-  { suffix: "/revalidation", stage: "order" },
   { suffix: "/quotes", stage: "export" },
   { suffix: "/savings", stage: "export" },
   { suffix: "/price-changes", stage: "export" },

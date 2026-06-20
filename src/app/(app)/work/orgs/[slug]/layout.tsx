@@ -11,16 +11,14 @@ export const dynamic = "force-dynamic";
 const sections = [
   { href: "", label: "Overview" },
   { href: "/profile", label: "Client Profile" },
-  { href: "/materials", label: "Materials" },
-  { href: "/revalidation", label: "Expiries" },
   { href: "/leads", label: "Leads" },
-  { href: "/outreach", label: "Outreach" },
+  { href: "/threads", label: "Threads" },
   { href: "/pipeline", label: "Pipeline" },
   { href: "/quotes", label: "Quotes" },
+  { href: "/materials", label: "Materials" },
   { href: "/savings", label: "Savings" },
   { href: "/price-changes", label: "Price Changes" },
   { href: "/suppliers", label: "Suppliers" },
-  { href: "/inbound", label: "Inbound" },
   { href: "/cases", label: "Cases" },
   { href: "/approvals", label: "Approvals" },
 ];

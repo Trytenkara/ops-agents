@@ -53,7 +53,7 @@ export default async function ReviewByOrgPage() {
               ) : (
                 <div className="flex flex-wrap items-center gap-2">
                   <NudgeChip n={counts.newLeads} label="new leads" href={`/work/orgs/${org.slug}/leads`} />
-                  <NudgeChip n={counts.draftsToSend} label="to send" href={`/work/orgs/${org.slug}/outreach`} />
+                  <NudgeChip n={counts.draftsToSend} label="to send" href={`/work/orgs/${org.slug}/threads`} />
                   <NudgeChip n={counts.priceChanges} label="price changes" href={`/work/orgs/${org.slug}/price-changes`} />
                   <NudgeChip n={counts.openCases} label="cases" href={`/work/orgs/${org.slug}/cases`} />
                 </div>
