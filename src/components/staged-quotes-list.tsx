@@ -3,8 +3,10 @@
 import { Table, TableHeader, TableBody, TableRow, TableCell } from "@/components/ui/table";
 import { StagedQuoteRow, StagedQuoteHeaders, stagedQuoteColSpan, STAGED_CONF_ORDER } from "@/components/staged-quote-row";
 import { useListFilter, byString, byNumberDesc, byDateDesc } from "@/components/use-list-filter";
+import { ListCsvButton } from "@/components/list-csv-button";
+import { filenameFor } from "@/lib/csv";
 
-export function StagedQuotesList({ rows, canAct }: { rows: any[]; canAct: boolean }) {
+export function StagedQuotesList({ rows, canAct, slug = "all" }: { rows: any[]; canAct: boolean; slug?: string }) {
   const { filtered, controls } = useListFilter(rows, {
     searchText: (r) => `${r.supplier_name ?? ""} ${r.material_name ?? ""} ${r.grade ?? ""}`,
     searchPlaceholder: "supplier, material, grade…",
@@ -21,9 +23,27 @@ export function StagedQuotesList({ rows, canAct }: { rows: any[]; canAct: boolea
     ],
   });
 
+  const csvRows = filtered.map((r: any) => [
+    r.supplier_name ?? "",
+    r.material_name ?? "",
+    r.grade ?? "",
+    r.price ?? "",
+    r.case_size ?? "",
+    r.unit_of_measurement ?? "",
+    r.unit_price ?? "",
+    r.confidence ?? "",
+  ]);
+
   return (
     <div className="space-y-3">
-      {controls}
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        {controls}
+        <ListCsvButton
+          filename={filenameFor(slug, "staged-quotes")}
+          headers={["Supplier", "Material", "Grade", "Price", "Case size", "Unit", "Per-unit", "Confidence"]}
+          rows={csvRows}
+        />
+      </div>
       <Table>
         <TableHeader>
           <StagedQuoteHeaders showOrg={false} />

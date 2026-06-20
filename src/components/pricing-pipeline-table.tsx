@@ -6,18 +6,9 @@ import { PIPELINE_STAGES, type PipelineData, type PipelineThread } from "@/lib/p
 import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
+import { relativeTime } from "@/lib/utils";
 
 const STAGE_INDEX: Record<string, number> = Object.fromEntries(PIPELINE_STAGES.map((s, i) => [s.key, i]));
-
-function relTime(iso: string | null): string {
-  if (!iso) return "—";
-  const d = Date.now() - new Date(iso).getTime();
-  const m = Math.floor(d / 60000);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
 
 export function PricingPipelineTable({ data, emptyReason, slug = "all" }: { data: PipelineData; emptyReason?: string; slug?: string }) {
   const { threads, counts } = data;
@@ -91,7 +82,7 @@ export function PricingPipelineTable({ data, emptyReason, slug = "all" }: { data
                     </span>
                     {t.lastNote ? <div className="mt-1 text-xs text-muted-foreground">{t.lastNote}</div> : null}
                   </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{relTime(t.updatedAt)}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{relativeTime(t.updatedAt)}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-3 text-sm">
                       <Link href={`/work/drafts/${t.draftRefId}`} className="underline">

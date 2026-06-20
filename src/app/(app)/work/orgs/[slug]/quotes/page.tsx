@@ -88,7 +88,7 @@ export default async function OrgQuotesPage({
           )}
         </p>
       ) : (
-        <StagedQuotesList rows={staged} canAct={canAct} />
+        <StagedQuotesList rows={staged} canAct={canAct} slug={params.slug} />
       )}
     </div>
   );
