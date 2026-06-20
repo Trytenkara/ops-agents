@@ -36,7 +36,7 @@ export default async function CrossOrgPage() {
 
       <div className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
         <span className="font-medium text-foreground">Agent-staged, human-sent.</span>{" "}
-        Drafts here are written by Agent 02 (Quote Revalidation). A human picks one up, edits it in Missive, and sends — no agent ever sends email automatically.
+        Drafts here are written by Agent 02 (Quote Revalidation). A human picks one up, edits it in the Tenkara Inbox, and sends — no agent ever sends email automatically.
       </div>
       <Table>
         <TableHeader>

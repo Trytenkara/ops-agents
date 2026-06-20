@@ -19,7 +19,7 @@ const MAIN_FLOW: Step[] = [
   { kind: "agent", badge: "06", title: "Enrichment", detail: "Fills contacts (called by 03)" },
   { kind: "agent", badge: "04", title: "Outreach", detail: "Drafts the email (called by 03)" },
   { kind: "agent", badge: "10", title: "QA", detail: "Lints the draft inline" },
-  { kind: "human", badge: "YOU", title: "Send", detail: "Review & click Send in Missive" },
+  { kind: "human", badge: "YOU", title: "Send", detail: "Review & click Send in the Tenkara Inbox" },
   { kind: "agent", badge: "08", title: "Email Scanner", detail: "Detects the reply, drafts a response" },
   { kind: "human", badge: "YOU", title: "Send reply", detail: "Review & send the response" },
 ];

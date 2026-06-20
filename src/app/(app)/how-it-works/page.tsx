@@ -20,7 +20,7 @@ export default function HowItWorksPage() {
       <section className="space-y-3">
         <h2 className="font-serif text-xl">Safety invariants</h2>
         <ul className="text-sm text-muted-foreground space-y-1 list-disc pl-5">
-          <li>No emails are ever sent automatically. Missive drafts are staged with an empty from-address; operators pick the sender and click Send.</li>
+          <li>No emails are ever sent automatically. Drafts are staged in the Tenkara Inbox under Pending Outreach; operators review and click Send.</li>
           <li>No writes to Tenkara prod. Tackle Box only has a read-only client; all writes land in the ops-assistants Supabase project.</li>
           <li>Org access is gated by RLS plus app-layer filters. Operators only see the orgs they're assigned to.</li>
         </ul>
@@ -30,7 +30,7 @@ export default function HowItWorksPage() {
         <h2 className="font-serif text-xl">Pipeline at a glance</h2>
         <p className="text-sm text-muted-foreground">
           The outreach happy path runs left to right. Agent 03 drives the automatic steps end-to-end; the cyan steps are where{" "}
-          <span className="font-medium text-foreground">you</span> take over — reviewing and sending each draft in Missive. You can also
+          <span className="font-medium text-foreground">you</span> take over — reviewing and sending each draft in the Tenkara Inbox. You can also
           Promote or Drop leads anytime on <a href="/work/review/leads" className="underline hover:text-foreground">the Review queue</a>.
         </p>
         <PipelineDiagram />

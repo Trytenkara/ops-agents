@@ -33,7 +33,7 @@ export default async function CasesPage({ params }: { params: { slug: string } }
       <ListPageHeader
         level={2}
         title="Cases"
-        description="Stale leads escalated by Agent 07 — supplier outreach that's been active >14d. Pick a case, take the recommended action in Missive or off-platform, and resolve."
+        description="Stale leads escalated by Agent 07 — supplier outreach that's been active >14d. Pick a case, take the recommended action in the email inbox or off-platform, and resolve."
         explainer={
           <>
             <span className="font-medium text-foreground">Agent 07 (Escalation)</span> opens these when an in-flight lead crosses 14 days without resolution. The assigned operator is the org&apos;s primary (or backup if OOO).

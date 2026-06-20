@@ -14,7 +14,14 @@
 // The returned draft.id is the exact UUID that comes back on the
 // draft.sent / draft.discarded webhook (see /api/webhooks/tenkara).
 
-const TENKARA_INBOX_BASE = "https://tenkara-inbox-nine.vercel.app";
+export const TENKARA_INBOX_BASE = "https://tenkara-inbox-nine.vercel.app";
+
+// Where an operator reviews/sends a Tenkara-staged draft. The agent stages it
+// under the client inbox → Pending Outreach; we link to the app (deep-linking to
+// a specific conversation can be added once the conversation route is confirmed).
+export function tenkaraInboxUrl(_conversationId?: string): string {
+  return TENKARA_INBOX_BASE;
+}
 
 export interface CreateTenkaraDraftInput {
   conversationId: string;             // REQUIRED — Tenkara conversation UUID to reply into

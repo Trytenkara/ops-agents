@@ -85,7 +85,7 @@ export default async function TodayInboxPage() {
       </header>
 
       <PageExplainer tag="Your inbox.">
-        Agents stage work here for human review. Nothing is sent until you click Send in Missive.
+        Agents stage work here for human review. Nothing is sent until you click Send in the Tenkara Inbox.
         See <a href="/how-it-works" className="underline hover:text-foreground">How Tackle Box works</a> for the full pipeline.
       </PageExplainer>
 

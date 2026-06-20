@@ -8,6 +8,7 @@ import { MarkReviewedButton } from "@/components/mark-reviewed-button";
 import { relativeTime } from "@/lib/utils";
 import { OperatorChip } from "@/components/operator-chip";
 import { operatorRoles, primaryRole } from "@/lib/operator";
+import { tenkaraInboxUrl } from "@/lib/tenkara";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +24,11 @@ export default async function DraftDetail({ params }: { params: { id: string } }
 
   const d = draft as any;
   const canReview = hasAnyRole(session, ["admin", "ops_lead", "ops_operator"]);
-  const missiveUrl = `https://mail.missiveapp.com/#inbox/conversations/${d.thread_id}/drafts/${d.draft_id}`;
+  const isTenkara = d.email_client === "rod_app" || d.email_client === "tenkara";
+  const inboxUrl = isTenkara
+    ? tenkaraInboxUrl(d.thread_id)
+    : `https://mail.missiveapp.com/#inbox/conversations/${d.thread_id}/drafts/${d.draft_id}`;
+  const inboxName = isTenkara ? "Tenkara Inbox" : "Missive";
 
   return (
     <div className="max-w-3xl space-y-4">
@@ -54,21 +59,21 @@ export default async function DraftDetail({ params }: { params: { id: string } }
           <DetailRow label="Supplier" value={(d.metadata as any)?.supplier_name ?? d.supplier_id} />
           <DetailRow label="Material" value={(d.metadata as any)?.material_name ?? d.material_id} />
           <DetailRow label="Quote" value={d.quote_id} />
-          <DetailRow label="Missive thread" value={d.thread_id} />
+          <DetailRow label="Conversation" value={d.thread_id} />
 
           <div>
             <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Body preview</div>
-            <pre className="text-sm whitespace-pre-wrap rounded border border-border bg-muted/40 p-3 font-sans">{d.body_preview ?? "(no preview — open in Missive)"}</pre>
+            <pre className="text-sm whitespace-pre-wrap rounded border border-border bg-muted/40 p-3 font-sans">{d.body_preview ?? `(no preview — open in ${inboxName})`}</pre>
           </div>
 
           <div className="flex gap-2 pt-2">
             <a
-              href={missiveUrl}
+              href={inboxUrl}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center justify-center rounded-md border border-border h-9 px-4 text-sm hover:bg-secondary"
             >
-              Open in Missive ↗
+              Open in {inboxName} ↗
             </a>
             {canReview && d.status === "staged" && <MarkReviewedButton draftId={d.id} />}
           </div>

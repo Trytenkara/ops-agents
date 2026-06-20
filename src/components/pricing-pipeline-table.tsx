@@ -90,7 +90,7 @@ export function PricingPipelineTable({ data, emptyReason, slug = "all" }: { data
                       </Link>
                       {t.draftLink ? (
                         <a href={t.draftLink} target="_blank" rel="noreferrer" className="underline">
-                          Missive
+                          Email ↗
                         </a>
                       ) : null}
                     </div>
