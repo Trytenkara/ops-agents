@@ -2,7 +2,8 @@
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
-import { promoteLead, dropLead, DROP_REASONS, type DropReason } from "@/app/actions/leads";
+import { promoteLead, dropLead } from "@/app/actions/leads";
+import { DROP_REASONS, type DropReason } from "@/app/actions/lead-drop-reasons";
 
 interface Props {
   leadId: string;

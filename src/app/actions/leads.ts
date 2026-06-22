@@ -1,5 +1,6 @@
 "use server";
 import { revalidatePath } from "next/cache";
+import { DROP_REASONS, type DropReason } from "@/app/actions/lead-drop-reasons";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
@@ -181,18 +182,6 @@ export async function uploadSuppliersCsv(orgId: string, form: FormData): Promise
   };
 }
 
-// Reasons an operator can pick when dropping a lead. Kept short and stable —
-// surfaced as a dropdown in the UI; Agent 11 groups CSVs by reason.
-export const DROP_REASONS = [
-  { value: "duplicate", label: "Duplicate of an existing lead" },
-  { value: "wrong_material", label: "Wrong material" },
-  { value: "not_a_supplier", label: "Not actually a supplier" },
-  { value: "already_relationship", label: "Already an active relationship" },
-  { value: "low_quality_signal", label: "Low quality signal" },
-  { value: "out_of_scope_geo", label: "Out of geographic scope" },
-  { value: "other", label: "Other" },
-] as const;
-export type DropReason = (typeof DROP_REASONS)[number]["value"];
 
 async function assertCanActOnLead(leadId: string) {
   const session = await getSession();
