@@ -50,11 +50,12 @@ export function MarketplaceFindingsList({ rows, canAct, slug = "all" }: { rows: 
     ],
   });
 
-  // Group into per-supplier-per-material tier ladders so the bulk-quantity rows
-  // read as tiers of one material, not separate alarming line items.
+  // Group by material so all suppliers' tiers for one material sit together
+  // (cheapest per-unit first); the supplier is called out per row in the Source
+  // column, not in the group header.
   const groups = new Map<string, any[]>();
   for (const r of filtered) {
-    const key = `${r.supplier_name ?? ""}||${r.material_name ?? ""}`;
+    const key = `${r.material_name ?? ""}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(r);
   }
@@ -88,7 +89,7 @@ export function MarketplaceFindingsList({ rows, canAct, slug = "all" }: { rows: 
             <TableHead className="text-right">On file</TableHead>
             <TableHead className="text-right">Current</TableHead>
             <TableHead className="text-right">Δ%</TableHead>
-            <TableHead>Source</TableHead>
+            <TableHead>Supplier / source</TableHead>
             <TableHead>Status</TableHead>
             <TableHead className="text-right">Action</TableHead>
           </TableRow>
@@ -97,15 +98,16 @@ export function MarketplaceFindingsList({ rows, canAct, slug = "all" }: { rows: 
           {Array.from(groups.values()).map((tiers) => {
             const head = tiers[0];
             const sorted = [...tiers].sort(tierSort);
+            const supplierCount = new Set(tiers.map((t) => t.supplier_name).filter(Boolean)).size;
             return (
-              <Fragment key={`${head.supplier_name}||${head.material_name}`}>
+              <Fragment key={head.material_name ?? "—"}>
                 <TableRow className="bg-secondary/40">
                   <TableCell colSpan={COLS} className="py-2">
                     <span className="font-medium">{head.material_name ?? "—"}</span>
-                    <span className="text-muted-foreground"> · {head.supplier_name ?? "—"}</span>
-                    {tiers.length > 1 && (
-                      <span className="ml-2 text-xs text-muted-foreground">{tiers.length} tiers</span>
-                    )}
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      {tiers.length} tier{tiers.length === 1 ? "" : "s"}
+                      {supplierCount > 1 ? ` · ${supplierCount} suppliers` : ""}
+                    </span>
                   </TableCell>
                 </TableRow>
                 {sorted.map((r) => {
@@ -132,6 +134,7 @@ export function MarketplaceFindingsList({ rows, canAct, slug = "all" }: { rows: 
                       <TableCell className="text-right align-top tabular-nums">{formatPrice(r.current_price, r.currency)}</TableCell>
                       <TableCell className="text-right align-top tabular-nums"><PctBadge pct={r.pct_change} /></TableCell>
                       <TableCell className="align-top">
+                        <div className="font-medium">{r.supplier_name ?? "—"}</div>
                         {r.source_url ? (
                           <a
                             href={r.source_url}
@@ -142,9 +145,7 @@ export function MarketplaceFindingsList({ rows, canAct, slug = "all" }: { rows: 
                           >
                             {r.source_url.replace(/^https?:\/\//, "").replace(/\/$/, "")} ↗
                           </a>
-                        ) : (
-                          "—"
-                        )}
+                        ) : null}
                         {r.notes && (
                           <div className="text-[11px] text-muted-foreground max-w-[28ch] truncate" title={r.notes}>
                             {r.notes}
