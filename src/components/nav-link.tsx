@@ -24,7 +24,7 @@ export function NavLink({
       href={href}
       className={cn(
         "flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-colors",
-        active ? "bg-secondary text-foreground font-medium" : "text-foreground/80 hover:bg-secondary/60"
+        active ? "bg-primary/10 text-primary font-medium" : "text-foreground/80 hover:bg-secondary/60"
       )}
     >
       {active && <span className="block w-1.5 h-1.5 rounded-full bg-primary" />}

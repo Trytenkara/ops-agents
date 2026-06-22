@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BookOpen, Settings as SettingsIcon } from "lucide-react";
 import { roleLabel, ROLE_CHIP } from "@/lib/roles";
 import type { SessionContext } from "@/lib/auth";
 import { hasAnyRole } from "@/lib/auth";
@@ -63,11 +64,6 @@ export function Shell({
               View all {orgs.length} clients →
             </Link>
           )}
-
-          <div className="pt-4">
-            <NavLink href="/guide" match="prefix">Operators Guide</NavLink>
-            <NavLink href="/settings" match="prefix">Settings</NavLink>
-          </div>
         </nav>
 
         <div className="mt-auto border-t border-border px-5 py-4 space-y-2">
@@ -87,7 +83,25 @@ export function Shell({
         </div>
       </aside>
 
-      <main className="flex-1 min-h-screen">
+      <main className="flex-1 min-h-screen relative">
+        <div className="absolute top-5 right-6 z-40 flex items-center gap-1">
+          <Link
+            href="/settings"
+            title="Settings"
+            aria-label="Settings"
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground hover:border-accent"
+          >
+            <SettingsIcon className="h-[18px] w-[18px]" />
+          </Link>
+          <Link
+            href="/guide"
+            title="Operators Guide"
+            aria-label="Operators Guide"
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-background text-primary shadow-sm transition-colors hover:bg-primary hover:text-primary-foreground hover:border-primary"
+          >
+            <BookOpen className="h-[18px] w-[18px]" />
+          </Link>
+        </div>
         <div className="px-10 py-8 max-w-6xl">{children}</div>
       </main>
     </div>

@@ -88,12 +88,12 @@ export default async function OrgOverview({ params }: { params: { slug: string }
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-        <Metric label="New leads" value={nudges.newLeads} note="to review" href={`${base}/leads`} />
-        <Metric label="Drafts to send" value={staged} note={`${reviewed} reviewed`} href={`${base}/threads`} />
-        <Metric label="Quotes to approve" value={quotesRes.count ?? 0} note="pending review" href={`${base}/materials`} />
-        <Metric label="Price changes" value={nudges.priceChanges} note="pending review" href={`${base}/price-index`} />
-        <Metric label="Open cases" value={casesRes.data?.length ?? 0} href={`${base}/cases`} />
-        <Metric label="Pending approvals" value={approvalsRes.data?.length ?? 0} href={`${base}/materials`} />
+        <Metric label="New leads" value={nudges.newLeads} note="to review" href={`${base}/leads`} tone="blue" />
+        <Metric label="Drafts to send" value={staged} note={`${reviewed} reviewed`} href={`${base}/threads`} tone="indigo" />
+        <Metric label="Quotes to approve" value={quotesRes.count ?? 0} note="pending review" href={`${base}/materials`} tone="amber" />
+        <Metric label="Price changes" value={nudges.priceChanges} note="pending review" href={`${base}/price-index`} tone="violet" />
+        <Metric label="Open cases" value={casesRes.data?.length ?? 0} href={`${base}/cases`} tone="red" />
+        <Metric label="Pending approvals" value={approvalsRes.data?.length ?? 0} href={`${base}/materials`} tone="emerald" />
       </div>
 
       <Card className="tb-surface shadow-none">
@@ -115,14 +115,26 @@ export default async function OrgOverview({ params }: { params: { slug: string }
   );
 }
 
-function Metric({ label, value, note, href }: { label: string; value: number; note?: string; href?: string }) {
+const METRIC_TONE: Record<string, { border: string; value: string }> = {
+  blue: { border: "border-l-blue-500", value: "text-blue-600 dark:text-blue-400" },
+  indigo: { border: "border-l-indigo-500", value: "text-indigo-600 dark:text-indigo-400" },
+  amber: { border: "border-l-amber-500", value: "text-amber-600 dark:text-amber-400" },
+  violet: { border: "border-l-violet-500", value: "text-violet-600 dark:text-violet-400" },
+  red: { border: "border-l-red-500", value: "text-red-600 dark:text-red-400" },
+  emerald: { border: "border-l-emerald-500", value: "text-emerald-600 dark:text-emerald-400" },
+};
+
+function Metric({ label, value, note, href, tone }: { label: string; value: number; note?: string; href?: string; tone?: string }) {
+  const t = (tone && METRIC_TONE[tone]) || null;
+  // Zero is a non-event — keep it muted; only color a value that needs attention.
+  const valueColor = value > 0 && t ? t.value : "text-foreground";
   const card = (
-    <Card className={`tb-surface shadow-none ${href ? "transition-colors hover:bg-secondary/40" : ""}`}>
+    <Card className={`tb-surface shadow-none border-l-4 ${t ? t.border : "border-l-transparent"} ${href ? "transition-colors hover:bg-secondary/40" : ""}`}>
       <CardHeader>
         <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground font-medium">{label}</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="font-serif text-4xl">{value}</div>
+        <div className={`font-serif text-4xl ${valueColor}`}>{value}</div>
         {note && <p className="text-xs text-muted-foreground mt-1">{note}</p>}
       </CardContent>
     </Card>

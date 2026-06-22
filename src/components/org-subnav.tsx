@@ -20,7 +20,7 @@ export function OrgSubnav({ base, sections }: { base: string; sections: { href: 
             href={href}
             className={cn(
               "px-3 py-1.5 rounded-md transition-colors",
-              active ? "bg-secondary text-foreground font-medium" : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+              active ? "bg-primary/10 text-primary font-medium" : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
             )}
           >
             {s.label}
