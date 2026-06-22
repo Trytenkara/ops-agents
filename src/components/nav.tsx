@@ -65,6 +65,7 @@ export function Shell({
           )}
 
           <div className="pt-4">
+            <NavLink href="/guide" match="prefix">Operators Guide</NavLink>
             <NavLink href="/settings" match="prefix">Settings</NavLink>
           </div>
         </nav>
