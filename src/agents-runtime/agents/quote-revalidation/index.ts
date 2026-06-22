@@ -10,6 +10,7 @@ import { createTenkaraConversation, coldOutboundEmailClient, tenkaraEmailAccount
 import { bodyToHtml } from "@/lib/email-style";
 import { lintDraft } from "../outreach-qa/lint";
 import { postQrSummary } from "./slack-notifier";
+import { getOrgOperatorPool, pickSupplierOperator } from "@/lib/operator-assignment";
 
 // Now runs daily (was weekly), so a quote that's expiring stays "overdue" for
 // days. Debounce: don't re-draft a quote we already drafted within this window,
@@ -319,6 +320,10 @@ registerAgent({
             const ooo = ops.primary_user?.status === "out_of_office";
             assignedOperator = ooo ? (ops.backup_user_id ?? ops.primary_user_id) : ops.primary_user_id;
           }
+          // Prefer the sticky-random operator owning this supplier for the org.
+          const pool = await getOrgOperatorPool(admin, (oaOrg as any).id).catch(() => []);
+          const sticky = pickSupplierOperator(pool, r.group.supplier_id)?.id;
+          if (sticky) assignedOperator = sticky;
         }
         const qaFindings = lintDraft({
           subject: r.subject ?? null,

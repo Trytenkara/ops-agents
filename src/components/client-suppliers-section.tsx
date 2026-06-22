@@ -28,7 +28,7 @@ function StatusBadge({ s }: { s: SupplierApproval }) {
   return <Badge variant={m.variant}>{m.label}</Badge>;
 }
 
-export function ClientSuppliersSection({ suppliers }: { suppliers: ClientSuppliers }) {
+export function ClientSuppliersSection({ suppliers, owners }: { suppliers: ClientSuppliers; owners?: Record<string, string> }) {
   const all: ClientSupplier[] = [
     ...suppliers.approved,
     ...suppliers.pending_review,
@@ -74,6 +74,7 @@ export function ClientSuppliersSection({ suppliers }: { suppliers: ClientSupplie
                 <TableRow>
                   <TableHead>Supplier</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Operator</TableHead>
                   <TableHead>Contact</TableHead>
                   <TableHead>Notes</TableHead>
                 </TableRow>
@@ -88,6 +89,9 @@ export function ClientSuppliersSection({ suppliers }: { suppliers: ClientSupplie
                       </span>
                     </TableCell>
                     <TableCell><StatusBadge s={s.approval} /></TableCell>
+                    <TableCell className="text-xs">
+                      {owners?.[s.id] ? <Badge variant="outline">{owners[s.id]}</Badge> : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
                     <TableCell className="text-muted-foreground text-xs">{s.poc_email ?? s.poc_name ?? "—"}</TableCell>
                     <TableCell className="text-muted-foreground text-xs max-w-xs truncate" title={s.approval_notes ?? undefined}>
                       {s.approval_notes ?? "—"}
@@ -96,7 +100,7 @@ export function ClientSuppliersSection({ suppliers }: { suppliers: ClientSupplie
                 ))}
                 {filtered.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-center text-muted-foreground py-8">No suppliers match.</TableCell>
+                    <TableCell colSpan={5} className="text-center text-muted-foreground py-8">No suppliers match.</TableCell>
                   </TableRow>
                 )}
               </TableBody>

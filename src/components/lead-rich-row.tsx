@@ -113,6 +113,11 @@ export function LeadRichRow({
             {[r.payload?.supplier_role, r.payload?.supplier_country].filter(Boolean).join(" · ")}
           </div>
         )}
+        {r.operator_name && (
+          <div className="text-[11px] text-muted-foreground" title="Operator who owns this supplier for this client">
+            Operator: <span className="text-foreground">{r.operator_name}</span>
+          </div>
+        )}
         {sourceUrl && (
           <a
             href={sourceUrl}

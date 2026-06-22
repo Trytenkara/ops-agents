@@ -1,5 +1,6 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getOrgOperatorPool, pickSupplierOperator, type OperatorRef } from "@/lib/operator-assignment";
 import { classifyClient } from "../quote-revalidation/config";
 import { runOutreachForLead } from "./run-outreach";
 import { suppliersWithPriorRelationship } from "@/lib/tenkara-relationships";
@@ -98,6 +99,12 @@ registerAgent({
       }
     }
 
+    // Operator pool per org — drafts get a sticky-random operator by supplier.
+    const poolByOrg = new Map<string, OperatorRef[]>();
+    for (const oid of orgIds) {
+      poolByOrg.set(oid, await getOrgOperatorPool(admin, oid).catch(() => []));
+    }
+
     // 3. Filter to leads we can actually draft for.
     type Candidate = {
       lead: (typeof leads)[number];
@@ -143,7 +150,9 @@ registerAgent({
         mode: cls.mode,
         ghostBrand: cls.ghostBrand,
         clientOrgName: org.name,
-        assignedOperator: org.primary_user_id,
+        // Sticky-random by supplier within the org; fall back to the org's primary.
+        assignedOperator:
+          pickSupplierOperator(poolByOrg.get(lead.org_id) ?? [], lead.supplier_id)?.id ?? org.primary_user_id,
       });
     }
 
