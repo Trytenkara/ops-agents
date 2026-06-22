@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // In-app Ops assistant: a launcher (sidebar footer) + a right-side drawer that
@@ -85,14 +86,18 @@ export function RunbookAssistant() {
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="flex w-full items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:underline"
-      >
-        <HelpGlyph className="h-3.5 w-3.5" />
-        Ask the assistant
-      </button>
+      {!open && (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          aria-label="Open the Ops assistant"
+          className="group fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full border border-primary/40 bg-primary/10 px-4 py-2.5 text-sm font-medium text-primary backdrop-blur-md shadow-[0_0_25px_-3px_hsl(var(--primary)/0.55)] transition-all hover:bg-primary/20 hover:shadow-[0_0_34px_-2px_hsl(var(--primary)/0.8)]"
+        >
+          <span className="absolute inset-0 -z-10 rounded-full bg-primary/20 blur-md animate-pulse" aria-hidden="true" />
+          <Sparkles className="h-4 w-4" />
+          Assistant
+        </button>
+      )}
 
       {open && (
         <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label="Ops assistant">
