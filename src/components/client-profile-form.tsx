@@ -260,7 +260,8 @@ function SettingsCard({ orgId, settings, canEdit, pending, run }: { orgId: strin
   const tier: ClientSettingsInput["priority_tier"] = settings?.priority_tier ?? "standard";
   const [contactName, setContactName] = useState(settings?.primary_contact_name ?? "");
   const [contactEmail, setContactEmail] = useState(settings?.primary_contact_email ?? "");
-  const [notes, setNotes] = useState(settings?.sourcing_notes ?? "");
+  // Sourcing notes are edited on the Materials tab now; preserve the stored value.
+  const notes = settings?.sourcing_notes ?? null;
 
   function collect(): ClientSettingsInput {
     return {
@@ -282,10 +283,6 @@ function SettingsCard({ orgId, settings, canEdit, pending, run }: { orgId: strin
         <Field label="Outreach mode"><Select value={mode} onValueChange={(v) => setMode(v as any)} options={MODE_OPTIONS} disabled={!canEdit || pending} ariaLabel="Outreach mode" /></Field>
         {mode === "ghost" && <Field label="Ghost brand"><Input value={ghostBrand} onChange={(e) => setGhostBrand(e.target.value)} disabled={!canEdit || pending} /></Field>}
       </div>
-      <Field label="Sourcing notes">
-        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} disabled={!canEdit || pending} rows={2}
-          className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50" />
-      </Field>
       {canEdit && <Button size="sm" variant="secondary" disabled={pending} onClick={() => run(() => saveClientSettings(orgId, collect()), "Settings saved.")}>Save settings</Button>}
     </Section>
   );

@@ -2,6 +2,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { notFound } from "next/navigation";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { ClientProfilePanel, type ProfileValue, type SettingsValue, type UploadItem } from "@/components/client-profile-form";
+import { ClientSuppliersSection } from "@/components/client-suppliers-section";
+import { getClientSuppliers } from "@/lib/client-suppliers";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
@@ -11,6 +13,8 @@ export default async function ClientProfilePage({ params }: { params: { slug: st
   const admin = createAdminClient();
   const { data: org } = await admin.from("orgs").select("id, slug, name, tenkara_org_id").eq("slug", params.slug).maybeSingle();
   if (!org) notFound();
+
+  const suppliers = await getClientSuppliers(org.tenkara_org_id ?? null);
 
   const [profileRes, settingsRes, uploadsRes] = await Promise.all([
     admin
@@ -65,6 +69,8 @@ export default async function ClientProfilePage({ params }: { params: { slug: st
         here for you to edit.
       </p>
       <ClientProfilePanel orgId={org.id} profile={profile} settings={settings} uploads={uploads} canEdit={canEdit} />
+
+      <ClientSuppliersSection suppliers={suppliers} />
 
       <Link
         href={`/work/orgs/${org.slug}/materials`}

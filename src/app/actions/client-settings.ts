@@ -54,6 +54,21 @@ export async function saveClientSettings(orgId: string, input: ClientSettingsInp
   return { ok: true };
 }
 
+// Save just the sourcing notes (edited from the Materials tab's PO area). Kept
+// separate so saving notes never clobbers the other client settings.
+export async function saveSourcingNotes(orgId: string, notes: string | null): Promise<Result> {
+  const auth = await requireEditor();
+  if (auth.error) return { ok: false, error: auth.error };
+  const admin = createAdminClient();
+  const { error } = await admin.from("client_settings").upsert(
+    { org_id: orgId, sourcing_notes: clean(notes), updated_at: new Date().toISOString() },
+    { onConflict: "org_id" }
+  );
+  if (error) return { ok: false, error: error.message };
+  revalidatePath(`/work/orgs`);
+  return { ok: true };
+}
+
 // Run the research generation for one client. force=true overrides a prior
 // manual edit (the explicit "Regenerate" path).
 export async function generateClientProfileAction(orgId: string, force = false): Promise<Result> {

@@ -12,6 +12,10 @@ import { Select, type SelectOption } from "@/components/ui/select";
 import type { MaterialProfile, MaterialProfileRow, OrderLineRow } from "@/lib/material-profile";
 import type { MaterialSourcingStatus } from "@/lib/material-sourcing-status";
 import { uploadAndParsePO, confirmOrder, deleteOrder, rematchOrders, editOrder } from "@/app/actions/material-profile";
+import { approveStagedQuote, dismissStagedQuote } from "@/app/actions/staged-quotes";
+import { saveSourcingNotes } from "@/app/actions/client-settings";
+import { TemplateDownloadButton } from "@/components/template-download-button";
+import { QUOTE_TEMPLATE_HEADERS, SUPPLIER_TEMPLATE_HEADERS } from "@/lib/tenkara-templates";
 
 function fmtQty(qty: number | null, unit: string | null): string {
   if (qty == null) return "—";
@@ -32,22 +36,39 @@ const FREQ_VARIANT: Record<string, "default" | "secondary"> = {
   "No data": "secondary",
 };
 
+export interface MaterialQuote {
+  id: string;
+  supplier_name: string | null;
+  price: number | null;
+  case_size: number | null;
+  unit_of_measurement: string | null;
+  unit_price: number | null;
+  status: string;
+  confidence: string | null;
+  created_at: string;
+}
+
 export function MaterialsPanel({
   orgId,
   slug,
   profile,
   canEdit,
   statuses,
+  quotesByMaterial,
+  sourcingNotes,
 }: {
   orgId: string;
   slug: string;
   profile: MaterialProfile;
   canEdit: boolean;
   statuses?: Record<string, MaterialSourcingStatus>;
+  quotesByMaterial?: Record<string, MaterialQuote[]>;
+  sourcingNotes?: string | null;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [notes, setNotes] = useState(sourcingNotes ?? "");
   const fileRef = useRef<HTMLInputElement>(null);
 
   function run(fn: () => Promise<{ ok: boolean; error?: string; parsed?: number }>, okText: string) {
@@ -95,6 +116,34 @@ export function MaterialsPanel({
             <Button size="sm" variant="secondary" className="ml-auto" disabled={pending} onClick={() => fileRef.current?.click()}>
               {pending ? "Working…" : "Upload PO"}
             </Button>
+            <div className="flex flex-col items-end gap-1 border-l border-border pl-3">
+              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Bulk upload templates</span>
+              <div className="flex gap-1">
+                <TemplateDownloadButton headers={QUOTE_TEMPLATE_HEADERS} filename="tenkara-quotes-template.csv" label="Quotes" />
+                <TemplateDownloadButton headers={SUPPLIER_TEMPLATE_HEADERS} filename="tenkara-suppliers-template.csv" label="Suppliers" />
+              </div>
+            </div>
+            <div className="w-full">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-1">Sourcing notes</div>
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                disabled={!canEdit || pending}
+                rows={2}
+                placeholder="Context for sourcing this client — preferred suppliers, constraints, supplier notes…"
+                className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
+              />
+              <div className="mt-1 flex justify-end">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={pending || notes === (sourcingNotes ?? "")}
+                  onClick={() => run(() => saveSourcingNotes(orgId, notes), "Notes saved")}
+                >
+                  Save notes
+                </Button>
+              </div>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -144,6 +193,7 @@ export function MaterialsPanel({
                     pending={pending}
                     run={run}
                     status={m.tenkaraMaterialId ? statuses?.[m.tenkaraMaterialId] : undefined}
+                    quotes={m.tenkaraMaterialId ? quotesByMaterial?.[m.tenkaraMaterialId] ?? [] : []}
                     base={`/work/orgs/${slug}`}
                   />
                 ))}
@@ -212,6 +262,7 @@ function MaterialRow({
   pending,
   run,
   status,
+  quotes,
   base,
 }: {
   m: MaterialProfileRow;
@@ -219,17 +270,20 @@ function MaterialRow({
   pending: boolean;
   run: (fn: () => Promise<{ ok: boolean; error?: string; parsed?: number }>, okText: string) => void;
   status?: MaterialSourcingStatus;
+  quotes: MaterialQuote[];
   base: string;
 }) {
   const [open, setOpen] = useState(false);
   const rec = m.recommendedShelfLifeMonths;
+  const expandable = m.orders.length > 0 || quotes.length > 0;
+  const detailCount = quotes.length + m.orders.length;
 
   return (
     <>
-      <TableRow className="cursor-pointer" onClick={() => m.orders.length > 0 && setOpen((o) => !o)}>
+      <TableRow className={expandable ? "cursor-pointer" : ""} onClick={() => expandable && setOpen((o) => !o)}>
         <TableCell className="font-medium">
           {m.label}
-          {m.orders.length > 0 && <span className="ml-2 text-xs text-muted-foreground">{open ? "▾" : "▸"} {m.orders.length}</span>}
+          {expandable && <span className="ml-2 text-xs text-muted-foreground">{open ? "▾" : "▸"} {detailCount}</span>}
         </TableCell>
         <TableCell>{m.grade ? <Badge variant="secondary">{m.grade}</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
         <TableCell><SourcingChip status={status} base={base} /></TableCell>
@@ -246,14 +300,92 @@ function MaterialRow({
           )}
         </TableCell>
       </TableRow>
-      {open && m.orders.length > 0 && (
+      {open && expandable && (
         <TableRow>
           <TableCell colSpan={8} className="bg-secondary/20">
-            <OrderList orders={m.orders} canEdit={canEdit} pending={pending} run={run} />
+            <div className="space-y-4 py-1">
+              <div>
+                <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-1">
+                  Quotes <span className="text-foreground">· {quotes.length}</span>
+                </div>
+                {quotes.length > 0 ? (
+                  <QuoteList quotes={quotes} canEdit={canEdit} pending={pending} run={run} />
+                ) : (
+                  <p className="text-xs text-muted-foreground">No collected quotes yet.</p>
+                )}
+              </div>
+              {m.orders.length > 0 && (
+                <div>
+                  <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-1">
+                    Orders &amp; uploads <span className="text-foreground">· {m.orders.length}</span>
+                  </div>
+                  <OrderList orders={m.orders} canEdit={canEdit} pending={pending} run={run} />
+                </div>
+              )}
+            </div>
           </TableCell>
         </TableRow>
       )}
     </>
+  );
+}
+
+function QuoteStatusBadge({ status }: { status: string }) {
+  const v =
+    status === "approved" ? "success" : status === "dismissed" ? "secondary" : status === "pending_review" ? "warn" : "secondary";
+  const label = status === "pending_review" ? "pending" : status;
+  return <Badge variant={v as any}>{label}</Badge>;
+}
+
+function QuoteList({
+  quotes,
+  canEdit,
+  pending,
+  run,
+}: {
+  quotes: MaterialQuote[];
+  canEdit: boolean;
+  pending: boolean;
+  run: (fn: () => Promise<{ ok: boolean; error?: string; parsed?: number }>, okText: string) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      {quotes.map((q) => {
+        const perUnit = q.unit_price != null ? q.unit_price : q.price != null && q.case_size ? q.price / q.case_size : null;
+        return (
+          <div key={q.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+            <QuoteStatusBadge status={q.status} />
+            <span className="font-medium">{q.supplier_name ?? "—"}</span>
+            {perUnit != null && (
+              <span className="tabular-nums">
+                ${perUnit.toLocaleString(undefined, { maximumFractionDigits: 4 })}
+                {q.unit_of_measurement ? `/${q.unit_of_measurement}` : ""}
+              </span>
+            )}
+            {q.price != null && <span className="text-muted-foreground">${q.price} / {q.case_size ?? "?"} {q.unit_of_measurement ?? ""}</span>}
+            {q.confidence && <span className="text-muted-foreground">conf {q.confidence}</span>}
+            {canEdit && q.status === "pending_review" && (
+              <span className="ml-auto flex items-center gap-3">
+                <button
+                  className="text-green-700 hover:underline disabled:opacity-50"
+                  disabled={pending}
+                  onClick={() => run(() => approveStagedQuote(q.id), "Quote approved")}
+                >
+                  approve
+                </button>
+                <button
+                  className="text-red-600 hover:underline disabled:opacity-50"
+                  disabled={pending}
+                  onClick={() => run(() => dismissStagedQuote(q.id), "Quote dismissed")}
+                >
+                  dismiss
+                </button>
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

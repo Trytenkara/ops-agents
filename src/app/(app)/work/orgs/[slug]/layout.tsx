@@ -13,11 +13,9 @@ const sections = [
   { href: "/materials", label: "Materials" },
   { href: "/leads", label: "Leads" },
   { href: "/threads", label: "Threads" },
-  { href: "/quotes", label: "Quotes" },
   { href: "/price-index", label: "Live Price Index" },
   { href: "/savings", label: "Savings" },
   { href: "/cases", label: "Cases" },
-  { href: "/approvals", label: "Approvals" },
 ];
 
 export default async function OrgLayout({
