@@ -86,10 +86,10 @@ export function ClientProfilePanel({
 
   return (
     <div className="space-y-6">
-      <ProfileCard orgId={orgId} profile={profile} canEdit={canEdit} pending={pending} run={run} />
-      <RepSheetCard orgId={orgId} profile={profile} canEdit={canEdit} pending={pending} run={run} />
-      <UploadsCard orgId={orgId} uploads={uploads} canEdit={canEdit} pending={pending} run={run} />
       <SettingsCard orgId={orgId} settings={settings} canEdit={canEdit} pending={pending} run={run} />
+      <RepSheetCard orgId={orgId} profile={profile} canEdit={canEdit} pending={pending} run={run} />
+      <ProfileCard orgId={orgId} profile={profile} canEdit={canEdit} pending={pending} run={run} />
+      <UploadsCard orgId={orgId} uploads={uploads} canEdit={canEdit} pending={pending} run={run} />
       {msg && <p className={msg.kind === "ok" ? "text-sm text-emerald-700" : "text-sm text-red-700"}>{msg.text}</p>}
     </div>
   );
@@ -159,7 +159,7 @@ function ProfileCard({ orgId, profile, canEdit, pending, run }: { orgId: string;
   const generated = !!profile?.last_generated_at;
   return (
     <Section
-      title="Client profile"
+      title="Client summary"
       action={
         <div className="flex items-center gap-2">
           {profile?.client_type && <Badge variant={TYPE_VARIANT[profile.client_type] ?? "secondary"}>{profile.client_type}</Badge>}
@@ -275,8 +275,8 @@ function SettingsCard({ orgId, settings, canEdit, pending, run }: { orgId: strin
   }
 
   return (
-    <Section title="Client settings (optional inputs)">
-      <p className="text-xs text-muted-foreground -mt-1">Anything you enter here feeds the next profile generation.</p>
+    <Section title="Client contact">
+      <p className="text-xs text-muted-foreground -mt-1">Primary purchasing contact and outreach mode for this client.</p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <Field label="Priority contact"><Input value={contactName} onChange={(e) => setContactName(e.target.value)} disabled={!canEdit || pending} placeholder="—" /></Field>
         <Field label="Purchasing email"><Input type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} disabled={!canEdit || pending} placeholder="—" /></Field>

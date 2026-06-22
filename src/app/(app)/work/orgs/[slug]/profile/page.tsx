@@ -65,12 +65,12 @@ export default async function ClientProfilePage({ params }: { params: { slug: st
   return (
     <div className="space-y-6">
       <p className="text-sm text-muted-foreground">
-        Who this client is — researched from the web plus their Tenkara data, your settings, and uploads, and summarized
-        here for you to edit.
+        Contact, rep sheet, and a researched summary of this client — pulled from their Tenkara data, your settings, and
+        uploads, and editable here.
       </p>
       <ClientProfilePanel orgId={org.id} profile={profile} settings={settings} uploads={uploads} canEdit={canEdit} />
 
-      <ClientSuppliersSection suppliers={suppliers} />
+      <ClientSuppliersSection suppliers={suppliers} slug={org.slug} />
 
       <Link
         href={`/work/orgs/${org.slug}/materials`}
