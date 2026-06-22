@@ -14,6 +14,8 @@ export interface SavingsLine {
   grade: string | null;
   unit: string;
   their_unit_price: number;
+  // false => no client current-supply price; their_unit_price is the market average.
+  has_client_price: boolean;
   best_unit_price: number;
   recommended_supplier_id: string | null;
   recommended_supplier_name: string | null;
@@ -43,6 +45,7 @@ function toLine(b: ClientBenchmark): SavingsLine {
     grade: b.grade,
     unit: b.unit,
     their_unit_price: b.client_unit_price,
+    has_client_price: b.has_client_price,
     best_unit_price: b.min_unit_price,
     recommended_supplier_id: b.cheapest_supplier_id,
     recommended_supplier_name: b.cheapest_supplier_name,

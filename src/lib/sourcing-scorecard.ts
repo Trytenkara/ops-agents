@@ -76,12 +76,14 @@ export async function buildSourcingScorecard(
   const rows = (data ?? []) as StagedQuoteRow[];
 
   // Benchmark map: client's current price + market avg, keyed by material+unit.
-  const benchByKey = new Map<string, { client: number; avg: number }>();
+  // When the client has no current-supply price, keep client=null so the line
+  // stays "no baseline" and is judged against the market average instead.
+  const benchByKey = new Map<string, { client: number | null; avg: number }>();
   if (tenkaraOrgId) {
     const bench = await getClientBenchmark(tenkaraOrgId).catch(() => []);
     for (const b of bench) {
       benchByKey.set(`${b.material_id}|${b.unit}`, {
-        client: b.client_unit_price,
+        client: b.has_client_price ? b.client_unit_price : null,
         avg: b.avg_unit_price,
       });
     }

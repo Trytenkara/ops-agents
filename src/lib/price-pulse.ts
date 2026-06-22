@@ -142,9 +142,13 @@ export async function getPricePulse(opts?: {
 }
 
 export interface ClientBenchmark extends PricePulseStat {
-  // The client's currently-accepted price = their cheapest APPROVED quote for
-  // this material/unit. This is "their price" in the savings story.
+  // The client's "currently supply $" = their material's current_quote. When the
+  // client hasn't entered a current price, this falls back to the market average
+  // (see has_client_price) so the material still benchmarks instead of dropping.
   client_unit_price: number;
+  // false when there's no client current-supply price and we benchmarked against
+  // the market average instead.
+  has_client_price: boolean;
   // Where the client's price sits in the spread (0 = at min, 1 = at max).
   percentile: number;
   // Positive => client is paying above the market average.
@@ -164,43 +168,47 @@ export async function getClientBenchmark(
   const pulseByKey = new Map<string, PricePulseStat>();
   for (const p of pulse) pulseByKey.set(`${p.material_id}|${p.unit}`, p);
 
-  // The client's accepted (approved) price per material/unit.
+  // The client's "currently supply $" — the price they entered when adding the
+  // material, stored as the material's current_quote. This is the sourcing
+  // benchmark baseline (NOT the cheapest approved quote, which could be a price
+  // we sourced). One current_quote per material, so no aggregation.
   const approved = await tenkaraQuery<{
     material_id: string;
     unit: string;
     client_unit_price: number;
   }>(
     `
-    select mq.material_id,
-           lower(coalesce(nullif(trim(mq.unit_of_measurement), ''), '?')) as unit,
-           min(mq.price / nullif(mq.case_size, 0))::double precision as client_unit_price
-      from public.material_quotes mq
-      join public.materials m on m.id = mq.material_id
+    select m.id::text as material_id,
+           lower(coalesce(nullif(trim(cq.unit_of_measurement), ''), '?')) as unit,
+           (cq.price / nullif(cq.case_size, 0))::double precision as client_unit_price
+      from public.materials m
+      join public.material_quotes cq on cq.id = m.current_quote_id
       left join public.users u on u.id = m.user_id
      where u.organization_id = $1::uuid
-       and mq.approval::text = 'approved'
-       and mq.replaced_quote_id is null
-       and mq.price is not null and mq.price > 0
-       and mq.case_size is not null and mq.case_size > 0
-       and coalesce(mq.sample_status::text, '') <> 'sample'
-     group by mq.material_id, unit
+       and cq.price is not null and cq.price > 0
+       and cq.case_size is not null and cq.case_size > 0
     `,
     [tenkaraOrgId]
   );
 
+  const currentByKey = new Map<string, number>();
+  for (const a of approved) currentByKey.set(`${a.material_id}|${a.unit}`, a.client_unit_price);
+
+  // Iterate every material with market stats so a material still appears even
+  // when the client hasn't entered a current-supply price — in that case we
+  // benchmark against the market average instead of dropping it.
   const out: ClientBenchmark[] = [];
-  for (const a of approved) {
-    const stat = pulseByKey.get(`${a.material_id}|${a.unit}`);
-    if (!stat) continue;
+  for (const stat of pulse) {
+    const current = currentByKey.get(`${stat.material_id}|${stat.unit}`);
+    const hasClient = current != null;
+    const clientPrice = hasClient ? current! : stat.avg_unit_price;
     const span = stat.max_unit_price - stat.min_unit_price;
-    const percentile = span <= 0 ? 0 : (a.client_unit_price - stat.min_unit_price) / span;
+    const percentile = span <= 0 ? 0 : (clientPrice - stat.min_unit_price) / span;
     const vs_avg_pct =
-      stat.avg_unit_price > 0
-        ? ((a.client_unit_price - stat.avg_unit_price) / stat.avg_unit_price) * 100
-        : 0;
+      stat.avg_unit_price > 0 ? ((clientPrice - stat.avg_unit_price) / stat.avg_unit_price) * 100 : 0;
     const position: ClientBenchmark["position"] =
       vs_avg_pct > 5 ? "above_market" : vs_avg_pct < -5 ? "below_market" : "at_market";
-    out.push({ ...stat, client_unit_price: a.client_unit_price, percentile, vs_avg_pct, position });
+    out.push({ ...stat, client_unit_price: clientPrice, has_client_price: hasClient, percentile, vs_avg_pct, position });
   }
   out.sort((x, y) => y.vs_avg_pct - x.vs_avg_pct);
   return out;

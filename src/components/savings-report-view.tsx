@@ -92,12 +92,15 @@ export function SavingsReportView({
               <div className="grid grid-cols-1 gap-px bg-border sm:grid-cols-2">
                 <div className="bg-background px-5 py-4">
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    Your current source
+                    {l.has_client_price ? "Your current source" : "Market average"}
                   </div>
                   <div className="mt-2 text-2xl font-semibold tabular-nums text-red-600 dark:text-red-400">
                     {money(l.their_unit_price)}
                     <span className="text-sm font-normal text-muted-foreground">/{l.unit}</span>
                   </div>
+                  {!l.has_client_price && (
+                    <div className="mt-1 text-[11px] text-muted-foreground">No client price on file — using market average</div>
+                  )}
                 </div>
                 <div className="border-l-2 border-emerald-500/40 bg-background px-5 py-4">
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">

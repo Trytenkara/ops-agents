@@ -186,7 +186,14 @@ export function SavingsWorksheet({
                     )}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{l.unit}</TableCell>
-                  <TableCell className="text-right tabular-nums">{money(l.their_unit_price)}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {money(l.their_unit_price)}
+                    {!l.has_client_price && (
+                      <span className="ml-1 text-[10px] text-muted-foreground" title="No client current-supply price on file — benchmarked against the market average.">
+                        mkt avg
+                      </span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-right tabular-nums">{money(l.best_unit_price)}</TableCell>
                   <TableCell className={"text-right tabular-nums " + (hasSaving ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>
                     {hasSaving ? money(l.savings_per_unit) : "—"}
