@@ -11,6 +11,7 @@ const sections = [
   { href: "", label: "Overview" },
   { href: "/profile", label: "Client Profile" },
   { href: "/materials", label: "Materials" },
+  { href: "/suppliers", label: "Suppliers" },
   { href: "/leads", label: "Leads" },
   { href: "/threads", label: "Threads" },
   { href: "/price-index", label: "Live Price Index" },
