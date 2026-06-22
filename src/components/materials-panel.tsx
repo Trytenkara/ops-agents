@@ -143,6 +143,19 @@ export function MaterialsPanel({
         <p className={msg.kind === "ok" ? "text-xs text-green-700" : "text-xs text-red-600"}>{msg.text}</p>
       )}
 
+      {(() => {
+        const missing = profile.materials.filter((m) => !m.grade);
+        if (missing.length === 0) return null;
+        return (
+          <div className="rounded-lg border border-amber-300/60 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
+            <span className="font-medium">{missing.length} material{missing.length === 1 ? "" : "s"} need a grade.</span>{" "}
+            Specify the grade/form (e.g. HCl, base, USP) on{" "}
+            {missing.slice(0, 4).map((m) => m.label).join(", ")}
+            {missing.length > 4 ? `, +${missing.length - 4} more` : ""} so sourcing matches the right product.
+          </div>
+        );
+      })()}
+
       {!profile.tenkaraConnected ? (
         <Card className="tb-surface shadow-none">
           <CardContent className="py-8 text-center">
@@ -272,7 +285,15 @@ function MaterialRow({
           {m.label}
           {expandable && <span className="ml-2 text-xs text-muted-foreground">{open ? "▾" : "▸"} {detailCount}</span>}
         </TableCell>
-        <TableCell>{m.grade ? <Badge variant="secondary">{m.grade}</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
+        <TableCell>
+          {m.grade ? (
+            <Badge variant="secondary">{m.grade}</Badge>
+          ) : (
+            <Badge variant="warn" title="No grade/form set. Specify the grade (e.g. HCl, base, USP) so sourcing matches the right product — a name alone (e.g. “GBB”) can map to several forms.">
+              Needs grade
+            </Badge>
+          )}
+        </TableCell>
         <TableCell><SourcingChip status={status} base={base} /></TableCell>
         <TableCell>{m.annualVolume != null ? `${m.annualVolume.toLocaleString()}${m.volumeUnit ? ` ${m.volumeUnit}` : ""}/yr` : "—"}</TableCell>
         <TableCell>

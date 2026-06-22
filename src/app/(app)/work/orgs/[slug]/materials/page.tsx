@@ -50,7 +50,7 @@ export default async function OrgMaterialsPage({ params }: { params: { slug: str
 
       <Link
         href={`/work/orgs/${org.slug}/suppliers`}
-        className="group flex items-center justify-between rounded-lg border border-border bg-background px-4 py-3 hover:bg-secondary/60 transition-colors"
+        className="group flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3 hover:bg-secondary/60 transition-colors"
       >
         <div>
           <div className="font-medium">Next: Suppliers</div>

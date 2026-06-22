@@ -90,7 +90,7 @@ export function ClientSuppliersSection({ suppliers, owners }: { suppliers: Clien
                     </TableCell>
                     <TableCell><StatusBadge s={s.approval} /></TableCell>
                     <TableCell className="text-xs">
-                      {owners?.[s.id] ? <Badge variant="outline">{owners[s.id]}</Badge> : <span className="text-muted-foreground">—</span>}
+                      {owners?.[s.id] ? <Badge variant="outline">{owners[s.id]}</Badge> : <span className="italic text-muted-foreground">Unassigned</span>}
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs">{s.poc_email ?? s.poc_name ?? "—"}</TableCell>
                     <TableCell className="text-muted-foreground text-xs max-w-xs truncate" title={s.approval_notes ?? undefined}>

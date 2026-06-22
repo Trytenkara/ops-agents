@@ -102,7 +102,7 @@ type RunFn = (fn: () => Promise<{ ok: boolean; error?: string }>, okText: string
 
 function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-border p-4 space-y-3">
+    <div className="rounded-lg border border-border bg-card p-4 space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="text-sm uppercase tracking-wider text-muted-foreground font-medium">{title}</h3>
         {action}

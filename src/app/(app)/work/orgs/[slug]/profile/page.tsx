@@ -67,7 +67,7 @@ export default async function ClientProfilePage({ params }: { params: { slug: st
 
       <Link
         href={`/work/orgs/${org.slug}/materials`}
-        className="group flex items-center justify-between rounded-lg border border-border bg-background px-4 py-3 hover:bg-secondary/60 transition-colors"
+        className="group flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3 hover:bg-secondary/60 transition-colors"
       >
         <div>
           <div className="font-medium">Next: Materials &amp; sourcing</div>
