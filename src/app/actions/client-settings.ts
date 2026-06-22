@@ -2,6 +2,7 @@
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateClientProfile } from "@/lib/client-profile";
+import { extractDocumentText } from "@/lib/po-parse";
 import { revalidatePath } from "next/cache";
 
 interface Result { ok: boolean; error?: string }
@@ -127,11 +128,10 @@ export async function uploadClientFile(orgId: string, form: FormData): Promise<R
   if (auth.error) return { ok: false, error: auth.error };
   const file = form.get("file");
   if (!(file instanceof File) || file.size === 0) return { ok: false, error: "no file" };
-  if (file.size > 5 * 1024 * 1024) return { ok: false, error: "file too large (max 5MB)" };
+  if (file.size > 10 * 1024 * 1024) return { ok: false, error: "file too large (max 10MB)" };
 
   const admin = createAdminClient();
   const bytes = Buffer.from(await file.arrayBuffer());
-  const isText = /^text\/|markdown|json|csv/.test(file.type) || /\.(txt|md|markdown|csv|json)$/i.test(file.name);
   const path = `${orgId}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
 
   const up = await admin.storage.from(UPLOAD_BUCKET).upload(path, bytes, {
@@ -140,12 +140,16 @@ export async function uploadClientFile(orgId: string, form: FormData): Promise<R
   });
   if (up.error) return { ok: false, error: `upload failed: ${up.error.message}` };
 
+  // Parse the document to text (xlsx/csv/text read directly, PDFs transcribed)
+  // so its contents feed the client summary. null = unreadable, stored only.
+  const content_text = await extractDocumentText({ bytes, mimeType: file.type, fileName: file.name });
+
   const { error } = await admin.from("client_uploads").insert({
     org_id: orgId,
     kind: "file",
     file_path: path,
     file_name: file.name,
-    content_text: isText ? bytes.toString("utf8").slice(0, 20000) : null,
+    content_text,
     created_by: auth.session!.userId,
   });
   if (error) return { ok: false, error: error.message };

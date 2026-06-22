@@ -219,12 +219,12 @@ function UploadsCard({ orgId, slug, uploads, canEdit, pending, run }: { orgId: s
   const fileRef = useRef<HTMLInputElement>(null);
 
   return (
-    <Section title="Reference docs & notes">
+    <Section title="Documents & notes">
       <p className="text-xs text-muted-foreground -mt-1">
-        Background context that feeds the AI client summary above. Notes and text/CSV/Markdown files are read; PDFs and
-        spreadsheets are stored for reference only — their contents aren&apos;t parsed.{" "}
+        Add client info through documentation. Upload any document — PDF, Excel, CSV, or text — and its contents are
+        parsed and folded into the AI client summary above. You can also paste a quick note.{" "}
         <Link href={`/work/orgs/${slug}/materials`} className="text-primary hover:underline">
-          To turn purchasing history into orders &amp; materials, use Upload a PO on the Materials tab.
+          For purchasing history that should become orders &amp; materials, use Upload a PO on the Materials tab.
         </Link>
       </p>
       {uploads.length > 0 ? (
@@ -255,7 +255,7 @@ function UploadsCard({ orgId, slug, uploads, canEdit, pending, run }: { orgId: s
                 if (fileRef.current) fileRef.current.value = "";
               }} />
             <Button size="sm" variant="secondary" disabled={pending} onClick={() => fileRef.current?.click()}>Upload file</Button>
-            <span className="text-xs text-muted-foreground">Text/CSV/Markdown is read into the summary; PDFs &amp; spreadsheets are stored only</span>
+            <span className="text-xs text-muted-foreground">PDF, Excel, CSV &amp; text are parsed into the summary</span>
           </div>
         </div>
       )}

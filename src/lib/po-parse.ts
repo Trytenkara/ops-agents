@@ -198,3 +198,60 @@ export async function parsePoDocument(opts: {
   );
   return perChunk.flat();
 }
+
+const DOC_TEXT_MAX = 20000;
+const DOC_TRANSCRIBE_PROMPT =
+  "Transcribe the information in this client document as concise plain text. Capture company details, " +
+  "contacts, products, materials, volumes, pricing, terms, and anything relevant to sourcing for this client. " +
+  "Be factual — do not invent or infer anything that isn't present.";
+
+function isTextLike(mimeType: string, fileName: string): boolean {
+  return /^text\/|markdown|json|csv/.test(mimeType) || /\.(txt|md|markdown|csv|tsv|json)$/i.test(fileName);
+}
+
+// General document → plain text, for feeding the client summary. Spreadsheets
+// are flattened to CSV, text files read directly, and PDFs transcribed by the
+// model. Returns null for formats we can't read (e.g. images) — callers store
+// those for reference only. Never throws; logs and returns null on failure.
+export async function extractDocumentText(opts: {
+  bytes: Buffer;
+  mimeType: string;
+  fileName: string;
+}): Promise<string | null> {
+  const { bytes, mimeType, fileName } = opts;
+  try {
+    if (isXlsx(mimeType, fileName) || /\.xls$/i.test(fileName)) {
+      const t = (await xlsxToText(bytes)).trim();
+      return t ? t.slice(0, DOC_TEXT_MAX) : null;
+    }
+    if (isTextLike(mimeType, fileName)) {
+      const t = bytes.toString("utf8").trim();
+      return t ? t.slice(0, DOC_TEXT_MAX) : null;
+    }
+    if (isPdf(mimeType, fileName)) {
+      const resp = await anthropic().messages.create({
+        model: MODEL,
+        max_tokens: 4000,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "document", source: { type: "base64", media_type: "application/pdf", data: bytes.toString("base64") } },
+              { type: "text", text: DOC_TRANSCRIBE_PROMPT },
+            ],
+          },
+        ],
+      });
+      const t = resp.content
+        .filter((b): b is Anthropic.TextBlock => b.type === "text")
+        .map((b) => b.text)
+        .join("\n")
+        .trim();
+      return t ? t.slice(0, DOC_TEXT_MAX) : null;
+    }
+    return null;
+  } catch (e) {
+    console.error("[extractDocumentText] failed:", e);
+    return null;
+  }
+}
