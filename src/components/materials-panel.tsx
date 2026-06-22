@@ -157,11 +157,8 @@ export function MaterialsPanel({
           </CardContent>
         </Card>
       ) : (
-        <Card className="tb-surface shadow-none">
-          <CardHeader>
-            <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Materials</CardTitle>
-          </CardHeader>
-          <CardContent>
+        <div className="space-y-3">
+          <h3 className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Materials</h3>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -190,8 +187,7 @@ export function MaterialsPanel({
                 ))}
               </TableBody>
             </Table>
-          </CardContent>
-        </Card>
+        </div>
       )}
 
       {profile.unmatchedOrders.length > 0 && (

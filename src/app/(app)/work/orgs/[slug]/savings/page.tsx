@@ -51,9 +51,15 @@ export default async function OrgSavingsPage({
     const attributes = await loadMaterialAttributes(org.id);
     return (
       <div className="space-y-6">
-        <div className="flex flex-wrap items-center gap-3">
-          <ViewToggle slug={org.slug} view={view} />
-          <ReportTypeToggle slug={org.slug} type={reportType} />
+        <div className="space-y-3">
+          <div>
+            <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">View</div>
+            <ViewToggle slug={org.slug} view={view} />
+          </div>
+          <div>
+            <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">Report type</div>
+            <ReportTypeToggle slug={org.slug} type={reportType} />
+          </div>
         </div>
         <SavingsReportInteractive
           report={report}

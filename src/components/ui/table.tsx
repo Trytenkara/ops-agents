@@ -1,10 +1,14 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
+// Every table gets the same framed-card treatment (ivory surface, crisp border,
+// consistent radius) so all tables across the platform read as one system.
 const Table = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableElement>>(
   ({ className, ...props }, ref) => (
-    <div className="relative w-full overflow-auto">
-      <table ref={ref} className={cn("w-full caption-bottom text-sm", className)} {...props} />
+    <div className="overflow-hidden rounded-lg border border-border bg-card">
+      <div className="relative w-full overflow-x-auto">
+        <table ref={ref} className={cn("w-full caption-bottom text-sm", className)} {...props} />
+      </div>
     </div>
   )
 );

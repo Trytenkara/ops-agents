@@ -1,3 +1,4 @@
+import { Greeting } from "@/components/greeting";
 import { getSession } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { roleLabel } from "@/lib/roles";
@@ -56,8 +57,6 @@ export default async function HomePage() {
     .map((r) => ({ ...r, oldestDays: Math.floor((now - r._oldest) / 86_400_000) }))
     .sort((a, b) => b.total - a.total);
 
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const firstName = session.displayName?.split(" ")[0] ?? null;
   const primaryRoleLabel = session.roles.length ? roleLabel(session.roles[0]) : "Operator";
   const scopeLabel = seesAllOrgs(session) ? "all clients" : `${orgIds?.length ?? 0} client${(orgIds?.length ?? 0) === 1 ? "" : "s"}`;
@@ -66,7 +65,7 @@ export default async function HomePage() {
     <div className="space-y-8 max-w-6xl">
       <header>
         <h1 className="font-serif text-4xl tracking-tight">
-          {greeting}{firstName ? `, ${firstName}` : ""}
+          <Greeting firstName={firstName} />
         </h1>
         <p className="text-sm text-muted-foreground mt-2">Work waiting across your clients.</p>
         <p className="text-xs text-muted-foreground mt-1">

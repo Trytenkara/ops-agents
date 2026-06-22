@@ -49,7 +49,7 @@ export function ClientSuppliersSection({ suppliers, owners }: { suppliers: Clien
   });
 
   return (
-    <div className="rounded-lg border border-border p-4 space-y-3">
+    <div className="space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Client suppliers</h3>
         <span className="text-xs text-muted-foreground">

@@ -1,3 +1,4 @@
+import { Greeting } from "@/components/greeting";
 import Link from "next/link";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -57,8 +58,6 @@ export default async function TodayInboxPage() {
     // If Tenkara is unreachable, fall back to UUIDs rather than failing the page.
   }
 
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const firstName = session.displayName?.split(" ")[0] ?? null;
 
   // Role + org scope line so an operator immediately knows what they're seeing.
@@ -72,7 +71,7 @@ export default async function TodayInboxPage() {
     <div className="space-y-8 max-w-6xl">
       <header>
         <h1 className="font-serif text-4xl tracking-tight">
-          {greeting}{firstName ? `, ${firstName}` : ""}
+          <Greeting firstName={firstName} />
         </h1>
         <p className="text-sm text-muted-foreground mt-2">
           {isAccountManager
@@ -89,43 +88,32 @@ export default async function TodayInboxPage() {
         See <a href="/how-it-works" className="underline hover:text-foreground">How Tackle Box works</a> for the full pipeline.
       </PageExplainer>
 
-      <Card className="tb-surface shadow-none">
-        <CardHeader>
-          <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">My assigned items <span className="ml-1 text-foreground">· {assignedDrafts?.length ?? 0}</span></CardTitle>
-        </CardHeader>
-        <CardContent>
-          {assignedDrafts && assignedDrafts.length > 0 ? (
-            <DraftTable rows={assignedDrafts as any} supplierNames={supplierNames} materialNames={materialNames} />
-          ) : (
-            <p className="text-sm text-muted-foreground">Nothing assigned to you right now. Pick up an unassigned item below.</p>
-          )}
-        </CardContent>
-      </Card>
+      <section className="space-y-3">
+        <h3 className="text-sm uppercase tracking-wider text-muted-foreground font-medium">My assigned items <span className="ml-1 text-foreground">· {assignedDrafts?.length ?? 0}</span></h3>
+        {assignedDrafts && assignedDrafts.length > 0 ? (
+          <DraftTable rows={assignedDrafts as any} supplierNames={supplierNames} materialNames={materialNames} />
+        ) : (
+          <p className="text-sm text-muted-foreground">Nothing assigned to you right now. Pick up an unassigned item below.</p>
+        )}
+      </section>
 
-      <Card className="tb-surface shadow-none">
-        <CardHeader>
-          <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Unassigned <span className="ml-1 text-foreground">· {unassignedDrafts?.length ?? 0}</span></CardTitle>
-        </CardHeader>
-        <CardContent>
-          {unassignedDrafts && unassignedDrafts.length > 0 ? (
-            <DraftTable rows={unassignedDrafts as any} supplierNames={supplierNames} materialNames={materialNames} />
-          ) : (
-            <p className="text-sm text-muted-foreground">Inbox zero — nothing waiting for pickup.</p>
-          )}
-          {!isAccountManager && (
-            <Link href="/work/review/leads" className="mt-3 inline-block text-sm text-primary hover:underline">
-              Browse the Review queue →
-            </Link>
-          )}
-        </CardContent>
-      </Card>
+      <section className="space-y-3">
+        <h3 className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Unassigned <span className="ml-1 text-foreground">· {unassignedDrafts?.length ?? 0}</span></h3>
+        {unassignedDrafts && unassignedDrafts.length > 0 ? (
+          <DraftTable rows={unassignedDrafts as any} supplierNames={supplierNames} materialNames={materialNames} />
+        ) : (
+          <p className="text-sm text-muted-foreground">Inbox zero — nothing waiting for pickup.</p>
+        )}
+        {!isAccountManager && (
+          <Link href="/work/review/leads" className="mt-3 inline-block text-sm text-primary hover:underline">
+            Browse the Review queue →
+          </Link>
+        )}
+      </section>
 
       {hasAnyRole(session, ["admin","monitor"]) && (
-        <Card className="tb-surface shadow-none">
-          <CardHeader>
-            <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Recent agent failures</CardTitle>
-          </CardHeader>
-          <CardContent>
+        <section className="space-y-3">
+          <h3 className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Recent agent failures</h3>
             {recentFailures && recentFailures.length > 0 ? (
               <Table>
                 <TableHeader>
@@ -148,8 +136,7 @@ export default async function TodayInboxPage() {
             ) : (
               <p className="text-sm text-muted-foreground">No recent failures.</p>
             )}
-          </CardContent>
-        </Card>
+        </section>
       )}
     </div>
   );

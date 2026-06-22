@@ -76,19 +76,19 @@ export function HomeBoard({ counts, rows }: { counts: Record<WorkType, number>; 
         })}
       </div>
 
-      <Card className="tb-surface shadow-none">
-        <CardHeader className="flex-row items-center justify-between space-y-0">
-          <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">
+      <div className="space-y-3">
+        <div className="flex flex-row items-center justify-between">
+          <h3 className="text-sm uppercase tracking-wider text-muted-foreground font-medium">
             Clients needing attention
             {active && <span className="ml-2 normal-case tracking-normal text-foreground">· {CARDS.find((c) => c.key === active)?.label}</span>}
-          </CardTitle>
+          </h3>
           {active && (
             <button type="button" onClick={() => setActive(null)} className="text-xs text-primary hover:underline">
               Clear filter
             </button>
           )}
-        </CardHeader>
-        <CardContent>
+        </div>
+        <div>
           {visible.length === 0 ? (
             <p className="text-sm text-muted-foreground">Nothing waiting across your clients right now. 🎣</p>
           ) : (
@@ -137,8 +137,8 @@ export function HomeBoard({ counts, rows }: { counts: Record<WorkType, number>; 
               </TableBody>
             </Table>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }
