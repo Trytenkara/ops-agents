@@ -90,10 +90,10 @@ export default async function OrgOverview({ params }: { params: { slug: string }
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         <Metric label="New leads" value={nudges.newLeads} note="to review" href={`${base}/leads`} />
         <Metric label="Drafts to send" value={staged} note={`${reviewed} reviewed`} href={`${base}/threads`} />
-        <Metric label="Quotes to approve" value={quotesRes.count ?? 0} note="pending review" href={`${base}/quotes`} />
-        <Metric label="Price changes" value={nudges.priceChanges} note="pending review" href={`${base}/price-changes`} />
+        <Metric label="Quotes to approve" value={quotesRes.count ?? 0} note="pending review" href={`${base}/materials`} />
+        <Metric label="Price changes" value={nudges.priceChanges} note="pending review" href={`${base}/price-index`} />
         <Metric label="Open cases" value={casesRes.data?.length ?? 0} href={`${base}/cases`} />
-        <Metric label="Pending approvals" value={approvalsRes.data?.length ?? 0} href={`${base}/approvals`} />
+        <Metric label="Pending approvals" value={approvalsRes.data?.length ?? 0} href={`${base}/materials`} />
       </div>
 
       <Card className="tb-surface shadow-none">

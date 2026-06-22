@@ -4,7 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { operatorRoles, primaryRole } from "@/lib/operator";
-import { resolveSupplierNamesWithFallback, resolveMaterialNames, resolveQuoteRefs } from "@/lib/tenkara-names";
+import { resolveSupplierNamesWithFallback, resolveMaterialNames, resolveQuoteRefs, resolveQuoteExpiries } from "@/lib/tenkara-names";
 import { ListPageHeader } from "@/components/list-page-header";
 import { MarketplaceFindingsList } from "@/components/marketplace-findings-list";
 import { RequoteList, type RequoteRow } from "@/components/requote-list";
@@ -72,11 +72,13 @@ export default async function OrgPriceIndexPage({
   let supplierNames = new Map<string, string>();
   let materialNames = new Map<string, string>();
   let quoteRefs = new Map<string, string>();
+  let quoteExpiries = new Map<string, string>();
   try {
-    [supplierNames, materialNames, quoteRefs] = await Promise.all([
+    [supplierNames, materialNames, quoteRefs, quoteExpiries] = await Promise.all([
       resolveSupplierNamesWithFallback(draftRows.map((d: any) => d.supplier_id).filter(Boolean)),
       resolveMaterialNames(draftRows.map((d: any) => d.material_id).filter(Boolean)),
       resolveQuoteRefs(draftRows.map((d: any) => d.quote_id).filter(Boolean)),
+      resolveQuoteExpiries(draftRows.map((d: any) => d.quote_id).filter(Boolean)),
     ]);
   } catch {
     // Tenkara unreachable — rows fall back to "name unavailable".
@@ -90,6 +92,7 @@ export default async function OrgPriceIndexPage({
     materialId: d.material_id ?? null,
     materialName: d.material_id ? materialNames.get(d.material_id) ?? null : null,
     quoteRef: d.quote_id ? quoteRefs.get(d.quote_id) ?? null : null,
+    quoteExpiry: d.quote_id ? quoteExpiries.get(d.quote_id) ?? null : null,
     status: d.status,
     createdAt: d.created_at ?? null,
     metadata: d.metadata,

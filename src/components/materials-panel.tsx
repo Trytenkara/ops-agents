@@ -14,8 +14,6 @@ import type { MaterialSourcingStatus } from "@/lib/material-sourcing-status";
 import { uploadAndParsePO, confirmOrder, deleteOrder, rematchOrders, editOrder } from "@/app/actions/material-profile";
 import { approveStagedQuote, dismissStagedQuote } from "@/app/actions/staged-quotes";
 import { saveSourcingNotes } from "@/app/actions/client-settings";
-import { TemplateDownloadButton } from "@/components/template-download-button";
-import { QUOTE_TEMPLATE_HEADERS } from "@/lib/tenkara-templates";
 
 function fmtQty(qty: number | null, unit: string | null): string {
   if (qty == null) return "—";
@@ -116,10 +114,6 @@ export function MaterialsPanel({
             <Button size="sm" variant="secondary" className="ml-auto" disabled={pending} onClick={() => fileRef.current?.click()}>
               {pending ? "Working…" : "Upload PO"}
             </Button>
-            <div className="flex flex-col items-end gap-1 border-l border-border pl-3">
-              <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Bulk upload template</span>
-              <TemplateDownloadButton headers={QUOTE_TEMPLATE_HEADERS} filename="tenkara-quotes-template.csv" label="Quotes" />
-            </div>
             <div className="w-full">
               <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-1">Sourcing notes</div>
               <textarea

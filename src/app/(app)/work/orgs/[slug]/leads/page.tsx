@@ -8,8 +8,6 @@ import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { ListPageHeader } from "@/components/list-page-header";
 import { LeadsList } from "@/components/leads-list";
 import { SuppliersCsvUpload } from "@/components/suppliers-csv-upload";
-import { TemplateDownloadButton } from "@/components/template-download-button";
-import { SUPPLIER_TEMPLATE_HEADERS } from "@/lib/tenkara-templates";
 import { resolveMaterialGrades } from "@/lib/tenkara-names";
 import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
 
@@ -62,12 +60,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
         level={2}
         title="Leads"
         description={`Suppliers discovered for ${org.name}. Export the CSV for the manual supplier-sourcing index.`}
-        actions={
-          <div className="flex items-center gap-2">
-            <TemplateDownloadButton headers={SUPPLIER_TEMPLATE_HEADERS} filename="tenkara-suppliers-template.csv" label="Suppliers template" />
-            {canAct && <SuppliersCsvUpload orgId={org.id} />}
-          </div>
-        }
+        actions={canAct ? <SuppliersCsvUpload orgId={org.id} /> : undefined}
       />
       {leads.length === 0 ? (
         <p className="text-sm text-muted-foreground py-4">No active leads for this org.</p>

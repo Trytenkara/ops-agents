@@ -13,8 +13,8 @@ const sections = [
   { href: "/materials", label: "Materials" },
   { href: "/suppliers", label: "Suppliers" },
   { href: "/leads", label: "Leads" },
-  { href: "/threads", label: "Threads" },
   { href: "/price-index", label: "Live Price Index" },
+  { href: "/threads", label: "All Threads" },
   { href: "/savings", label: "Savings" },
   { href: "/cases", label: "Cases" },
 ];

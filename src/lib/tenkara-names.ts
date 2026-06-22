@@ -91,3 +91,20 @@ export async function resolveQuoteRefs(ids: string[]): Promise<Map<string, strin
   }
   return out;
 }
+
+// Quote expiry dates (the reason a re-quote is drafted). Maps quote_id → the
+// product_expiry date string, so the UI can show "Expires <date>".
+export async function resolveQuoteExpiries(ids: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const unique = Array.from(new Set(ids.filter((x): x is string => !!x)));
+  if (unique.length === 0) return out;
+  const rows = await tenkaraQuery<{ id: string; product_expiry: string | null }>(
+    `select id::text as id, product_expiry::text as product_expiry
+       from material_quotes where id = any($1::uuid[]) and product_expiry is not null`,
+    [unique]
+  );
+  for (const r of rows) {
+    if (r.product_expiry) out.set(r.id, new Date(r.product_expiry).toLocaleDateString());
+  }
+  return out;
+}

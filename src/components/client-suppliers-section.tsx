@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/select";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
+import { SUPPLIER_TEMPLATE_HEADERS } from "@/lib/tenkara-templates";
 import { useListFilter, byString } from "@/components/use-list-filter";
 import { useState } from "react";
 import type { ClientSuppliers, ClientSupplier, SupplierApproval } from "@/lib/client-suppliers";
@@ -50,13 +51,9 @@ export function ClientSuppliersSection({ suppliers, slug }: { suppliers: ClientS
     defaultSort: "status",
   });
 
-  const csvRows = filtered.map((r) => [
-    r.name ?? "",
-    STATUS_META[r.approval]?.label ?? r.approval,
-    r.is_marketplace ? "marketplace" : "",
-    r.poc_email ?? r.poc_name ?? "",
-    r.approval_notes ?? "",
-  ]);
+  // Export in the Tenkara bulk-upload template format (doubles as the template,
+  // so there's no separate blank-template download).
+  const csvRows = filtered.map((r: any) => SUPPLIER_TEMPLATE_HEADERS.map((col) => (r[col] != null ? r[col] : "")));
 
   return (
     <div className="rounded-lg border border-border p-4 space-y-3">
@@ -82,8 +79,9 @@ export function ClientSuppliersSection({ suppliers, slug }: { suppliers: ClientS
               </div>
               <ListCsvButton
                 filename={filenameFor(slug, "suppliers")}
-                headers={["Supplier", "Status", "Marketplace", "Contact", "Notes"]}
+                headers={[...SUPPLIER_TEMPLATE_HEADERS]}
                 rows={csvRows}
+                label="Export (Tenkara template)"
               />
             </div>
             <Table>

@@ -3,13 +3,14 @@ import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAssignedOrgIds } from "@/lib/org-access";
 import { toCsv } from "@/lib/csv";
-import { QUOTE_EXPORT_HEADERS } from "@/lib/tenkara-templates";
+import { QUOTE_TEMPLATE_HEADERS } from "@/lib/tenkara-templates";
 
 // GET /api/staged-quotes/export-csv
-// Streams a Tenkara-ready CSV of all approved staged_quotes the caller can see.
-// Only real Tenkara material_quotes columns are emitted (no ops-only fields like
-// unit_price/source/approved_at, which shifted data into the wrong columns on
-// upload). Ops downloads this and uploads it via Tenkara's bulk-upload path —
+// Streams a Tenkara-ready CSV of all approved staged_quotes the caller can see,
+// IN THE FULL BULK-UPLOAD TEMPLATE FORMAT — the columns we have data for are
+// filled, the rest are left blank for ops to complete. This doubles as the
+// template, so there's no separate blank-template download. All emitted columns
+// are real Tenkara material_quotes columns. Ops uploads via Tenkara's bulk path;
 // staged quotes never write back automatically.
 
 export async function GET() {
@@ -32,17 +33,13 @@ export async function GET() {
   const { data: rows, error } = await q;
   if (error) return new NextResponse(error.message, { status: 500 });
 
+  // Map each row to the full template column set; data we have is filled, the
+  // rest stay blank for ops to complete before upload.
   const body = toCsv(
-    [...QUOTE_EXPORT_HEADERS],
-    (rows ?? []).map((r: any) => [
-      r.supplier_id,
-      r.supplier_name,
-      r.material_id,
-      r.material_name,
-      r.price,
-      r.case_size,
-      r.unit_of_measurement,
-    ])
+    [...QUOTE_TEMPLATE_HEADERS],
+    (rows ?? []).map((r: any) =>
+      QUOTE_TEMPLATE_HEADERS.map((col) => (r[col] != null ? r[col] : ""))
+    )
   );
 
   const date = new Date().toISOString().slice(0, 10);

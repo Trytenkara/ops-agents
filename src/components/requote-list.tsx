@@ -18,6 +18,7 @@ export type RequoteRow = {
   materialId: string | null;
   materialName: string | null;
   quoteRef: string | null;
+  quoteExpiry: string | null;
   status: string;
   createdAt: string | null;
   metadata: any;
@@ -52,6 +53,7 @@ export function RequoteList({ rows, slug }: { rows: RequoteRow[]; slug: string }
     r.supplierName ?? r.supplierId ?? "",
     r.materialName ?? r.materialId ?? "",
     r.quoteRef ?? "",
+    r.quoteExpiry ? `Expires ${r.quoteExpiry}` : "",
     r.status,
     r.createdAt ?? "",
   ]);
@@ -62,7 +64,7 @@ export function RequoteList({ rows, slug }: { rows: RequoteRow[]; slug: string }
         {controls}
         <ListCsvButton
           filename={filenameFor(slug, "requotes")}
-          headers={["Subject", "Supplier", "Material", "Quote", "Status", "Staged"]}
+          headers={["Subject", "Supplier", "Material", "Quote", "Reason", "Status", "Staged"]}
           rows={csvRows}
         />
       </div>
@@ -73,6 +75,7 @@ export function RequoteList({ rows, slug }: { rows: RequoteRow[]; slug: string }
             <TableHead>Supplier</TableHead>
             <TableHead>Material</TableHead>
             <TableHead>Quote</TableHead>
+            <TableHead>Reason</TableHead>
             <TableHead>Assigned</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Staged</TableHead>
@@ -95,6 +98,15 @@ export function RequoteList({ rows, slug }: { rows: RequoteRow[]; slug: string }
                 {d.materialName ?? (d.materialId ? <span className="text-xs text-muted-foreground">name unavailable</span> : "—")}
               </TableCell>
               <TableCell className="text-muted-foreground">{d.quoteRef ?? "—"}</TableCell>
+              <TableCell>
+                {d.quoteExpiry ? (
+                  <Badge variant="warn" title="The on-file quote expires on this date — the reason for re-quoting.">
+                    Expires {d.quoteExpiry}
+                  </Badge>
+                ) : (
+                  <span className="text-muted-foreground text-xs">expiring</span>
+                )}
+              </TableCell>
               <TableCell><OperatorChip name={d.assignedName} email={d.assignedEmail} role={d.assignedRole} /></TableCell>
               <TableCell><StatusBadge status={d.status} /></TableCell>
               <TableCell className="text-muted-foreground">{relativeTime(d.createdAt)}</TableCell>
@@ -103,7 +115,7 @@ export function RequoteList({ rows, slug }: { rows: RequoteRow[]; slug: string }
           ))}
           {filtered.length === 0 && (
             <TableRow>
-              <TableCell colSpan={8} className="text-center text-muted-foreground py-8">No re-quote drafts.</TableCell>
+              <TableCell colSpan={9} className="text-center text-muted-foreground py-8">No re-quote drafts.</TableCell>
             </TableRow>
           )}
         </TableBody>

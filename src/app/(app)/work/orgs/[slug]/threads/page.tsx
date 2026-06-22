@@ -65,12 +65,12 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
     <div className="space-y-4">
       <ListPageHeader
         level={2}
-        title="Threads"
-        description="Every email thread for this client — outbound RFQs, inbound supplier replies, and re-quotes for expiring quotes. Drafts only; nothing sends automatically."
+        title="All Threads"
+        description="Every email conversation for this client — outbound RFQs and inbound supplier replies. Drafts only; nothing sends automatically. Re-quotes to maintain live pricing are on the Live Price Index tab."
         explainer={
           <>
             Drafts are composed automatically and staged for review. Filter by <span className="font-medium text-foreground">kind</span> to
-            see outbound RFQs, inbound replies, or expiring-quote re-quotes. Open a draft to review and send it.
+            see outbound RFQs or inbound replies. Open a draft to review and send it.
           </>
         }
       />

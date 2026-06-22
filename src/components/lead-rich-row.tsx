@@ -1,5 +1,4 @@
 import { TableRow, TableHead, TableCell } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/lib/utils";
 import { LeadRowActions } from "@/components/lead-row-actions";
 
@@ -48,14 +47,6 @@ export function LeadSourceBadge({ source }: { source: string | null | undefined 
   );
 }
 
-export function ConfidenceBadge({ value }: { value: number | null }) {
-  if (value == null) return <span className="text-muted-foreground">—</span>;
-  const pct = `${(value * 100).toFixed(0)}%`;
-  if (value >= 0.85) return <Badge variant="success">{pct}</Badge>;
-  if (value >= 0.65) return <Badge variant="default">{pct}</Badge>;
-  return <Badge variant="secondary">{pct}</Badge>;
-}
-
 export function LeadRichHeaders({ showOrg = true }: { showOrg?: boolean }) {
   return (
     <TableRow>
@@ -97,7 +88,6 @@ export function LeadRichRow({
 }) {
   const signal = r.payload?.signal as string | undefined;
   const signalCount = r.payload?.signal_count as number | undefined;
-  const isScout = r.source === "ai_discovery";
   const sourceUrl = (r.payload?.source_url ?? r.payload?.supplier_website) as string | undefined;
   const siteType = r.payload?.site_type as "M" | "MS" | "N" | undefined;
   const marketKind = leadMarketKind(siteType);
@@ -163,14 +153,6 @@ export function LeadRichRow({
             </span>
           </div>
         )}
-        {isScout && (
-          <span
-            className="mt-1 inline-flex items-center rounded-full bg-yellow-500/15 text-yellow-700 dark:text-yellow-400 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
-            title="Discovered by Agent 03 via web search. Verify the supplier and pricing before promoting."
-          >
-            Scout discovery — needs verification
-          </span>
-        )}
       </TableCell>
       <TableCell className="text-muted-foreground text-xs align-top">
         {signal ? (
@@ -178,8 +160,6 @@ export function LeadRichRow({
             <code>{signal}</code>
             {signalCount != null && <span className="ml-1">×{signalCount}</span>}
           </>
-        ) : isScout ? (
-          <code className="text-yellow-700 dark:text-yellow-400">scout</code>
         ) : (
           "—"
         )}

@@ -13,12 +13,14 @@ export function ListCsvButton({
   rows,
   count,
   disabled,
+  label = "Export CSV",
 }: {
   filename: string;
   headers: string[];
   rows: CsvCell[][];
   count?: number;
   disabled?: boolean;
+  label?: string;
 }) {
   function download() {
     const body = toCsv(headers, rows);
@@ -40,7 +42,7 @@ export function ListCsvButton({
       onClick={download}
       title={n === 0 ? "Nothing to export" : undefined}
     >
-      Export CSV{n > 0 ? ` (${n})` : ""}
+      {label}{n > 0 ? ` (${n})` : ""}
     </Button>
   );
 }

@@ -11,6 +11,24 @@ export interface ClientSupplier {
   poc_email: string | null;
   approval_notes: string | null;
   last_approved_at: string | null;
+  // Extra fields, for the Tenkara-template-format export.
+  website: string | null;
+  poc_phone: string | null;
+  poc_phone_extension: string | null;
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+  country: string | null;
+  shipping_terms: string | null;
+  shipping_email: string | null;
+  billing_email: string | null;
+  minimum_order: number | null;
+  minimum_order_unit: string | null;
+  supplier_type: string | null;
+  purchasing_notes: string | null;
+  ddp_minimum_limit: number | null;
+  ddp_maximum_limit: number | null;
 }
 
 export interface ClientSuppliers {
@@ -37,7 +55,24 @@ export async function getClientSuppliers(orgTenkaraId: string | null): Promise<C
               poc_name,
               poc_email,
               approval_notes,
-              last_approved_at
+              last_approved_at,
+              website,
+              poc_phone,
+              poc_phone_extension,
+              address,
+              city,
+              state,
+              zip,
+              country,
+              shipping_terms,
+              shipping_email,
+              billing_email,
+              minimum_order,
+              minimum_order_unit,
+              array_to_string(supplier_type, ';') as supplier_type,
+              purchasing_notes,
+              ddp_minimum_limit,
+              ddp_maximum_limit
          from public.suppliers
         where $1::uuid = any(organization_ids)
         order by name asc`,
