@@ -64,7 +64,7 @@ export default async function ClientProfilePage({ params }: { params: { slug: st
         Contact, rep sheet, and a researched summary of this client — pulled from their Tenkara data, your settings, and
         uploads, and editable here.
       </p>
-      <ClientProfilePanel orgId={org.id} profile={profile} settings={settings} uploads={uploads} canEdit={canEdit} />
+      <ClientProfilePanel orgId={org.id} slug={org.slug} profile={profile} settings={settings} uploads={uploads} canEdit={canEdit} />
 
       <Link
         href={`/work/orgs/${org.slug}/materials`}

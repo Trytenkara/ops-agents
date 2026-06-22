@@ -1,6 +1,7 @@
 "use client";
 import { useState, useRef, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -60,12 +61,14 @@ const TYPE_VARIANT: Record<string, "success" | "secondary" | "warn" | "outline">
 
 export function ClientProfilePanel({
   orgId,
+  slug,
   profile,
   settings,
   uploads,
   canEdit,
 }: {
   orgId: string;
+  slug: string;
   profile: ProfileValue | null;
   settings: SettingsValue | null;
   uploads: UploadItem[];
@@ -89,7 +92,7 @@ export function ClientProfilePanel({
       <SettingsCard orgId={orgId} settings={settings} canEdit={canEdit} pending={pending} run={run} />
       <RepSheetCard orgId={orgId} profile={profile} canEdit={canEdit} pending={pending} run={run} />
       <ProfileCard orgId={orgId} profile={profile} canEdit={canEdit} pending={pending} run={run} />
-      <UploadsCard orgId={orgId} uploads={uploads} canEdit={canEdit} pending={pending} run={run} />
+      <UploadsCard orgId={orgId} slug={slug} uploads={uploads} canEdit={canEdit} pending={pending} run={run} />
       {msg && <p className={msg.kind === "ok" ? "text-sm text-emerald-700" : "text-sm text-red-700"}>{msg.text}</p>}
     </div>
   );
@@ -211,12 +214,19 @@ function ProfileCard({ orgId, profile, canEdit, pending, run }: { orgId: string;
   );
 }
 
-function UploadsCard({ orgId, uploads, canEdit, pending, run }: { orgId: string; uploads: UploadItem[]; canEdit: boolean; pending: boolean; run: RunFn }) {
+function UploadsCard({ orgId, slug, uploads, canEdit, pending, run }: { orgId: string; slug: string; uploads: UploadItem[]; canEdit: boolean; pending: boolean; run: RunFn }) {
   const [note, setNote] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   return (
-    <Section title="Uploaded info">
+    <Section title="Reference docs & notes">
+      <p className="text-xs text-muted-foreground -mt-1">
+        Background context that feeds the AI client summary above. Notes and text/CSV/Markdown files are read; PDFs and
+        spreadsheets are stored for reference only — their contents aren&apos;t parsed.{" "}
+        <Link href={`/work/orgs/${slug}/materials`} className="text-primary hover:underline">
+          To turn purchasing history into orders &amp; materials, use Upload a PO on the Materials tab.
+        </Link>
+      </p>
       {uploads.length > 0 ? (
         <ul className="text-sm space-y-1">
           {uploads.map((u) => (
@@ -245,7 +255,7 @@ function UploadsCard({ orgId, uploads, canEdit, pending, run }: { orgId: string;
                 if (fileRef.current) fileRef.current.value = "";
               }} />
             <Button size="sm" variant="secondary" disabled={pending} onClick={() => fileRef.current?.click()}>Upload file</Button>
-            <span className="text-xs text-muted-foreground">text/markdown/csv extracted; other types stored</span>
+            <span className="text-xs text-muted-foreground">Text/CSV/Markdown is read into the summary; PDFs &amp; spreadsheets are stored only</span>
           </div>
         </div>
       )}
