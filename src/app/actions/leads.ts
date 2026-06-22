@@ -5,6 +5,7 @@ import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { loadMatchCandidates, matchOrderToMaterial } from "@/lib/material-profile";
+import { sanitizeTiers, type PriceTier } from "@/lib/price-tiers";
 
 interface ActionResult {
   ok: boolean;
@@ -251,6 +252,39 @@ export async function promoteLead(leadId: string): Promise<ActionResult> {
   });
 
   revalidatePath("/work/review/leads");
+  return { ok: true };
+}
+
+// Save ops-edited tier pricing for a marketplace lead. Persists onto
+// leads_in_flight.payload.price_tiers (replacing any prior set).
+export async function saveLeadPriceTiers(leadId: string, tiers: PriceTier[]): Promise<ActionResult> {
+  const guard = await assertCanActOnLead(leadId);
+  if ("error" in guard) return { ok: false, error: guard.error };
+  const { session, admin, lead } = guard;
+
+  const clean = sanitizeTiers(tiers);
+  const { error } = await admin
+    .from("leads_in_flight")
+    .update({
+      payload: {
+        ...((lead.payload as any) ?? {}),
+        price_tiers: clean,
+        price_tiers_updated_by: session.userId,
+        price_tiers_updated_at: new Date().toISOString(),
+      },
+    })
+    .eq("id", leadId);
+  if (error) return { ok: false, error: error.message };
+
+  await admin.from("audit_log").insert({
+    actor_user_id: session.userId,
+    action: "lead.price_tiers_saved",
+    target_table: "leads_in_flight",
+    target_id: leadId,
+    diff: { count: clean.length },
+  });
+
+  revalidatePath("/work/orgs/[slug]/leads", "page");
   return { ok: true };
 }
 

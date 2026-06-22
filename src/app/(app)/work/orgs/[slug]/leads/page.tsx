@@ -6,7 +6,7 @@ import { relativeTime } from "@/lib/utils";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { ListPageHeader } from "@/components/list-page-header";
-import { LeadsList } from "@/components/leads-list";
+import { LeadsTabs } from "@/components/leads-tabs";
 import { SuppliersCsvUpload } from "@/components/suppliers-csv-upload";
 import { resolveMaterialGrades, resolveSupplierMarketplace } from "@/lib/tenkara-names";
 import { leadMarketKind } from "@/components/lead-rich-row";
@@ -82,7 +82,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
       {leads.length === 0 ? (
         <p className="text-sm text-muted-foreground py-4">No active leads for this org.</p>
       ) : (
-        <LeadsList rows={leads} canAct={canAct} slug={org.slug} />
+        <LeadsTabs rows={leads} canAct={canAct} slug={org.slug} />
       )}
 
       <section className="space-y-2 pt-2">
