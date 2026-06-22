@@ -9,6 +9,20 @@ import { MarketplaceFindingActions } from "@/components/marketplace-finding-acti
 // One component keeps the scraped fields (source URL, notes, classification,
 // pack size) identical across both surfaces.
 
+// Parse a pack-size string ("25 kg", "5,000 kg", "1 lb") into a quantity + unit
+// so a bulk total can be normalized to a per-unit price for tier comparison.
+export function perUnitPrice(
+  price: number | null,
+  packSize: string | null
+): { value: number; unit: string } | null {
+  if (price == null || !packSize) return null;
+  const m = String(packSize).match(/([\d.,]+)\s*(kg|kgs|g|grams?|lb|lbs|oz|mt|ton|tonnes?|l|ml|ea|unit|units|count|ct)?/i);
+  if (!m) return null;
+  const qty = parseFloat(m[1].replace(/,/g, ""));
+  if (!qty || qty <= 0) return null;
+  return { value: price / qty, unit: m[2] ? m[2].toLowerCase().replace(/s$/, "") : "unit" };
+}
+
 export function formatPrice(v: number | null, currency: string | null) {
   if (v == null) return <span className="text-muted-foreground">—</span>;
   const sym = currency === "USD" || !currency ? "$" : "";

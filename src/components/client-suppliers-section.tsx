@@ -3,9 +3,6 @@
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/select";
-import { ListCsvButton } from "@/components/list-csv-button";
-import { filenameFor } from "@/lib/csv";
-import { SUPPLIER_TEMPLATE_HEADERS } from "@/lib/tenkara-templates";
 import { useListFilter, byString } from "@/components/use-list-filter";
 import { useState } from "react";
 import type { ClientSuppliers, ClientSupplier, SupplierApproval } from "@/lib/client-suppliers";
@@ -51,10 +48,6 @@ export function ClientSuppliersSection({ suppliers, slug }: { suppliers: ClientS
     defaultSort: "status",
   });
 
-  // Export in the Tenkara bulk-upload template format (doubles as the template,
-  // so there's no separate blank-template download).
-  const csvRows = filtered.map((r: any) => SUPPLIER_TEMPLATE_HEADERS.map((col) => (r[col] != null ? r[col] : "")));
-
   return (
     <div className="rounded-lg border border-border p-4 space-y-3">
       <div className="flex items-center justify-between">
@@ -69,20 +62,12 @@ export function ClientSuppliersSection({ suppliers, slug }: { suppliers: ClientS
           <p className="text-sm text-muted-foreground">No suppliers linked to this client in Tenkara yet.</p>
         ) : (
           <>
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div className="flex flex-wrap items-end gap-3">
-                {controls}
-                <label className="flex flex-col gap-1">
-                  <span className="text-xs text-muted-foreground">Status</span>
-                  <Select size="sm" className="min-w-[9rem]" ariaLabel="Status" value={status} onValueChange={setStatus} options={FILTER_OPTIONS} />
-                </label>
-              </div>
-              <ListCsvButton
-                filename={filenameFor(slug, "suppliers")}
-                headers={[...SUPPLIER_TEMPLATE_HEADERS]}
-                rows={csvRows}
-                label="Export (Tenkara template)"
-              />
+            <div className="flex flex-wrap items-end gap-3">
+              {controls}
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-muted-foreground">Status</span>
+                <Select size="sm" className="min-w-[9rem]" ariaLabel="Status" value={status} onValueChange={setStatus} options={FILTER_OPTIONS} />
+              </label>
             </div>
             <Table>
               <TableHeader>

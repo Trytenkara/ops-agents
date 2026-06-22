@@ -1,14 +1,32 @@
 "use client";
 
-import { Table, TableHeader, TableBody, TableRow, TableCell } from "@/components/ui/table";
+import { Fragment } from "react";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import {
-  MarketplaceFindingRow,
-  MarketplaceFindingHeaders,
-  marketplaceFindingColSpan,
+  formatPrice,
+  perUnitPrice,
+  PctBadge,
+  ClassificationBadge,
 } from "@/components/marketplace-finding-row";
+import { MarketplaceFindingActions } from "@/components/marketplace-finding-actions";
 import { useListFilter, byString, byNumberDesc, byDateDesc } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
+
+const COLS = 8;
+
+function perUnitLabel(r: any): string {
+  const pu = perUnitPrice(r.current_price ?? r.baseline_price ?? null, r.pack_size ?? null);
+  return pu ? `$${pu.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}/${pu.unit}` : "";
+}
+
+// Cheapest per-unit first; rows without a parseable pack size sort last.
+function tierSort(a: any, b: any): number {
+  const pa = perUnitPrice(a.current_price ?? a.baseline_price ?? null, a.pack_size ?? null)?.value ?? Infinity;
+  const pb = perUnitPrice(b.current_price ?? b.baseline_price ?? null, b.pack_size ?? null)?.value ?? Infinity;
+  if (pa !== pb) return pa - pb;
+  return (a.baseline_price ?? Infinity) - (b.baseline_price ?? Infinity);
+}
 
 export function MarketplaceFindingsList({ rows, canAct, slug = "all" }: { rows: any[]; canAct: boolean; slug?: string }) {
   const { filtered, controls } = useListFilter(rows, {
@@ -22,12 +40,22 @@ export function MarketplaceFindingsList({ rows, canAct, slug = "all" }: { rows: 
     ],
   });
 
+  // Group into per-supplier-per-material tier ladders so the bulk-quantity rows
+  // read as tiers of one material, not separate alarming line items.
+  const groups = new Map<string, any[]>();
+  for (const r of filtered) {
+    const key = `${r.supplier_name ?? ""}||${r.material_name ?? ""}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(r);
+  }
+
   const csvRows = filtered.map((r: any) => [
     r.supplier_name ?? "",
     r.material_name ?? "",
+    r.pack_size ?? "",
+    perUnitLabel(r),
     r.baseline_price ?? "",
     r.current_price ?? "",
-    r.currency ?? "",
     r.pct_change != null ? `${r.pct_change}%` : "",
     r.created_at ?? "",
   ]);
@@ -38,21 +66,94 @@ export function MarketplaceFindingsList({ rows, canAct, slug = "all" }: { rows: 
         {controls}
         <ListCsvButton
           filename={filenameFor(slug, "price-changes")}
-          headers={["Supplier", "Material", "Previous", "Current", "Currency", "Change", "Found"]}
+          headers={["Supplier", "Material", "Pack / tier", "Per-unit", "On file", "Current", "Change", "Found"]}
           rows={csvRows}
         />
       </div>
       <Table>
         <TableHeader>
-          <MarketplaceFindingHeaders showOrg={false} />
+          <TableRow>
+            <TableHead>Pack / tier</TableHead>
+            <TableHead className="text-right">Per-unit</TableHead>
+            <TableHead className="text-right">On file</TableHead>
+            <TableHead className="text-right">Current</TableHead>
+            <TableHead className="text-right">Δ%</TableHead>
+            <TableHead>Source</TableHead>
+            <TableHead>Status</TableHead>
+            <TableHead className="text-right">Action</TableHead>
+          </TableRow>
         </TableHeader>
         <TableBody>
-          {filtered.map((r: any) => (
-            <MarketplaceFindingRow key={r.id} r={r} canAct={canAct} showOrg={false} />
-          ))}
+          {Array.from(groups.values()).map((tiers) => {
+            const head = tiers[0];
+            const sorted = [...tiers].sort(tierSort);
+            return (
+              <Fragment key={`${head.supplier_name}||${head.material_name}`}>
+                <TableRow className="bg-secondary/40">
+                  <TableCell colSpan={COLS} className="py-2">
+                    <span className="font-medium">{head.material_name ?? "—"}</span>
+                    <span className="text-muted-foreground"> · {head.supplier_name ?? "—"}</span>
+                    {tiers.length > 1 && (
+                      <span className="ml-2 text-xs text-muted-foreground">{tiers.length} tiers</span>
+                    )}
+                  </TableCell>
+                </TableRow>
+                {sorted.map((r) => {
+                  const pu = perUnitPrice(r.current_price ?? r.baseline_price ?? null, r.pack_size ?? null);
+                  return (
+                    <TableRow key={r.id}>
+                      <TableCell className="align-top">
+                        {r.pack_size ? (
+                          <span>{r.pack_size}</span>
+                        ) : (
+                          <span className="text-muted-foreground text-xs">size unknown · bulk total</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right align-top tabular-nums">
+                        {pu ? (
+                          <span className="font-medium">
+                            ${pu.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}/{pu.unit}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right align-top tabular-nums">{formatPrice(r.baseline_price, r.currency)}</TableCell>
+                      <TableCell className="text-right align-top tabular-nums">{formatPrice(r.current_price, r.currency)}</TableCell>
+                      <TableCell className="text-right align-top tabular-nums"><PctBadge pct={r.pct_change} /></TableCell>
+                      <TableCell className="align-top">
+                        {r.source_url ? (
+                          <a
+                            href={r.source_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-primary hover:underline truncate inline-block max-w-[24ch]"
+                            title={r.source_url}
+                          >
+                            {r.source_url.replace(/^https?:\/\//, "").replace(/\/$/, "")} ↗
+                          </a>
+                        ) : (
+                          "—"
+                        )}
+                        {r.notes && (
+                          <div className="text-[11px] text-muted-foreground max-w-[28ch] truncate" title={r.notes}>
+                            {r.notes}
+                          </div>
+                        )}
+                      </TableCell>
+                      <TableCell className="align-top"><ClassificationBadge value={r.classification ?? null} /></TableCell>
+                      <TableCell className="text-right align-top">
+                        <MarketplaceFindingActions findingId={r.id} status={r.status} disabled={!canAct} />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </Fragment>
+            );
+          })}
           {filtered.length === 0 && (
             <TableRow>
-              <TableCell colSpan={marketplaceFindingColSpan(false)} className="text-center py-8 text-muted-foreground">
+              <TableCell colSpan={COLS} className="text-center py-8 text-muted-foreground">
                 No price changes match.
               </TableCell>
             </TableRow>
