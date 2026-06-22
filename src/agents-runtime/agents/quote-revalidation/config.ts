@@ -24,6 +24,7 @@ export const GHOST_CLIENTS: Record<string, string> = {
   "Meridian Foods Co.": "Bobber Labs",
   "Vitality Labs Inc.": "Bobber Labs",
   "Tenkara": "Rove Essentials",
+  "Tenkara (Internal Sourcing)": "Rove Essentials",
   "Catalyst Chemical Solutions": "Rove Essentials",
   "Nitro Logistics": "Rove Essentials",
 };
