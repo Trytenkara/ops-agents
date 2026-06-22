@@ -46,7 +46,9 @@ export default async function OrgSavingsPage({
   const scorecard = await buildSourcingScorecard(admin, org.id, org.tenkara_org_id);
 
   if (view === "report") {
-    const attributes = reportType === "freight" ? await loadMaterialAttributes(org.id) : undefined;
+    // Loaded for both types: the "freight" view shows the detail editor, and the
+    // "savings" view uses freight to optionally compute landed-cost savings.
+    const attributes = await loadMaterialAttributes(org.id);
     return (
       <div className="space-y-6">
         <div className="flex flex-wrap items-center gap-3">

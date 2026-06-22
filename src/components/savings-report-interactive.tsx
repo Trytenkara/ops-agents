@@ -3,8 +3,15 @@
 import { useMemo, useState } from "react";
 import type { SavingsReport } from "@/lib/savings-report";
 import type { MaterialAttributes } from "@/lib/material-attributes";
+import { attrKey } from "@/lib/material-attributes";
 import { SavingsReportView } from "@/components/savings-report-view";
 import { Button } from "@/components/ui/button";
+
+// Per-unit freight to add to the alternative when computing landed-cost savings.
+function freightPerUnit(a: MaterialAttributes | undefined): number {
+  if (!a) return 0;
+  return (a.freight_ocean ?? 0) + (a.tariff_duty ?? 0);
+}
 
 // Wraps the branded savings report with a prompt box that reshapes it. The
 // prompt only selects/orders which materials appear (validated server-side);
@@ -33,15 +40,38 @@ export function SavingsReportInteractive({
   const [keys, setKeys] = useState<string[] | null>(null);
   const [subtitle, setSubtitle] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  const [includeFreight, setIncludeFreight] = useState(false);
 
   const keyOf = (l: { material_id: string; unit: string }) => `${l.material_id}|${l.unit}`;
 
+  // Any material with freight/tariff data entered → the freight toggle is useful.
+  const hasFreightData = useMemo(
+    () => report.lines.some((l) => freightPerUnit(attributes?.[attrKey(l.material_id, l.unit)]) > 0),
+    [report, attributes]
+  );
+
   const shaped = useMemo<SavingsReport>(() => {
-    if (!keys) return report;
-    const byKey = new Map(report.lines.map((l) => [keyOf(l), l]));
-    const lines = keys.map((k) => byKey.get(k)).filter((l): l is (typeof report.lines)[number] => Boolean(l));
+    let lines = report.lines;
+    // Optionally fold freight into the alternative → landed-cost savings.
+    if (includeFreight && attributes) {
+      lines = lines.map((l) => {
+        const fr = freightPerUnit(attributes[attrKey(l.material_id, l.unit)]);
+        if (fr <= 0) return l;
+        const best_unit_price = l.best_unit_price + fr;
+        const savings_per_unit = l.their_unit_price - best_unit_price;
+        const savings_pct = l.their_unit_price > 0 ? (savings_per_unit / l.their_unit_price) * 100 : 0;
+        return { ...l, best_unit_price, savings_per_unit, savings_pct };
+      });
+      lines = [...lines].sort((a, b) => b.savings_per_unit - a.savings_per_unit);
+    }
+    if (keys) {
+      const byKey = new Map(lines.map((l) => [keyOf(l), l]));
+      lines = keys.map((k) => byKey.get(k)).filter((l): l is (typeof report.lines)[number] => Boolean(l));
+    }
     return { ...report, lines };
-  }, [keys, report]);
+  }, [keys, report, includeFreight, attributes]);
+
+  const effectiveSubtitle = subtitle ?? (includeFreight ? "Landed cost — includes freight & tariff" : null);
 
   async function run() {
     setLoading(true);
@@ -103,12 +133,19 @@ export function SavingsReportInteractive({
           {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
           {note && !error && <span className="text-xs text-muted-foreground">{note}</span>}
         </div>
+        {hasFreightData && (
+          <label className="flex items-center gap-2 border-t pt-3 text-sm">
+            <input type="checkbox" checked={includeFreight} onChange={(e) => setIncludeFreight(e.target.checked)} />
+            <span>Include freight &amp; tariff (landed-cost savings)</span>
+            <span className="text-xs text-muted-foreground">— adds ocean freight + tariff to the Tenkara alternative</span>
+          </label>
+        )}
       </div>
 
       <SavingsReportView
         report={shaped}
         clientName={clientName}
-        subtitle={subtitle}
+        subtitle={effectiveSubtitle}
         variant={variant}
         attributes={attributes}
         orgId={orgId}
