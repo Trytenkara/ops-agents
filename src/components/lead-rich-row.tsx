@@ -61,7 +61,6 @@ export function LeadRichHeaders({ showOrg = true }: { showOrg?: boolean }) {
     <TableRow>
       <TableHead>Supplier</TableHead>
       <TableHead>Material</TableHead>
-      <TableHead>Pricing / MOQ</TableHead>
       <TableHead>Signal</TableHead>
       <TableHead>Type</TableHead>
       <TableHead>Source</TableHead>
@@ -75,7 +74,7 @@ export function LeadRichHeaders({ showOrg = true }: { showOrg?: boolean }) {
 
 // Column count for empty-state colSpan. Matches LeadRichHeaders.
 export function leadRichColSpan(showOrg = true): number {
-  return showOrg ? 10 : 9;
+  return showOrg ? 9 : 8;
 }
 
 // Marketplace vs direct (non-marketplace), derived from the scanner's site_type.
@@ -102,8 +101,6 @@ export function LeadRichRow({
   const sourceUrl = (r.payload?.source_url ?? r.payload?.supplier_website) as string | undefined;
   const siteType = r.payload?.site_type as "M" | "MS" | "N" | undefined;
   const marketKind = leadMarketKind(siteType);
-  const pricing = r.payload?.pack_sizes_pricing as string | undefined;
-  const moq = r.payload?.moq as string | undefined;
   const completeness = r.payload?.completeness_score != null ? Number(r.payload.completeness_score) : null;
   const citations = Array.isArray(r.payload?.source_citations) ? r.payload.source_citations : [];
 
@@ -174,10 +171,6 @@ export function LeadRichRow({
             Scout discovery — needs verification
           </span>
         )}
-      </TableCell>
-      <TableCell className="align-top text-xs max-w-[26ch]">
-        {pricing ? <span className="text-foreground">{pricing}</span> : <span className="text-muted-foreground">—</span>}
-        {moq && <div className="text-muted-foreground mt-0.5">MOQ: {moq}</div>}
       </TableCell>
       <TableCell className="text-muted-foreground text-xs align-top">
         {signal ? (
