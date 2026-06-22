@@ -51,20 +51,24 @@ export function SavingsReportView({
       : 0;
 
   return (
-    <div className="print-report mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-3xl space-y-4">
       <div className="flex justify-end no-print print:hidden">
         <PrintReportButton target="report" />
       </div>
 
+      {/* White paper sheet — a client-facing document should read as printed
+          white, clearly lifted off the parchment app background. */}
+      <div className="print-report space-y-6 rounded-xl border border-zinc-200 bg-white p-8 text-zinc-900 shadow-sm print:rounded-none print:border-0 print:p-0 print:shadow-none">
+
       {/* Header */}
-      <div className="rounded-xl border bg-muted/30 px-8 py-7">
+      <div className="rounded-xl border border-zinc-200 bg-zinc-50 px-8 py-7">
         <div className="flex items-center gap-2 text-sm font-medium">
           <img src="/tenkara-mark.png" alt="Tenkara" className="h-5 w-5" />
           <span>Tenkara</span>
         </div>
         <h1 className="mt-5 font-serif text-4xl tracking-tight">{clientName}</h1>
         {subtitle ? <p className="mt-1 text-sm font-medium">{subtitle}</p> : null}
-        <p className="mt-2 text-xs text-muted-foreground">Savings Report · {todayLabel()}</p>
+        <p className="mt-2 text-xs text-zinc-500">Savings Report · {todayLabel()}</p>
       </div>
 
       {lines.length === 0 && (
@@ -78,44 +82,44 @@ export function SavingsReportView({
         {lines.map((l) => {
           const hasSaving = l.savings_per_unit > 0;
           return (
-            <div key={`${l.material_id}-${l.unit}`} className="report-card rounded-xl border overflow-hidden">
-              <div className="flex items-center justify-between gap-4 bg-muted/40 px-5 py-3">
+            <div key={`${l.material_id}-${l.unit}`} className="report-card rounded-xl border border-zinc-200 overflow-hidden">
+              <div className="flex items-center justify-between gap-4 bg-zinc-50 px-5 py-3">
                 <div className="font-semibold">
                   {l.material_name}
-                  {l.grade ? <span className="font-normal italic text-muted-foreground"> — {l.grade}</span> : null}
+                  {l.grade ? <span className="font-normal italic text-zinc-500"> — {l.grade}</span> : null}
                 </div>
                 <span className="shrink-0 rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
                   {hasSaving ? `${l.savings_pct.toFixed(2)}% Savings` : "Within Target Range"}
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 gap-px bg-border sm:grid-cols-2">
-                <div className="bg-background px-5 py-4">
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <div className="grid grid-cols-1 gap-px bg-zinc-200 sm:grid-cols-2">
+                <div className="bg-white px-5 py-4">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">
                     {l.has_client_price ? "Your current source" : "Market average"}
                   </div>
-                  <div className="mt-2 text-2xl font-semibold tabular-nums text-red-600 dark:text-red-400">
+                  <div className="mt-2 text-2xl font-semibold tabular-nums text-red-600">
                     {money(l.their_unit_price)}
-                    <span className="text-sm font-normal text-muted-foreground">/{l.unit}</span>
+                    <span className="text-sm font-normal text-zinc-500">/{l.unit}</span>
                   </div>
                   {!l.has_client_price && (
-                    <div className="mt-1 text-[11px] text-muted-foreground">No client price on file — using market average</div>
+                    <div className="mt-1 text-[11px] text-zinc-500">No client price on file — using market average</div>
                   )}
                 </div>
-                <div className="border-l-2 border-emerald-500/40 bg-background px-5 py-4">
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">
+                <div className="border-l-2 border-emerald-500/40 bg-white px-5 py-4">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
                     Tenkara alternative
                   </div>
                   <div className="mt-1 font-medium">{l.recommended_supplier_name ?? "—"}</div>
-                  <div className="mt-1 text-2xl font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+                  <div className="mt-1 text-2xl font-semibold tabular-nums text-emerald-600">
                     {money(l.best_unit_price)}
-                    <span className="text-sm font-normal text-muted-foreground">/{l.unit}</span>
+                    <span className="text-sm font-normal text-zinc-500">/{l.unit}</span>
                   </div>
                 </div>
               </div>
 
-              <div className="border-t bg-muted/20 px-5 py-2 text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">Market:</span> avg {money(l.market_avg_unit_price)}/{l.unit} ·{" "}
+              <div className="border-t border-zinc-200 bg-zinc-50 px-5 py-2 text-xs text-zinc-500">
+                <span className="font-medium text-zinc-900">Market:</span> avg {money(l.market_avg_unit_price)}/{l.unit} ·{" "}
                 {l.n_quotes} quotes from {l.n_suppliers} suppliers
               </div>
 
@@ -135,19 +139,20 @@ export function SavingsReportView({
 
       {/* Summary footer */}
       {lines.length > 0 && (
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border">
-          <div className="bg-muted/30 px-6 py-5">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Average savings</div>
-            <div className="mt-1 text-3xl font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-zinc-200 bg-zinc-200">
+          <div className="bg-zinc-50 px-6 py-5">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Average savings</div>
+            <div className="mt-1 text-3xl font-semibold tabular-nums text-emerald-600">
               {avgSavingsPct.toFixed(2)}%
             </div>
           </div>
-          <div className="bg-muted/30 px-6 py-5 text-right">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Ingredients analyzed</div>
+          <div className="bg-zinc-50 px-6 py-5 text-right">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Ingredients analyzed</div>
             <div className="mt-1 text-3xl font-semibold tabular-nums">{lines.length}</div>
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

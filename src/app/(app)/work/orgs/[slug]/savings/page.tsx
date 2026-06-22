@@ -89,14 +89,14 @@ function ViewToggle({ slug, view }: { slug: string; view: "table" | "report" }) 
       href={href}
       className={cn(
         "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-        view === key ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+        view === key ? "bg-card text-foreground shadow-sm ring-1 ring-border" : "text-muted-foreground hover:text-foreground"
       )}
     >
       {label}
     </Link>
   );
   return (
-    <div className="inline-flex rounded-lg border bg-muted/40 p-1 print:hidden">
+    <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1 print:hidden">
       {tab("table", "Worksheet", base)}
       {tab("report", "Savings report", `${base}?view=report`)}
     </div>
@@ -110,14 +110,14 @@ function ReportTypeToggle({ slug, type }: { slug: string; type: "savings" | "fre
       href={href}
       className={cn(
         "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-        type === key ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground"
+        type === key ? "bg-card text-foreground shadow-sm ring-1 ring-border" : "text-muted-foreground hover:text-foreground"
       )}
     >
       {label}
     </Link>
   );
   return (
-    <div className="inline-flex rounded-lg border bg-muted/40 p-1 print:hidden">
+    <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1 print:hidden">
       {tab("savings", "Cost savings", base)}
       {tab("freight", "Freight & suppliers", `${base}&type=freight`)}
     </div>
