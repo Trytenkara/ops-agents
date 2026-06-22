@@ -3,7 +3,6 @@
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/select";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
 import { useListFilter, byString } from "@/components/use-list-filter";
@@ -60,15 +59,15 @@ export function ClientSuppliersSection({ suppliers, slug }: { suppliers: ClientS
   ]);
 
   return (
-    <Card className="tb-surface shadow-none">
-      <CardHeader className="flex flex-row items-center justify-between">
-        <CardTitle className="text-base">Client suppliers</CardTitle>
+    <div className="rounded-lg border border-border p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Client suppliers</h3>
         <span className="text-xs text-muted-foreground">
           {suppliers.total} total · {suppliers.approved.length} approved · {suppliers.pending_review.length} pending ·{" "}
           {suppliers.denied.length} denied
         </span>
-      </CardHeader>
-      <CardContent className="space-y-3">
+      </div>
+      <div className="space-y-3">
         {suppliers.total === 0 ? (
           <p className="text-sm text-muted-foreground">No suppliers linked to this client in Tenkara yet.</p>
         ) : (
@@ -121,7 +120,7 @@ export function ClientSuppliersSection({ suppliers, slug }: { suppliers: ClientS
             </Table>
           </>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
