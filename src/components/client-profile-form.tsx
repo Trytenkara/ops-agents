@@ -256,7 +256,8 @@ function UploadsCard({ orgId, uploads, canEdit, pending, run }: { orgId: string;
 function SettingsCard({ orgId, settings, canEdit, pending, run }: { orgId: string; settings: SettingsValue | null; canEdit: boolean; pending: boolean; run: RunFn }) {
   const [mode, setMode] = useState<ClientSettingsInput["outreach_mode"]>(settings?.outreach_mode ?? "active");
   const [ghostBrand, setGhostBrand] = useState(settings?.ghost_brand ?? "");
-  const [tier, setTier] = useState<ClientSettingsInput["priority_tier"]>(settings?.priority_tier ?? "standard");
+  // Priority tier is no longer ops-facing; preserve whatever's stored on save.
+  const tier: ClientSettingsInput["priority_tier"] = settings?.priority_tier ?? "standard";
   const [contactName, setContactName] = useState(settings?.primary_contact_name ?? "");
   const [contactEmail, setContactEmail] = useState(settings?.primary_contact_email ?? "");
   const [notes, setNotes] = useState(settings?.sourcing_notes ?? "");
@@ -276,11 +277,10 @@ function SettingsCard({ orgId, settings, canEdit, pending, run }: { orgId: strin
     <Section title="Client settings (optional inputs)">
       <p className="text-xs text-muted-foreground -mt-1">Anything you enter here feeds the next profile generation.</p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <Field label="Priority contact"><Input value={contactName} onChange={(e) => setContactName(e.target.value)} disabled={!canEdit || pending} placeholder="—" /></Field>
+        <Field label="Purchasing email"><Input type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} disabled={!canEdit || pending} placeholder="—" /></Field>
         <Field label="Outreach mode"><Select value={mode} onValueChange={(v) => setMode(v as any)} options={MODE_OPTIONS} disabled={!canEdit || pending} ariaLabel="Outreach mode" /></Field>
-        <Field label="Priority tier"><Select value={tier} onValueChange={(v) => setTier(v as any)} options={TIER_OPTIONS} disabled={!canEdit || pending} ariaLabel="Priority tier" /></Field>
         {mode === "ghost" && <Field label="Ghost brand"><Input value={ghostBrand} onChange={(e) => setGhostBrand(e.target.value)} disabled={!canEdit || pending} /></Field>}
-        <Field label="Primary contact"><Input value={contactName} onChange={(e) => setContactName(e.target.value)} disabled={!canEdit || pending} placeholder="—" /></Field>
-        <Field label="Contact email"><Input type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} disabled={!canEdit || pending} placeholder="—" /></Field>
       </div>
       <Field label="Sourcing notes">
         <textarea value={notes} onChange={(e) => setNotes(e.target.value)} disabled={!canEdit || pending} rows={2}
