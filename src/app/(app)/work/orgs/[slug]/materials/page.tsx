@@ -46,6 +46,18 @@ export default async function OrgMaterialsPage({ params }: { params: { slug: str
         title="Materials"
         description="What this client buys and where each one stands. Expand a row for its quotes, uploads, and approvals."
       />
+
+      <Link
+        href={`/work/orgs/${org.slug}/suppliers`}
+        className="group flex items-center justify-between rounded-lg border border-border bg-background px-4 py-3 hover:bg-secondary/60 transition-colors"
+      >
+        <div>
+          <div className="font-medium">Next: Suppliers</div>
+          <div className="text-sm text-muted-foreground">Who can supply these materials — added, approved, and denied.</div>
+        </div>
+        <span className="text-muted-foreground group-hover:text-foreground" aria-hidden>→</span>
+      </Link>
+
       <MaterialsPanel
         orgId={org.id}
         slug={org.slug}
@@ -55,17 +67,6 @@ export default async function OrgMaterialsPage({ params }: { params: { slug: str
         quotesByMaterial={quotesByMaterial}
         sourcingNotes={settingsRow?.sourcing_notes ?? null}
       />
-
-      <Link
-        href={`/work/orgs/${org.slug}/suppliers`}
-        className="group flex items-center justify-between rounded-lg border border-border bg-background px-4 py-3 hover:bg-secondary/60 transition-colors"
-      >
-        <div>
-          <div className="font-medium">Suppliers</div>
-          <div className="text-sm text-muted-foreground">Who can supply these materials — added, approved, and denied.</div>
-        </div>
-        <span className="text-muted-foreground group-hover:text-foreground" aria-hidden>→</span>
-      </Link>
     </div>
   );
 }
