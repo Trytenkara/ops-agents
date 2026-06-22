@@ -40,9 +40,11 @@
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1, "ss01" 1;
-    /* Faint dot-grid for a subtle retro paper texture — barely-there, prints clean. */
-    background-image: radial-gradient(hsl(30 20% 30% / 0.05) 1px, transparent 1px);
-    background-size: 22px 22px;
+    /* Ever-so-faint grid for a subtle retro paper texture — barely-there, prints clean. */
+    background-image:
+      linear-gradient(to right, hsl(30 18% 28% / 0.04) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(30 18% 28% / 0.04) 1px, transparent 1px);
+    background-size: 26px 26px;
   }
   @media print {
     body { background-image: none; }

@@ -20,6 +20,19 @@ function fmtQty(qty: number | null, unit: string | null): string {
   return `${qty.toLocaleString()}${unit ? ` ${unit}` : ""}`;
 }
 
+// A material's grade is a "gap" when it's missing OR too basic — e.g. just a
+// purity spec ("100% purity", "99%") that doesn't say which form/grade (HCl,
+// base, USP, anhydrous…), since a name alone can map to several products.
+function gradeGap(grade: string | null | undefined): "missing" | "weak" | null {
+  const g = (grade ?? "").trim().toLowerCase();
+  if (!g) return "missing";
+  // Only a purity/percentage value, no form descriptor → too basic.
+  const purityOnly =
+    /^[≥>~\s]*\d+(\.\d+)?\s*%?\s*(min|minimum)?\s*(purity|pure)?$/.test(g) ||
+    /^(purity|pure|assay)\s*[:\-]?\s*[≥>~]?\s*\d+(\.\d+)?\s*%?$/.test(g);
+  return purityOnly ? "weak" : null;
+}
+
 function fmtDate(d: string | null): string {
   if (!d) return "—";
   const t = new Date(d);
@@ -144,14 +157,14 @@ export function MaterialsPanel({
       )}
 
       {(() => {
-        const missing = profile.materials.filter((m) => !m.grade);
-        if (missing.length === 0) return null;
+        const gaps = profile.materials.filter((m) => gradeGap(m.grade));
+        if (gaps.length === 0) return null;
         return (
           <div className="rounded-lg border border-amber-300/60 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
-            <span className="font-medium">{missing.length} material{missing.length === 1 ? "" : "s"} need a grade.</span>{" "}
-            Specify the grade/form (e.g. HCl, base, USP) on{" "}
-            {missing.slice(0, 4).map((m) => m.label).join(", ")}
-            {missing.length > 4 ? `, +${missing.length - 4} more` : ""} so sourcing matches the right product.
+            <span className="font-medium">{gaps.length} material{gaps.length === 1 ? "" : "s"} need a clearer grade.</span>{" "}
+            A missing grade or a bare purity % (e.g. “100% purity”) doesn&apos;t say which form (HCl, base, USP, anhydrous…). Specify it on{" "}
+            {gaps.slice(0, 4).map((m) => m.label).join(", ")}
+            {gaps.length > 4 ? `, +${gaps.length - 4} more` : ""} so sourcing matches the right product.
           </div>
         );
       })()}
@@ -286,13 +299,25 @@ function MaterialRow({
           {expandable && <span className="ml-2 text-xs text-muted-foreground">{open ? "▾" : "▸"} {detailCount}</span>}
         </TableCell>
         <TableCell>
-          {m.grade ? (
-            <Badge variant="secondary">{m.grade}</Badge>
-          ) : (
-            <Badge variant="warn" title="No grade/form set. Specify the grade (e.g. HCl, base, USP) so sourcing matches the right product — a name alone (e.g. “GBB”) can map to several forms.">
-              Needs grade
-            </Badge>
-          )}
+          {(() => {
+            const gap = gradeGap(m.grade);
+            if (gap === "missing")
+              return (
+                <Badge variant="warn" title="No grade/form set. Specify the grade (e.g. HCl, base, USP) — a name alone (e.g. “GBB”) can map to several forms.">
+                  Needs grade
+                </Badge>
+              );
+            if (gap === "weak")
+              return (
+                <span className="inline-flex items-center gap-1">
+                  <Badge variant="secondary">{m.grade}</Badge>
+                  <Badge variant="warn" title="Too basic — a purity % alone doesn't say which form/grade (HCl, base, USP, anhydrous…). Specify it so sourcing matches the right product.">
+                    too basic
+                  </Badge>
+                </span>
+              );
+            return <Badge variant="secondary">{m.grade}</Badge>;
+          })()}
         </TableCell>
         <TableCell><SourcingChip status={status} base={base} /></TableCell>
         <TableCell>{m.annualVolume != null ? `${m.annualVolume.toLocaleString()}${m.volumeUnit ? ` ${m.volumeUnit}` : ""}/yr` : "—"}</TableCell>
