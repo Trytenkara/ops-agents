@@ -1,6 +1,5 @@
 "use client";
 
-import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -11,11 +10,8 @@ import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
 import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
 
-export type ThreadKind = "outbound" | "inbound";
-
-export type ThreadRow = {
+export type RequoteRow = {
   id: string;
-  kind: ThreadKind;
   subject: string | null;
   supplierId: string | null;
   supplierName: string | null;
@@ -30,87 +26,53 @@ export type ThreadRow = {
   assignedRole: string | null;
 };
 
-const KIND_META: Record<ThreadKind, { label: string; variant: string; title: string }> = {
-  outbound: { label: "Outbound RFQ", variant: "default", title: "Initial outreach email to a supplier." },
-  inbound: { label: "Inbound reply", variant: "success", title: "A reply drafted for a supplier's incoming email." },
-};
-
 function StatusBadge({ status }: { status: string }) {
   const v = status === "staged" ? "warn" : status === "reviewed" ? "success" : status === "sent" ? "default" : "secondary";
   return <Badge variant={v as any}>{status}</Badge>;
 }
 
-const FILTERS: { value: "all" | ThreadKind; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "outbound", label: "Outbound RFQs" },
-  { value: "inbound", label: "Inbound replies" },
-];
-
-export function ThreadsList({ rows, slug }: { rows: ThreadRow[]; slug: string }) {
-  const [kind, setKind] = useState<"all" | ThreadKind>("all");
-
-  const byKind = useMemo(() => (kind === "all" ? rows : rows.filter((r) => r.kind === kind)), [kind, rows]);
-  const counts = useMemo(() => {
-    const c = { all: rows.length, outbound: 0, inbound: 0 } as Record<string, number>;
-    for (const r of rows) c[r.kind]++;
-    return c;
-  }, [rows]);
-
-  const { filtered, controls } = useListFilter(byKind, {
+// Direct-supplier re-quote drafts (Agent 02). For non-marketplace suppliers we
+// can't read a public price, so an expiring quote becomes a draft email asking
+// for a fresh quote — reviewed and sent like any other draft.
+export function RequoteList({ rows, slug }: { rows: RequoteRow[]; slug: string }) {
+  const { filtered, controls } = useListFilter(rows, {
     searchText: (r) => `${r.subject ?? ""} ${r.supplierName ?? ""} ${r.materialName ?? ""}`,
     searchPlaceholder: "subject, supplier, material…",
     sorts: [
-      { value: "newest", label: "Newest", compare: byDateDesc((r: ThreadRow) => r.createdAt) },
-      { value: "supplier", label: "Supplier (A–Z)", compare: byString((r: ThreadRow) => r.supplierName) },
-      { value: "material", label: "Material (A–Z)", compare: byString((r: ThreadRow) => r.materialName) },
-      { value: "status", label: "Status", compare: byString((r: ThreadRow) => r.status) },
+      { value: "newest", label: "Newest", compare: byDateDesc((r: RequoteRow) => r.createdAt) },
+      { value: "supplier", label: "Supplier (A–Z)", compare: byString((r: RequoteRow) => r.supplierName) },
+      { value: "material", label: "Material (A–Z)", compare: byString((r: RequoteRow) => r.materialName) },
+      { value: "status", label: "Status", compare: byString((r: RequoteRow) => r.status) },
     ],
     defaultSort: "newest",
   });
 
   const csvRows = filtered.map((r) => [
-    KIND_META[r.kind].label,
     r.subject ?? "",
     r.supplierName ?? r.supplierId ?? "",
     r.materialName ?? r.materialId ?? "",
+    r.quoteRef ?? "",
     r.status,
-    r.assignedName ?? r.assignedEmail ?? "",
     r.createdAt ?? "",
   ]);
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        {FILTERS.map((f) => (
-          <button
-            key={f.value}
-            onClick={() => setKind(f.value)}
-            className={
-              "rounded-full border px-3 py-1 text-xs font-medium transition-colors " +
-              (kind === f.value ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground")
-            }
-          >
-            {f.label} <span className="tabular-nums opacity-70">{counts[f.value]}</span>
-          </button>
-        ))}
-      </div>
-
       <div className="flex flex-wrap items-end justify-between gap-3">
         {controls}
         <ListCsvButton
-          filename={filenameFor(slug, "threads")}
-          headers={["Kind", "Subject", "Supplier", "Material", "Status", "Assigned", "Staged"]}
+          filename={filenameFor(slug, "requotes")}
+          headers={["Subject", "Supplier", "Material", "Quote", "Status", "Staged"]}
           rows={csvRows}
         />
       </div>
-
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Kind</TableHead>
             <TableHead>Subject</TableHead>
             <TableHead>Supplier</TableHead>
             <TableHead>Material</TableHead>
+            <TableHead>Quote</TableHead>
             <TableHead>Assigned</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Staged</TableHead>
@@ -120,16 +82,10 @@ export function ThreadsList({ rows, slug }: { rows: ThreadRow[]; slug: string })
         <TableBody>
           {filtered.map((d) => (
             <TableRow key={d.id}>
-              <TableCell>
-                <Badge variant={KIND_META[d.kind].variant as any} title={KIND_META[d.kind].title}>
-                  {KIND_META[d.kind].label}
-                </Badge>
-              </TableCell>
               <TableCell className="font-medium">
                 <div className="flex flex-col gap-1">
                   <span>{d.subject ?? "(no subject)"}</span>
                   <DraftSignals metadata={d.metadata} />
-                  {d.quoteRef && <span className="text-xs text-muted-foreground">quote {d.quoteRef}</span>}
                 </div>
               </TableCell>
               <TableCell title={d.supplierId ?? undefined}>
@@ -138,6 +94,7 @@ export function ThreadsList({ rows, slug }: { rows: ThreadRow[]; slug: string })
               <TableCell title={d.materialId ?? undefined}>
                 {d.materialName ?? (d.materialId ? <span className="text-xs text-muted-foreground">name unavailable</span> : "—")}
               </TableCell>
+              <TableCell className="text-muted-foreground">{d.quoteRef ?? "—"}</TableCell>
               <TableCell><OperatorChip name={d.assignedName} email={d.assignedEmail} role={d.assignedRole} /></TableCell>
               <TableCell><StatusBadge status={d.status} /></TableCell>
               <TableCell className="text-muted-foreground">{relativeTime(d.createdAt)}</TableCell>
@@ -146,9 +103,7 @@ export function ThreadsList({ rows, slug }: { rows: ThreadRow[]; slug: string })
           ))}
           {filtered.length === 0 && (
             <TableRow>
-              <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
-                No threads match.
-              </TableCell>
+              <TableCell colSpan={8} className="text-center text-muted-foreground py-8">No re-quote drafts.</TableCell>
             </TableRow>
           )}
         </TableBody>

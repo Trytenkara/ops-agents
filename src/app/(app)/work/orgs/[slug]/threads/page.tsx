@@ -8,14 +8,12 @@ import { ThreadsList, type ThreadRow, type ThreadKind } from "@/components/threa
 export const dynamic = "force-dynamic";
 
 function kindOf(d: any): ThreadKind {
-  if (d.metadata?.draft_kind === "inbound_reply") return "inbound";
-  if (d.agents?.slug === "agent-02-revalidation") return "expiring";
-  return "outbound";
+  return d.metadata?.draft_kind === "inbound_reply" ? "inbound" : "outbound";
 }
 
-// Unified email-thread workspace: outbound RFQs, inbound replies, and expiring-
-// quote re-quotes — all draft_references for the client, filterable by kind.
-// Replaces the separate Outreach / Inbound / Expiries tabs.
+// Unified email-thread workspace: outbound RFQs + inbound supplier replies for
+// the client, filterable by kind. Re-quote drafts for expiring quotes live on
+// the Price Index tab, not here.
 export default async function OrgThreadsPage({ params }: { params: { slug: string } }) {
   const admin = createAdminClient();
   const { data: org } = await admin.from("orgs").select("id, name").eq("slug", params.slug).maybeSingle();
@@ -44,7 +42,9 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
     // Tenkara unreachable — rows fall back to "name unavailable".
   }
 
-  const threadRows: ThreadRow[] = rows.map((d: any) => ({
+  const threadRows: ThreadRow[] = rows
+    .filter((d: any) => d.agents?.slug !== "agent-02-revalidation")
+    .map((d: any) => ({
     id: d.id,
     kind: kindOf(d),
     subject: d.subject ?? null,
