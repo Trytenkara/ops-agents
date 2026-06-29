@@ -21,6 +21,17 @@ import { recheckMarketplaceQuote, type RecheckResult } from "./price-recheck";
 const MAX_QUOTES_PER_RUN = 25;
 const SIGNIFICANCE_THRESHOLD_PCT = 1.0; // <1% drift treated as unchanged
 
+// Each recheck is an Opus + web_search call (~25s). Run sequentially, the cap's
+// worth of quotes blows past the 300s function budget: the run never reaches
+// completion, so last_run_at/lock never update and the scheduler re-fires it
+// every ~30min in a perpetual timeout loop. Two guards fix that:
+//  - CONCURRENCY: process rechecks in bounded-parallel batches so a full cap of
+//    quotes fits inside the budget.
+//  - RUN_DEADLINE_MS: stop before the function cap and exit cleanly with
+//    partial progress, so completion (last_run_at + lock release) always runs.
+const CONCURRENCY = 4;
+const RUN_DEADLINE_MS = 270_000;
+
 interface QuoteRow {
   id: string;                      // material_quotes.id
   material_id: string;
@@ -90,6 +101,7 @@ registerAgent({
     "Re-checks current public pricing on Tenkara marketplace quotes expiring within 7 days. Uses Anthropic web_search to find a current price signal per quote and writes findings to marketplace_check_findings for ops review. Read-only on Tenkara; never writes back.",
   async run(ctx) {
     const admin = createAdminClient();
+    const deadline = Date.now() + RUN_DEADLINE_MS;
 
     if (!process.env.ANTHROPIC_API_KEY) {
       await ctx.log("ANTHROPIC_API_KEY not set - cannot run price re-check", {
@@ -135,7 +147,7 @@ registerAgent({
     const pendingFor = new Set((existing ?? []).map((r: any) => r.quote_id));
 
     let written = 0;
-    let skippedPending = 0;
+    let stoppedEarly = false;
     const counts = {
       signal_matches_baseline: 0,
       signal_diverges: 0,
@@ -145,12 +157,12 @@ registerAgent({
       login_required: 0,
     };
 
-    for (const q of quotes) {
-      if (pendingFor.has(q.id)) {
-        skippedPending++;
-        continue;
-      }
+    const toProcess = quotes.filter((q) => !pendingFor.has(q.id));
+    const skippedPending = quotes.length - toProcess.length;
 
+    // Re-check one quote (web_search → classify → insert finding). Returns the
+    // classification on success, or null if the insert failed (already logged).
+    const processQuote = async (q: QuoteRow): Promise<string | null> => {
       let result: RecheckResult;
       try {
         result = await recheckMarketplaceQuote({
@@ -181,7 +193,6 @@ registerAgent({
 
       const oaOrgId = q.tenkara_org_id ? tenkaraOrgToOaOrg.get(q.tenkara_org_id) ?? null : null;
       const classification = classify(q.price, result.current_price, result);
-      counts[classification as keyof typeof counts]++;
 
       // Prices that match baseline carry no signal — auto-resolve them so the
       // human review queue only holds actionable findings (diverges / needs_review
@@ -216,13 +227,34 @@ registerAgent({
           step: "insert",
           data: { quote_id: q.id },
         });
-        continue;
+        return null;
       }
-      written++;
       await ctx.log(
         `${classification}: ${q.supplier_name} x ${q.material_name} (baseline=${q.price ?? "—"}, current=${result.current_price ?? "—"})`,
         { step: "finding", data: { quote_id: q.id, classification } }
       );
+      return classification;
+    };
+
+    // Bounded-parallel batches, with a wall-clock guard between batches so the
+    // run always exits cleanly inside the function budget (partial is fine —
+    // unprocessed quotes are still expiring and get picked up next run).
+    for (let i = 0; i < toProcess.length; i += CONCURRENCY) {
+      if (Date.now() > deadline) {
+        stoppedEarly = true;
+        await ctx.log(
+          `Stopping at time budget — processed ${written}, ${toProcess.length - i} eligible quotes left for next run`,
+          { step: "deadline" }
+        );
+        break;
+      }
+      const batch = toProcess.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(batch.map((q) => processQuote(q)));
+      for (const classification of results) {
+        if (classification == null) continue;
+        counts[classification as keyof typeof counts]++;
+        written++;
+      }
     }
 
     ctx.setItemsProcessed(written);
@@ -233,7 +265,8 @@ registerAgent({
         `${counts.signal_matches_baseline} unchanged · ${counts.signal_diverges} diverged · ` +
         `${counts.no_signal_found} no signal · ${counts.needs_review} needs review · ${counts.link_broken} link broken` +
         (counts.login_required ? ` · ${counts.login_required} need manual login` : "") +
-        (skippedPending ? ` · ${skippedPending} skipped (already pending)` : "")
+        (skippedPending ? ` · ${skippedPending} skipped (already pending)` : "") +
+        (stoppedEarly ? " · stopped at time budget (more next run)" : "")
     );
   },
 });
