@@ -3,13 +3,18 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 
 // No-reply follow-ups (part of Agent 15). When a supplier never replies to the
 // initial RFQ, draft up to two gentle nudges — at 4 and 8 days after the RFQ
-// was sent — staged for a human to send. Still no reply after that → Agent 07's
-// 14-day case escalation takes over. Nothing auto-sends.
+// was sent — staged for a human to send. Once both nudges are out and the
+// supplier is still silent, route the supplier to Cases as a calling escalation
+// so a call operator can phone them. Nothing auto-sends.
 
 const FOLLOWUP_DAYS = [4, 8]; // days-after-sent for follow-up #1 and #2
 const DAY = 24 * 3600 * 1000;
 const MAX_PER_RUN = 50;
-const TERMINAL = new Set(["stale", "closed_declined", "finalized", "price_captured"]);
+// Grace after the last (day-8) follow-up before we escalate to a phone call —
+// gives a slow supplier a final window to reply by email first (≈ day 10).
+const CALLING_ESCALATE_AFTER_DAYS = 2;
+const MAX_ESCALATIONS_PER_RUN = 50;
+const TERMINAL = new Set(["stale", "closed_declined", "finalized", "price_captured", "escalated_to_calling"]);
 
 type Ctx = { agentId: string | null; runId: string | null; log: (m: string, o?: any) => Promise<void> };
 type Admin = ReturnType<typeof createAdminClient>;
@@ -31,16 +36,82 @@ function buildFollowupBody(opts: { contactName: string | null; material: string 
   ].join("\n");
 }
 
-export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ drafted: number; skipped: number }> {
+// Create a calling-escalation case for a silent supplier and stamp the draft so
+// we never escalate the same conversation twice. Returns true if a case was
+// created. Defensive against duplicates: skips if an open calling case already
+// exists for this supplier × material × org.
+async function escalateToCalling(
+  ctx: Ctx,
+  admin: Admin,
+  r: any,
+  meta: any
+): Promise<boolean> {
+  const { data: existing } = await admin
+    .from("cases")
+    .select("id")
+    .eq("org_id", r.org_id)
+    .eq("type", "calling_escalation")
+    .in("status", ["open", "in_progress"])
+    .eq("supplier_id", r.supplier_id ?? "")
+    .eq("material_id", r.material_id ?? "")
+    .maybeSingle();
+  if (existing) {
+    // Already escalated elsewhere — stamp so we stop reconsidering it.
+    await admin
+      .from("draft_references")
+      .update({ metadata: { ...meta, calling_escalated_at: new Date().toISOString(), flow_status: "escalated_to_calling" } })
+      .eq("id", r.id);
+    return false;
+  }
+
+  const supplierName = meta.supplier_name ?? r.supplier_id ?? "supplier";
+  const materialName = meta.material_name ?? null;
+  const { error: caseErr } = await admin.from("cases").insert({
+    org_id: r.org_id,
+    type: "calling_escalation",
+    status: "open",
+    supplier_id: r.supplier_id ?? null,
+    material_id: r.material_id ?? null,
+    originating_thread_id: r.thread_id ?? null,
+    recommended_action: `Call ${supplierName}${materialName ? ` re: ${materialName}` : ""} — no reply after ${FOLLOWUP_DAYS.length} email follow-ups. Confirm the RFQ was received and the right contact, and request a quote.`,
+    assigned_operator: r.assigned_operator ?? null,
+    metadata: {
+      source_agent: "agent-15-reply-manager",
+      source_run_id: ctx.runId,
+      reason: "no_reply_after_followups",
+      draft_reference_id: r.id,
+      thread_id: r.thread_id ?? null,
+      followup_count: Number(meta.followup_count ?? 0),
+      last_followup_at: meta.last_followup_at ?? null,
+      supplier_name: meta.supplier_name ?? null,
+      supplier_contact_email: meta.supplier_contact_email ?? null,
+      material_name: materialName,
+    },
+  });
+  if (caseErr) {
+    await ctx.log(`Calling escalation insert failed for ${supplierName}: ${caseErr.message}`, { level: "warn", step: "calling_escalation" });
+    return false;
+  }
+
+  await admin
+    .from("draft_references")
+    .update({ metadata: { ...meta, calling_escalated_at: new Date().toISOString(), flow_status: "escalated_to_calling" } })
+    .eq("id", r.id);
+  await ctx.log(`Calling escalation opened for ${supplierName} (no reply after ${FOLLOWUP_DAYS.length} follow-ups)`, { step: "calling_escalation" });
+  return true;
+}
+
+export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ drafted: number; skipped: number; escalated: number }> {
   let drafted = 0;
   let skipped = 0;
+  let escalated = 0;
 
   // Only follow up on Agent 04's initial cold outreach — not re-quotes (Agent 02)
   // or reply responses (Agent 15 itself).
   const { data: a4 } = await admin.from("agents").select("id").eq("slug", "agent-04-outreach").maybeSingle();
   if (!a4?.id) {
     await ctx.log("follow-up: agent-04-outreach not found, skipping", { step: "followup" });
-    return { drafted, skipped };
+    return { drafted, skipped, escalated };
   }
 
   const { data: sent } = await admin
@@ -57,8 +128,19 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
     if (drafted >= MAX_PER_RUN) break;
     const meta = (r.metadata ?? {}) as any;
     const fu = Number(meta.followup_count ?? 0);
-    if (fu >= FOLLOWUP_DAYS.length) continue; // both follow-ups already drafted
     if (TERMINAL.has(meta.flow_status)) continue;
+
+    // Both follow-ups sent and still silent → escalate to a phone call once the
+    // grace window has elapsed. Stamped via calling_escalated_at so we only do
+    // this once per conversation.
+    if (fu >= FOLLOWUP_DAYS.length) {
+      if (meta.calling_escalated_at) continue;
+      if (escalated >= MAX_ESCALATIONS_PER_RUN) continue;
+      const lastFu = meta.last_followup_at ? new Date(meta.last_followup_at).getTime() : null;
+      if (!lastFu || (now - lastFu) / DAY < CALLING_ESCALATE_AFTER_DAYS) continue; // grace not elapsed
+      if (await escalateToCalling(ctx, admin, r, meta)) escalated++;
+      continue;
+    }
 
     const sentAt = r.reviewed_at ? new Date(r.reviewed_at).getTime() : null;
     if (!sentAt) continue;
@@ -114,5 +196,5 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
     }
   }
 
-  return { drafted, skipped };
+  return { drafted, skipped, escalated };
 }

@@ -5,7 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 const caseSchema = z.object({
   org_slug: z.string(),
-  type: z.enum(["price_change","lead_time_change","availability_change","quality_change","po_timing","client_info_request","archive_request","other"]),
+  type: z.enum(["price_change","lead_time_change","availability_change","quality_change","po_timing","client_info_request","archive_request","calling_escalation","other"]),
   supplier_id: z.string().optional(),
   material_id: z.string().optional(),
   originating_thread_id: z.string().optional(),

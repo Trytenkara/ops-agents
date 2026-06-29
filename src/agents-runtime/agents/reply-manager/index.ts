@@ -40,7 +40,8 @@ type FlowStatus =
   | "price_captured"
   | "finalized"
   | "stale"
-  | "closed_declined";
+  | "closed_declined"
+  | "escalated_to_calling"; // no reply after both follow-ups → routed to Cases for a call
 
 interface Classification {
   category: "price_given" | "no_record" | "question" | "partial" | "declined" | "auto_reply";
@@ -369,7 +370,7 @@ registerAgent({
 
     // No-reply follow-ups: nudge suppliers who never replied to the initial RFQ
     // (drafted at 4d and 8d, staged for review). Best-effort; never fails the run.
-    let followups = { drafted: 0, skipped: 0 };
+    let followups = { drafted: 0, skipped: 0, escalated: 0 };
     try {
       followups = await runNoReplyFollowups(
         { agentId: ctx.agentId, runId: ctx.runId, log: (m, o) => ctx.log(m, o) },
@@ -379,9 +380,9 @@ registerAgent({
       await ctx.log(`No-reply follow-up sweep failed: ${e?.message ?? e}`, { level: "warn", step: "followup" });
     }
 
-    ctx.setItemsProcessed(responded + priced + stale + closed + bounced + awaitingHuman + followups.drafted);
+    ctx.setItemsProcessed(responded + priced + stale + closed + bounced + awaitingHuman + followups.drafted + followups.escalated);
     ctx.setStatus("success");
-    ctx.setSummary(`Threads: ${byThread.size} · ${responded} responded · ${priced} priced · ${awaitingHuman} awaiting-human · ${bounced} bounced · ${stale} stale · ${closed} closed · ${followups.drafted} follow-ups · ${skipped} skipped`);
+    ctx.setSummary(`Threads: ${byThread.size} · ${responded} responded · ${priced} priced · ${awaitingHuman} awaiting-human · ${bounced} bounced · ${stale} stale · ${closed} closed · ${followups.drafted} follow-ups · ${followups.escalated} calling-escalations · ${skipped} skipped`);
   },
 });
 
