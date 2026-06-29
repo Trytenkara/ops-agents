@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { queryRecentMaterials, findCandidatesForMaterial, existingQuotesForMaterials, type CandidateSupplier, type MaterialRow } from "./sql";
 import { scoutSuppliersForMaterial, scoreScoutConfidence, scoutCompleteness, type ScoutSupplier } from "./scout";
 import { toCsv } from "@/lib/csv";
+import { getSourcingExclusions, exclusionReason, type SourcingExclusions } from "@/lib/tenkara-sourcing-exclusions";
 import { uploadCsvAndSign } from "@/lib/storage";
 
 // v1 trims (vs. full spec):
@@ -173,7 +174,29 @@ registerAgent({
     let materialsWithoutLeads = 0;
     let materialsWithScoutLeads = 0;
     let skippedByMirror = 0;
+    let skippedByExclusion = 0;
     const noLeadMaterials: string[] = [];
+
+    // Per-client sourcing exclusions (do-not-contact companies + excluded
+    // countries), fetched once per Tenkara org and cached for the run. Fail-open
+    // here: a transient Tenkara read shouldn't block lead creation — Agent 04
+    // re-checks fail-closed before any email actually goes out.
+    const exclusionCache = new Map<string, SourcingExclusions>();
+    const exclusionsFor = async (tenkaraOrgId: string | null | undefined): Promise<SourcingExclusions | null> => {
+      if (!tenkaraOrgId) return null;
+      if (exclusionCache.has(tenkaraOrgId)) return exclusionCache.get(tenkaraOrgId)!;
+      try {
+        const ex = await getSourcingExclusions(tenkaraOrgId);
+        exclusionCache.set(tenkaraOrgId, ex);
+        return ex;
+      } catch (e: any) {
+        await ctx.log(`Sourcing-exclusions lookup failed for org ${tenkaraOrgId} (non-fatal): ${e?.message ?? e}`, {
+          level: "warn",
+          step: "exclusions",
+        });
+        return null;
+      }
+    };
 
     for (const material of materials) {
       if (leadsCreated >= MAX_NEW_LEADS_PER_RUN) {
@@ -237,12 +260,45 @@ registerAgent({
         });
       }
 
+      // 5a-pre. Drop candidates the client has excluded — do-not-contact
+      //         companies or excluded-country suppliers (Tenkara client
+      //         settings). Applied to both graph and scout candidates below.
+      const ex = await exclusionsFor(material.tenkara_org_id);
+      const keepIfAllowed = <T extends { supplier_name?: string | null }>(
+        rows: T[],
+        get: (r: T) => { name?: string | null; website?: string | null; country?: string | null }
+      ): T[] => {
+        if (!ex || ex.raw.companies + ex.raw.countries === 0) return rows;
+        const kept: T[] = [];
+        for (const r of rows) {
+          const reason = exclusionReason(get(r), ex);
+          if (reason) {
+            skippedByExclusion++;
+            continue;
+          }
+          kept.push(r);
+        }
+        return kept;
+      };
+
+      const freshAllowed = keepIfAllowed(fresh, (c) => ({
+        name: c.supplier_name,
+        website: c.supplier_website,
+        country: c.supplier_country,
+      }));
+      if (fresh.length > 0 && freshAllowed.length < fresh.length) {
+        await ctx.log(
+          `Excluded ${fresh.length - freshAllowed.length} graph candidate(s) for ${matLabel} (do-not-contact / excluded country)`,
+          { step: "exclusions", data: { material_id: material.id } }
+        );
+      }
+
       // 5a. Stage graph-derived leads first (high confidence, deterministic).
       let stagedThisMaterial = 0;
       const graphHosts = new Set<string>();
-      if (fresh.length > 0) {
+      if (freshAllowed.length > 0) {
         const budget = MAX_NEW_LEADS_PER_RUN - leadsCreated;
-        const toInsert = fresh.slice(0, budget).map((c) => ({
+        const toInsert = freshAllowed.slice(0, budget).map((c) => ({
           org_id: oaOrgId,
           supplier_name: c.supplier_name,
           supplier_id: c.supplier_id,
@@ -264,7 +320,7 @@ registerAgent({
           confidence_score: scoreCandidate(c),
           agent_run_id: ctx.runId,
         }));
-        for (const c of fresh) {
+        for (const c of freshAllowed) {
           const h = hostOf(c.supplier_website);
           if (h) graphHosts.add(h);
         }
@@ -312,9 +368,21 @@ registerAgent({
           });
         }
 
-        if (scoutResults.length > 0) {
+        const scoutAllowed = keepIfAllowed(scoutResults, (s) => ({
+          name: s.supplier_name,
+          website: s.url,
+          country: s.country,
+        }));
+        if (scoutResults.length > 0 && scoutAllowed.length < scoutResults.length) {
+          await ctx.log(
+            `Excluded ${scoutResults.length - scoutAllowed.length} scout candidate(s) for ${matLabel} (do-not-contact / excluded country)`,
+            { step: "exclusions", data: { material_id: material.id } }
+          );
+        }
+
+        if (scoutAllowed.length > 0) {
           const scoutBudget = MAX_NEW_LEADS_PER_RUN - leadsCreated;
-          const scoutToInsert = scoutResults.slice(0, scoutBudget).map((s) => ({
+          const scoutToInsert = scoutAllowed.slice(0, scoutBudget).map((s) => ({
             org_id: oaOrgId,
             supplier_name: s.supplier_name,
             supplier_id: null,                  // no Tenkara supplier_id — new discovery
@@ -440,6 +508,7 @@ registerAgent({
     ctx.setSummary(
       `Staged ${leadsCreated} raw leads (${graphLeads} graph, ${scoutLeadsCreated} scout) across ${materialsWithLeads} material${materialsWithLeads === 1 ? "" : "s"} · ` +
         `${materialsWithScoutLeads} got scout leads · ${materialsWithoutLeads} empty · ${skippedByMirror} graph candidates skipped by 90d mirror` +
+        (skippedByExclusion ? ` · ${skippedByExclusion} skipped (do-not-contact / excluded country)` : "") +
         (scoutEnabled ? "" : " · scout off (no ANTHROPIC_API_KEY)") +
         (csvUrl ? ` · CSV ready` : "") +
         (noLeadMaterials.length

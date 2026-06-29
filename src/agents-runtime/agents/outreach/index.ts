@@ -4,6 +4,7 @@ import { getOrgOperatorPool, pickSupplierOperator, type OperatorRef } from "@/li
 import { classifyClient } from "../quote-revalidation/config";
 import { runOutreachForLead } from "./run-outreach";
 import { suppliersWithPriorRelationship } from "@/lib/tenkara-relationships";
+import { getSourcingExclusions, exclusionReason } from "@/lib/tenkara-sourcing-exclusions";
 
 // v1 trim (vs. full spec):
 //   - pre-outreach only. Reply tracking + follow-up cadence land with Agent 08.
@@ -172,6 +173,7 @@ registerAgent({
     //     org (any prior material_quotes row in Tenkara). An initial-RFQ email
     //     would be wrong — these need a re-engagement template, not a cold ask.
     let priorRelSkipped = 0;
+    let exclusionSkipped = 0;
     const byOrg = new Map<string, Candidate[]>();
     for (const c of candidates) {
       const arr = byOrg.get(c.lead.org_id!) ?? [];
@@ -203,16 +205,38 @@ registerAgent({
         priorRelSkipped += group.length;
         continue;
       }
+
+      // Client do-not-contact / excluded-country suppression (Tenkara client
+      // settings). This is the hard gate before any email — fail closed: if we
+      // can't read the client's exclusions, don't risk contacting a banned
+      // supplier. Agent 03 already filters at lead creation; this catches
+      // manually-added and pre-existing leads too.
+      let exclusions;
+      try {
+        exclusions = await getSourcingExclusions(tenkaraOrgId);
+      } catch (e: any) {
+        await ctx.log(`Sourcing-exclusions check failed for org ${org?.name}: ${e.message}`, {
+          level: "error", step: "exclusions",
+        });
+        exclusionSkipped += group.length;
+        continue;
+      }
+
       for (const c of group) {
         if (c.lead.supplier_id && priorSet.has(c.lead.supplier_id)) {
           priorRelSkipped++;
+          continue;
+        }
+        const p = (c.lead.payload ?? {}) as any;
+        if (exclusionReason({ name: c.lead.supplier_name, website: p.supplier_website ?? p.source_url, country: p.supplier_country }, exclusions)) {
+          exclusionSkipped++;
           continue;
         }
         candidatesNoPrior.push(c);
       }
     }
     await ctx.log(
-      `Prior-relationship filter: ${candidatesNoPrior.length} kept · ${priorRelSkipped} skipped (already-known suppliers)`,
+      `Prior-relationship + exclusion filter: ${candidatesNoPrior.length} kept · ${priorRelSkipped} skipped (already-known) · ${exclusionSkipped} skipped (do-not-contact / excluded country)`,
       { step: "prior_relationship" }
     );
 
