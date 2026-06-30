@@ -46,6 +46,7 @@ export function SuppliersCsvUpload({ orgId }: { orgId: string }) {
             <span className="text-muted-foreground">
               Added <span className="font-medium text-foreground">{res.inserted}</span>
               {res.skippedDuplicate ? ` · ${res.skippedDuplicate} dup` : ""}
+              {res.skippedFuzzyDuplicate ? ` · ${res.skippedFuzzyDuplicate} likely dup (name match)` : ""}
               {res.skippedNoMatch ? ` · ${res.skippedNoMatch} no material match` : ""}
               {res.skippedNoEmail ? ` · ${res.skippedNoEmail} bad email` : ""}
               {res.unmatchedSample && res.unmatchedSample.length > 0 ? ` (e.g. ${res.unmatchedSample.slice(0, 3).join(", ")})` : ""}

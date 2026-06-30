@@ -6,6 +6,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { loadMatchCandidates, matchOrderToMaterial } from "@/lib/material-profile";
 import { sanitizeTiers, type PriceTier } from "@/lib/price-tiers";
+import { normalizeCompanyName, hostOf } from "@/lib/tenkara-sourcing-exclusions";
+import { isSameCompanyName } from "@/lib/fuzzy";
 
 interface ActionResult {
   ok: boolean;
@@ -17,6 +19,7 @@ export interface CsvUploadResult {
   error?: string;
   inserted?: number;
   skippedDuplicate?: number;
+  skippedFuzzyDuplicate?: number;
   skippedNoMatch?: number;
   skippedNoEmail?: number;
   unmatchedSample?: string[];
@@ -106,19 +109,44 @@ export async function uploadSuppliersCsv(orgId: string, form: FormData): Promise
   }
   const candById = new Map(candidates.map((c) => [c.id, c]));
 
-  // Existing active leads for this org → dedup set keyed by email|material_id.
+  // Existing active leads for this org → per-material dedup index. A supplier is
+  // a duplicate if, for the SAME material, it matches an existing lead by email,
+  // website host, exact normalized name, OR a fuzzy name match (typo variants).
   const { data: existing } = await admin
     .from("leads_in_flight")
-    .select("material_id, payload")
+    .select("material_id, supplier_name, payload")
     .eq("org_id", orgId)
     .eq("status", "active");
-  const seen = new Set<string>();
+
+  type MatIndex = { emails: Set<string>; hosts: Set<string>; names: string[] };
+  const byMaterial = new Map<string, MatIndex>();
+  const idxFor = (matId: string): MatIndex => {
+    let m = byMaterial.get(matId);
+    if (!m) { m = { emails: new Set(), hosts: new Set(), names: [] }; byMaterial.set(matId, m); }
+    return m;
+  };
   for (const r of existing ?? []) {
+    const matId = (r.material_id as string) ?? "";
+    const ix = idxFor(matId);
     const em = ((r.payload as any)?.supplier_contact_email as string | undefined)?.toLowerCase();
-    if (em) seen.add(`${em}|${r.material_id ?? ""}`);
+    if (em) ix.emails.add(em);
+    const host = hostOf((r.payload as any)?.supplier_website);
+    if (host) ix.hosts.add(host);
+    const nm = normalizeCompanyName(r.supplier_name as string | null);
+    if (nm) ix.names.push(nm);
   }
 
-  let skippedDuplicate = 0, skippedNoMatch = 0, skippedNoEmail = 0;
+  // True if this supplier already exists for the material (exact or fuzzy).
+  const isDuplicate = (ix: MatIndex, email: string, host: string | null, name: string): "exact" | "fuzzy" | null => {
+    if (email && ix.emails.has(email.toLowerCase())) return "exact";
+    if (host && ix.hosts.has(host)) return "exact";
+    const nm = normalizeCompanyName(name);
+    if (nm && ix.names.includes(nm)) return "exact";
+    if (nm && ix.names.some((existing) => isSameCompanyName(nm, existing))) return "fuzzy";
+    return null;
+  };
+
+  let skippedDuplicate = 0, skippedFuzzyDuplicate = 0, skippedNoMatch = 0, skippedNoEmail = 0;
   const unmatched: string[] = [];
   const toInsert: any[] = [];
 
@@ -132,9 +160,17 @@ export async function uploadSuppliersCsv(orgId: string, form: FormData): Promise
     const materialId = matchOrderToMaterial(materialText, candidates);
     if (!materialId) { skippedNoMatch++; if (unmatched.length < 8) unmatched.push(materialText); continue; }
 
-    const key = `${email.toLowerCase()}|${materialId}`;
-    if (seen.has(key)) { skippedDuplicate++; continue; }
-    seen.add(key);
+    const website = iWebsite >= 0 ? (r[iWebsite] ?? "").trim() || null : null;
+    const host = hostOf(website);
+    const ix = idxFor(materialId);
+    const dup = isDuplicate(ix, email, host, supplier);
+    if (dup === "exact") { skippedDuplicate++; continue; }
+    if (dup === "fuzzy") { skippedFuzzyDuplicate++; continue; }
+    // Accept — record this supplier in the index so later CSV rows dedup against it too.
+    ix.emails.add(email.toLowerCase());
+    if (host) ix.hosts.add(host);
+    const nm = normalizeCompanyName(supplier);
+    if (nm) ix.names.push(nm);
 
     toInsert.push({
       org_id: orgId,
@@ -148,7 +184,7 @@ export async function uploadSuppliersCsv(orgId: string, form: FormData): Promise
       payload: {
         supplier_contact_email: email,
         supplier_contact_name: iContact >= 0 ? (r[iContact] ?? "").trim() || null : null,
-        supplier_website: iWebsite >= 0 ? (r[iWebsite] ?? "").trim() || null : null,
+        supplier_website: website,
         supplier_country: iCountry >= 0 ? (r[iCountry] ?? "").trim() || null : null,
         enrichment: { email_check: { format_valid: true } },
         tenkara_org_id: org.tenkara_org_id,
@@ -168,7 +204,7 @@ export async function uploadSuppliersCsv(orgId: string, form: FormData): Promise
       action: "leads.bulk_upload",
       target_table: "leads_in_flight",
       target_id: orgId,
-      diff: { inserted: toInsert.length, skippedDuplicate, skippedNoMatch, skippedNoEmail },
+      diff: { inserted: toInsert.length, skippedDuplicate, skippedFuzzyDuplicate, skippedNoMatch, skippedNoEmail },
     });
   }
 
@@ -177,6 +213,7 @@ export async function uploadSuppliersCsv(orgId: string, form: FormData): Promise
     ok: true,
     inserted: toInsert.length,
     skippedDuplicate,
+    skippedFuzzyDuplicate,
     skippedNoMatch,
     skippedNoEmail,
     unmatchedSample: unmatched,
