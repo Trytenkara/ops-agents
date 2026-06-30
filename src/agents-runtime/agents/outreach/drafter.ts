@@ -14,6 +14,7 @@ export interface DraftInput {
   materialName: string;
   inciName: string | null;
   signal: string | null; // how we found them — kept for telemetry, no longer changes copy
+  isMarketplace?: boolean; // marketplace supplier → ask for bulk/wholesale pricing beyond listed retail
 }
 
 export interface ComposedDraft {
@@ -63,22 +64,41 @@ export function composeOutreachDraft(input: DraftInput): ComposedDraft {
     : input.materialName;
 
   const subject = pickSubject(input);
-  const body = [
-    greeting(input.supplierContactName, input.supplierCompanyName),
-    "",
-    `We are expanding our supplier network at ${senderOrg} and are looking for ${materialLabel}.`,
-    "",
-    "Do you supply this? If so, could you kindly share current pricing, estimated lead times, and MOQs?",
-    "",
-    "Additionally, if you have a product catalog, please share it. We're evaluating suppliers across multiple raw materials and will share what you carry with the rest of our procurement team.",
-    "",
-    "We may have follow-up questions as we go along, and any context you can share is helpful.",
-    "",
-    "Thanks,",
-    "",
-    "Procurement Team",
-    senderOrg,
-  ].join("\n");
+  const body = (
+    input.isMarketplace
+      ? [
+          // Marketplace supplier: they have public/listed retail pricing, so we
+          // ask for the bulk/wholesale tier and volume breaks beyond the listing.
+          greeting(input.supplierContactName, input.supplierCompanyName),
+          "",
+          `We are sourcing ${materialLabel} at ${senderOrg} and saw your listing.`,
+          "",
+          "Beyond your published pricing, could you share your bulk and wholesale rates? We're after volume price breaks (e.g. at larger pack sizes or full pallet/ton quantities), along with lead times and MOQs.",
+          "",
+          "If you have a wholesale price list or catalog, please send it over. We evaluate suppliers across multiple raw materials and will share what you carry with the rest of our procurement team.",
+          "",
+          "Thanks,",
+          "",
+          "Procurement Team",
+          senderOrg,
+        ]
+      : [
+          greeting(input.supplierContactName, input.supplierCompanyName),
+          "",
+          `We are expanding our supplier network at ${senderOrg} and are looking for ${materialLabel}.`,
+          "",
+          "Do you supply this? If so, could you kindly share current pricing, estimated lead times, and MOQs?",
+          "",
+          "Additionally, if you have a product catalog, please share it. We're evaluating suppliers across multiple raw materials and will share what you carry with the rest of our procurement team.",
+          "",
+          "We may have follow-up questions as we go along, and any context you can share is helpful.",
+          "",
+          "Thanks,",
+          "",
+          "Procurement Team",
+          senderOrg,
+        ]
+  ).join("\n");
 
   return sanitizeDraft({ subject, body });
 }

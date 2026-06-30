@@ -44,6 +44,12 @@ export async function runOutreachForLead(input: RunOutreachInput): Promise<RunOu
   const log = input.log ?? (async () => {});
   const payload = (lead.payload ?? {}) as any;
 
+  const isMarketplace =
+    payload.site_type === "M" ||
+    payload.site_type === "MS" ||
+    payload.supplier_role === "Marketplace" ||
+    payload.enrichment?.tenkara_supplier?.is_marketplace === true;
+
   const draft = composeOutreachDraft({
     mode,
     ghostBrand,
@@ -53,6 +59,7 @@ export async function runOutreachForLead(input: RunOutreachInput): Promise<RunOu
     materialName: lead.material_name ?? "the material",
     inciName: payload.inci_name ?? null,
     signal: payload.signal ?? null,
+    isMarketplace,
   });
 
   const emailClient = coldOutboundEmailClient("04");
