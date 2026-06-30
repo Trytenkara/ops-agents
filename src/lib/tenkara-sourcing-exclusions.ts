@@ -105,6 +105,36 @@ export async function getSourcingExclusions(orgTenkaraId: string | null | undefi
   };
 }
 
+export interface SourcingExclusionsDetail {
+  companies: Array<{ name: string | null; website: string | null }>;
+  countries: string[];
+}
+
+// Display-oriented read: the raw do-not-contact companies and excluded
+// countries a client configured, for surfacing on the client profile so ops can
+// confirm what sourcing/outreach is suppressing.
+export async function getSourcingExclusionsDetail(
+  orgTenkaraId: string | null | undefined
+): Promise<SourcingExclusionsDetail> {
+  if (!orgTenkaraId) return { companies: [], countries: [] };
+  const rows = await tenkaraQuery<SettingsRow>(
+    `select dnc_suppliers, excluded_material_countries, excluded_packaging_countries, excluded_sourcing
+       from public.user_supplier_settings
+      where organization_id = $1::uuid
+      limit 1`,
+    [orgTenkaraId]
+  );
+  const row = rows[0];
+  if (!row) return { companies: [], countries: [] };
+  const companies = (row.dnc_suppliers ?? [])
+    .map((c) => ({ name: c?.name ?? null, website: c?.website ?? null }))
+    .filter((c) => c.name || c.website);
+  const countrySet = new Set<string>();
+  for (const c of row.excluded_material_countries ?? []) if (c?.trim()) countrySet.add(c.trim());
+  for (const c of row.excluded_sourcing?.countries ?? []) if (c?.trim()) countrySet.add(c.trim());
+  return { companies, countries: Array.from(countrySet) };
+}
+
 export interface ExclusionCheckInput {
   name?: string | null;
   website?: string | null;

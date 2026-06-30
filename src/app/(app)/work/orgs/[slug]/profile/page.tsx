@@ -2,6 +2,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { notFound } from "next/navigation";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { ClientProfilePanel, type ProfileValue, type SettingsValue, type UploadItem } from "@/components/client-profile-form";
+import { getSourcingExclusionsDetail, type SourcingExclusionsDetail } from "@/lib/tenkara-sourcing-exclusions";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
@@ -58,6 +59,17 @@ export default async function ClientProfilePage({ params }: { params: { slug: st
   const uploads = (uploadsRes.data ?? []) as UploadItem[];
   const canEdit = hasAnyRole(session, ["admin", "ops_lead", "ops_operator"]);
 
+  // Do-not-contact list + excluded countries, read from this client's Tenkara
+  // settings. Surfaced read-only so ops can confirm what sourcing (Agent 03) and
+  // outreach (Agent 04) are suppressing. Best-effort — a Tenkara read hiccup
+  // shouldn't break the profile.
+  let dnc: SourcingExclusionsDetail | null = null;
+  try {
+    dnc = await getSourcingExclusionsDetail(org.tenkara_org_id);
+  } catch {
+    dnc = null;
+  }
+
   return (
     <div className="space-y-6">
       <p className="text-sm text-muted-foreground">
@@ -77,6 +89,62 @@ export default async function ClientProfilePage({ params }: { params: { slug: st
       </Link>
 
       <ClientProfilePanel orgId={org.id} slug={org.slug} profile={profile} settings={settings} uploads={uploads} canEdit={canEdit} />
+
+      <section className="rounded-lg border border-border bg-card p-4 space-y-3">
+        <div>
+          <h2 className="font-medium">Do-not-contact &amp; excluded countries</h2>
+          <p className="text-sm text-muted-foreground">
+            From this client&apos;s Tenkara settings. Lead sourcing (Agent 03) and outreach (Agent 04) automatically
+            suppress these suppliers — they won&apos;t be surfaced as leads or emailed.
+          </p>
+        </div>
+
+        {dnc === null ? (
+          <p className="text-sm text-muted-foreground">Couldn&apos;t load the list right now — try refreshing.</p>
+        ) : dnc.companies.length === 0 && dnc.countries.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            {org.tenkara_org_id
+              ? "No do-not-contact companies or excluded countries configured for this client."
+              : "This org isn’t linked to a Tenkara client yet, so there’s nothing to suppress."}
+          </p>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">
+                Do-not-contact companies ({dnc.companies.length})
+              </div>
+              {dnc.companies.length === 0 ? (
+                <p className="text-sm text-muted-foreground">None.</p>
+              ) : (
+                <ul className="text-sm space-y-1">
+                  {dnc.companies.map((c, i) => (
+                    <li key={i} className="flex flex-col">
+                      <span className="font-medium">{c.name ?? c.website}</span>
+                      {c.website ? <span className="text-xs text-muted-foreground">{c.website}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div>
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground mb-1">
+                Excluded countries ({dnc.countries.length})
+              </div>
+              {dnc.countries.length === 0 ? (
+                <p className="text-sm text-muted-foreground">None.</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {dnc.countries.map((c) => (
+                    <span key={c} className="rounded-full bg-secondary px-2.5 py-0.5 text-xs">
+                      {c}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </section>
     </div>
   );
 }
