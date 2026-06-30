@@ -38,6 +38,11 @@ const REP_FIELDS: { key: string; label: string }[] = [
 ];
 export interface SettingsValue extends ClientSettingsInput {}
 export interface UploadItem { id: string; kind: string; file_name: string | null; content_text: string | null; created_at: string }
+export interface DncValue {
+  companies: Array<{ name: string | null; website: string | null }>;
+  countries: string[];
+  linked: boolean; // false when the org has no Tenkara client link
+}
 
 const MODE_OPTIONS = [
   { value: "active", label: "Active" },
@@ -66,6 +71,7 @@ export function ClientProfilePanel({
   settings,
   uploads,
   canEdit,
+  dnc,
 }: {
   orgId: string;
   slug: string;
@@ -73,6 +79,7 @@ export function ClientProfilePanel({
   settings: SettingsValue | null;
   uploads: UploadItem[];
   canEdit: boolean;
+  dnc: DncValue | null;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -90,7 +97,7 @@ export function ClientProfilePanel({
   return (
     <div className="space-y-6">
       <SettingsCard orgId={orgId} settings={settings} canEdit={canEdit} pending={pending} run={run} />
-      <RepSheetCard orgId={orgId} profile={profile} canEdit={canEdit} pending={pending} run={run} />
+      <RepSheetCard orgId={orgId} profile={profile} canEdit={canEdit} pending={pending} run={run} dnc={dnc} />
       <ProfileCard orgId={orgId} profile={profile} canEdit={canEdit} pending={pending} run={run} />
       <UploadsCard orgId={orgId} slug={slug} uploads={uploads} canEdit={canEdit} pending={pending} run={run} />
       {msg && <p className={msg.kind === "ok" ? "text-sm text-emerald-700" : "text-sm text-red-700"}>{msg.text}</p>}
@@ -112,7 +119,7 @@ function Section({ title, action, children }: { title: string; action?: React.Re
   );
 }
 
-function RepSheetCard({ orgId, profile, canEdit, pending, run }: { orgId: string; profile: ProfileValue | null; canEdit: boolean; pending: boolean; run: RunFn }) {
+function RepSheetCard({ orgId, profile, canEdit, pending, run, dnc }: { orgId: string; profile: ProfileValue | null; canEdit: boolean; pending: boolean; run: RunFn; dnc: DncValue | null }) {
   const sheet = profile?.rep_sheet ?? {};
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>(() =>
@@ -150,6 +157,50 @@ function RepSheetCard({ orgId, profile, canEdit, pending, run }: { orgId: string
           </div>
         ))}
       </dl>
+
+      <div className="border-t border-border pt-3 mt-1 space-y-2">
+        <div className="text-xs uppercase tracking-wider text-muted-foreground">Do-not-contact &amp; excluded countries</div>
+        <p className="text-xs text-muted-foreground -mt-1">
+          From this client&apos;s Tenkara settings. Sourcing (Agent 03) and outreach (Agent 04) suppress these automatically — read-only here.
+        </p>
+        {dnc === null ? (
+          <p className="text-sm text-muted-foreground">Couldn&apos;t load right now — refresh to retry.</p>
+        ) : !dnc.linked ? (
+          <p className="text-sm text-muted-foreground italic">Not linked to a Tenkara client yet — nothing to suppress.</p>
+        ) : dnc.companies.length === 0 && dnc.countries.length === 0 ? (
+          <p className="text-sm text-muted-foreground italic">No do-not-contact companies or excluded countries configured.</p>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 text-sm">
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">Companies ({dnc.companies.length})</div>
+              {dnc.companies.length === 0 ? (
+                <p className="text-muted-foreground italic">None</p>
+              ) : (
+                <ul className="space-y-1">
+                  {dnc.companies.map((c, i) => (
+                    <li key={i} className="flex flex-col">
+                      <span className="font-medium">{c.name ?? c.website}</span>
+                      {c.website ? <span className="text-xs text-muted-foreground">{c.website}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">Excluded countries ({dnc.countries.length})</div>
+              {dnc.countries.length === 0 ? (
+                <p className="text-muted-foreground italic">None</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {dnc.countries.map((c) => (
+                    <Badge key={c} variant="secondary">{c}</Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </Section>
   );
 }
