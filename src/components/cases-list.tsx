@@ -18,6 +18,17 @@ export type CaseRow = {
   assignedEmail: string | null;
   assignedRole: string | null;
   createdAt: string | null;
+  formType: string | null;     // present for supplier_form cases
+  formAvailable: boolean;      // true when a downloadable file is stored
+};
+
+const FORM_TYPE_LABEL: Record<string, string> = {
+  credit_reference: "Credit reference",
+  new_account: "New account",
+  w9_tax: "W-9 / tax",
+  nda: "NDA",
+  banking: "Banking",
+  other: "Form",
 };
 
 export function CasesList({ rows, slug }: { rows: CaseRow[]; slug: string }) {
@@ -67,7 +78,24 @@ export function CasesList({ rows, slug }: { rows: CaseRow[]; slug: string }) {
               <TableCell className="font-medium" title={c.supplierId ?? undefined}>
                 {c.supplierName ?? (c.supplierId ? <code className="text-xs">{c.supplierId.slice(0, 8)}…</code> : "—")}
               </TableCell>
-              <TableCell className="max-w-md">{c.recommendedAction ?? "—"}</TableCell>
+              <TableCell className="max-w-md">
+                {c.formType && (
+                  <span className="mr-2 inline-block rounded-full bg-secondary px-2 py-0.5 text-xs align-middle">
+                    {FORM_TYPE_LABEL[c.formType] ?? FORM_TYPE_LABEL.other}
+                  </span>
+                )}
+                {c.recommendedAction ?? "—"}
+                {c.formAvailable && (
+                  <a
+                    href={`/api/cases/${c.id}/form`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ml-2 inline-block text-xs font-medium text-primary underline hover:no-underline"
+                  >
+                    Download form ↓
+                  </a>
+                )}
+              </TableCell>
               <TableCell className="text-muted-foreground text-xs">{c.staleDays != null ? `${c.staleDays}d` : "—"}</TableCell>
               <TableCell>
                 <OperatorChip name={c.assignedName} email={c.assignedEmail} role={c.assignedRole} />

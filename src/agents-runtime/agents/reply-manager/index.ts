@@ -1,8 +1,9 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getConversationMessages, getMessage, htmlToText } from "@/lib/missive";
+import { getConversationMessages, getMessage, htmlToText, type MissiveAttachment } from "@/lib/missive";
 import { stageDraft } from "@/lib/draft-staging";
 import { runNoReplyFollowups } from "./no-reply-followup";
+import { handleSupplierForm } from "./form-handler";
 import { postAgentAlert } from "@/lib/slack-alert";
 import Anthropic from "@anthropic-ai/sdk";
 
@@ -41,10 +42,12 @@ type FlowStatus =
   | "finalized"
   | "stale"
   | "closed_declined"
-  | "escalated_to_calling"; // no reply after both follow-ups → routed to Cases for a call
+  | "escalated_to_calling" // no reply after both follow-ups → routed to Cases for a call
+  | "form_escalated";      // supplier sent a form to fill/sign → routed to Cases, not auto-replied
 
 interface Classification {
-  category: "price_given" | "no_record" | "question" | "partial" | "declined" | "auto_reply";
+  category: "price_given" | "no_record" | "question" | "partial" | "declined" | "auto_reply" | "form_received";
+  form_type?: "credit_reference" | "new_account" | "w9_tax" | "nda" | "banking" | "other";
   needs_response: boolean;
   needs_info: boolean;        // responding requires info we don't have -> ask a human
   info_questions: string[];   // the specific gaps to ask the human
@@ -91,8 +94,9 @@ Classify into exactly one category:
 - "partial": they replied but the price is missing/incomplete. Nudge specifically for the missing pricing.
 - "declined": they can't or won't supply. Acknowledge and close gracefully.
 - "auto_reply": out-of-office / automated / non-human (NOT a bounce — bounces are handled separately). No response.
+- "form_received": the supplier sent a FORM for US to fill out or sign before they can quote/set us up — e.g. a credit reference form, new-account / vendor-setup / customer application, W-9 / tax form, NDA, or banking / ACH form (usually an attached PDF or a link). We do NOT fill these out automatically; ops handles them. When you pick this category, also set "form_type" to one of: "credit_reference" | "new_account" | "w9_tax" | "nda" | "banking" | "other" (best guess). Do NOT use this for a normal price list or quote attachment — that is "price_given".
 
-needs_response: true only for no_record, question, partial (and declined -> a brief courteous close). false for price_given and auto_reply.
+needs_response: true only for no_record, question, partial (and declined -> a brief courteous close). false for price_given, auto_reply, and form_received.
 needs_info: leave FALSE in almost all cases. We can always ask a supplier for their pricing without our order specs. Only set true for a genuine blocker per the rule above. Lacking a quantity/ship-to/grade is NOT a blocker - still draft the pricing ask.
 
 DRAFTING RULES when needs_response is true and needs_info is false:
@@ -122,7 +126,7 @@ Thanks,
 Procurement Team
 Bobber Labs
 
-Return ONLY JSON: {"category":"...","needs_response":true|false,"needs_info":true|false,"info_questions":["..."],"supplyable_materials":["Acetone","Citric Acid"],"subject":"...","body":"...","reason":"<one line>"}. supplyable_materials = the materials they CAN supply (drop any they said they don't carry). If needs_response is false or needs_info is true, subject/body may be empty strings.`;
+Return ONLY JSON: {"category":"...","form_type":"credit_reference|new_account|w9_tax|nda|banking|other (only when category is form_received, else omit)","needs_response":true|false,"needs_info":true|false,"info_questions":["..."],"supplyable_materials":["Acetone","Citric Acid"],"subject":"...","body":"...","reason":"<one line>"}. supplyable_materials = the materials they CAN supply (drop any they said they don't carry). If needs_response is false or needs_info is true, subject/body may be empty strings.`;
 
 const sani = (s: string) => s.replace(/\s*[—–]\s*/g, ", ").replace(/\n{3,}/g, "\n\n").trim();
 
@@ -225,12 +229,12 @@ registerAgent({
       byThread.set(key, arr);
     }
 
-    let responded = 0, priced = 0, stale = 0, closed = 0, skipped = 0, bounced = 0, awaitingHuman = 0;
+    let responded = 0, priced = 0, stale = 0, closed = 0, skipped = 0, bounced = 0, awaitingHuman = 0, formEscalated = 0;
     for (const [threadId, rows] of byThread) {
       const head: any = rows[0];
       const meta = head.metadata ?? {};
       const status: FlowStatus = meta.flow_status ?? "reply_received";
-      if (["price_captured", "finalized", "stale", "closed_declined", "awaiting_human", "bounced"].includes(status)) { skipped++; continue; }
+      if (["price_captured", "finalized", "stale", "closed_declined", "awaiting_human", "bounced", "form_escalated"].includes(status)) { skipped++; continue; }
 
       // If a price already landed for this thread, mark it and move on.
       const supplierIds = rows.map((r) => r.supplier_id).filter(Boolean);
@@ -266,6 +270,7 @@ registerAgent({
       let theirSubject: string | null = meta.reply_detected?.reply_subject ?? null;
       let contactName: string | null = meta.reply_detected?.reply_sender_name ?? null;
       let senderAddr: string | null = meta.reply_detected?.reply_sender_email ?? null;
+      let theirAttachments: MissiveAttachment[] = [];
       try {
         if (replyMsgId) {
           const full = await getMessage(replyMsgId);
@@ -274,6 +279,7 @@ registerAgent({
             theirSubject = full.subject ?? theirSubject;
             contactName = full.from_field?.name ?? contactName;
             senderAddr = full.from_field?.address ?? senderAddr;
+            theirAttachments = full.attachments ?? [];
           }
         } else {
           const convId = meta.reply_detected?.reply_conversation_id ?? threadId;
@@ -322,6 +328,33 @@ registerAgent({
         await setStatus(admin, rows, "awaiting_human", { note: `needs_info: ${qs.join("; ")}` });
         awaitingHuman++;
         await ctx.log(`Gap-fill alerted for ${meta.supplier_name ?? threadId}`, { step: "gap" });
+        continue;
+      }
+
+      // Supplier sent a form for us to fill/sign → pull it, store it, open a
+      // Case for ops. We never fill the form ourselves, so no draft.
+      if (cls.category === "form_received") {
+        try {
+          const opened = await handleSupplierForm(
+            { agentId: ctx.agentId, runId: ctx.runId, log: (m, o) => ctx.log(m, o) },
+            admin,
+            {
+              head,
+              threadId,
+              supplierName: meta.supplier_name ?? contactName ?? null,
+              supplierEmail: senderAddr ?? meta.supplier_contact_email ?? null,
+              formType: cls.form_type ?? "other",
+              attachments: theirAttachments,
+            }
+          );
+          if (opened) formEscalated++;
+          await setStatus(admin, rows, "form_escalated", {
+            note: `form received (${cls.form_type ?? "other"})`,
+            extra: { last_handled_reply_msg_id: replyMsgId ?? null },
+          });
+        } catch (e: any) {
+          await ctx.log(`Form handling failed for ${meta.supplier_name ?? threadId}: ${e?.message ?? e}`, { level: "warn", step: "form" });
+        }
         continue;
       }
 
@@ -380,9 +413,9 @@ registerAgent({
       await ctx.log(`No-reply follow-up sweep failed: ${e?.message ?? e}`, { level: "warn", step: "followup" });
     }
 
-    ctx.setItemsProcessed(responded + priced + stale + closed + bounced + awaitingHuman + followups.drafted + followups.escalated);
+    ctx.setItemsProcessed(responded + priced + stale + closed + bounced + awaitingHuman + formEscalated + followups.drafted + followups.escalated);
     ctx.setStatus("success");
-    ctx.setSummary(`Threads: ${byThread.size} · ${responded} responded · ${priced} priced · ${awaitingHuman} awaiting-human · ${bounced} bounced · ${stale} stale · ${closed} closed · ${followups.drafted} follow-ups · ${followups.escalated} calling-escalations · ${skipped} skipped`);
+    ctx.setSummary(`Threads: ${byThread.size} · ${responded} responded · ${priced} priced · ${awaitingHuman} awaiting-human · ${bounced} bounced · ${stale} stale · ${closed} closed · ${formEscalated} forms · ${followups.drafted} follow-ups · ${followups.escalated} calling-escalations · ${skipped} skipped`);
   },
 });
 

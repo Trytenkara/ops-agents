@@ -33,11 +33,11 @@ export default async function CasesPage({ params }: { params: { slug: string } }
       <ListPageHeader
         level={2}
         title="Cases"
-        description="Stale leads escalated by Agent 07 — supplier outreach that's been active >14d. Pick a case, take the recommended action in the email inbox or off-platform, and resolve."
-        collectedBy="Agent 07 (Escalation)"
+        description="Things that need a human: stale leads (Agent 07), no-reply calling escalations, and supplier forms to fill/sign (Agent 15). Pick a case, take the recommended action, and resolve."
+        collectedBy="Agents 07 + 15"
         explainer={
           <>
-            <span className="font-medium text-foreground">Agent 07 (Escalation)</span> opens these when an in-flight lead crosses 14 days without resolution. The assigned operator is the org&apos;s primary (or backup if OOO).
+            <span className="font-medium text-foreground">Agent 07</span> opens a case when an in-flight lead crosses 14 days. <span className="font-medium text-foreground">Agent 15</span> opens one when a supplier goes silent after two follow-ups (calling escalation) or sends a form to fill/sign. The assigned operator is the org&apos;s primary (or backup if OOO).
           </>
         }
       />
@@ -53,6 +53,8 @@ export default async function CasesPage({ params }: { params: { slug: string } }
           assignedEmail: c.users?.email ?? null,
           assignedRole: primaryRole(operatorRoles(c.users)),
           createdAt: c.created_at ?? null,
+          formType: (c.metadata?.form_type as string | undefined) ?? null,
+          formAvailable: c.type === "supplier_form" && !!c.metadata?.form_available,
         }));
         return caseRows.length === 0 ? (
           <p className="text-center text-muted-foreground py-8 text-sm">No open cases.</p>
