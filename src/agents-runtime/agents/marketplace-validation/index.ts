@@ -2,6 +2,7 @@ import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
 import { recheckMarketplaceQuote, type RecheckResult } from "./price-recheck";
+import { convertToUsd } from "@/lib/fx";
 
 // Agent 05 - Marketplace Price Re-check.
 //
@@ -182,6 +183,7 @@ registerAgent({
         result = {
           classification: "needs_review",
           current_price: null,
+          currency: null,
           pack_size: null,
           unit_price: null,
           tiers: [],
@@ -189,6 +191,33 @@ registerAgent({
           source_citations: [],
           notes: `Re-check failed: ${e.message}`,
         };
+      }
+
+      // Normalize non-USD listings to USD so the baseline (USD) comparison is
+      // valid, recording the rate used. If no FX rate is reachable, don't emit a
+      // misleading USD number — drop the price and note it for manual review.
+      if (result.currency && result.currency !== "USD" && result.current_price != null) {
+        const conv = await convertToUsd(result.current_price, result.currency);
+        if (conv) {
+          const note = `Listed in ${result.currency} ${result.current_price}; converted to USD $${conv.usd} at FX 1 ${result.currency} = $${conv.rate}.`;
+          result.notes = result.notes ? `${result.notes} ${note}` : note;
+          result.current_price = conv.usd;
+          if (result.unit_price != null) {
+            const u = await convertToUsd(result.unit_price, result.currency);
+            if (u) result.unit_price = u.usd;
+          }
+          const cur = result.currency;
+          result.tiers = await Promise.all(
+            result.tiers.map(async (t) => {
+              const p = t.price != null ? (await convertToUsd(t.price, cur))?.usd ?? t.price : t.price;
+              const up = t.unit_price != null ? (await convertToUsd(t.unit_price, cur))?.usd ?? t.unit_price : t.unit_price;
+              return { ...t, price: p, unit_price: up };
+            })
+          );
+        } else {
+          result.notes = `${result.notes ? result.notes + " " : ""}Listed in ${result.currency}; USD FX rate unavailable, left unconverted.`;
+          result.current_price = null;
+        }
       }
 
       const oaOrgId = q.tenkara_org_id ? tenkaraOrgToOaOrg.get(q.tenkara_org_id) ?? null : null;

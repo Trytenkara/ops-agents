@@ -28,6 +28,7 @@ export interface PriceTier {
 export interface RecheckResult {
   classification: "current_price_found" | "link_broken" | "needs_review" | "login_required";
   current_price: number | null;
+  currency: string | null;             // ISO code of current_price/tiers as listed (e.g. "USD","EUR")
   pack_size: string | null;            // free-text e.g. "50 lb"
   unit_price: number | null;           // best (lowest) per-unit price seen
   tiers: PriceTier[];                  // every visible pack-size / volume-break tier
@@ -51,6 +52,7 @@ Return ONLY a JSON object (no prose) like:
 {
   "classification": "current_price_found | link_broken | needs_review | login_required",
   "current_price": 99.99,
+  "currency": "USD",
   "pack_size": "50 lb",
   "unit_price": 2.00,
   "tiers": [
@@ -69,9 +71,10 @@ Rules:
 - "current_price" + "pack_size" stay the single closest match to our baseline pack size (for the change comparison).
 - "login_required" when the price is hidden behind a sign-in / registration / "create an account" / "log in to see price" wall — i.e. it could be read by a human who signs up, but not publicly. Ops will sign up and pull it manually.
 - "link_broken" ONLY for hard 404 / product removed / redirect to category page.
-- "needs_review" for other ambiguous cases: multiple SKUs on page, currency mismatch, price requires a custom quote/RFQ, page exists but pack size differs significantly.
+- "needs_review" for other ambiguous cases: multiple SKUs on page, price requires a custom quote/RFQ, page exists but pack size differs significantly.
 - "current_price_found" only when you have a concrete numeric price for an equivalent pack size.
-- current_price must be a numeric USD value (or null). Strip currency symbols.
+- current_price and tier prices must be numeric, in the currency AS LISTED on the page. Strip currency symbols to a plain number.
+- "currency": the ISO 4217 code the listed prices are in — "USD", "EUR", "GBP", "INR", "CNY", etc. Infer from the currency symbol/locale (€→EUR, £→GBP, ₹→INR, ¥→CNY or JPY by site, $→USD unless clearly CAD/AUD/etc.). Default "USD" if a bare "$" with no other signal. We convert to USD ourselves — do NOT convert; report the listed currency.
 - source_url must be the actual product page you read from, not a search result.
 - Never fabricate. If a public price isn't visible, return login_required (if it's behind a login) or needs_review, with a note explaining why.`;
 
@@ -126,6 +129,7 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
     return {
       classification: "needs_review",
       current_price: null,
+      currency: null,
       pack_size: null,
       unit_price: null,
       tiers: [],
@@ -169,9 +173,14 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
         .slice(0, 20)
     : [];
 
+  const currency = typeof parsed.currency === "string" && /^[A-Za-z]{3}$/.test(parsed.currency.trim())
+    ? parsed.currency.trim().toUpperCase()
+    : null;
+
   return {
     classification: validCls,
     current_price: price,
+    currency,
     pack_size: typeof parsed.pack_size === "string" ? parsed.pack_size : null,
     unit_price: toNum(parsed.unit_price),
     tiers,
