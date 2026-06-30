@@ -22,7 +22,7 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
   const { data: drafts } = await admin
     .from("draft_references")
     .select(
-      "id, subject, supplier_id, material_id, quote_id, status, created_at, metadata, assigned_operator, users:users!draft_references_assigned_operator_fkey(display_name, email, user_roles(role)), agents(name, slug)"
+      "id, subject, supplier_id, material_id, quote_id, status, created_at, metadata, assigned_operator, users:users!draft_references_assigned_operator_fkey(display_name, email, user_roles(role)), reviewer:users!draft_references_reviewer_fkey(display_name), agents(name, slug)"
     )
     .eq("org_id", org.id)
     .order("created_at", { ascending: false })
@@ -59,6 +59,7 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
     assignedName: d.users?.display_name ?? null,
     assignedEmail: d.users?.email ?? null,
     assignedRole: primaryRole(operatorRoles(d.users)),
+    reviewerName: d.reviewer?.display_name ?? null,
   }));
 
   return (

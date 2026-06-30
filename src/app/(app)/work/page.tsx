@@ -10,6 +10,7 @@ import { resolveSupplierNamesWithFallback, resolveMaterialNames } from "@/lib/te
 import { PageExplainer } from "@/components/page-explainer";
 import { roleLabel } from "@/lib/roles";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
+import { DraftStatusBadge } from "@/components/draft-status-badge";
 
 export const dynamic = "force-dynamic";
 
@@ -159,6 +160,7 @@ function DraftTable({
           <TableHead>Org</TableHead>
           <TableHead>Supplier</TableHead>
           <TableHead>Material</TableHead>
+          <TableHead>Status</TableHead>
           <TableHead>Staged</TableHead>
           <TableHead></TableHead>
         </TableRow>
@@ -177,6 +179,7 @@ function DraftTable({
               <TableCell title={d.material_id ?? undefined}>
                 {materialName ?? (d.material_id ? <code className="text-xs text-muted-foreground">{d.material_id.slice(0, 8)}…</code> : "—")}
               </TableCell>
+              <TableCell><DraftStatusBadge status={d.status} /></TableCell>
               <TableCell className="text-muted-foreground">{relativeTime(d.created_at)}</TableCell>
               <TableCell><Link href={`/work/drafts/${d.id}`} className="text-primary hover:underline text-sm">Review →</Link></TableCell>
             </TableRow>

@@ -53,7 +53,7 @@ export default async function OrgPriceIndexPage({
     admin
       .from("draft_references")
       .select(
-        "id, subject, supplier_id, material_id, quote_id, status, created_at, metadata, assigned_operator, users:users!draft_references_assigned_operator_fkey(display_name, email, user_roles(role)), agents(slug)"
+        "id, subject, supplier_id, material_id, quote_id, status, created_at, metadata, assigned_operator, users:users!draft_references_assigned_operator_fkey(display_name, email, user_roles(role)), reviewer:users!draft_references_reviewer_fkey(display_name), agents(slug)"
       )
       .eq("org_id", org.id)
       .eq("agents.slug", "agent-02-revalidation")
@@ -100,6 +100,7 @@ export default async function OrgPriceIndexPage({
     assignedName: d.users?.display_name ?? null,
     assignedEmail: d.users?.email ?? null,
     assignedRole: primaryRole(operatorRoles(d.users)),
+    reviewerName: d.reviewer?.display_name ?? null,
   }));
 
   const base = `/work/orgs/${org.slug}/price-index`;

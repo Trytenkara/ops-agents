@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/lib/utils";
 import { OperatorChip } from "@/components/operator-chip";
 import { DraftSignals } from "@/components/draft-signals";
+import { DraftStatusBadge } from "@/components/draft-status-badge";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
 import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
@@ -28,6 +29,7 @@ export type ThreadRow = {
   assignedName: string | null;
   assignedEmail: string | null;
   assignedRole: string | null;
+  reviewerName: string | null;
 };
 
 const KIND_META: Record<ThreadKind, { label: string; variant: string; title: string }> = {
@@ -35,10 +37,6 @@ const KIND_META: Record<ThreadKind, { label: string; variant: string; title: str
   inbound: { label: "Inbound reply", variant: "success", title: "A reply drafted for a supplier's incoming email." },
 };
 
-function StatusBadge({ status }: { status: string }) {
-  const v = status === "staged" ? "warn" : status === "reviewed" ? "success" : status === "sent" ? "default" : "secondary";
-  return <Badge variant={v as any}>{status}</Badge>;
-}
 
 const FILTERS: { value: "all" | ThreadKind; label: string }[] = [
   { value: "all", label: "All" },
@@ -139,7 +137,7 @@ export function ThreadsList({ rows, slug }: { rows: ThreadRow[]; slug: string })
                 {d.materialName ?? (d.materialId ? <span className="text-xs text-muted-foreground">name unavailable</span> : "—")}
               </TableCell>
               <TableCell><OperatorChip name={d.assignedName} email={d.assignedEmail} role={d.assignedRole} /></TableCell>
-              <TableCell><StatusBadge status={d.status} /></TableCell>
+              <TableCell><DraftStatusBadge status={d.status} reviewerName={d.reviewerName} /></TableCell>
               <TableCell className="text-muted-foreground">{relativeTime(d.createdAt)}</TableCell>
               <TableCell><Link href={`/work/drafts/${d.id}`} className="text-primary hover:underline text-sm">Open →</Link></TableCell>
             </TableRow>

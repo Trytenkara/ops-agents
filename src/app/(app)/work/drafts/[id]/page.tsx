@@ -12,6 +12,21 @@ import { tenkaraInboxUrl } from "@/lib/tenkara";
 
 export const dynamic = "force-dynamic";
 
+// Human-readable labels for the agent-tracked conversation flow_status.
+const FLOW_STATUS_LABEL: Record<string, string> = {
+  outreach_sent: "Outreach sent",
+  reply_received: "Reply received",
+  responded: "We replied",
+  awaiting_human: "Awaiting your input",
+  bounced: "Bounced — bad address",
+  price_captured: "Price captured",
+  finalized: "Finalized",
+  stale: "Stale — no price after follow-ups",
+  closed_declined: "Closed — supplier declined",
+  escalated_to_calling: "Escalated to a call",
+  form_escalated: "Form routed to ops",
+};
+
 export default async function DraftDetail({ params }: { params: { id: string } }) {
   const session = (await getSession())!;
   const admin = createAdminClient();
@@ -59,7 +74,41 @@ export default async function DraftDetail({ params }: { params: { id: string } }
           <DetailRow label="Supplier" value={(d.metadata as any)?.supplier_name ?? d.supplier_id} />
           <DetailRow label="Material" value={(d.metadata as any)?.material_name ?? d.material_id} />
           <DetailRow label="Quote" value={d.quote_id} />
-          <DetailRow label="Conversation" value={d.thread_id} />
+
+          {(() => {
+            const meta = (d.metadata ?? {}) as any;
+            const reply = meta.reply_detected as any;
+            const followups = Number(meta.followup_count ?? 0);
+            const flowLabel = FLOW_STATUS_LABEL[meta.flow_status as string] ?? null;
+            const repliedAt = reply?.reply_unix_at ? new Date(reply.reply_unix_at * 1000).toISOString() : null;
+            return (
+              <div>
+                <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Conversation</div>
+                {reply ? (
+                  <div className="rounded border border-border bg-muted/40 p-3 text-sm space-y-1">
+                    <div className="flex items-center gap-2">
+                      <Badge variant="success">↩ Supplier replied</Badge>
+                      {flowLabel && <span className="text-xs text-muted-foreground">{flowLabel}</span>}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      From {reply.reply_sender_name || reply.reply_sender_email || "supplier"}
+                      {repliedAt ? ` · ${relativeTime(repliedAt)}` : ""}
+                    </div>
+                    {reply.reply_subject && <div className="font-medium">{reply.reply_subject}</div>}
+                    {reply.reply_preview && (
+                      <p className="text-muted-foreground whitespace-pre-wrap">{reply.reply_preview}</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    No supplier reply yet{followups ? ` · ${followups} follow-up${followups === 1 ? "" : "s"} sent` : ""}
+                    {flowLabel ? ` · ${flowLabel}` : ""}.
+                  </p>
+                )}
+                <p className="text-[11px] text-muted-foreground mt-1 font-mono break-all">Thread {d.thread_id ?? "—"}</p>
+              </div>
+            );
+          })()}
 
           <div>
             <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Body preview</div>
@@ -73,7 +122,7 @@ export default async function DraftDetail({ params }: { params: { id: string } }
               rel="noreferrer"
               className="inline-flex items-center justify-center rounded-md border border-border h-9 px-4 text-sm hover:bg-secondary"
             >
-              Open in {inboxName} ↗
+              Open full thread in {inboxName} ↗
             </a>
             {canReview && d.status === "staged" && <MarkReviewedButton draftId={d.id} />}
           </div>

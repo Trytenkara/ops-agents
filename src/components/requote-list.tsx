@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/lib/utils";
 import { OperatorChip } from "@/components/operator-chip";
 import { DraftSignals } from "@/components/draft-signals";
+import { DraftStatusBadge } from "@/components/draft-status-badge";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
 import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
@@ -25,12 +26,8 @@ export type RequoteRow = {
   assignedName: string | null;
   assignedEmail: string | null;
   assignedRole: string | null;
+  reviewerName: string | null;
 };
-
-function StatusBadge({ status }: { status: string }) {
-  const v = status === "staged" ? "warn" : status === "reviewed" ? "success" : status === "sent" ? "default" : "secondary";
-  return <Badge variant={v as any}>{status}</Badge>;
-}
 
 // Direct-supplier re-quote drafts (Agent 02). For non-marketplace suppliers we
 // can't read a public price, so an expiring quote becomes a draft email asking
@@ -108,7 +105,7 @@ export function RequoteList({ rows, slug }: { rows: RequoteRow[]; slug: string }
                 )}
               </TableCell>
               <TableCell><OperatorChip name={d.assignedName} email={d.assignedEmail} role={d.assignedRole} /></TableCell>
-              <TableCell><StatusBadge status={d.status} /></TableCell>
+              <TableCell><DraftStatusBadge status={d.status} reviewerName={d.reviewerName} /></TableCell>
               <TableCell className="text-muted-foreground">{relativeTime(d.createdAt)}</TableCell>
               <TableCell><Link href={`/work/drafts/${d.id}`} className="text-primary hover:underline text-sm">Open →</Link></TableCell>
             </TableRow>

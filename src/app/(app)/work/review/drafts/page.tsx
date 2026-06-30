@@ -1,12 +1,14 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/lib/utils";
 import Link from "next/link";
 import { getSession } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { getAssignedOrgIds } from "@/lib/org-access";
 import { DraftSignals } from "@/components/draft-signals";
+import { DraftStatusBadge } from "@/components/draft-status-badge";
+import { OperatorChip } from "@/components/operator-chip";
+import { operatorRoles, primaryRole } from "@/lib/operator";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +22,7 @@ export default async function CrossOrgPage() {
   const admin = createAdminClient();
   let q = admin
     .from("draft_references")
-    .select("id, subject, status, created_at, org_id, metadata, orgs(slug, name)")
+    .select("id, subject, status, created_at, org_id, metadata, orgs(slug, name), users:users!draft_references_assigned_operator_fkey(display_name, email, user_roles(role)), reviewer:users!draft_references_reviewer_fkey(display_name)")
     .eq("status", "staged")
     .order("created_at", { ascending: false })
     .limit(50);
@@ -43,6 +45,7 @@ export default async function CrossOrgPage() {
           <TableRow>
             <TableHead>Subject</TableHead>
             <TableHead>Org</TableHead>
+            <TableHead>Assigned</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Staged</TableHead>
             <TableHead></TableHead>
@@ -58,13 +61,14 @@ export default async function CrossOrgPage() {
                 </div>
               </TableCell>
               <TableCell>{d.orgs?.name ?? "—"}</TableCell>
-              <TableCell><Badge variant="warn">{d.status}</Badge></TableCell>
+              <TableCell><OperatorChip name={d.users?.display_name ?? null} email={d.users?.email ?? null} role={primaryRole(operatorRoles(d.users))} /></TableCell>
+              <TableCell><DraftStatusBadge status={d.status} reviewerName={d.reviewer?.display_name ?? null} /></TableCell>
               <TableCell className="text-muted-foreground">{relativeTime(d.created_at)}</TableCell>
               <TableCell><Link href={`/work/drafts/${d.id}`} className="text-primary hover:underline text-sm">Open →</Link></TableCell>
             </TableRow>
           ))}
           {(!drafts || drafts.length === 0) && (
-            <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No staged drafts.</TableCell></TableRow>
+            <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No staged drafts.</TableCell></TableRow>
           )}
         </TableBody>
       </Table>
