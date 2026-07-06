@@ -1,6 +1,7 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getConversationMessages, getMessage, htmlToText, type MissiveAttachment } from "@/lib/missive";
+import { missivePollingEnabled } from "@/lib/tenkara";
 import { stageDraft } from "@/lib/draft-staging";
 import { runNoReplyFollowups } from "./no-reply-followup";
 import { handleSupplierForm } from "./form-handler";
@@ -190,6 +191,11 @@ registerAgent({
   description:
     "Owns the supplier conversation after a reply is detected: classifies the reply and drafts the right next message (answer, reframe a no-record reply as a fresh pricing ask, or nudge for the missing price), staged for a human to send. Also drafts no-reply follow-ups (at 4d and 8d after a sent RFQ that got no reply). Tracks flow_status to a finalized price. Never sends.",
   async run(ctx) {
+    if (!missivePollingEnabled()) {
+      ctx.setStatus("success");
+      ctx.setSummary("Skipped: Missive polling disabled (Tenkara cutover). Supplier replies are drafted by the Tenkara message.received webhook.");
+      return;
+    }
     if (!process.env.ANTHROPIC_API_KEY) {
       ctx.setStatus("failure");
       ctx.setSummary("ANTHROPIC_API_KEY missing.");

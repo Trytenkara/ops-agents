@@ -6,6 +6,7 @@ import { composeReply } from "./reply-drafter";
 import { stageDraft } from "@/lib/draft-staging";
 import { parseMessageAttachments } from "./attachment-parser";
 import { insertStagedQuotes, type StagedQuoteInput } from "@/lib/staged-quotes";
+import { missivePollingEnabled } from "@/lib/tenkara";
 
 // Agent 08 — Email Scanner (v1)
 //
@@ -101,6 +102,12 @@ registerAgent({
   description:
     "Scans Missive team_inbox for sent messages whose sender email matches a supplier we have outreach to. Flags replies on draft_references + leads. Reads Missive only; never sends.",
   async run(ctx) {
+    if (!missivePollingEnabled()) {
+      ctx.setItemsProcessed(0);
+      ctx.setStatus("success");
+      ctx.setSummary("Skipped: Missive polling disabled (Tenkara cutover). Inbound replies are handled by the Tenkara message.received webhook.");
+      return;
+    }
     if (!process.env.MISSIVE_API_TOKEN) {
       await ctx.log("MISSIVE_API_TOKEN not configured", { level: "error", step: "config" });
       ctx.setStatus("failure");

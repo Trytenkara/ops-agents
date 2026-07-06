@@ -2,6 +2,7 @@ import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
 import { listLabelConversations, getConversationMessages } from "@/lib/missive";
+import { missivePollingEnabled } from "@/lib/tenkara";
 import { MISSIVE_BOBBER_LABS_LABEL_ID } from "../quote-revalidation/config";
 import Anthropic from "@anthropic-ai/sdk";
 
@@ -125,6 +126,11 @@ registerAgent({
   description:
     "Reads the Missive 'Bobber Labs' shared label and builds a per-supplier email-context row (last outbound/inbound, thread state, summary, open ask) so Agent 02 reaches out with the right tone. Read-only on Missive/Tenkara; writes supplier_email_context in OA only.",
   async run(ctx) {
+    if (!missivePollingEnabled()) {
+      ctx.setStatus("success");
+      ctx.setSummary("Skipped: Missive polling disabled (Tenkara cutover). Supplier email context now derives from the Tenkara reply path.");
+      return;
+    }
     if (!process.env.MISSIVE_API_TOKEN) {
       ctx.setStatus("failure");
       ctx.setSummary("MISSIVE_API_TOKEN missing.");
