@@ -223,14 +223,23 @@ export function tenkaraEmailAccountIdFor(input: {
   return resolveTenkaraEmailAccountId(brand);
 }
 
-// Rollout flag: which email app a cold-outbound agent stages into. Defaults to
-// Missive. Set COLD_OUTBOUND_TENKARA_AGENTS to "all" (or a csv like "04" /
-// "02,04") to route those agents to Tenkara. Lets us flip per-deploy — and
-// migrate one agent at a time — without a code change.
+// Cold-outbound routing. The migration off Missive is complete: cold outbound
+// now defaults to Tenkara (rod_app) for every agent. The escape hatch runs the
+// other way — set COLD_OUTBOUND_MISSIVE_AGENTS to "all" (or a csv like "04" /
+// "02,04") to force those agents BACK onto Missive without a code change.
 export function coldOutboundEmailClient(agent: "02" | "04"): "missive" | "rod_app" {
-  const raw = (process.env.COLD_OUTBOUND_TENKARA_AGENTS ?? "").trim().toLowerCase();
-  if (!raw) return "missive";
-  if (raw === "all" || raw === "true" || raw === "1") return "rod_app";
-  const enabled = new Set(raw.split(",").map((s) => s.trim()));
-  return enabled.has(agent) ? "rod_app" : "missive";
+  const raw = (process.env.COLD_OUTBOUND_MISSIVE_AGENTS ?? "").trim().toLowerCase();
+  if (!raw) return "rod_app";
+  if (raw === "all" || raw === "true" || raw === "1") return "missive";
+  const forced = new Set(raw.split(",").map((s) => s.trim()));
+  return forced.has(agent) ? "missive" : "rod_app";
+}
+
+// Full Tenkara cutover: the Missive-polling agents (08 email-scanner, 13 inbox-
+// context, 15 reply-manager) are superseded by the Tenkara webhook reply path
+// (handleInboundReply — Rod pushes inbound replies instead of us polling). They
+// no-op unless ENABLE_MISSIVE_POLLING is explicitly set to "true", which lets us
+// re-enable Missive scanning to drain any in-flight Missive threads if needed.
+export function missivePollingEnabled(): boolean {
+  return (process.env.ENABLE_MISSIVE_POLLING ?? "").trim().toLowerCase() === "true";
 }

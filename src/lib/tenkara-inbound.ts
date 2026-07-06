@@ -74,12 +74,19 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   const refMeta = (ref.metadata ?? {}) as Record<string, any>;
   const from = parseFrom(msg.from);
 
+  // Advance the pipeline board unless the thread is already further along
+  // (mirrors Agent 08's flow_status handling so the /work board is consistent
+  // whether a reply arrived via Missive scan or the Tenkara webhook).
+  const ADVANCED = ["responded", "price_captured", "finalized", "closed_declined"];
+  const flowAt = (s: string) => (ADVANCED.includes(refMeta.flow_status) ? refMeta.flow_status : s);
+
   // 3. Stamp reply_detected on the originating draft (mirrors Agent 08).
   await admin
     .from("draft_references")
     .update({
       metadata: {
         ...refMeta,
+        flow_status: flowAt("reply_received"),
         reply_detected: {
           detected_at: new Date().toISOString(),
           source: "tenkara_webhook",
@@ -178,6 +185,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     .update({
       metadata: {
         ...refMeta,
+        flow_status: flowAt("responded"),
         reply_draft: {
           draft_ref_id: staged.draftRefId,
           staged_at: new Date().toISOString(),
