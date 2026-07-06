@@ -5,11 +5,8 @@ export type OutreachMode = "active" | "ghost" | "skip";
 
 export const ACTIVE_CLIENTS: string[] = [
   "Bobber Labs",
-  "McGinley",
   "Nutripro",
   "PharmaLab",
-  "Sphere",
-  "Ulo",
   "Vita Organica",
 ];
 
@@ -29,7 +26,14 @@ export const GHOST_CLIENTS: Record<string, string> = {
   "Nitro Logistics": "Rove Essentials",
 };
 
-export const SKIP_CLIENTS: string[] = [];
+// Not yet built out on Tenkara — no inbox mapped in TENKARA_EMAIL_ACCOUNT_IDS,
+// so a draft would be created without a sender and be invisible in the app.
+// Skip until Rod provisions their Tenkara inboxes, then move back to ACTIVE_CLIENTS.
+export const SKIP_CLIENTS: string[] = [
+  "McGinley",
+  "Sphere",
+  "Ulo",
+];
 
 export interface Classification {
   mode: OutreachMode;
