@@ -1,6 +1,8 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { stageDraft } from "@/lib/draft-staging";
 import { composeReply } from "@/agents-runtime/agents/email-scanner/reply-drafter";
+import { extractQuotesFromReplyText } from "@/lib/reply-quote-extract";
+import { insertStagedQuotes, type StagedQuoteInput } from "@/lib/staged-quotes";
 
 // Handles a Tenkara `message.received` webhook: a supplier replied on a
 // conversation one of our agents originated. We match it back to the
@@ -127,6 +129,39 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     return { status: 200, body: { reply_detected: true, drafted: false, reason: "no_anthropic_key" } };
   }
 
+  // 4b. Capture any pricing the supplier stated inline in the reply text into
+  // staged_quotes for ops review (the webhook only carries body text — attached
+  // price sheets need attachments in the payload, which Tenkara doesn't send).
+  // Best-effort: extraction failure must never block the reply draft.
+  let quotesStaged = 0;
+  try {
+    const quotes = await extractQuotesFromReplyText(msg.body_text);
+    if (quotes.length) {
+      const staged: StagedQuoteInput[] = quotes.map((q) => ({
+        orgId: ref.org_id,
+        runId: null,
+        source: "email_body",
+        sourceConversationId: msg.conversation_id,
+        sourceMessageId: msg.message_id,
+        supplierId: ref.supplier_id,
+        supplierName: q.supplier_name ?? leadRow?.supplier_name ?? null,
+        materialId: ref.material_id,
+        materialName: q.material_name ?? leadRow?.material_name ?? null,
+        price: q.price,
+        caseSize: q.case_size,
+        unitOfMeasurement: q.unit_of_measurement,
+        currency: q.currency,
+        confidence: q.confidence,
+        extractionNotes: q.notes,
+        rawExtract: q as any,
+      }));
+      const res = await insertStagedQuotes(admin, staged);
+      quotesStaged = res.inserted;
+    }
+  } catch {
+    // swallow — reply drafting proceeds regardless
+  }
+
   // 5. Compose the reply.
   let orgName = "the client";
   if (ref.org_id) {
@@ -196,5 +231,5 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     })
     .eq("id", ref.id);
 
-  return { status: 200, body: { drafted: true, draft_ref_id: staged.draftRefId, draft_id: staged.draftId } };
+  return { status: 200, body: { drafted: true, draft_ref_id: staged.draftRefId, draft_id: staged.draftId, quotes_staged: quotesStaged } };
 }
