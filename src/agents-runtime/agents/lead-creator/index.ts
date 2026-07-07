@@ -5,6 +5,7 @@ import { scoutSuppliersForMaterial, scoreScoutConfidence, scoutCompleteness, typ
 import { toCsv } from "@/lib/csv";
 import { getSourcingExclusions, exclusionReason, type SourcingExclusions } from "@/lib/tenkara-sourcing-exclusions";
 import { uploadCsvAndSign } from "@/lib/storage";
+import { onlyOrgName } from "@/lib/org-scope";
 
 // v1 trims (vs. full spec):
 //   - existing-DB only mode. BrowserBase external discovery is gated on
@@ -131,12 +132,17 @@ registerAgent({
 
     // 3b. Build Tenkara→OA org map (orgs.tenkara_org_id is the join key).
     //     Cached for the run so we make one round-trip total.
-    const { data: orgRows } = await admin.from("orgs").select("id, tenkara_org_id");
+    const { data: orgRows } = await admin.from("orgs").select("id, tenkara_org_id, name");
     const tenkaraOrgToOaOrg = new Map<string, string>();
-    for (const r of (orgRows ?? []) as { id: string; tenkara_org_id: string | null }[]) {
-      if (r.tenkara_org_id) tenkaraOrgToOaOrg.set(r.tenkara_org_id, r.id);
+    const allowedTenkaraOrgIds = new Set<string>();
+    const onlyOrg = onlyOrgName();
+    for (const r of (orgRows ?? []) as { id: string; tenkara_org_id: string | null; name: string }[]) {
+      if (r.tenkara_org_id) {
+        tenkaraOrgToOaOrg.set(r.tenkara_org_id, r.id);
+        if (onlyOrg && r.name === onlyOrg) allowedTenkaraOrgIds.add(r.tenkara_org_id);
+      }
     }
-    await ctx.log(`Loaded ${tenkaraOrgToOaOrg.size} tenkara→OA org mappings`, { step: "org_map" });
+    await ctx.log(`Loaded ${tenkaraOrgToOaOrg.size} tenkara→OA org mappings${onlyOrg ? ` · scoped to ${onlyOrg}` : ""}`, { step: "org_map" });
 
     // 3c. Per-material idempotency for the scout phase. Equivalent to Ben's
     //     `processed_material_ids` set in sourcing-trigger.json — once a
@@ -199,6 +205,11 @@ registerAgent({
     };
 
     for (const material of materials) {
+      // Fleet-wide org scoping: when ONLY_ORG is set, only source for materials
+      // belonging to that org (matched via tenkara_org_id). Skip everything else.
+      if (onlyOrg && (!material.tenkara_org_id || !allowedTenkaraOrgIds.has(material.tenkara_org_id))) {
+        continue;
+      }
       if (leadsCreated >= MAX_NEW_LEADS_PER_RUN) {
         await ctx.log(`Hit MAX_NEW_LEADS_PER_RUN=${MAX_NEW_LEADS_PER_RUN}; stopping`, { step: "cap" });
         break;

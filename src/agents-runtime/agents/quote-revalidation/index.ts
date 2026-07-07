@@ -11,6 +11,7 @@ import { bodyToHtml } from "@/lib/email-style";
 import { lintDraft } from "../outreach-qa/lint";
 import { postQrSummary } from "./slack-notifier";
 import { getOrgOperatorPool, getSupplierAssignments, resolveSupplierOperatorId } from "@/lib/operator-assignment";
+import { onlyOrgName } from "@/lib/org-scope";
 
 // Now runs daily (was weekly), so a quote that's expiring stays "overdue" for
 // days. Debounce: don't re-draft a quote we already drafted within this window,
@@ -24,7 +25,7 @@ const MAX_MATERIALS_PER_EMAIL = 15;
 // Optional run scope: when set, only this client org is processed (others are
 // dropped like "skip"). Used to stage a single client's drafts in isolation
 // (e.g. a Bobber Labs test run) without editing ACTIVE_CLIENTS.
-const ONLY_ORG = process.env.QR_ONLY_ORG?.trim() || null;
+const ONLY_ORG = onlyOrgName();
 
 // Group key: (client_org × supplier).
 function groupKey(r: OverdueRow): string {

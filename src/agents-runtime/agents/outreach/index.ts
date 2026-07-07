@@ -2,6 +2,7 @@ import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getOrgOperatorPool, resolveSupplierOperatorId, getSupplierAssignments, type OperatorRef } from "@/lib/operator-assignment";
 import { classifyClient } from "../quote-revalidation/config";
+import { onlyOrgName } from "@/lib/org-scope";
 import { runOutreachForLead } from "./run-outreach";
 import { suppliersWithPriorRelationship } from "@/lib/tenkara-relationships";
 import { getSourcingExclusions, exclusionReason } from "@/lib/tenkara-sourcing-exclusions";
@@ -121,9 +122,11 @@ registerAgent({
     };
 
     const candidates: Candidate[] = [];
+    const onlyOrg = onlyOrgName();
     let droppedNoEmail = 0;
     let droppedNoOrg = 0;
     let droppedSkipClient = 0;
+    let droppedOtherOrg = 0;
 
     for (const lead of leads) {
       const payload = (lead.payload ?? {}) as any;
@@ -140,6 +143,10 @@ registerAgent({
       const org = orgsById.get(lead.org_id);
       if (!org) {
         droppedNoOrg++;
+        continue;
+      }
+      if (onlyOrg && org.name !== onlyOrg) {
+        droppedOtherOrg++;
         continue;
       }
       const cls = classifyClient(org.name);
@@ -162,14 +169,14 @@ registerAgent({
     }
 
     await ctx.log(
-      `Filtered: ${candidates.length} draftable · dropped ${droppedNoEmail} (no/invalid email), ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)`,
+      `Filtered: ${candidates.length} draftable · dropped ${droppedNoEmail} (no/invalid email), ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${onlyOrg ? `, ${droppedOtherOrg} (outside ${onlyOrg})` : ""}`,
       { step: "filter" }
     );
 
     if (candidates.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary(`No draftable leads after filters (no_email=${droppedNoEmail}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}).`);
+      ctx.setSummary(`No draftable leads after filters (no_email=${droppedNoEmail}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${onlyOrg ? `, other_org=${droppedOtherOrg}` : ""}).`);
       return;
     }
 
