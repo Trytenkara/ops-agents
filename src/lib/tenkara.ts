@@ -197,6 +197,8 @@ const TENKARA_EMAIL_ACCOUNT_IDS: Record<string, string> = {
   "rove essentials": "d350fc1e-984d-4efd-9332-b20f8d7f66e2",
   "vita organica": "294ba3df-a368-4e5d-8508-099267ca9665",
   "operations": "424f6dc3-8c78-4201-b5e3-69e242e34735",
+  // Tenkara Internal Sourcing → sends as Sierra Materials Co (info@sierramaterialsco.com)
+  "sierra materials co": "599fb464-9682-43cd-8e9e-b5eeff83eb76",
 };
 
 function normalizeBrand(brand: string): string {

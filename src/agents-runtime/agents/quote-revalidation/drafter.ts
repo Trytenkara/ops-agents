@@ -10,7 +10,7 @@ const STYLE_ANCHOR = `REFERENCE VOICE (real examples from our workflow guide —
 Example A (initial outreach):
   Hi The Green Labs,
   ${""}
-  We are expanding our supplier network at Bobber Labs and are looking for Organic Barley.
+  We are expanding our supplier network at Northwind Ingredients and are looking for Organic Barley.
   ${""}
   Do you supply this? If so, could you kindly share current pricing, estimated lead times, and MOQs?
   ${""}
@@ -19,7 +19,7 @@ Example A (initial outreach):
   Thanks,
   ${""}
   Procurement Team
-  Bobber Labs
+  Northwind Ingredients
 
 Example B (a check-in / follow-up):
   Hi Herbal Creations Team,
@@ -31,7 +31,7 @@ Example B (a check-in / follow-up):
   Thanks,
   ${""}
   Procurement Team
-  Bobber Labs`;
+  Northwind Ingredients`;
 
 const SYSTEM_BASE = `You are writing a supplier outreach email asking them to re-validate a quote (or set of quotes) we have on file that are past their reanalyze date.
 

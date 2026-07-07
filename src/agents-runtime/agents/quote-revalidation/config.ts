@@ -20,8 +20,10 @@ export const GHOST_CLIENTS: Record<string, string> = {
   "Lakeside Formulations": "Bobber Labs",
   "Meridian Foods Co.": "Bobber Labs",
   "Vitality Labs Inc.": "Bobber Labs",
-  "Tenkara": "Rove Essentials",
-  "Tenkara (Internal Sourcing)": "Rove Essentials",
+  // Internal Sourcing consolidates under the Sierra Materials Co ghost brand
+  // (info@sierramaterialsco.com). Never send as Tenkara or Rove for these.
+  "Tenkara": "Sierra Materials Co",
+  "Tenkara (Internal Sourcing)": "Sierra Materials Co",
   "Catalyst Chemical Solutions": "Rove Essentials",
   "Nitro Logistics": "Rove Essentials",
 };

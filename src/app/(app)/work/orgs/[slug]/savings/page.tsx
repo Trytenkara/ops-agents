@@ -8,6 +8,7 @@ import { buildSourcingScorecard } from "@/lib/sourcing-scorecard";
 import { loadMaterialAttributes } from "@/lib/material-attributes";
 import { SavingsReportInteractive } from "@/components/savings-report-interactive";
 import { SavingsWorksheet } from "@/components/savings-worksheet";
+import { orgDisplayName } from "@/lib/org-display";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -28,10 +29,11 @@ export default async function OrgSavingsPage({
   const admin = createAdminClient();
   const { data: org } = await admin
     .from("orgs")
-    .select("id, slug, name, tenkara_org_id")
+    .select("id, slug, name, display_name, tenkara_org_id")
     .eq("slug", params.slug)
     .maybeSingle();
   if (!org) notFound();
+  const orgName = orgDisplayName(org);
 
   if (!org.tenkara_org_id) {
     return (
@@ -63,7 +65,7 @@ export default async function OrgSavingsPage({
         </div>
         <SavingsReportInteractive
           report={report}
-          clientName={org.name}
+          clientName={orgName}
           slug={org.slug}
           variant={reportType}
           attributes={attributes}
@@ -77,7 +79,7 @@ export default async function OrgSavingsPage({
   return (
     <div className="space-y-6">
       <ViewToggle slug={org.slug} view={view} />
-      <SavingsWorksheet report={report} scorecard={scorecard} slug={org.slug} clientName={org.name} />
+      <SavingsWorksheet report={report} scorecard={scorecard} slug={org.slug} clientName={orgName} />
     </div>
   );
 }

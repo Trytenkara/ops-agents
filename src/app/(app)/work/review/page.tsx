@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAssignedOrgIds } from "@/lib/org-access";
 import { getOrgNudgeCounts, totalNudges } from "@/lib/org-nudges";
+import { orgDisplayName } from "@/lib/org-display";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,7 @@ export default async function ReviewByOrgPage() {
   const admin = createAdminClient();
   const assigned = await getAssignedOrgIds(session);
 
-  let orgQuery = admin.from("orgs").select("id, slug, name, is_internal").order("is_internal").order("name");
+  let orgQuery = admin.from("orgs").select("id, slug, name, display_name, is_internal").order("is_internal").order("name");
   if (assigned) {
     if (assigned.length === 0) {
       return <p className="text-sm text-muted-foreground">No orgs assigned to you yet.</p>;
@@ -45,7 +46,7 @@ export default async function ReviewByOrgPage() {
               className={`flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3 ${total > 0 ? "border-border bg-background" : "border-border/60 bg-background/50"}`}
             >
               <Link href={`/work/orgs/${org.slug}`} className="font-medium hover:underline">
-                {org.name}
+                {orgDisplayName(org)}
                 {org.is_internal && <span className="ml-2 text-[9px] uppercase tracking-wider bg-secondary text-muted-foreground px-1.5 py-0.5 rounded">Internal</span>}
               </Link>
               {total === 0 ? (

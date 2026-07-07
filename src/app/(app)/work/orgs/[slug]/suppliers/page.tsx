@@ -5,13 +5,14 @@ import { ClientSuppliersSection } from "@/components/client-suppliers-section";
 import { getClientSuppliers } from "@/lib/client-suppliers";
 import { getOrgOperatorPool, operatorBySupplier, getSupplierAssignments } from "@/lib/operator-assignment";
 import { getSession, hasAnyRole } from "@/lib/auth";
+import { orgDisplayName } from "@/lib/org-display";
 
 export const dynamic = "force-dynamic";
 
 export default async function OrgSuppliersPage({ params }: { params: { slug: string } }) {
   const session = (await getSession())!;
   const admin = createAdminClient();
-  const { data: org } = await admin.from("orgs").select("id, slug, name, tenkara_org_id").eq("slug", params.slug).maybeSingle();
+  const { data: org } = await admin.from("orgs").select("id, slug, name, display_name, tenkara_org_id").eq("slug", params.slug).maybeSingle();
   if (!org) notFound();
 
   const suppliers = await getClientSuppliers(org.tenkara_org_id ?? null);
@@ -38,7 +39,7 @@ export default async function OrgSuppliersPage({ params }: { params: { slug: str
       <ListPageHeader
         level={2}
         title="Suppliers"
-        description={`Suppliers linked to ${org.name} in Tenkara, by approval status. Assign a supplier's operator to route its outreach; "Auto" uses the default.`}
+        description={`Suppliers linked to ${orgDisplayName(org)}, by approval status. Assign a supplier's operator to route its outreach; "Auto" uses the default.`}
       />
       <ClientSuppliersSection
         suppliers={suppliers}

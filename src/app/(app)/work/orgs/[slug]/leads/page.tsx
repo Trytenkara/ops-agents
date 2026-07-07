@@ -12,13 +12,15 @@ import { resolveMaterialGrades, resolveSupplierMarketplace } from "@/lib/tenkara
 import { leadMarketKind } from "@/components/lead-rich-row";
 import { getOrgOperatorPool, pickSupplierOperator } from "@/lib/operator-assignment";
 import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
+import { orgDisplayName } from "@/lib/org-display";
 
 export const dynamic = "force-dynamic";
 
 export default async function OrgLeadsPage({ params }: { params: { slug: string } }) {
   const admin = createAdminClient();
-  const { data: org } = await admin.from("orgs").select("id, slug, name, tenkara_org_id").eq("slug", params.slug).maybeSingle();
+  const { data: org } = await admin.from("orgs").select("id, slug, name, display_name, tenkara_org_id").eq("slug", params.slug).maybeSingle();
   if (!org) notFound();
+  const orgName = orgDisplayName(org);
 
   const { data: rows } = await admin
     .from("leads_in_flight")
@@ -75,7 +77,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
       <ListPageHeader
         level={2}
         title="Leads"
-        description={`Suppliers discovered for ${org.name}. Export the CSV for the manual supplier-sourcing index.`}
+        description={`Suppliers discovered for ${orgName}. Export the CSV for the manual supplier-sourcing index.`}
         collectedBy="Agent 03 (Lead Creator) + Agent 06 (Enrichment)"
         actions={canAct ? <SuppliersCsvUpload orgId={org.id} /> : undefined}
       />
@@ -90,7 +92,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           Existing saved quotes <span className="text-muted-foreground text-base">· {quotes.length}</span>
         </h2>
         <p className="text-xs text-muted-foreground">
-          Quotes already in the database for {org.name}&apos;s materials — so you can see what&apos;s covered before sourcing more. Re-quoting these is Agent 02&apos;s job, not new outreach.
+          Quotes already in the database for {orgName}&apos;s materials — so you can see what&apos;s covered before sourcing more. Re-quoting these is Agent 02&apos;s job, not new outreach.
         </p>
         {quotes.length > 0 ? (
           <Table>

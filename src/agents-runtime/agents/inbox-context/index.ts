@@ -4,6 +4,7 @@ import { tenkaraQuery } from "@/lib/tenkara-readonly";
 import { listLabelConversations, getConversationMessages } from "@/lib/missive";
 import { missivePollingEnabled } from "@/lib/tenkara";
 import { MISSIVE_BOBBER_LABS_LABEL_ID } from "../quote-revalidation/config";
+import { onlyOrgName } from "@/lib/org-scope";
 import Anthropic from "@anthropic-ai/sdk";
 
 // Agent 13 - Inbox Context.
@@ -26,7 +27,7 @@ const MAX_LLM_SUMMARIES = 40;
 
 // Optional scope: reuse the same flag Agent 02 uses so a Bobber-Labs-only run
 // only builds context for Bobber Labs suppliers.
-const ONLY_ORG = process.env.QR_ONLY_ORG?.trim() || null;
+const ONLY_ORG = onlyOrgName();
 
 const SUMMARY_MODEL = "claude-opus-4-5";
 
