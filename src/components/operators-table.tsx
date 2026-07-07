@@ -12,6 +12,7 @@ import { ROLE_LABELS, roleLabel } from "@/lib/roles";
 import type { AppRole } from "@/lib/auth";
 import { inviteOperator, resendInvite, changeUserRole, setOrgAssignments, deactivateUser, reactivateUser } from "@/app/actions/operators";
 import { relativeTime } from "@/lib/utils";
+import { orgDisplayName } from "@/lib/org-display";
 
 interface UserRow {
   id: string;
@@ -22,13 +23,14 @@ interface UserRow {
   last_login_at: string | null;
   deactivated_at: string | null;
   user_roles: { role: string }[];
-  user_org_assignments: { orgs: { slug: string; name: string } }[];
+  user_org_assignments: { orgs: { slug: string; name: string; display_name: string | null } }[];
 }
 
 interface Org {
   id: string;
   slug: string;
   name: string;
+  display_name: string | null;
   is_internal: boolean;
 }
 
@@ -92,7 +94,7 @@ export function OperatorsTable({ actor, users, orgs }: { actor: Actor; users: Us
                       ? <span title="Admins and Monitors have global access">all orgs</span>
                       : "—"
                   ) : (
-                    u.user_org_assignments.map((a) => a.orgs?.name).filter(Boolean).join(", ")
+                    u.user_org_assignments.map((a) => a.orgs && orgDisplayName(a.orgs)).filter(Boolean).join(", ")
                   )}
                 </TableCell>
                 <TableCell><StatusBadge s={status} /></TableCell>
@@ -174,7 +176,7 @@ function InviteModal({ onClose, actor, orgs }: { onClose: () => void; actor: Act
                     setSelectedOrgs(next);
                   }}
                 />
-                <span className={o.is_internal ? "text-muted-foreground" : ""}>{o.name}</span>
+                <span className={o.is_internal ? "text-muted-foreground" : ""}>{orgDisplayName(o)}</span>
               </label>
             ))}
           </div>
@@ -247,7 +249,7 @@ function ManageModal({ user, actor, orgs, onClose }: { user: UserRow; actor: Act
                     setSelectedOrgs(next);
                   }}
                 />
-                <span className={o.is_internal ? "text-muted-foreground" : ""}>{o.name}</span>
+                <span className={o.is_internal ? "text-muted-foreground" : ""}>{orgDisplayName(o)}</span>
               </label>
             ))}
           </div>

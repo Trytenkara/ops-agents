@@ -6,6 +6,7 @@ import { getSession, hasAnyRole, type AppRole } from "@/lib/auth";
 import { operatorRoles, primaryRole } from "@/lib/operator";
 import { OrgOperatorsEditor } from "@/components/org-operators-editor";
 import { getOrgNudgeCounts } from "@/lib/org-nudges";
+import { orgDisplayName } from "@/lib/org-display";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,7 @@ export default async function OrgOverview({ params }: { params: { slug: string }
   const admin = createAdminClient();
   const { data: org } = await admin
     .from("orgs")
-    .select("id, slug, name, tenkara_org_id, is_internal")
+    .select("id, slug, name, display_name, tenkara_org_id, is_internal")
     .eq("slug", params.slug)
     .maybeSingle();
   if (!org) notFound();
@@ -103,7 +104,7 @@ export default async function OrgOverview({ params }: { params: { slug: string }
         <CardContent>
           <OrgOperatorsEditor
             orgId={org.id}
-            orgName={org.name}
+            orgName={orgDisplayName(org)}
             initialPrimary={initialPrimary as any}
             initialBackup={initialBackup as any}
             candidates={candidates as any}

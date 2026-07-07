@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { roleLabel } from "@/lib/roles";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
+import { orgDisplayName } from "@/lib/org-display";
 import { HomeBoard, type WorkType, type ClientRow } from "@/components/home-board";
 
 export const dynamic = "force-dynamic";
@@ -23,13 +24,13 @@ export default async function HomePage() {
     scope(admin.from("marketplace_check_findings").select("org_id, created_at").eq("status", "pending_review")),
     scope(admin.from("cases").select("org_id, created_at").in("status", ["open", "in_progress"])),
     scope(admin.from("leads_in_flight").select("org_id, created_at").eq("stage", "ready_for_approval").eq("status", "active")),
-    orgIds ? admin.from("orgs").select("id, slug, name").in("id", orgIds) : admin.from("orgs").select("id, slug, name"),
+    orgIds ? admin.from("orgs").select("id, slug, name, display_name").in("id", orgIds) : admin.from("orgs").select("id, slug, name, display_name"),
   ]);
 
   const now = Date.now();
   const acc = new Map<string, ClientRow & { _oldest: number }>();
   for (const o of (orgsRes.data ?? []) as any[]) {
-    acc.set(o.id, { slug: o.slug, name: o.name, drafts: 0, quotes: 0, changes: 0, cases: 0, leads: 0, total: 0, oldestDays: 0, _oldest: now });
+    acc.set(o.id, { slug: o.slug, name: orgDisplayName(o), drafts: 0, quotes: 0, changes: 0, cases: 0, leads: 0, total: 0, oldestDays: 0, _oldest: now });
   }
   const tally = (rows: any[], key: WorkType) => {
     let total = 0;

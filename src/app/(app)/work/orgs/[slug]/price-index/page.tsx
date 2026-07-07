@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
+import { orgDisplayName } from "@/lib/org-display";
 import { operatorRoles, primaryRole } from "@/lib/operator";
 import { resolveSupplierNamesWithFallback, resolveMaterialNames, resolveQuoteRefs, resolveQuoteExpiries } from "@/lib/tenkara-names";
 import { ListPageHeader } from "@/components/list-page-header";
@@ -37,7 +38,7 @@ export default async function OrgPriceIndexPage({
     : "pending_review";
 
   const admin = createAdminClient();
-  const { data: org } = await admin.from("orgs").select("id, slug, name").eq("slug", params.slug).maybeSingle();
+  const { data: org } = await admin.from("orgs").select("id, slug, name, display_name").eq("slug", params.slug).maybeSingle();
   if (!org) notFound();
 
   const [findingsRes, draftsRes] = await Promise.all([
@@ -110,7 +111,7 @@ export default async function OrgPriceIndexPage({
       <ListPageHeader
         level={2}
         title="Live Price Index"
-        description={`Keep ${org.name}'s pricing current. Marketplace suppliers are re-checked against their public price; direct suppliers get a re-quote draft to send.`}
+        description={`Keep ${orgDisplayName(org)}'s pricing current. Marketplace suppliers are re-checked against their public price; direct suppliers get a re-quote draft to send.`}
         collectedBy="Agent 05 (Marketplace Re-check) + Agent 02 (Revalidation)"
         actions={
           <Link

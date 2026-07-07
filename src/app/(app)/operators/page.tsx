@@ -16,9 +16,9 @@ export default async function OperatorsPage() {
       .from("users")
       // user_org_assignments has two FKs to users (user_id + assigned_by); PostgREST
       // refuses to pick → PGRST201. Pin to the user_id relationship explicitly.
-      .select("id, email, display_name, status, invited_at, last_login_at, deactivated_at, user_roles(role), user_org_assignments!user_org_assignments_user_id_fkey(orgs(slug, name))")
+      .select("id, email, display_name, status, invited_at, last_login_at, deactivated_at, user_roles(role), user_org_assignments!user_org_assignments_user_id_fkey(orgs(slug, name, display_name))")
       .order("invited_at", { ascending: false, nullsFirst: true }),
-    admin.from("orgs").select("id, slug, name, is_internal").order("name"),
+    admin.from("orgs").select("id, slug, name, display_name, is_internal").order("name"),
   ]);
 
   return (

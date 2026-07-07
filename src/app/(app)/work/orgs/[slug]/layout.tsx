@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { OrgSubnav } from "@/components/org-subnav";
+import { orgDisplayName } from "@/lib/org-display";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +28,7 @@ export default async function OrgLayout({
   params: { slug: string };
 }) {
   const admin = createAdminClient();
-  const { data: org } = await admin.from("orgs").select("id, slug, name, is_internal").eq("slug", params.slug).maybeSingle();
+  const { data: org } = await admin.from("orgs").select("id, slug, name, display_name, is_internal").eq("slug", params.slug).maybeSingle();
   if (!org) notFound();
 
   const base = `/work/orgs/${org.slug}`;
@@ -36,7 +37,7 @@ export default async function OrgLayout({
     <div className="space-y-6">
       <header className="flex items-baseline justify-between border-b border-border pb-4">
         <div>
-          <h1 className="font-serif text-3xl tracking-tight">{org.name}</h1>
+          <h1 className="font-serif text-3xl tracking-tight">{orgDisplayName(org)}</h1>
           <p className="text-xs text-muted-foreground mt-1">
             Org workspace
             {org.is_internal && <span className="ml-2 text-[9px] uppercase tracking-wider bg-secondary px-1.5 py-0.5 rounded">Internal</span>}
