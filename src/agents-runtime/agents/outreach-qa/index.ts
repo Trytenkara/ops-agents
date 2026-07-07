@@ -61,34 +61,48 @@ registerAgent({
     let errored = 0;
     const codeCounts: Record<string, number> = {};
 
-    for (const d of drafts as any[]) {
+    // Lint in-memory (cheap), then write the findings back. Writes go out in
+    // concurrent chunks — 100 sequential round-trips to the pooler was blowing
+    // the 300s function budget once the staged-draft backlog grew.
+    const ranAt = new Date().toISOString();
+    const linted = (drafts as any[]).map((d) => {
       const findings: Finding[] = lintDraft(d);
       for (const f of findings) codeCounts[f.code] = (codeCounts[f.code] ?? 0) + 1;
+      return { d, findings };
+    });
 
-      const newMetadata = {
-        ...(d.metadata ?? {}),
-        qa_findings: findings,
-        qa_run_id: ctx.runId,
-        qa_ran_at: new Date().toISOString(),
-      };
-
-      const { error: upErr } = await admin
-        .from("draft_references")
-        .update({ metadata: newMetadata })
-        .eq("id", d.id);
-      if (upErr) {
-        errored++;
-        await ctx.log(`Update failed for draft ${d.id}: ${upErr.message}`, {
-          level: "error",
-          step: "update",
-          data: { draft_id: d.id },
-        });
-        continue;
+    const CHUNK = 20;
+    for (let i = 0; i < linted.length; i += CHUNK) {
+      const batch = linted.slice(i, i + CHUNK);
+      const results = await Promise.all(
+        batch.map(async ({ d, findings }) => {
+          const newMetadata = {
+            ...(d.metadata ?? {}),
+            qa_findings: findings,
+            qa_run_id: ctx.runId,
+            qa_ran_at: ranAt,
+          };
+          const { error } = await admin
+            .from("draft_references")
+            .update({ metadata: newMetadata })
+            .eq("id", d.id);
+          return { id: d.id, findings, error };
+        })
+      );
+      for (const r of results) {
+        if (r.error) {
+          errored++;
+          await ctx.log(`Update failed for draft ${r.id}: ${r.error.message}`, {
+            level: "error",
+            step: "update",
+            data: { draft_id: r.id },
+          });
+          continue;
+        }
+        if (r.findings.length === 0) clean++;
+        else if (r.findings.some((f) => f.severity === "error")) withErrors++;
+        else withWarnings++;
       }
-
-      if (findings.length === 0) clean++;
-      else if (findings.some((f) => f.severity === "error")) withErrors++;
-      else withWarnings++;
     }
 
     ctx.setItemsProcessed(drafts.length);
