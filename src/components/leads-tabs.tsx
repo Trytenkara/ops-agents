@@ -8,7 +8,19 @@ import { leadMarketKind } from "@/components/lead-rich-row";
 
 // Two views over the same lead set: the full list, and a marketplace-only
 // pricing view (suppliers with published website prices, edited into tiers).
-export function LeadsTabs({ rows, canAct, slug }: { rows: any[]; canAct: boolean; slug: string }) {
+export function LeadsTabs({
+  rows,
+  canAct,
+  slug,
+  orgId,
+  operatorOptions,
+}: {
+  rows: any[];
+  canAct: boolean;
+  slug: string;
+  orgId?: string;
+  operatorOptions?: { id: string; name: string }[];
+}) {
   const [tab, setTab] = useState<"all" | "marketplace">("all");
 
   const marketCount = rows.filter(
@@ -36,7 +48,7 @@ export function LeadsTabs({ rows, canAct, slug }: { rows: any[]; canAct: boolean
         {tabBtn("marketplace", "Marketplace pricing", marketCount)}
       </div>
       {tab === "all" ? (
-        <LeadsList rows={rows} canAct={canAct} slug={slug} />
+        <LeadsList rows={rows} canAct={canAct} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
       ) : (
         <MarketplacePricing rows={rows} canAct={canAct} slug={slug} />
       )}
