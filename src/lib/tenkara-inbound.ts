@@ -223,6 +223,8 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     metadata: {
       outreach_mode: mode,
       ghost_brand: refMeta.ghost_brand ?? null,
+      supplier_name: leadRow?.supplier_name ?? from.name ?? null,
+      material_name: leadRow?.material_name ?? null,
       draft_kind: "inbound_reply",
       in_reply_to_draft_ref: ref.id,
       in_reply_to_message_id: msg.message_id,

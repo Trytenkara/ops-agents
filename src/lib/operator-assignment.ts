@@ -39,11 +39,13 @@ export async function getOrgOperatorPool(
   admin: SupabaseClient,
   orgId: string
 ): Promise<OperatorRef[]> {
-  // Only people with the ops_operator role are assignable — not admins/leads/
-  // monitors. When no operators are assigned to an org, the pool is empty and
-  // suppliers stay unassigned (by design, until the ops team is added).
+  // Assignable operators = ops_operator OR ops_lead (leads run sourcing for
+  // clients too). Admins/monitors/account_managers are not assignable. When no
+  // eligible operators are assigned to an org, the pool is empty and suppliers
+  // stay unassigned (by design, until the ops team is added).
+  const ASSIGNABLE = new Set(["ops_operator", "ops_lead"]);
   const isOperator = (u: any): boolean =>
-    Array.isArray(u?.user_roles) && u.user_roles.some((r: any) => r?.role === "ops_operator");
+    Array.isArray(u?.user_roles) && u.user_roles.some((r: any) => ASSIGNABLE.has(r?.role));
   const toRef = (u: any): OperatorRef | null =>
     u && u.status !== "out_of_office" && isOperator(u)
       ? { id: u.id, name: u.display_name ?? u.email ?? "—", email: u.email ?? null }
