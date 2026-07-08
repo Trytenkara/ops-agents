@@ -21,13 +21,31 @@ export function MaterialFlagsPrompt({ flags }: { flags: MaterialFlag[] }) {
   const visible = flags.filter((f) => !hidden.has(f.id));
   if (!visible.length) return null;
 
-  function act(id: string, fn: () => Promise<{ ok: boolean; error?: string; corrected?: number }>, okMsg: (n?: number) => string) {
+  function applyFix(id: string) {
     setMsg(null);
     start(async () => {
-      const r = await fn();
+      const r = await applyMaterialNameFlag(id);
       if (!r.ok) { setMsg(r.error ?? "failed"); return; }
       setHidden((h) => new Set(h).add(id));
-      setMsg(okMsg(r.corrected));
+      // Regenerate the affected emails with the corrected name.
+      if (r.regenerating) {
+        fetch("/api/agents/run/agent-04-outreach", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
+      }
+      const parts = [`Corrected ${r.corrected ?? 0} lead(s)`];
+      if (r.superseded) parts.push(`${r.superseded} old draft(s) superseded — delete them in the Tenkara inbox`);
+      if (r.regenerating) parts.push(`regenerating ${r.regenerating} email(s) with the correct spelling`);
+      setMsg(parts.join(" · ") + ".");
+      router.refresh();
+    });
+  }
+
+  function dismiss(id: string) {
+    setMsg(null);
+    start(async () => {
+      const r = await dismissMaterialNameFlag(id);
+      if (!r.ok) { setMsg(r.error ?? "failed"); return; }
+      setHidden((h) => new Set(h).add(id));
+      setMsg("Dismissed.");
       router.refresh();
     });
   }
@@ -45,19 +63,10 @@ export function MaterialFlagsPrompt({ flags }: { flags: MaterialFlag[] }) {
             <span className="font-medium">{f.suggested_name}</span>
           </span>
           <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              disabled={pending}
-              onClick={() => act(f.id, () => applyMaterialNameFlag(f.id), (n) => `Corrected ${n ?? 0} lead${n === 1 ? "" : "s"}/drafts.`)}
-            >
+            <Button size="sm" disabled={pending} onClick={() => applyFix(f.id)}>
               Correct all to “{f.suggested_name}”
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={pending}
-              onClick={() => act(f.id, () => dismissMaterialNameFlag(f.id), () => "Dismissed.")}
-            >
+            <Button size="sm" variant="outline" disabled={pending} onClick={() => dismiss(f.id)}>
               Name is fine
             </Button>
           </div>
