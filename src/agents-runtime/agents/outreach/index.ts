@@ -4,6 +4,7 @@ import { getOrgOperatorPool, resolveSupplierOperatorId, getSupplierAssignments, 
 import { classifyClient } from "../quote-revalidation/config";
 import { onlyOrgName } from "@/lib/org-scope";
 import { runOutreachForLead } from "./run-outreach";
+import { composeOutreachDraft } from "./drafter";
 import { suppliersWithPriorRelationship } from "@/lib/tenkara-relationships";
 import { getSourcingExclusions, exclusionReason } from "@/lib/tenkara-sourcing-exclusions";
 
@@ -113,7 +114,10 @@ registerAgent({
     // 3. Filter to leads we can actually draft for.
     type Candidate = {
       lead: (typeof leads)[number];
-      email: string;
+      // "email" → draft a Tenkara email; "manual" → open a contact-via-form case.
+      channel: "email" | "manual";
+      email: string | null;
+      channelUrl: string | null; // for channel="manual": the form / inquiry URL
       contactName: string | null;
       mode: "active" | "ghost";
       ghostBrand?: string;
@@ -123,17 +127,26 @@ registerAgent({
 
     const candidates: Candidate[] = [];
     const onlyOrg = onlyOrgName();
-    let droppedNoEmail = 0;
+    let droppedNoContact = 0;
     let droppedNoOrg = 0;
     let droppedSkipClient = 0;
     let droppedOtherOrg = 0;
 
     for (const lead of leads) {
       const payload = (lead.payload ?? {}) as any;
-      const email = payload.supplier_contact_email as string | undefined;
+      const email = (payload.supplier_contact_email as string | undefined) ?? null;
       const formatValid = payload.enrichment?.email_check?.format_valid === true;
-      if (!email || !formatValid) {
-        droppedNoEmail++;
+      const hasEmail = !!email && formatValid;
+      // A reachable non-email channel: a discovered contact/quote form, or the
+      // supplier's own site/listing we can submit an inquiry through.
+      const channelUrl =
+        (payload.enrichment?.contact?.contact_url as string | undefined) ??
+        (payload.supplier_website as string | undefined) ??
+        (payload.source_url as string | undefined) ??
+        null;
+      const channel: "email" | "manual" | null = hasEmail ? "email" : channelUrl ? "manual" : null;
+      if (!channel) {
+        droppedNoContact++; // no email AND no contactable channel — genuinely unreachable
         continue;
       }
       if (!lead.org_id) {
@@ -156,7 +169,9 @@ registerAgent({
       }
       candidates.push({
         lead,
-        email,
+        channel,
+        email: hasEmail ? email : null,
+        channelUrl: channel === "manual" ? channelUrl : null,
         contactName: payload.supplier_contact_name ?? null,
         mode: cls.mode,
         ghostBrand: cls.ghostBrand,
@@ -168,15 +183,17 @@ registerAgent({
       });
     }
 
+    const emailCount = candidates.filter((c) => c.channel === "email").length;
+    const manualCount = candidates.filter((c) => c.channel === "manual").length;
     await ctx.log(
-      `Filtered: ${candidates.length} draftable · dropped ${droppedNoEmail} (no/invalid email), ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${onlyOrg ? `, ${droppedOtherOrg} (outside ${onlyOrg})` : ""}`,
+      `Filtered: ${candidates.length} actionable (${emailCount} email, ${manualCount} manual-contact) · dropped ${droppedNoContact} (no contact channel), ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${onlyOrg ? `, ${droppedOtherOrg} (outside ${onlyOrg})` : ""}`,
       { step: "filter" }
     );
 
     if (candidates.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary(`No draftable leads after filters (no_email=${droppedNoEmail}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${onlyOrg ? `, other_org=${droppedOtherOrg}` : ""}).`);
+      ctx.setSummary(`No actionable leads after filters (no_contact=${droppedNoContact}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${onlyOrg ? `, other_org=${droppedOtherOrg}` : ""}).`);
       return;
     }
 
@@ -251,19 +268,35 @@ registerAgent({
       { step: "prior_relationship" }
     );
 
-    // 4b. Dedup against existing staged drafts (same supplier × material × agent).
+    // 4b. Dedup: email leads against an existing staged draft; manual leads
+    //     against an existing open manual_outreach case (same supplier × material).
     const cleanCandidates: Candidate[] = [];
     let dedupSkipped = 0;
     for (const c of candidatesNoPrior) {
       if (cleanCandidates.length >= maxDrafts) break;
-      const { data: existing } = await admin
-        .from("draft_references")
-        .select("id")
-        .eq("agent_id", tackleAgentId)
-        .eq("supplier_id", c.lead.supplier_id)
-        .eq("material_id", c.lead.material_id)
-        .eq("status", "staged")
-        .maybeSingle();
+      let existing: { id: string } | null = null;
+      if (c.channel === "email") {
+        const { data } = await admin
+          .from("draft_references")
+          .select("id")
+          .eq("agent_id", tackleAgentId)
+          .eq("supplier_id", c.lead.supplier_id)
+          .eq("material_id", c.lead.material_id)
+          .eq("status", "staged")
+          .maybeSingle();
+        existing = data;
+      } else {
+        const { data } = await admin
+          .from("cases")
+          .select("id")
+          .eq("org_id", c.lead.org_id)
+          .eq("supplier_id", c.lead.supplier_id)
+          .eq("material_id", c.lead.material_id)
+          .eq("type", "manual_outreach")
+          .eq("status", "open")
+          .maybeSingle();
+        existing = data;
+      }
       if (existing) {
         dedupSkipped++;
         continue;
@@ -271,7 +304,7 @@ registerAgent({
       cleanCandidates.push(c);
     }
 
-    await ctx.log(`After dedup: ${cleanCandidates.length} → Missive (skipped ${dedupSkipped} already-staged)`, { step: "dedup" });
+    await ctx.log(`After dedup: ${cleanCandidates.length} actionable (skipped ${dedupSkipped} already-staged/cased)`, { step: "dedup" });
 
     if (cleanCandidates.length === 0) {
       ctx.setItemsProcessed(0);
@@ -280,43 +313,94 @@ registerAgent({
       return;
     }
 
-    // 5. Compose + stage via the shared draft→QA pipeline, serially. Missive API
-    //    has loose rate limits but staging outreach is meant to be deliberate.
+    // 5. Compose + act, serially. Email leads → staged Tenkara draft. Manual
+    //    leads → a manual_outreach case with ready-to-paste RFQ text so the
+    //    operator can reach out through the form/marketplace, then drop the lead.
     let staged = 0;
+    let manualCased = 0;
     let missiveErrors = 0;
     let promoted = 0;
 
     for (const c of cleanCandidates) {
-      const res = await runOutreachForLead({
-        admin,
-        agentId: tackleAgentId,
-        runId: ctx.runId,
-        lead: c.lead,
-        email: c.email,
-        contactName: c.contactName,
+      if (c.channel === "email") {
+        const res = await runOutreachForLead({
+          admin,
+          agentId: tackleAgentId,
+          runId: ctx.runId,
+          lead: c.lead,
+          email: c.email!,
+          contactName: c.contactName,
+          mode: c.mode,
+          ghostBrand: c.ghostBrand,
+          clientOrgName: c.clientOrgName,
+          assignedOperator: c.assignedOperator,
+          log: (m, meta) => ctx.log(m, meta),
+        });
+        if (res.staged) {
+          staged++;
+          if (!res.reason) promoted++;
+        } else {
+          missiveErrors++;
+        }
+        continue;
+      }
+
+      // channel === "manual"
+      const p = (c.lead.payload ?? {}) as any;
+      const draft = composeOutreachDraft({
         mode: c.mode,
         ghostBrand: c.ghostBrand,
         clientOrgName: c.clientOrgName,
-        assignedOperator: c.assignedOperator,
-        log: (m, meta) => ctx.log(m, meta),
+        supplierContactName: c.contactName,
+        supplierCompanyName: c.lead.supplier_name,
+        materialName: c.lead.material_name ?? "the material",
+        inciName: p.inci ?? p.inci_name ?? null,
+        signal: p.signal ?? null,
+        isMarketplace: (c.lead as any).market_kind === "marketplace" || p.site_type === "M" || p.site_type === "MS",
       });
-      if (res.staged) {
-        staged++;
-        if (!res.reason) promoted++;
-      } else {
+      const { error: caseErr } = await admin.from("cases").insert({
+        org_id: c.lead.org_id,
+        type: "manual_outreach",
+        status: "open",
+        supplier_id: c.lead.supplier_id,
+        material_id: c.lead.material_id,
+        recommended_action: `No public email for ${c.lead.supplier_name ?? "this supplier"}. Send the RFQ for ${c.lead.material_name ?? "the material"} via their contact form / marketplace inquiry: ${c.channelUrl ?? "(see supplier site)"}`,
+        assigned_operator: c.assignedOperator,
+        metadata: {
+          source_agent: "agent-04-outreach",
+          source_run_id: ctx.runId,
+          lead_id: c.lead.id,
+          supplier_name: c.lead.supplier_name,
+          material_name: c.lead.material_name,
+          contact_url: c.channelUrl,
+          outreach_mode: c.mode,
+          ghost_brand: c.ghostBrand ?? null,
+          rfq_subject: draft.subject,
+          rfq_body: draft.body,
+        },
+      });
+      if (caseErr) {
         missiveErrors++;
+        await ctx.log(`Manual-outreach case insert failed for ${c.lead.supplier_name}: ${caseErr.message}`, { level: "error", step: "manual_contact" });
+        continue;
       }
+      manualCased++;
+      // Drop the lead so it isn't reprocessed (mirrors Agent 07's case handoff).
+      await admin
+        .from("leads_in_flight")
+        .update({ status: "dropped", payload: { ...p, drop_reason: "manual_outreach_case" } })
+        .eq("id", c.lead.id);
     }
 
-    ctx.setItemsProcessed(staged);
-    ctx.setStatus(missiveErrors > 0 && staged === 0 ? "failure" : missiveErrors > 0 ? "partial" : "success");
+    ctx.setItemsProcessed(staged + manualCased);
+    ctx.setStatus(missiveErrors > 0 && staged + manualCased === 0 ? "failure" : missiveErrors > 0 ? "partial" : "success");
     ctx.setSummary(
-      `Staged ${staged} Missive draft${staged === 1 ? "" : "s"} · promoted ${promoted} to ready_for_outreach` +
-        (missiveErrors ? ` · ${missiveErrors} staging errors` : "") +
+      `Staged ${staged} email draft${staged === 1 ? "" : "s"} · ${manualCased} manual-contact case${manualCased === 1 ? "" : "s"} · promoted ${promoted} to ready_for_outreach` +
+        (missiveErrors ? ` · ${missiveErrors} errors` : "") +
         (priorRelSkipped ? ` · skipped ${priorRelSkipped} existing-relationship` : "") +
-        (dedupSkipped ? ` · skipped ${dedupSkipped} already-staged` : "") +
-        (droppedNoEmail || droppedNoOrg || droppedSkipClient
-          ? ` · dropped ${droppedNoEmail + droppedNoOrg + droppedSkipClient} pre-filter`
+        (dedupSkipped ? ` · skipped ${dedupSkipped} already-staged/cased` : "") +
+        (droppedNoContact || droppedNoOrg || droppedSkipClient
+          ? ` · dropped ${droppedNoContact + droppedNoOrg + droppedSkipClient} pre-filter`
           : "")
     );
   },
