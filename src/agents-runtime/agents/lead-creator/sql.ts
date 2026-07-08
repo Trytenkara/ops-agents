@@ -52,6 +52,20 @@ export async function queryRecentMaterials(since: string): Promise<MaterialRow[]
   );
 }
 
+// Fetch specific materials by id (for an on-demand single-material discovery
+// run triggered from the dashboard, ignoring the recency window).
+export async function queryMaterialsByIds(ids: string[]): Promise<MaterialRow[]> {
+  if (!ids.length) return [];
+  return tenkaraQuery<MaterialRow>(
+    `select m.id, m.name, m.trade_name, m.inci, m.created_at, m.user_id,
+            u.organization_id as tenkara_org_id
+       from public.materials m
+       left join public.users u on u.id = m.user_id
+      where m.id = any($1::uuid[])`,
+    [ids]
+  );
+}
+
 // Top suppliers who have quoted this exact material, then suppliers who have
 // quoted other materials with matching INCI or name, then suppliers carrying
 // the material in their uploaded catalog. We union the three buckets in JS

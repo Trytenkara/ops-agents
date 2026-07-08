@@ -15,6 +15,7 @@ export interface RunClaim {
   agentSlug: string;
   runId: string;
   triggerSource: "cron" | "manual" | "webhook";
+  input?: Record<string, any>;
   def: AgentDefinition;
 }
 
@@ -24,6 +25,7 @@ export interface RunClaim {
 export async function claimRun(opts: {
   agentSlug: string;
   triggerSource: "cron" | "manual" | "webhook";
+  input?: Record<string, any>;
 }): Promise<{ ok: true; claim: RunClaim } | { ok: false; error: string }> {
   const def = getAgentDefinition(opts.agentSlug);
   if (!def) return { ok: false, error: `agent ${opts.agentSlug} not registered in embedded runtime` };
@@ -80,6 +82,7 @@ export async function claimRun(opts: {
       agentSlug: agent.slug,
       runId: run.id,
       triggerSource: opts.triggerSource,
+      input: opts.input,
       def,
     },
   };
@@ -100,6 +103,7 @@ export async function runClaimed(claim: RunClaim): Promise<void> {
     runId: claim.runId,
     agentId: claim.agentId,
     agentSlug: claim.agentSlug,
+    input: claim.input ?? {},
     log: async (message, o) => {
       const level = o?.level ?? "info";
       await admin.from("agent_run_events").insert({
@@ -172,8 +176,9 @@ export async function executeAgentRun(opts: {
   agentSlug: string;
   triggerSource: "cron" | "manual" | "webhook";
   triggeredBy?: string | null;
+  input?: Record<string, any>;
 }): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {
-  const claimed = await claimRun({ agentSlug: opts.agentSlug, triggerSource: opts.triggerSource });
+  const claimed = await claimRun({ agentSlug: opts.agentSlug, triggerSource: opts.triggerSource, input: opts.input });
   if (!claimed.ok) return claimed;
   await runClaimed(claimed.claim);
   return { ok: true, runId: claimed.claim.runId };
