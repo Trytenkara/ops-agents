@@ -15,6 +15,7 @@ import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agent
 import { orgDisplayName } from "@/lib/org-display";
 import { AgentRunsStrip, type RunStat } from "@/components/agent-runs-strip";
 import { RunNowButton } from "@/components/run-now-button";
+import { MaterialFlagsPrompt, type MaterialFlag } from "@/components/material-flags-prompt";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +48,14 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   const runStats = Object.keys(RUN_LABELS)
     .map((s) => latestBySlug.get(s))
     .filter(Boolean) as RunStat[];
+
+  const { data: flagRows } = await admin
+    .from("material_name_flags")
+    .select("id, wrong_name, suggested_name")
+    .eq("org_id", org.id)
+    .eq("status", "pending")
+    .order("created_at", { ascending: false });
+  const materialFlags = (flagRows ?? []) as MaterialFlag[];
 
   const { data: rows } = await admin
     .from("leads_in_flight")
@@ -132,6 +141,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
         }
       />
       <AgentRunsStrip runs={runStats} />
+      <MaterialFlagsPrompt flags={materialFlags} />
       {leads.length === 0 ? (
         <p className="text-sm text-muted-foreground py-4">No active leads for this org.</p>
       ) : (
