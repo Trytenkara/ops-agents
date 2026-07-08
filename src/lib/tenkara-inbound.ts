@@ -23,6 +23,7 @@ export interface InboundMessage {
   from: string;
   subject?: string | null;
   body_text?: string | null;
+  body_html?: string | null;
   received_at?: string | null;
 }
 
@@ -136,7 +137,9 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   // Best-effort: extraction failure must never block the reply draft.
   let quotesStaged = 0;
   try {
-    const quotes = await extractQuotesFromReplyText(msg.body_text);
+    // Prefer the HTML body — suppliers put price ladders in tables that the
+    // flattened text loses. Falls back to plain text.
+    const quotes = await extractQuotesFromReplyText(msg.body_html || msg.body_text);
     if (quotes.length) {
       const staged: StagedQuoteInput[] = quotes.map((q) => ({
         orgId: ref.org_id,

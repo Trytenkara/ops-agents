@@ -20,7 +20,7 @@ export interface ExtractedQuote {
   notes: string | null;
 }
 
-const SYSTEM_PROMPT = `You are a B2B sourcing analyst extracting supplier price quotes from the plain text of an email a supplier sent us in reply to a sourcing request.
+const SYSTEM_PROMPT = `You are a B2B sourcing analyst extracting supplier price quotes from the body of an email a supplier sent us in reply to a sourcing request. The input may be plain text OR raw HTML — if it's HTML, read the rendered content, and pay special attention to <table> price ladders (pack size / tier / price columns).
 
 Only extract prices the supplier ACTUALLY STATES in the text. Most replies won't contain a firm price (they ask a question, promise a quote later, attach a sheet, or decline) — in those cases return {"quotes": []}. Do not guess.
 
@@ -77,7 +77,7 @@ export async function extractQuotesFromReplyText(body: string | null | undefined
     model: MODEL,
     max_tokens: 1500,
     system: SYSTEM_PROMPT,
-    messages: [{ role: "user", content: `Supplier reply text:\n\n${text.slice(0, 12000)}` }],
+    messages: [{ role: "user", content: `Supplier reply body (text or HTML):\n\n${text.slice(0, 20000)}` }],
   });
   const out = res.content.find((b) => b.type === "text");
   return extractJson(out && out.type === "text" ? out.text : "").quotes.filter(
