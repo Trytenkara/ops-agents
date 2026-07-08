@@ -125,12 +125,33 @@ registerAgent({
       assignedOperator: string | null;
     };
 
+    // Hold outreach for materials with an UNRESOLVED spelling flag, so we don't
+    // draft (and later have to regenerate) wrong-spelling emails. Leads stay at
+    // stage=enriched and get picked up automatically once ops applies/dismisses
+    // the flag — no cron change, just a per-run skip.
+    const pendingByOrg = new Map<string, Set<string>>();
+    {
+      const orgIds = Array.from(new Set(leads.map((l) => l.org_id).filter(Boolean) as string[]));
+      if (orgIds.length) {
+        const { data: pf } = await admin
+          .from("material_name_flags")
+          .select("org_id, wrong_name")
+          .in("org_id", orgIds)
+          .eq("status", "pending");
+        for (const r of (pf ?? []) as any[]) {
+          if (!pendingByOrg.has(r.org_id)) pendingByOrg.set(r.org_id, new Set());
+          pendingByOrg.get(r.org_id)!.add((r.wrong_name as string).toLowerCase());
+        }
+      }
+    }
+
     const candidates: Candidate[] = [];
     const onlyOrg = onlyOrgName();
     let droppedNoContact = 0;
     let droppedNoOrg = 0;
     let droppedSkipClient = 0;
     let droppedOtherOrg = 0;
+    let heldForSpelling = 0;
 
     for (const lead of leads) {
       const payload = (lead.payload ?? {}) as any;
@@ -162,6 +183,11 @@ registerAgent({
         droppedOtherOrg++;
         continue;
       }
+      // Hold if this material has an unresolved spelling flag.
+      if (lead.material_name && pendingByOrg.get(lead.org_id)?.has(lead.material_name.toLowerCase())) {
+        heldForSpelling++;
+        continue;
+      }
       const cls = classifyClient(org.name);
       if (cls.mode === "skip") {
         droppedSkipClient++;
@@ -186,14 +212,14 @@ registerAgent({
     const emailCount = candidates.filter((c) => c.channel === "email").length;
     const manualCount = candidates.filter((c) => c.channel === "manual").length;
     await ctx.log(
-      `Filtered: ${candidates.length} actionable (${emailCount} email, ${manualCount} manual-contact) · dropped ${droppedNoContact} (no contact channel), ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${onlyOrg ? `, ${droppedOtherOrg} (outside ${onlyOrg})` : ""}`,
+      `Filtered: ${candidates.length} actionable (${emailCount} email, ${manualCount} manual-contact) · dropped ${droppedNoContact} (no contact channel), ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${onlyOrg ? `, ${droppedOtherOrg} (outside ${onlyOrg})` : ""}${heldForSpelling ? ` · held ${heldForSpelling} (pending spelling review)` : ""}`,
       { step: "filter" }
     );
 
     if (candidates.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary(`No actionable leads after filters (no_contact=${droppedNoContact}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${onlyOrg ? `, other_org=${droppedOtherOrg}` : ""}).`);
+      ctx.setSummary(`No actionable leads after filters (no_contact=${droppedNoContact}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${onlyOrg ? `, other_org=${droppedOtherOrg}` : ""}${heldForSpelling ? `, held_spelling=${heldForSpelling}` : ""}).`);
       return;
     }
 
