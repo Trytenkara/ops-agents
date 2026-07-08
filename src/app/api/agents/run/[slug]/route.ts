@@ -6,12 +6,20 @@ import { createAdminClient } from "@/lib/supabase/admin";
 
 export const maxDuration = 300;
 
+// Agents ops can trigger from the client workspace (Leads / Materials) without
+// access to the full Agents admin area. Everything else stays admin/monitor.
+const CLIENT_SAFE_SLUGS = new Set(["agent-03-lead-creator", "agent-04-outreach", "agent-06-enrichment"]);
+
 export async function POST(request: NextRequest, { params }: { params: { slug: string } }) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
-  if (!hasAnyRole(session, ["admin", "monitor"])) {
-    return NextResponse.json({ error: "forbidden — Admin or Monitor only" }, { status: 403 });
-  }
+  const allowed =
+    hasAnyRole(session, ["admin", "monitor"]) ||
+    (CLIENT_SAFE_SLUGS.has(params.slug) && hasAnyRole(session, ["ops_lead", "ops_operator"]));
+  if (!allowed) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+
+  const body = await request.json().catch(() => ({} as any));
+  const input = body && typeof body.input === "object" && body.input ? (body.input as Record<string, any>) : undefined;
 
   const admin = createAdminClient();
   const { data: agent } = await admin
@@ -35,10 +43,10 @@ export async function POST(request: NextRequest, { params }: { params: { slug: s
     action: "agent.run_now",
     target_table: "agents",
     target_id: agent.id,
-    diff: { trigger: "manual" },
+    diff: { trigger: "manual", input: input ?? null },
   });
 
-  const claimed = await claimRun({ agentSlug: params.slug, triggerSource: "manual" });
+  const claimed = await claimRun({ agentSlug: params.slug, triggerSource: "manual", input });
   if (!claimed.ok) {
     return NextResponse.json({ ok: false, error: claimed.error }, { status: 500 });
   }

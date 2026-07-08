@@ -5,6 +5,9 @@ export interface RuntimeContext {
   runId: string;
   agentId: string;
   agentSlug: string;
+  // Optional per-run input from a manual trigger (e.g. { materialId } to scope
+  // discovery to one material). Empty for scheduled cron runs.
+  input?: Record<string, any>;
   log: (
     message: string,
     opts?: { step?: string; level?: "info" | "warn" | "error" | "debug"; data?: Record<string, any> }

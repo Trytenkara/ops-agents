@@ -8,24 +8,38 @@ interface Props {
   agentSlug: string;
   isRunning: boolean;
   currentRunId?: string | null;
+  label?: string;
+  input?: Record<string, any>;
+  // Ops trigger from a client page — they can't see /agents/runs, so stay put
+  // and show a success note instead of navigating to the run view.
+  stayOnPage?: boolean;
 }
 
-export function RunNowButton({ agentSlug, isRunning, currentRunId }: Props) {
+export function RunNowButton({ agentSlug, isRunning, currentRunId, label = "Run now", input, stayOnPage = false }: Props) {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
 
   async function start() {
     setMsg(null);
     setSubmitting(true);
-    const res = await fetch(`/api/agents/run/${agentSlug}`, { method: "POST" });
+    const res = await fetch(`/api/agents/run/${agentSlug}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input ? { input } : {}),
+    });
     const body = await res.json().catch(() => ({}));
     setSubmitting(false);
     if (!res.ok || !body.ok) {
       setMsg(body.error ?? `HTTP ${res.status}`);
       return;
     }
-    // Route to the run-detail view.
+    if (stayOnPage) {
+      setDone(true);
+      router.refresh();
+      return;
+    }
     if (body.run_id) router.push(`/agents/runs/${body.run_id}`);
     else router.refresh();
   }
@@ -44,10 +58,11 @@ export function RunNowButton({ agentSlug, isRunning, currentRunId }: Props) {
 
   return (
     <div className="space-y-1">
-      <Button size="sm" onClick={start} disabled={submitting}>
-        {submitting ? "Starting…" : "Run now"}
+      <Button size="sm" variant="outline" onClick={start} disabled={submitting || done}>
+        {submitting ? "Starting…" : done ? "Started ✓" : label}
       </Button>
       {msg && <p className="text-xs text-destructive">{msg}</p>}
+      {done && <p className="text-[11px] text-muted-foreground">Running — check activity above in ~a minute.</p>}
     </div>
   );
 }

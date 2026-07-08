@@ -14,6 +14,7 @@ import { getOrgOperatorPool, pickSupplierOperator, operatorBySupplier, getSuppli
 import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
 import { orgDisplayName } from "@/lib/org-display";
 import { AgentRunsStrip, type RunStat } from "@/components/agent-runs-strip";
+import { RunNowButton } from "@/components/run-now-button";
 
 export const dynamic = "force-dynamic";
 
@@ -120,7 +121,15 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
         title="Leads"
         description={`Suppliers discovered for ${orgName}. Export the CSV for the manual supplier-sourcing index.`}
         collectedBy="Agent 03 (Lead Creator) + Agent 06 (Enrichment)"
-        actions={canAct ? <SuppliersCsvUpload orgId={org.id} /> : undefined}
+        actions={
+          canAct ? (
+            <div className="flex items-center gap-2">
+              <RunNowButton agentSlug="agent-03-lead-creator" isRunning={false} label="Run discovery" stayOnPage />
+              <RunNowButton agentSlug="agent-04-outreach" isRunning={false} label="Run outreach" stayOnPage />
+              <SuppliersCsvUpload orgId={org.id} />
+            </div>
+          ) : undefined
+        }
       />
       <AgentRunsStrip runs={runStats} />
       {leads.length === 0 ? (

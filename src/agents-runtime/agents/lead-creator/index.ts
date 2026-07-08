@@ -1,6 +1,6 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { queryRecentMaterials, findCandidatesForMaterial, existingQuotesForMaterials, type CandidateSupplier, type MaterialRow } from "./sql";
+import { queryRecentMaterials, queryMaterialsByIds, findCandidatesForMaterial, existingQuotesForMaterials, type CandidateSupplier, type MaterialRow } from "./sql";
 import { scoutSuppliersForMaterial, scoreScoutConfidence, scoutCompleteness, type ScoutSupplier } from "./scout";
 import { toCsv } from "@/lib/csv";
 import { getSourcingExclusions, exclusionReason, type SourcingExclusions } from "@/lib/tenkara-sourcing-exclusions";
@@ -98,16 +98,23 @@ registerAgent({
       { step: "query" }
     );
 
-    // 2. Pull recent materials from Tenkara prod.
+    // On-demand: a dashboard trigger can target one material (ignores the recency
+    // window and forces a re-scout even if it already has leads).
+    const onlyMaterialId = (ctx.input?.materialId as string | undefined) || null;
+
+    // 2. Pull materials from Tenkara prod (one targeted material, or the window).
     let materials: MaterialRow[];
     try {
-      materials = await queryRecentMaterials(since.toISOString());
+      materials = onlyMaterialId
+        ? await queryMaterialsByIds([onlyMaterialId])
+        : await queryRecentMaterials(since.toISOString());
     } catch (e: any) {
       await ctx.log(`Tenkara materials query failed: ${e.message}`, { level: "error", step: "query" });
       ctx.setStatus("failure");
       ctx.setSummary(`Failed at Tenkara materials query: ${e.message}`);
       return;
     }
+    if (onlyMaterialId) await ctx.log(`Targeted single-material run: ${onlyMaterialId} (${materials.length} found)`, { step: "query" });
     await ctx.log(`${materials.length} materials in window`, { step: "query", data: { count: materials.length } });
 
     if (materials.length === 0) {
@@ -157,6 +164,8 @@ registerAgent({
       .eq("source", "ai_discovery")
       .in("material_id", materialIds);
     const alreadyScouted = new Set((scoutedRows ?? []).map((r: any) => r.material_id as string));
+    // Targeted runs force a fresh scout even if the material already has leads.
+    if (onlyMaterialId) alreadyScouted.clear();
     if (alreadyScouted.size > 0) {
       await ctx.log(`${alreadyScouted.size} materials already have scout leads — skipping scout phase for them`, {
         step: "scout_dedup",
@@ -207,7 +216,7 @@ registerAgent({
     for (const material of materials) {
       // Fleet-wide org scoping: when ONLY_ORG is set, only source for materials
       // belonging to that org (matched via tenkara_org_id). Skip everything else.
-      if (onlyOrg && (!material.tenkara_org_id || !allowedTenkaraOrgIds.has(material.tenkara_org_id))) {
+      if (!onlyMaterialId && onlyOrg && (!material.tenkara_org_id || !allowedTenkaraOrgIds.has(material.tenkara_org_id))) {
         continue;
       }
       if (leadsCreated >= MAX_NEW_LEADS_PER_RUN) {

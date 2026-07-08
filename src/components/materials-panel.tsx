@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
+import { RunNowButton } from "@/components/run-now-button";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { Select, type SelectOption } from "@/components/ui/select";
@@ -215,6 +216,7 @@ export function MaterialsPanel({
                   <TableHead>Avg order</TableHead>
                   <TableHead>Min shelf-life (mat. &amp; COA)</TableHead>
                   <TableHead>Current quote expiry</TableHead>
+                  <TableHead className="text-right">Discovery</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -360,10 +362,23 @@ function MaterialRow({
             <Badge variant="secondary" className="ml-2 text-red-600 border-red-300">request longer</Badge>
           )}
         </TableCell>
+        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+          {canEdit && m.tenkaraMaterialId ? (
+            <RunNowButton
+              agentSlug="agent-03-lead-creator"
+              isRunning={false}
+              label="Run"
+              input={{ materialId: m.tenkaraMaterialId }}
+              stayOnPage
+            />
+          ) : (
+            <span className="text-xs text-muted-foreground">—</span>
+          )}
+        </TableCell>
       </TableRow>
       {open && expandable && (
         <TableRow>
-          <TableCell colSpan={8} className="bg-secondary/20">
+          <TableCell colSpan={9} className="bg-secondary/20">
             <div className="space-y-4 py-1">
               <div>
                 <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-1">
