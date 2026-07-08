@@ -7,6 +7,7 @@ import { seesAllOrgs } from "@/lib/org-access";
 import { SignOutButton } from "@/components/sign-out-button";
 import { NavLink } from "@/components/nav-link";
 import { RunbookAssistant } from "@/components/runbook-assistant";
+import { ReportIssue } from "@/components/report-issue";
 import { cn } from "@/lib/utils";
 
 export interface OrgItem {
@@ -85,6 +86,7 @@ export function Shell({
 
       <main className="flex-1 min-h-screen relative">
         <div className="absolute top-5 right-6 z-40 flex items-center gap-1">
+          <ReportIssue />
           <Link
             href="/settings"
             title="Settings"
