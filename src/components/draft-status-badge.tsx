@@ -10,5 +10,11 @@ export function DraftStatusBadge({ status, reviewerName }: { status: string; rev
   }
   if (status === "sent") return <Badge variant="default">Sent</Badge>;
   if (status === "discarded") return <Badge variant="secondary">Discarded</Badge>;
+  if (status === "superseded")
+    return (
+      <Badge variant="warn" title="Regenerated with a corrected material spelling. Delete this old draft in the Tenkara inbox.">
+        Superseded · delete in Tenkara
+      </Badge>
+    );
   return <Badge variant="secondary">{status}</Badge>;
 }

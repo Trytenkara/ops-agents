@@ -3,6 +3,15 @@ import { composeOutreachDraft } from "./drafter";
 import { stageDraft } from "@/lib/draft-staging";
 import { coldOutboundEmailClient, tenkaraEmailAccountIdFor } from "@/lib/tenkara";
 
+// Short stable hash so a corrected material name yields a NEW Tenkara externalId
+// (Tenkara is idempotent on externalId — reusing it would return the old, wrong
+// draft instead of regenerating).
+function nameHash(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
 // Per-lead outreach: compose the email, stage it through the shared draft→QA
 // pipeline, and promote the lead to ready_for_outreach. Shared by Agent 04's
 // scheduled sweep and Agent 03's inline call so both paths behave identically.
@@ -84,7 +93,7 @@ export async function runOutreachForLead(input: RunOutreachInput): Promise<RunOu
     emailClient,
     emailAccountId,
     supplierCompany: lead.supplier_name,
-    externalId: emailClient === "rod_app" ? `agent-04-outreach-${lead.id}` : undefined,
+    externalId: emailClient === "rod_app" ? `agent-04-outreach-${lead.id}-${nameHash((lead.material_name ?? "").toLowerCase())}` : undefined,
     metadata: {
       outreach_mode: mode,
       ghost_brand: ghostBrand ?? null,
