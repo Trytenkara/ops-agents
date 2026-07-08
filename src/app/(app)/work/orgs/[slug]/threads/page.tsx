@@ -49,9 +49,11 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
     kind: kindOf(d),
     subject: d.subject ?? null,
     supplierId: d.supplier_id ?? null,
-    supplierName: d.supplier_id ? supplierNames.get(d.supplier_id) ?? null : null,
+    // Scout-discovered leads have no Tenkara supplier_id/material row, so fall
+    // back to the name carried on the draft metadata.
+    supplierName: (d.supplier_id ? supplierNames.get(d.supplier_id) : null) ?? (d.metadata as any)?.supplier_name ?? null,
     materialId: d.material_id ?? null,
-    materialName: d.material_id ? materialNames.get(d.material_id) ?? null : null,
+    materialName: (d.material_id ? materialNames.get(d.material_id) : null) ?? (d.metadata as any)?.material_name ?? null,
     quoteRef: d.quote_id ? quoteRefs.get(d.quote_id) ?? null : null,
     status: d.status,
     createdAt: d.created_at ?? null,
