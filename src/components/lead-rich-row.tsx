@@ -2,6 +2,7 @@ import { TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/lib/utils";
 import { LeadRowActions } from "@/components/lead-row-actions";
+import { SupplierOperatorAssign } from "@/components/supplier-operator-assign";
 
 // Shared rich-lead rendering used by both the cross-org Review queue
 // (/work/review/leads) and the per-client Leads tab. Keeping a single
@@ -89,10 +90,14 @@ export function LeadRichRow({
   r,
   canAct,
   showOrg = true,
+  orgId,
+  operatorOptions,
 }: {
   r: any;
   canAct: boolean;
   showOrg?: boolean;
+  orgId?: string;
+  operatorOptions?: { id: string; name: string }[];
 }) {
   const signal = r.payload?.signal as string | undefined;
   const signalCount = r.payload?.signal_count as number | undefined;
@@ -121,9 +126,22 @@ export function LeadRichRow({
             {[r.payload?.supplier_role, r.payload?.supplier_country].filter(Boolean).join(" · ")}
           </div>
         )}
-        <div className="text-[11px] text-muted-foreground" title="Operator who owns this supplier for this client (assigned to ops_operator-role team members)">
-          Operator: <span className={r.operator_name ? "text-foreground" : "italic"}>{r.operator_name ?? "Unassigned"}</span>
-        </div>
+        {canAct && orgId && operatorOptions && r.supplier_id ? (
+          <div className="mt-1" title="Operator who owns this supplier for this client. Assigning here sets the supplier's operator, so the lead and supplier stay matched.">
+            <div className="text-[11px] text-muted-foreground mb-0.5">Operator</div>
+            <SupplierOperatorAssign
+              orgId={orgId}
+              supplierId={r.supplier_id}
+              assignedId={r.operator_assigned_id ?? null}
+              autoName={r.operator_auto_name ?? null}
+              options={operatorOptions}
+            />
+          </div>
+        ) : (
+          <div className="text-[11px] text-muted-foreground" title="Operator who owns this supplier for this client (assigned to ops_operator-role team members)">
+            Operator: <span className={r.operator_name ? "text-foreground" : "italic"}>{r.operator_name ?? "Unassigned"}</span>
+          </div>
+        )}
         {sourceUrl && (
           <a
             href={sourceUrl}

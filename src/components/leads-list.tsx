@@ -16,7 +16,19 @@ const TYPE_OPTIONS = [
 
 const countryOf = (r: any): string => (r.payload?.supplier_country ?? "").toString().trim();
 
-export function LeadsList({ rows, canAct, slug }: { rows: any[]; canAct: boolean; slug: string }) {
+export function LeadsList({
+  rows,
+  canAct,
+  slug,
+  orgId,
+  operatorOptions,
+}: {
+  rows: any[];
+  canAct: boolean;
+  slug: string;
+  orgId?: string;
+  operatorOptions?: { id: string; name: string }[];
+}) {
   const [type, setType] = useState("all");
   const [country, setCountry] = useState("all");
 
@@ -81,7 +93,7 @@ export function LeadsList({ rows, canAct, slug }: { rows: any[]; canAct: boolean
         </TableHeader>
         <TableBody>
           {filtered.map((r: any) => (
-            <LeadRichRow key={r.id} r={r} canAct={canAct} showOrg={false} />
+            <LeadRichRow key={r.id} r={r} canAct={canAct} showOrg={false} orgId={orgId} operatorOptions={operatorOptions} />
           ))}
           {filtered.length === 0 && (
             <TableRow>

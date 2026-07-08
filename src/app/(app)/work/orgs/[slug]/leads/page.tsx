@@ -10,7 +10,7 @@ import { LeadsTabs } from "@/components/leads-tabs";
 import { SuppliersCsvUpload } from "@/components/suppliers-csv-upload";
 import { resolveMaterialGrades, resolveSupplierMarketplace } from "@/lib/tenkara-names";
 import { leadMarketKind } from "@/components/lead-rich-row";
-import { getOrgOperatorPool, pickSupplierOperator } from "@/lib/operator-assignment";
+import { getOrgOperatorPool, pickSupplierOperator, operatorBySupplier, getSupplierAssignments } from "@/lib/operator-assignment";
 import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
 import { orgDisplayName } from "@/lib/org-display";
 
@@ -47,13 +47,29 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   // market_kind: prefer the supplier's is_marketplace flag (covers platform-DB
   // leads), fall back to the scanner's site_type for scout leads.
   // Owning operator per lead, sticky by supplier within the org.
+  // A lead's operator is the SAME as its supplier's operator — assigning here
+  // writes the supplier assignment, so lead ownership and supplier ownership stay
+  // in lockstep. autoName = sticky-random default; assignedId = a manual claim.
   const operatorPool = await getOrgOperatorPool(admin, org.id);
+  const supplierIds = leads.map((r) => r.supplier_id).filter(Boolean) as string[];
+  const autoOwners = operatorBySupplier(operatorPool, supplierIds);
+  const supplierAssignments = await getSupplierAssignments(admin, org.id).catch(() => new Map<string, string>());
+  const operatorOptions = operatorPool.map((op) => ({ id: op.id, name: op.name }));
   leads = leads.map((r) => {
     const flag = r.supplier_id ? leadMarketplace.get(r.supplier_id) : undefined;
     const market_kind =
       flag === true ? "marketplace" : flag === false ? "direct" : leadMarketKind(r.payload?.site_type);
     const operator_name = pickSupplierOperator(operatorPool, r.supplier_id)?.name ?? null;
-    return { ...r, grade: r.material_id ? leadGrades.get(r.material_id) ?? null : null, market_kind, operator_name };
+    const operator_assigned_id = r.supplier_id ? supplierAssignments.get(r.supplier_id) ?? null : null;
+    const operator_auto_name = r.supplier_id ? autoOwners[r.supplier_id]?.name ?? null : null;
+    return {
+      ...r,
+      grade: r.material_id ? leadGrades.get(r.material_id) ?? null : null,
+      market_kind,
+      operator_name,
+      operator_assigned_id,
+      operator_auto_name,
+    };
   });
 
   // Promote/Drop gating: the operator can act if they see all orgs or this org
@@ -84,7 +100,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
       {leads.length === 0 ? (
         <p className="text-sm text-muted-foreground py-4">No active leads for this org.</p>
       ) : (
-        <LeadsTabs rows={leads} canAct={canAct} slug={org.slug} />
+        <LeadsTabs rows={leads} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} />
       )}
 
       <section className="space-y-2 pt-2">
