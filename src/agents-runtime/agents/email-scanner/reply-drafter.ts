@@ -25,6 +25,7 @@ export interface ReplyInput {
   originalSubject: string | null; // our outreach subject
   theirSubject: string | null;    // their reply subject
   theirPreview: string | null;    // snippet of their message
+  threadContext?: string | null;  // compact transcript of the prior thread (oldest first)
 }
 
 const SYSTEM = `You draft short, professional replies to suppliers on behalf of a procurement team. The operator will review and send — so:
@@ -56,6 +57,9 @@ export async function composeReply(input: ReplyInput): Promise<{ subject: string
     `Our original outreach subject: ${input.originalSubject ?? "(none)"}`,
     `Their reply subject: ${input.theirSubject ?? "(none)"}`,
     `Their message (snippet): ${input.theirPreview ?? "(not available)"}`,
+    ...(input.threadContext
+      ? ["", "Full thread so far (oldest first — use it to avoid repeating yourself and to answer what they actually asked):", input.threadContext]
+      : []),
     "",
     "Draft the reply.",
   ].join("\n");

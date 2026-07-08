@@ -3,6 +3,7 @@ import { stageDraft } from "@/lib/draft-staging";
 import { composeReply } from "@/agents-runtime/agents/email-scanner/reply-drafter";
 import { extractQuotesFromReplyText } from "@/lib/reply-quote-extract";
 import { insertStagedQuotes, type StagedQuoteInput } from "@/lib/staged-quotes";
+import { getTenkaraConversationMessages } from "@/lib/tenkara";
 
 // Handles a Tenkara `message.received` webhook: a supplier replied on a
 // conversation one of our agents originated. We match it back to the
@@ -162,13 +163,26 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     // swallow — reply drafting proceeds regardless
   }
 
-  // 5. Compose the reply.
+  // 5. Compose the reply. Pull the full thread from Tenkara for context so the
+  // reply answers what they actually asked and doesn't repeat earlier messages.
   let orgName = "the client";
   if (ref.org_id) {
     const { data: o } = await admin.from("orgs").select("name").eq("id", ref.org_id).maybeSingle();
     orgName = o?.name ?? "the client";
   }
   const mode = (refMeta.outreach_mode === "ghost" ? "ghost" : "active") as "active" | "ghost";
+  let threadContext: string | null = null;
+  try {
+    const thread = await getTenkaraConversationMessages(msg.conversation_id);
+    if (thread.length) {
+      threadContext = thread
+        .map((m) => `[${m.sent_at ?? "?"}] ${m.from_name || m.from_email || "?"}: ${(m.body_text ?? "").trim().slice(0, 1200)}`)
+        .join("\n\n")
+        .slice(0, 8000);
+    }
+  } catch {
+    // no context — proceed with just the inbound message
+  }
   const reply = await composeReply({
     mode,
     clientOrgName: orgName,
@@ -179,6 +193,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     originalSubject: ref.subject,
     theirSubject: msg.subject ?? null,
     theirPreview: msg.body_text ?? null,
+    threadContext,
   });
 
   // 6. Resolve Agent 08 for attribution (best-effort).
