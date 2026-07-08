@@ -90,6 +90,10 @@ export async function runOutreachForLead(input: RunOutreachInput): Promise<RunOu
       ghost_brand: ghostBrand ?? null,
       suggested_signoff: mode === "ghost" ? `${ghostBrand} Sourcing` : `${clientOrgName} Purchasing Team`,
       lead_id: lead.id,
+      // Scout leads have no Tenkara supplier_id/material row, so the draft views
+      // can't resolve names by id — carry them on the draft for display.
+      supplier_name: lead.supplier_name ?? null,
+      material_name: lead.material_name ?? null,
     },
   });
 
