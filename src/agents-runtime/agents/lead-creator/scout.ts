@@ -67,6 +67,9 @@ DISCOVERY — use the web_search tool aggressively across regions and channels:
 - US specialty distributors: also check Shay & Company, Silver Fern Chemical, Making Cosmetics, Lotioncrafter, Bulk Apothecary for this material.
 - EU specialty cosmetic-ingredient shops: "<material> kaufen" + "<material> acheter" — and check Lerochem, Alexmo Cosmetics, Handymade, Gracefruit.
 - If a trade name / brand is provided, also: "<trade> authorized distributor" and "<trade> Knowde"
+- CHEMICAL & PHARMA B2B DIRECTORIES (high value — these list manufacturers/distributors that publish DIRECT sales emails, not inquiry relays): search "<material>" on Chemondis, Knowde, Pharmaoffer, Echemi, ChemicalBook, Molbase, ChemBid, GoodScents / UL Prospector, Tradewheel, and Chemical Register. For a pharma/USP grade also: "<material> USP EP manufacturer DMF". Prefer these over generic marketplaces when both list the same supplier — they surface a reachable email.
+
+CONTACTABILITY: a supplier we can email is worth far more than one reachable only through a marketplace inquiry form. When a source publishes a direct sales/purchasing email (sales@, info@, export@ at the supplier's own domain), CAPTURE IT — do not settle for "via IndiaMART inquiry" when the same company has a real website with an address. Still include inquiry-only listings, but make sure the run also covers directly-emailable manufacturers and distributors, not just marketplace relays.
 
 DETAIL IS SECONDARY TO BREADTH. Capture pricing, contact, MOQ, grades, and certifications where they're readily visible, but NEVER drop a legitimate supplier just because its detail is thin. Fill what you find, leave the rest null. Do not fabricate. Do not spend so long extracting detail on one supplier that you fail to cover the rest of the market.
 
