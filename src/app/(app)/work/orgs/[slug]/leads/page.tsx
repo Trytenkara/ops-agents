@@ -13,6 +13,7 @@ import { leadMarketKind } from "@/components/lead-rich-row";
 import { getOrgOperatorPool, pickSupplierOperator, operatorBySupplier, getSupplierAssignments } from "@/lib/operator-assignment";
 import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
 import { orgDisplayName } from "@/lib/org-display";
+import { AgentRunsStrip, type RunStat } from "@/components/agent-runs-strip";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +22,30 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   const { data: org } = await admin.from("orgs").select("id, slug, name, display_name, tenkara_org_id").eq("slug", params.slug).maybeSingle();
   if (!org) notFound();
   const orgName = orgDisplayName(org);
+
+  // Recent fleet activity — latest run per key sourcing agent (fleet-level; while
+  // ONLY_ORG scopes the fleet to one org this reflects that org).
+  const RUN_LABELS: Record<string, string> = {
+    "agent-03-lead-creator": "Discovery",
+    "agent-06-enrichment": "Enrichment",
+    "agent-04-outreach": "Outreach",
+  };
+  const { data: runRows } = await admin
+    .from("agent_runs")
+    .select("summary, status, run_started_at, agents!inner(slug)")
+    .in("agents.slug", Object.keys(RUN_LABELS))
+    .order("run_started_at", { ascending: false })
+    .limit(40);
+  const latestBySlug = new Map<string, RunStat>();
+  for (const r of (runRows ?? []) as any[]) {
+    const slug = r.agents?.slug;
+    if (slug && !latestBySlug.has(slug)) {
+      latestBySlug.set(slug, { label: RUN_LABELS[slug], summary: r.summary, status: r.status, at: r.run_started_at });
+    }
+  }
+  const runStats = Object.keys(RUN_LABELS)
+    .map((s) => latestBySlug.get(s))
+    .filter(Boolean) as RunStat[];
 
   const { data: rows } = await admin
     .from("leads_in_flight")
@@ -97,6 +122,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
         collectedBy="Agent 03 (Lead Creator) + Agent 06 (Enrichment)"
         actions={canAct ? <SuppliersCsvUpload orgId={org.id} /> : undefined}
       />
+      <AgentRunsStrip runs={runStats} />
       {leads.length === 0 ? (
         <p className="text-sm text-muted-foreground py-4">No active leads for this org.</p>
       ) : (

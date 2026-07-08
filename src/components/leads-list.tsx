@@ -14,6 +14,13 @@ const TYPE_OPTIONS = [
   { value: "direct", label: "Direct" },
 ];
 
+const RECENCY_OPTIONS = [
+  { value: "1", label: "Last 24h" },
+  { value: "7", label: "Last 7 days" },
+  { value: "30", label: "Last 30 days" },
+  { value: "all", label: "All time" },
+];
+
 const countryOf = (r: any): string => (r.payload?.supplier_country ?? "").toString().trim();
 
 export function LeadsList({
@@ -31,6 +38,7 @@ export function LeadsList({
 }) {
   const [type, setType] = useState("all");
   const [country, setCountry] = useState("all");
+  const [recency, setRecency] = useState("all");
 
   const countryOptions = [
     { value: "all", label: "All countries" },
@@ -39,11 +47,18 @@ export function LeadsList({
       .map((c) => ({ value: c, label: c })),
   ];
 
+  const recencyCutoff = recency === "all" ? null : Date.now() - Number(recency) * 24 * 3600 * 1000;
   const typeRows = (
     type === "all"
       ? rows
       : rows.filter((r: any) => (r.market_kind ?? leadMarketKind(r.payload?.site_type)) === type)
-  ).filter((r: any) => (country === "all" ? true : countryOf(r) === country));
+  )
+    .filter((r: any) => (country === "all" ? true : countryOf(r) === country))
+    .filter((r: any) => {
+      if (recencyCutoff == null) return true;
+      const t = r.created_at ? new Date(r.created_at).getTime() : 0;
+      return t >= recencyCutoff;
+    });
 
   const { filtered, controls } = useListFilter(typeRows, {
     searchText: (r) => `${r.supplier_name ?? ""} ${r.material_name ?? ""} ${r.grade ?? ""} ${countryOf(r)}`,
@@ -79,6 +94,10 @@ export function LeadsList({
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">Country of origin</span>
             <Select size="sm" className="min-w-[10rem]" ariaLabel="Country of origin" value={country} onValueChange={setCountry} options={countryOptions} />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">Discovered</span>
+            <Select size="sm" className="min-w-[9rem]" ariaLabel="Discovered" value={recency} onValueChange={setRecency} options={RECENCY_OPTIONS} />
           </label>
         </div>
         <ListCsvButton
