@@ -6,6 +6,9 @@ import { toCsv } from "@/lib/csv";
 import { getSourcingExclusions, exclusionReason, type SourcingExclusions } from "@/lib/tenkara-sourcing-exclusions";
 import { uploadCsvAndSign } from "@/lib/storage";
 import { onlyOrgName } from "@/lib/org-scope";
+import { flagMaterialNames, correctName } from "@/lib/material-name-flags";
+
+const EMPTY_OVERRIDES = new Map<string, string>();
 
 // v1 trims (vs. full spec):
 //   - existing-DB only mode. BrowserBase external discovery is gated on
@@ -151,6 +154,46 @@ registerAgent({
     }
     await ctx.log(`Loaded ${tenkaraOrgToOaOrg.size} tenkara→OA org mappings${onlyOrg ? ` · scoped to ${onlyOrg}` : ""}`, { step: "org_map" });
 
+    // 3b-ii. Flag misspelled material names (e.g. "Butylene G;ycol"). Names come
+    // from Tenkara (read-only); Agent flags a suggestion + pings ops, who apply
+    // an OA-side override. Best-effort — never blocks discovery.
+    try {
+      const oaOrgName = new Map<string, string>();
+      for (const r of (orgRows ?? []) as any[]) if (r.tenkara_org_id) oaOrgName.set(tenkaraOrgToOaOrg.get(r.tenkara_org_id)!, r.name);
+      const namesByOrg = new Map<string, Set<string>>();
+      for (const m of materials) {
+        const oaId = m.tenkara_org_id ? tenkaraOrgToOaOrg.get(m.tenkara_org_id) : null;
+        if (!oaId || !m.name) continue;
+        if (!namesByOrg.has(oaId)) namesByOrg.set(oaId, new Set());
+        namesByOrg.get(oaId)!.add(m.name);
+      }
+      let totalFlagged = 0;
+      for (const [oaId, names] of namesByOrg) {
+        totalFlagged += await flagMaterialNames(admin, oaId, Array.from(names), oaOrgName.get(oaId) ?? "client");
+      }
+      if (totalFlagged) await ctx.log(`Flagged ${totalFlagged} misspelled material name(s) → #control-room-feedback`, { step: "spelling" });
+    } catch (e: any) {
+      await ctx.log(`Material-name spelling check failed: ${e?.message ?? e}`, { level: "warn", step: "spelling" });
+    }
+
+    // 3b-iii. Applied spelling overrides (org → lower(wrong)→correct), used to
+    // correct material names on newly-staged leads.
+    const overridesByOrg = new Map<string, Map<string, string>>();
+    {
+      const oaIds = Array.from(new Set(Array.from(tenkaraOrgToOaOrg.values())));
+      if (oaIds.length) {
+        const { data: applied } = await admin
+          .from("material_name_flags")
+          .select("org_id, wrong_name, suggested_name")
+          .in("org_id", oaIds)
+          .eq("status", "applied");
+        for (const r of (applied ?? []) as any[]) {
+          if (!overridesByOrg.has(r.org_id)) overridesByOrg.set(r.org_id, new Map());
+          overridesByOrg.get(r.org_id)!.set((r.wrong_name as string).toLowerCase(), r.suggested_name);
+        }
+      }
+    }
+
     // 3c. Per-material idempotency for the scout phase. Equivalent to Ben's
     //     `processed_material_ids` set in sourcing-trigger.json — once a
     //     material has any scout-discovered lead, we don't re-scout it (the
@@ -228,7 +271,13 @@ registerAgent({
         break;
       }
 
-      const matLabel = material.trade_name ?? material.name ?? material.id;
+      // Apply any operator-approved spelling correction so a (forced) re-scout
+      // doesn't re-introduce the Tenkara typo into new leads.
+      const matOaOrgId = material.tenkara_org_id ? tenkaraOrgToOaOrg.get(material.tenkara_org_id) ?? null : null;
+      const matLabel = correctName(
+        matOaOrgId ? overridesByOrg.get(matOaOrgId) ?? EMPTY_OVERRIDES : EMPTY_OVERRIDES,
+        material.trade_name ?? material.name ?? material.id
+      ) as string;
       let candidates: CandidateSupplier[];
       try {
         candidates = await findCandidatesForMaterial(material);
