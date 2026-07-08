@@ -225,6 +225,42 @@ export function tenkaraEmailAccountIdFor(input: {
   return resolveTenkaraEmailAccountId(brand);
 }
 
+export interface TenkaraMessage {
+  from_email: string | null;
+  from_name: string | null;
+  to: string | null;
+  subject: string | null;
+  body_text: string | null;
+  sent_at: string | null;
+}
+
+// Read a conversation's full message history from Tenkara (GET
+// /api/external/conversations/{id}) — oldest first, up to 200 messages. Used to
+// give the reply drafter real thread context and to reconstruct outreach/reply
+// state. Returns [] on any error so callers never break on a read miss.
+export async function getTenkaraConversationMessages(conversationId: string): Promise<TenkaraMessage[]> {
+  const token = process.env.TENKARA_API_TOKEN;
+  if (!token || !conversationId) return [];
+  try {
+    const res = await fetch(`${TENKARA_INBOX_BASE}/api/external/conversations/${encodeURIComponent(conversationId)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const messages = Array.isArray(data?.messages) ? data.messages : [];
+    return messages.map((m: any) => ({
+      from_email: m.from_email ?? null,
+      from_name: m.from_name ?? null,
+      to: m.to ?? null,
+      subject: m.subject ?? null,
+      body_text: m.body_text ?? null,
+      sent_at: m.sent_at ?? null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 // Cold-outbound routing. The migration off Missive is complete: cold outbound
 // now defaults to Tenkara (rod_app) for every agent. The escape hatch runs the
 // other way — set COLD_OUTBOUND_MISSIVE_AGENTS to "all" (or a csv like "04" /
