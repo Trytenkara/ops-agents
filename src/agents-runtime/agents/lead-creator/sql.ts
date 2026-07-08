@@ -215,13 +215,16 @@ export async function existingQuotesForMaterials(materialIds: string[]): Promise
   );
 }
 
-// Existing quotes across all materials owned by a Tenkara org (used on the
-// per-org Leads tab). Materials link to an org via users.organization_id.
+// Existing quotes across all materials OWNED by a Tenkara org (used on the
+// per-org Leads tab). Scope by the MATERIAL owner's org (m.user_id), NOT the
+// quote's creator (q.user_id): quotes are often entered by an internal ops user
+// whose org is the all-zeros Internal Sourcing org, so creator-scoping wrongly
+// pulled every client's quotes (Vita Organica, NutriPro, …) into that org.
 export async function existingQuotesForOrg(tenkaraOrgId: string, limit = 200): Promise<ExistingQuote[]> {
   return tenkaraQuery<ExistingQuote>(
     `${EXISTING_QUOTE_SELECT}
-      left join public.users u on u.id = q.user_id
-      where u.organization_id = $1::uuid and q.price is not null
+      left join public.users mu on mu.id = m.user_id
+      where mu.organization_id = $1::uuid and q.price is not null
       order by m.name, q.quote_date desc nulls last
       limit $2`,
     [tenkaraOrgId, limit]
