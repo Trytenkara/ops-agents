@@ -31,6 +31,7 @@ const inboundSchema = z.object({
   from: z.string().min(1),
   subject: z.string().nullish(),
   body_text: z.string().nullish(),
+  body_html: z.string().nullish(),
   received_at: z.string().nullish(),
 });
 

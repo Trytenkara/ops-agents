@@ -231,6 +231,7 @@ export interface TenkaraMessage {
   to: string | null;
   subject: string | null;
   body_text: string | null;
+  body_html: string | null;
   sent_at: string | null;
 }
 
@@ -254,6 +255,7 @@ export async function getTenkaraConversationMessages(conversationId: string): Pr
       to: m.to ?? null,
       subject: m.subject ?? null,
       body_text: m.body_text ?? null,
+      body_html: m.body_html ?? null,
       sent_at: m.sent_at ?? null,
     }));
   } catch {
