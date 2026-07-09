@@ -1,10 +1,58 @@
 "use server";
+import { revalidatePath } from "next/cache";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 
 interface ActionResult {
   ok: boolean;
   error?: string;
+}
+
+// Permanently delete draft/thread rows. Drafts are staged locally and nothing
+// sends automatically, so this just clears the thread workspace — e.g. when a
+// client deletes their email drafts and wants the All Threads tab to match.
+// Ops-only; scoped operators can only remove threads for orgs they own.
+export async function removeDrafts(
+  draftIds: string[]
+): Promise<{ ok: boolean; error?: string; removed?: number }> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" };
+  if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator"])) {
+    return { ok: false, error: "forbidden" };
+  }
+  const ids = Array.from(new Set((draftIds ?? []).filter((id) => typeof id === "string" && id)));
+  if (ids.length === 0) return { ok: false, error: "no threads selected" };
+
+  const admin = createAdminClient();
+  const { data: drafts } = await admin
+    .from("draft_references")
+    .select("id, org_id")
+    .in("id", ids);
+  if (!drafts || drafts.length === 0) return { ok: false, error: "no matching threads" };
+
+  if (!seesAllOrgs(session)) {
+    const assigned = await getAssignedOrgIds(session);
+    if (assigned !== null) {
+      const outOfScope = drafts.some((d) => !d.org_id || !assigned.includes(d.org_id));
+      if (outOfScope) return { ok: false, error: "forbidden" };
+    }
+  }
+
+  const found = drafts.map((d) => d.id);
+  const { error } = await admin.from("draft_references").delete().in("id", found);
+  if (error) return { ok: false, error: error.message };
+
+  await admin.from("audit_log").insert({
+    actor_user_id: session.userId,
+    action: "drafts.removed",
+    target_table: "draft_references",
+    target_id: found[0],
+    diff: { removed: found.length, ids: found },
+  });
+
+  revalidatePath("/work/orgs/[slug]/threads", "page");
+  return { ok: true, removed: found.length };
 }
 
 export async function markDraftReviewed(draftId: string): Promise<ActionResult> {
