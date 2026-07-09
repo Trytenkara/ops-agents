@@ -5,6 +5,8 @@ import { Table, TableHeader, TableBody, TableRow, TableCell } from "@/components
 import { LeadRichRow, LeadRichHeaders, leadRichColSpan, leadMarketKind } from "@/components/lead-rich-row";
 import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
+import { BulkRemoveBar } from "@/components/bulk-remove-bar";
+import { removeLeads } from "@/app/actions/leads";
 import { Select } from "@/components/ui/select";
 import { filenameFor } from "@/lib/csv";
 
@@ -39,6 +41,15 @@ export function LeadsList({
   const [type, setType] = useState("all");
   const [country, setCountry] = useState("all");
   const [recency, setRecency] = useState("all");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const toggleOne = (id: string, checked: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
 
   const countryOptions = [
     { value: "all", label: "All countries" },
@@ -70,6 +81,20 @@ export function LeadsList({
     ],
     defaultSort: "newest",
   });
+
+  const selectable = canAct;
+  const filteredIds = filtered.map((r: any) => r.id);
+  const selectedCount = filteredIds.filter((id: string) => selected.has(id)).length;
+  const allSelected = filteredIds.length > 0 && selectedCount === filteredIds.length;
+  const toggleAll = (checked: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of filteredIds) {
+        if (checked) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
 
   const csvRows = filtered.map((r: any) => [
     r.supplier_name ?? "",
@@ -106,17 +131,35 @@ export function LeadsList({
           rows={csvRows}
         />
       </div>
+      {selectable && (
+        <BulkRemoveBar
+          count={selectedCount}
+          noun="lead"
+          onRemove={() => removeLeads(filteredIds.filter((id: string) => selected.has(id)))}
+          onClear={() => setSelected(new Set())}
+        />
+      )}
       <Table>
         <TableHeader>
-          <LeadRichHeaders showOrg={false} />
+          <LeadRichHeaders showOrg={false} selectable={selectable} allSelected={allSelected} onToggleAll={toggleAll} />
         </TableHeader>
         <TableBody>
           {filtered.map((r: any) => (
-            <LeadRichRow key={r.id} r={r} canAct={canAct} showOrg={false} orgId={orgId} operatorOptions={operatorOptions} />
+            <LeadRichRow
+              key={r.id}
+              r={r}
+              canAct={canAct}
+              showOrg={false}
+              orgId={orgId}
+              operatorOptions={operatorOptions}
+              selectable={selectable}
+              selected={selected.has(r.id)}
+              onToggleSelect={(checked) => toggleOne(r.id, checked)}
+            />
           ))}
           {filtered.length === 0 && (
             <TableRow>
-              <TableCell colSpan={leadRichColSpan(false)} className="text-center py-8 text-muted-foreground">
+              <TableCell colSpan={leadRichColSpan(false, selectable)} className="text-center py-8 text-muted-foreground">
                 No leads match.
               </TableCell>
             </TableRow>

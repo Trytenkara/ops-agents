@@ -44,9 +44,30 @@ export function LeadSourceBadge({ source }: { source: string | null | undefined 
   return <Badge variant={s.variant} title={s.title}>{s.label}</Badge>;
 }
 
-export function LeadRichHeaders({ showOrg = true }: { showOrg?: boolean }) {
+export function LeadRichHeaders({
+  showOrg = true,
+  selectable = false,
+  allSelected = false,
+  onToggleAll,
+}: {
+  showOrg?: boolean;
+  selectable?: boolean;
+  allSelected?: boolean;
+  onToggleAll?: (checked: boolean) => void;
+}) {
   return (
     <TableRow>
+      {selectable && (
+        <TableHead className="w-8">
+          <input
+            type="checkbox"
+            aria-label="Select all leads"
+            className="h-4 w-4 accent-destructive align-middle"
+            checked={allSelected}
+            onChange={(e) => onToggleAll?.(e.target.checked)}
+          />
+        </TableHead>
+      )}
       <TableHead>Supplier</TableHead>
       <TableHead>Material</TableHead>
       <TableHead>Signal</TableHead>
@@ -61,8 +82,8 @@ export function LeadRichHeaders({ showOrg = true }: { showOrg?: boolean }) {
 }
 
 // Column count for empty-state colSpan. Matches LeadRichHeaders.
-export function leadRichColSpan(showOrg = true): number {
-  return showOrg ? 9 : 8;
+export function leadRichColSpan(showOrg = true, selectable = false): number {
+  return (showOrg ? 9 : 8) + (selectable ? 1 : 0);
 }
 
 // Marketplace vs direct (non-marketplace), derived from the scanner's site_type.
@@ -92,12 +113,18 @@ export function LeadRichRow({
   showOrg = true,
   orgId,
   operatorOptions,
+  selectable = false,
+  selected = false,
+  onToggleSelect,
 }: {
   r: any;
   canAct: boolean;
   showOrg?: boolean;
   orgId?: string;
   operatorOptions?: { id: string; name: string }[];
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (checked: boolean) => void;
 }) {
   const signal = r.payload?.signal as string | undefined;
   const signalCount = r.payload?.signal_count as number | undefined;
@@ -109,6 +136,17 @@ export function LeadRichRow({
 
   return (
     <TableRow>
+      {selectable && (
+        <TableCell className="align-top">
+          <input
+            type="checkbox"
+            aria-label="Select lead"
+            className="mt-1 h-4 w-4 accent-destructive"
+            checked={selected}
+            onChange={(e) => onToggleSelect?.(e.target.checked)}
+          />
+        </TableCell>
+      )}
       <TableCell className="font-medium align-top">
         <div className="flex items-center gap-2 flex-wrap">
           <span>{r.supplier_name ?? "—"}</span>

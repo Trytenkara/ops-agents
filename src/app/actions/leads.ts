@@ -325,6 +325,54 @@ export async function saveLeadPriceTiers(leadId: string, tiers: PriceTier[]): Pr
   return { ok: true };
 }
 
+// Permanently delete leads. Unlike dropLead (soft "terminal", still stored),
+// this wipes the rows so a client can start fresh — e.g. after materials were
+// deleted in the platform and their discovered leads are now stale. Ops-only;
+// non-global operators can only remove leads for orgs they're assigned to.
+export async function removeLeads(
+  leadIds: string[]
+): Promise<{ ok: boolean; error?: string; removed?: number }> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" };
+  if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator"])) {
+    return { ok: false, error: "forbidden" };
+  }
+  const ids = Array.from(new Set((leadIds ?? []).filter((id) => typeof id === "string" && id)));
+  if (ids.length === 0) return { ok: false, error: "no leads selected" };
+
+  const admin = createAdminClient();
+  const { data: leads } = await admin
+    .from("leads_in_flight")
+    .select("id, org_id")
+    .in("id", ids);
+  if (!leads || leads.length === 0) return { ok: false, error: "no matching leads" };
+
+  // Org gate: a scoped operator can only remove leads for orgs they own. Bail if
+  // any selected lead is outside their scope rather than silently partial-deleting.
+  if (!seesAllOrgs(session)) {
+    const assigned = await getAssignedOrgIds(session);
+    if (assigned !== null) {
+      const outOfScope = leads.some((l) => !l.org_id || !assigned.includes(l.org_id));
+      if (outOfScope) return { ok: false, error: "forbidden" };
+    }
+  }
+
+  const found = leads.map((l) => l.id);
+  const { error } = await admin.from("leads_in_flight").delete().in("id", found);
+  if (error) return { ok: false, error: error.message };
+
+  await admin.from("audit_log").insert({
+    actor_user_id: session.userId,
+    action: "leads.removed",
+    target_table: "leads_in_flight",
+    target_id: found[0],
+    diff: { removed: found.length, ids: found },
+  });
+
+  revalidatePath("/work/orgs/[slug]/leads", "page");
+  return { ok: true, removed: found.length };
+}
+
 export async function dropLead(leadId: string, reason: DropReason, note?: string): Promise<ActionResult> {
   if (!DROP_REASONS.some((r) => r.value === reason)) {
     return { ok: false, error: "invalid_reason" };

@@ -1,5 +1,7 @@
 import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getSession, hasAnyRole } from "@/lib/auth";
+import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { operatorRoles, primaryRole } from "@/lib/operator";
 import { resolveSupplierNamesWithFallback, resolveMaterialNames, resolveQuoteRefs } from "@/lib/tenkara-names";
 import { ListPageHeader } from "@/components/list-page-header";
@@ -18,6 +20,12 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
   const admin = createAdminClient();
   const { data: org } = await admin.from("orgs").select("id, name").eq("slug", params.slug).maybeSingle();
   if (!org) notFound();
+
+  const session = (await getSession())!;
+  const assigned = await getAssignedOrgIds(session);
+  const canAct =
+    hasAnyRole(session, ["admin", "ops_lead", "ops_operator"]) &&
+    (seesAllOrgs(session) || (assigned?.includes(org.id) ?? false));
 
   const { data: drafts } = await admin
     .from("draft_references")
@@ -81,7 +89,7 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
       {threadRows.length === 0 ? (
         <p className="text-center text-muted-foreground py-8 text-sm">No threads yet. Promote a lead to start outreach.</p>
       ) : (
-        <ThreadsList rows={threadRows} slug={params.slug} />
+        <ThreadsList rows={threadRows} slug={params.slug} canAct={canAct} />
       )}
     </div>
   );
