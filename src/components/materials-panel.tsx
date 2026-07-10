@@ -74,6 +74,7 @@ export interface MaterialQuote {
   case_size: number | null;
   unit_of_measurement: string | null;
   unit_price: number | null;
+  grade: string | null;
   status: string;
   confidence: string | null;
   created_at: string;
@@ -440,6 +441,7 @@ function QuoteList({
             </span>
             <span className="text-muted-foreground truncate">
               {q.price != null ? `$${q.price} / ${q.case_size ?? "?"} ${q.unit_of_measurement ?? ""}` : ""}
+              {q.grade ? ` · ${q.grade}` : ""}
               {q.confidence ? ` · conf ${q.confidence}` : ""}
             </span>
             <span className="flex items-center justify-end gap-3">

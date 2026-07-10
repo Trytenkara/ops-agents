@@ -155,12 +155,54 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
         caseSize: q.case_size,
         unitOfMeasurement: q.unit_of_measurement,
         currency: q.currency,
+        grade: q.grade,
         confidence: q.confidence,
         extractionNotes: q.notes,
         rawExtract: q as any,
       }));
       const res = await insertStagedQuotes(admin, staged);
       quotesStaged = res.inserted;
+
+      // Mirror the freshest captured price/grade onto the lead so the Leads tab
+      // shows the returned quote, not just a "supplier replied" marker. Pick the
+      // lowest per-unit priced line as the headline; ops can refine in review.
+      if (leadId && leadRow) {
+        const priced = quotes
+          .filter((q) => q.price != null)
+          .map((q) => ({
+            price: q.price,
+            case_size: q.case_size,
+            unit_price:
+              q.price != null && q.case_size ? q.price / q.case_size : q.price,
+            unit_of_measurement: q.unit_of_measurement,
+            currency: q.currency,
+            grade: q.grade,
+          }))
+          .sort((a, b) => (a.unit_price ?? Infinity) - (b.unit_price ?? Infinity));
+        if (priced.length) {
+          const best = priced[0];
+          // Re-read so we merge onto the supplier_reply marker written above
+          // instead of clobbering it with the stale pre-marker payload.
+          const { data: fresh } = await admin
+            .from("leads_in_flight")
+            .select("payload")
+            .eq("id", leadId)
+            .maybeSingle();
+          const payload = (fresh?.payload as any) ?? (leadRow.payload as any) ?? {};
+          payload.supplier_reply = {
+            ...(payload.supplier_reply ?? {}),
+            captured_price: best.price,
+            captured_case_size: best.case_size,
+            captured_unit_price: best.unit_price,
+            captured_unit_of_measurement: best.unit_of_measurement,
+            captured_currency: best.currency ?? "USD",
+            captured_grade: best.grade ?? null,
+            captured_at: msg.received_at ?? new Date().toISOString(),
+            captured_source: "reply_extract",
+          };
+          await admin.from("leads_in_flight").update({ payload }).eq("id", leadId);
+        }
+      }
     }
   } catch {
     // swallow — reply drafting proceeds regardless

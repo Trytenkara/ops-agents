@@ -332,6 +332,7 @@ registerAgent({
                   caseSize: q.case_size,
                   unitOfMeasurement: q.unit_of_measurement,
                   currency: q.currency,
+                  grade: (q as any).grade ?? null,
                   confidence: q.confidence,
                   extractionNotes: q.notes,
                   rawExtract: q as any,

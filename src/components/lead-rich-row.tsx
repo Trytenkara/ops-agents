@@ -70,6 +70,7 @@ export function LeadRichHeaders({
       )}
       <TableHead>Supplier</TableHead>
       <TableHead>Material</TableHead>
+      <TableHead>Returned price</TableHead>
       <TableHead>Signal</TableHead>
       <TableHead>Type</TableHead>
       <TableHead>Source</TableHead>
@@ -83,7 +84,7 @@ export function LeadRichHeaders({
 
 // Column count for empty-state colSpan. Matches LeadRichHeaders.
 export function leadRichColSpan(showOrg = true, selectable = false): number {
-  return (showOrg ? 9 : 8) + (selectable ? 1 : 0);
+  return (showOrg ? 10 : 9) + (selectable ? 1 : 0);
 }
 
 // Marketplace vs direct (non-marketplace), derived from the scanner's site_type.
@@ -226,6 +227,25 @@ export function LeadRichRow({
             <Badge variant="secondary">{r.grade ?? r.payload?.grade}</Badge>
           </div>
         )}
+      </TableCell>
+      <TableCell className="align-top">
+        {(() => {
+          const sr = r.payload?.supplier_reply;
+          if (!sr || sr.captured_price == null) {
+            return <span className="text-muted-foreground text-xs">—</span>;
+          }
+          const cur = sr.captured_currency ?? "USD";
+          const headline =
+            sr.captured_unit_price != null
+              ? `${cur} ${Number(sr.captured_unit_price).toLocaleString(undefined, { maximumFractionDigits: 4 })}/${sr.captured_unit_of_measurement ?? "unit"}`
+              : `${cur} ${sr.captured_price}`;
+          return (
+            <div className="flex flex-col gap-0.5">
+              <span className="font-medium tabular-nums" title="Price the supplier stated in their reply — review under Materials.">{headline}</span>
+              {sr.captured_grade && <span className="text-xs text-muted-foreground">{sr.captured_grade}</span>}
+            </div>
+          );
+        })()}
       </TableCell>
       <TableCell className="align-top">
         {signal ? (

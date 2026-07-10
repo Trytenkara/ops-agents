@@ -41,7 +41,7 @@ export default async function OrgPriceIndexPage({
   const { data: org } = await admin.from("orgs").select("id, slug, name, display_name").eq("slug", params.slug).maybeSingle();
   if (!org) notFound();
 
-  const [findingsRes, draftsRes] = await Promise.all([
+  const [findingsRes, draftsRes, stagedRes] = await Promise.all([
     admin
       .from("marketplace_check_findings")
       .select(
@@ -60,10 +60,36 @@ export default async function OrgPriceIndexPage({
       .eq("agents.slug", "agent-02-revalidation")
       .order("created_at", { ascending: false })
       .limit(200),
+    admin
+      .from("staged_quotes")
+      .select("supplier_id, supplier_name, material_id, price, case_size, unit_of_measurement, unit_price, currency, grade, status, created_at")
+      .eq("org_id", org.id)
+      .not("material_id", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1000),
   ]);
 
   const findings = findingsRes.data ?? [];
   const draftRows = (draftsRes.data ?? []).filter((d: any) => d.agents?.slug === "agent-02-revalidation");
+
+  // Latest captured supplier-reply quote — the price that came BACK for a direct
+  // re-quote draft. Rows are newest-first, so the first per key wins. We index by
+  // both supplier_id and (normalized) supplier_name so a reply still matches when
+  // the supplier_id didn't resolve during extraction — name is the fallback.
+  const normName = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
+  const capturedById = new Map<string, any>();
+  const capturedByName = new Map<string, any>();
+  for (const s of (stagedRes.data ?? []) as any[]) {
+    if (s.status === "dismissed") continue;
+    if (s.supplier_id) {
+      const k = `${s.supplier_id}|${s.material_id}`;
+      if (!capturedById.has(k)) capturedById.set(k, s);
+    }
+    if (s.supplier_name) {
+      const k = `${normName(s.supplier_name)}|${s.material_id}`;
+      if (!capturedByName.has(k)) capturedByName.set(k, s);
+    }
+  }
 
   const assigned = await getAssignedOrgIds(session);
   const canAct =
@@ -86,23 +112,36 @@ export default async function OrgPriceIndexPage({
     // Tenkara unreachable — rows fall back to "name unavailable".
   }
 
-  const requotes: RequoteRow[] = draftRows.map((d: any) => ({
-    id: d.id,
-    subject: d.subject ?? null,
-    supplierId: d.supplier_id ?? null,
-    supplierName: d.supplier_id ? supplierNames.get(d.supplier_id) ?? null : null,
-    materialId: d.material_id ?? null,
-    materialName: d.material_id ? materialNames.get(d.material_id) ?? null : null,
-    quoteRef: d.quote_id ? quoteRefs.get(d.quote_id) ?? null : null,
-    quoteExpiry: d.quote_id ? quoteExpiries.get(d.quote_id) ?? null : null,
-    status: d.status,
-    createdAt: d.created_at ?? null,
-    metadata: d.metadata,
-    assignedName: d.users?.display_name ?? null,
-    assignedEmail: d.users?.email ?? null,
-    assignedRole: primaryRole(operatorRoles(d.users)),
-    reviewerName: d.reviewer?.display_name ?? null,
-  }));
+  const requotes: RequoteRow[] = draftRows.map((d: any) => {
+    const supplierName = d.supplier_id ? supplierNames.get(d.supplier_id) ?? null : null;
+    const captured = d.material_id
+      ? capturedById.get(`${d.supplier_id}|${d.material_id}`) ??
+        (supplierName ? capturedByName.get(`${normName(supplierName)}|${d.material_id}`) ?? null : null)
+      : null;
+    return {
+      id: d.id,
+      subject: d.subject ?? null,
+      supplierId: d.supplier_id ?? null,
+      supplierName,
+      materialId: d.material_id ?? null,
+      materialName: d.material_id ? materialNames.get(d.material_id) ?? null : null,
+      quoteRef: d.quote_id ? quoteRefs.get(d.quote_id) ?? null : null,
+      quoteExpiry: d.quote_id ? quoteExpiries.get(d.quote_id) ?? null : null,
+      status: d.status,
+      createdAt: d.created_at ?? null,
+      metadata: d.metadata,
+      assignedName: d.users?.display_name ?? null,
+      assignedEmail: d.users?.email ?? null,
+      assignedRole: primaryRole(operatorRoles(d.users)),
+      reviewerName: d.reviewer?.display_name ?? null,
+      returnedPrice: captured?.price ?? null,
+      returnedUnitPrice: captured?.unit_price ?? null,
+      returnedUnitOfMeasurement: captured?.unit_of_measurement ?? null,
+      returnedCurrency: captured?.currency ?? null,
+      returnedGrade: captured?.grade ?? null,
+      returnedStatus: captured?.status ?? null,
+    };
+  });
 
   const base = `/work/orgs/${org.slug}/price-index`;
 
