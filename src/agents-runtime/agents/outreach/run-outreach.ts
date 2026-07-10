@@ -65,7 +65,10 @@ export async function runOutreachForLead(input: RunOutreachInput): Promise<RunOu
     clientOrgName,
     supplierContactName: contactName,
     supplierCompanyName: lead.supplier_name ?? null,
-    materialName: lead.material_name ?? "the material",
+    // `|| trim` (not `??`) so a blank/whitespace name — the bulk importer writes
+    // trade_name='' on unbranded materials — falls back instead of composing a
+    // subject/body with an empty material ("Quote request: ", "…looking for .").
+    materialName: lead.material_name?.trim() || "the material",
     inciName: payload.inci_name ?? null,
     signal: payload.signal ?? null,
     isMarketplace,
