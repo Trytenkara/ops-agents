@@ -13,9 +13,48 @@ const FEEDBACK_CHANNEL = "C0BATUWBHC7"; // #control-room-feedback
 // &, / are all legitimate and NOT flagged). Catches junk like "G;ycol".
 const BAD_CHARS = /[;:_~^`|{}\[\]<>*!?\\=@#$"]/;
 
+// A real raw-material name is never this long; past this it's malformed/test data.
+const MAX_NAME_LEN = 120;
+
+// Repeated-word spam ("... Extra Extra Extra Extra ...") is malformed/test data,
+// not a real material. Flag when any word (2+ chars) appears 3+ times — no
+// genuine material name repeats the same word that often, so ~zero false positives.
+export function repeatedTokenJunk(name: string): boolean {
+  const words = name.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  if (words.length < 3) return false;
+  const counts = new Map<string, number>();
+  for (const w of words) {
+    if (w.length < 2) continue;
+    const n = (counts.get(w) ?? 0) + 1;
+    if (n >= 3) return true;
+    counts.set(w, n);
+  }
+  return false;
+}
+
+// Malformed = junk *content* (over-long or repeated-word spam), as opposed to a
+// typo (bad punctuation). These get a deterministic flag + hold, not an LLM fix.
+export function isMalformed(name: string): boolean {
+  return name.length > MAX_NAME_LEN || repeatedTokenJunk(name);
+}
+
 export function looksSuspicious(name: string | null | undefined): boolean {
   if (!name) return false;
-  return BAD_CHARS.test(name);
+  return BAD_CHARS.test(name) || isMalformed(name);
+}
+
+// Best-effort cleanup for a malformed name: collapse runs of the same word and
+// trim. Only a suggestion — an operator reviews before it's applied.
+export function cleanMalformed(name: string): string {
+  const parts = name.split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  for (const p of parts) {
+    const prev = out[out.length - 1];
+    if (prev && prev.toLowerCase() === p.toLowerCase()) continue;
+    out.push(p);
+  }
+  const cleaned = out.join(" ").trim();
+  return cleaned.slice(0, MAX_NAME_LEN).trim() || name.slice(0, MAX_NAME_LEN).trim();
 }
 
 let _client: Anthropic | null = null;
@@ -70,20 +109,34 @@ export async function flagMaterialNames(admin: Admin, orgId: string, names: stri
   const fresh = suspicious.filter((n) => !seen.has(n.toLowerCase()));
   if (!fresh.length) return 0;
 
-  const corrections = await suggestCorrections(fresh);
+  // Two problem classes: typos (LLM suggests a spelling fix) and malformed junk
+  // (repeated-word spam / absurd length — likely test data) that must never be
+  // drafted. Malformed names get a deterministic flag so they don't depend on
+  // the LLM returning a "correction" for what isn't really a typo.
+  const malformed = fresh.filter(isMalformed);
+  const typoCandidates = fresh.filter((n) => !isMalformed(n));
+  const typoFixes = await suggestCorrections(typoCandidates);
+
+  type Flag = { wrong: string; suggested: string; malformed: boolean };
+  const flags: Flag[] = [
+    ...malformed.map((wrong) => ({ wrong, suggested: cleanMalformed(wrong), malformed: true })),
+    ...Object.entries(typoFixes).map(([wrong, suggested]) => ({ wrong, suggested, malformed: false })),
+  ];
+
   let flagged = 0;
-  for (const [wrong, correct] of Object.entries(corrections)) {
+  for (const f of flags) {
     const { data: ins } = await admin
       .from("material_name_flags")
-      .upsert({ org_id: orgId, wrong_name: wrong, suggested_name: correct, status: "pending" }, { onConflict: "org_id,wrong_name", ignoreDuplicates: true })
+      .upsert({ org_id: orgId, wrong_name: f.wrong, suggested_name: f.suggested, status: "pending" }, { onConflict: "org_id,wrong_name", ignoreDuplicates: true })
       .select("id")
       .maybeSingle();
     if (!ins) continue; // already existed
     flagged++;
-    await postSlackMessage({
-      channel: FEEDBACK_CHANNEL,
-      text: `:pencil2: *Material spelling flag* — *${orgLabel}*: "${wrong}" looks misspelled → suggest *"${correct}"*. Review on the client's Materials/Leads page to correct all instances.`,
-    }).catch(() => {});
+    const preview = f.wrong.length > 80 ? `${f.wrong.slice(0, 80)}…` : f.wrong;
+    const text = f.malformed
+      ? `:rotating_light: *Malformed material name* — *${orgLabel}*: "${preview}" looks like junk/test data (repeated or over-long text). Outreach is held; fix the name on the client's Materials/Leads page. Suggested cleanup: *"${f.suggested}"*.`
+      : `:pencil2: *Material spelling flag* — *${orgLabel}*: "${f.wrong}" looks misspelled → suggest *"${f.suggested}"*. Review on the client's Materials/Leads page to correct all instances.`;
+    await postSlackMessage({ channel: FEEDBACK_CHANNEL, text }).catch(() => {});
   }
   return flagged;
 }
