@@ -406,7 +406,7 @@ registerAgent({
         clientOrgName: c.clientOrgName,
         supplierContactName: c.contactName,
         supplierCompanyName: c.lead.supplier_name,
-        materialName: c.lead.material_name ?? "the material",
+        materialName: c.lead.material_name?.trim() || "the material",
         inciName: p.inci ?? p.inci_name ?? null,
         signal: p.signal ?? null,
         isMarketplace: (c.lead as any).market_kind === "marketplace" || p.site_type === "M" || p.site_type === "MS",
@@ -417,7 +417,7 @@ registerAgent({
         status: "open",
         supplier_id: c.lead.supplier_id,
         material_id: c.lead.material_id,
-        recommended_action: `No public email for ${c.lead.supplier_name ?? "this supplier"}. Send the RFQ for ${c.lead.material_name ?? "the material"} via their contact form / marketplace inquiry: ${c.channelUrl ?? "(see supplier site)"}`,
+        recommended_action: `No public email for ${c.lead.supplier_name ?? "this supplier"}. Send the RFQ for ${c.lead.material_name?.trim() || "the material"} via their contact form / marketplace inquiry: ${c.channelUrl ?? "(see supplier site)"}`,
         assigned_operator: c.assignedOperator,
         metadata: {
           source_agent: "agent-04-outreach",
