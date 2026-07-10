@@ -9,6 +9,7 @@ export type SourcingStatusKey =
   | "above"
   | "quotes"
   | "outreach"
+  | "drafted"
   | "sourcing"
   | "expiring"
   | "current"
@@ -42,7 +43,7 @@ function rankLine(l: SourcingScorecardLine): number {
   return 3;
 }
 
-function compute(m: MaterialProfileRow, score: SourcingScorecardLine | undefined, leads: number, drafts: number): MaterialSourcingStatus {
+function compute(m: MaterialProfileRow, score: SourcingScorecardLine | undefined, leads: number, drafted: number, sent: number): MaterialSourcingStatus {
   const pct = score?.beats_client_pct != null ? Math.abs(score.beats_client_pct).toFixed(0) : null;
   if (score?.status === "beating") {
     return { key: "sourced", label: "Sourced", reason: pct ? `beats by ${pct}%` : "below current", cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400", tab: "/savings" };
@@ -53,8 +54,11 @@ function compute(m: MaterialProfileRow, score: SourcingScorecardLine | undefined
   if (score?.status === "above") {
     return { key: "above", label: "Above client", reason: pct ? `+${pct}%` : "above current", cls: "bg-red-500/15 text-red-700 dark:text-red-400", tab: "/savings" };
   }
-  if (drafts > 0) {
+  if (sent > 0) {
     return { key: "outreach", label: "Outreach sent", reason: "awaiting replies", cls: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300", tab: "/threads" };
+  }
+  if (drafted > 0) {
+    return { key: "drafted", label: "Outreach drafted", reason: "awaiting send", cls: "bg-violet-500/15 text-violet-700 dark:text-violet-300", tab: "/threads" };
   }
   if (leads > 0) {
     return { key: "sourcing", label: "Sourcing", reason: `${leads} lead${leads === 1 ? "" : "s"}`, cls: "bg-teal-500/15 text-teal-700 dark:text-teal-300", tab: "/leads" };
@@ -80,12 +84,20 @@ export async function getMaterialSourcingStatus(
 ): Promise<Record<string, MaterialSourcingStatus>> {
   const [leadsRes, draftsRes] = await Promise.all([
     admin.from("leads_in_flight").select("material_id").eq("org_id", orgId).eq("status", "active"),
-    admin.from("draft_references").select("material_id").eq("org_id", orgId).eq("status", "staged"),
+    // A 'staged'/'reviewed' draft is composed but NOT yet sent — an operator
+    // still has to send it from Tenkara. Only 'sent' (flipped by the Tenkara
+    // draft.sent webhook) means outreach actually went out.
+    admin.from("draft_references").select("material_id, status").eq("org_id", orgId).in("status", ["staged", "reviewed", "sent"]),
   ]);
   const leadCount = new Map<string, number>();
   for (const r of leadsRes.data ?? []) if (r.material_id) leadCount.set(r.material_id, (leadCount.get(r.material_id) ?? 0) + 1);
-  const draftCount = new Map<string, number>();
-  for (const r of draftsRes.data ?? []) if (r.material_id) draftCount.set(r.material_id, (draftCount.get(r.material_id) ?? 0) + 1);
+  const draftedCount = new Map<string, number>();
+  const sentCount = new Map<string, number>();
+  for (const r of draftsRes.data ?? []) {
+    if (!r.material_id) continue;
+    const m = r.status === "sent" ? sentCount : draftedCount;
+    m.set(r.material_id, (m.get(r.material_id) ?? 0) + 1);
+  }
 
   const scoreByMat = new Map<string, SourcingScorecardLine>();
   if (tenkaraOrgId) {
@@ -99,7 +111,7 @@ export async function getMaterialSourcingStatus(
   const out: Record<string, MaterialSourcingStatus> = {};
   for (const m of profile.materials) {
     if (!m.tenkaraMaterialId) continue;
-    out[m.tenkaraMaterialId] = compute(m, scoreByMat.get(m.tenkaraMaterialId), leadCount.get(m.tenkaraMaterialId) ?? 0, draftCount.get(m.tenkaraMaterialId) ?? 0);
+    out[m.tenkaraMaterialId] = compute(m, scoreByMat.get(m.tenkaraMaterialId), leadCount.get(m.tenkaraMaterialId) ?? 0, draftedCount.get(m.tenkaraMaterialId) ?? 0, sentCount.get(m.tenkaraMaterialId) ?? 0);
   }
   return out;
 }
