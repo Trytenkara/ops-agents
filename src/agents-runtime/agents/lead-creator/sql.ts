@@ -1,4 +1,5 @@
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
+import { materialLabel } from "@/lib/material-label";
 
 // Tenkara prod schema (confirmed via mcp_readonly):
 //   materials(id, name, trade_name, inci, created_at, user_id, ...)
@@ -119,7 +120,7 @@ export async function findCandidatesForMaterial(material: MaterialRow): Promise<
   }
 
   // 3. Suppliers who have quoted materials with matching name (case-insensitive).
-  const nameKey = material.trade_name ?? material.name;
+  const nameKey = materialLabel(material);
   if (nameKey) {
     const sameName = await tenkaraQuery<CandidateSupplier>(
       `select s.id as supplier_id,

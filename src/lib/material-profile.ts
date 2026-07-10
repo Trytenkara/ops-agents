@@ -176,13 +176,13 @@ export function matchOrderToMaterial(label: string, materials: MatchCandidate[])
 export async function loadMatchCandidates(tenkaraOrgId: string): Promise<MatchCandidate[]> {
   const rows = await tenkaraQuery<any>(
     `select m.id::text as id,
-            coalesce(m.trade_name, m.name) as label,
+            coalesce(nullif(btrim(m.name), ''), nullif(btrim(m.trade_name), '')) as label,
             (select string_agg(g->>'grade_name', ' ')
                from jsonb_array_elements(coalesce(m.grade, '[]'::jsonb)) g) as grade
        from public.materials m
        join public.users u on u.id = m.user_id
       where u.organization_id = $1::uuid
-        and coalesce(m.trade_name, m.name) is not null`,
+        and coalesce(nullif(btrim(m.name), ''), nullif(btrim(m.trade_name), '')) is not null`,
     [tenkaraOrgId]
   );
   return rows.map((r) => ({ id: r.id, label: r.label, grade: r.grade ?? null }));
@@ -210,7 +210,7 @@ export async function getMaterialProfile(orgId: string): Promise<MaterialProfile
   try {
     tenkaraMaterials = await tenkaraQuery<any>(
       `select m.id::text as id,
-              coalesce(m.trade_name, m.name) as label,
+              coalesce(nullif(btrim(m.name), ''), nullif(btrim(m.trade_name), '')) as label,
               (select string_agg(g->>'grade_name', ', ')
                  from jsonb_array_elements(coalesce(m.grade, '[]'::jsonb)) g) as grade,
               m.annual_volume_expected, m.volume_unit, m.need_type, m.accepts_blanket_orders,
@@ -219,7 +219,7 @@ export async function getMaterialProfile(orgId: string): Promise<MaterialProfile
          join public.users u on u.id = m.user_id
          left join public.material_quotes q on q.id = m.current_quote_id
         where u.organization_id = $1::uuid
-          and coalesce(m.trade_name, m.name) is not null
+          and coalesce(nullif(btrim(m.name), ''), nullif(btrim(m.trade_name), '')) is not null
         order by m.created_at desc limit 200`,
       [org.tenkara_org_id]
     );

@@ -7,6 +7,7 @@ import { getSourcingExclusions, exclusionReason, type SourcingExclusions } from 
 import { uploadCsvAndSign } from "@/lib/storage";
 import { onlyOrgName } from "@/lib/org-scope";
 import { flagMaterialNames, correctName } from "@/lib/material-name-flags";
+import { materialLabel } from "@/lib/material-label";
 
 const EMPTY_OVERRIDES = new Map<string, string>();
 
@@ -276,7 +277,7 @@ registerAgent({
       const matOaOrgId = material.tenkara_org_id ? tenkaraOrgToOaOrg.get(material.tenkara_org_id) ?? null : null;
       const matLabel = correctName(
         matOaOrgId ? overridesByOrg.get(matOaOrgId) ?? EMPTY_OVERRIDES : EMPTY_OVERRIDES,
-        material.trade_name ?? material.name ?? material.id
+        materialLabel(material, material.id) as string
       ) as string;
       let candidates: CandidateSupplier[];
       try {

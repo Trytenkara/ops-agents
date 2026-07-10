@@ -7,6 +7,7 @@ import { runOutreachForLead } from "./run-outreach";
 import { composeOutreachDraft } from "./drafter";
 import { suppliersWithPriorRelationship } from "@/lib/tenkara-relationships";
 import { getSourcingExclusions, exclusionReason } from "@/lib/tenkara-sourcing-exclusions";
+import { resolveMaterialNames } from "@/lib/tenkara-names";
 
 // v1 trim (vs. full spec):
 //   - pre-outreach only. Reply tracking + follow-up cadence land with Agent 08.
@@ -145,6 +146,18 @@ registerAgent({
       }
     }
 
+    // Resolve each lead's authoritative material name from Tenkara. The name we
+    // stored on the lead can be blank/stale (the bulk importer writes
+    // trade_name='' on unbranded materials, which older label logic surfaced as
+    // an empty name). Tenkara is the source of truth, so re-derive here and never
+    // draft with a placeholder.
+    let matNamesById = new Map<string, string>();
+    try {
+      matNamesById = await resolveMaterialNames(leads.map((l) => l.material_id).filter(Boolean) as string[]);
+    } catch (e: any) {
+      await ctx.log(`Material-name resolve failed: ${e?.message ?? e}`, { level: "warn", step: "material_names" });
+    }
+
     const candidates: Candidate[] = [];
     const onlyOrg = onlyOrgName();
     let droppedNoContact = 0;
@@ -152,9 +165,23 @@ registerAgent({
     let droppedSkipClient = 0;
     let droppedOtherOrg = 0;
     let heldForSpelling = 0;
+    let heldForMissingName = 0;
 
     for (const lead of leads) {
       const payload = (lead.payload ?? {}) as any;
+      // Never draft outreach without a material name. Prefer the stored name,
+      // else the authoritative Tenkara name; if neither exists the material is
+      // genuinely nameless — hold the lead (stays at stage=enriched) for ops to
+      // fix the material in Tenkara and re-run, rather than sending a supplier a
+      // "the material" RFQ.
+      const resolvedName =
+        (lead.material_name && lead.material_name.trim()) ||
+        (lead.material_id ? matNamesById.get(lead.material_id) ?? null : null);
+      if (!resolvedName) {
+        heldForMissingName++;
+        continue;
+      }
+      lead.material_name = resolvedName; // normalize so every draft uses the real name
       const email = (payload.supplier_contact_email as string | undefined) ?? null;
       const formatValid = payload.enrichment?.email_check?.format_valid === true;
       const hasEmail = !!email && formatValid;
@@ -212,14 +239,14 @@ registerAgent({
     const emailCount = candidates.filter((c) => c.channel === "email").length;
     const manualCount = candidates.filter((c) => c.channel === "manual").length;
     await ctx.log(
-      `Filtered: ${candidates.length} actionable (${emailCount} email, ${manualCount} manual-contact) · dropped ${droppedNoContact} (no contact channel), ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${onlyOrg ? `, ${droppedOtherOrg} (outside ${onlyOrg})` : ""}${heldForSpelling ? ` · held ${heldForSpelling} (pending spelling review)` : ""}`,
+      `Filtered: ${candidates.length} actionable (${emailCount} email, ${manualCount} manual-contact) · dropped ${droppedNoContact} (no contact channel), ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${onlyOrg ? `, ${droppedOtherOrg} (outside ${onlyOrg})` : ""}${heldForSpelling ? ` · held ${heldForSpelling} (pending spelling review)` : ""}${heldForMissingName ? ` · held ${heldForMissingName} (missing material name)` : ""}`,
       { step: "filter" }
     );
 
     if (candidates.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary(`No actionable leads after filters (no_contact=${droppedNoContact}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${onlyOrg ? `, other_org=${droppedOtherOrg}` : ""}${heldForSpelling ? `, held_spelling=${heldForSpelling}` : ""}).`);
+      ctx.setSummary(`No actionable leads after filters (no_contact=${droppedNoContact}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${onlyOrg ? `, other_org=${droppedOtherOrg}` : ""}${heldForSpelling ? `, held_spelling=${heldForSpelling}` : ""}${heldForMissingName ? `, held_missing_name=${heldForMissingName}` : ""}).`);
       return;
     }
 
