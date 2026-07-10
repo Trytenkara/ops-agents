@@ -5,6 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MarkReviewedButton } from "@/components/mark-reviewed-button";
+import { RewriteDraftButton } from "@/components/rewrite-draft-button";
 import { relativeTime } from "@/lib/utils";
 import { OperatorChip } from "@/components/operator-chip";
 import { operatorRoles, primaryRole } from "@/lib/operator";
@@ -125,6 +126,9 @@ export default async function DraftDetail({ params }: { params: { id: string } }
               Open full thread in {inboxName} ↗
             </a>
             {canReview && d.status === "staged" && <MarkReviewedButton draftId={d.id} />}
+            {canReview && d.status === "staged" && isTenkara && (d.metadata as any)?.draft_kind !== "inbound_reply" && (
+              <RewriteDraftButton draftId={d.id} />
+            )}
           </div>
 
           {d.reviewer && (

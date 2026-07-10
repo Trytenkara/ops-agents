@@ -10,7 +10,9 @@ import { DraftSignals } from "@/components/draft-signals";
 import { DraftStatusBadge } from "@/components/draft-status-badge";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { BulkRemoveBar } from "@/components/bulk-remove-bar";
+import { BulkRewriteBar } from "@/components/bulk-rewrite-bar";
 import { removeDrafts } from "@/app/actions/drafts";
+import { rewriteDrafts } from "@/app/actions/rewrite-draft";
 import { filenameFor } from "@/lib/csv";
 import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
 
@@ -128,12 +130,19 @@ export function ThreadsList({ rows, slug, canAct = false }: { rows: ThreadRow[];
       </div>
 
       {selectable && (
-        <BulkRemoveBar
-          count={selectedCount}
-          noun="thread"
-          onRemove={() => removeDrafts(filteredIds.filter((id) => selected.has(id)))}
-          onClear={() => setSelected(new Set())}
-        />
+        <>
+          <BulkRewriteBar
+            count={selectedCount}
+            onRewrite={() => rewriteDrafts(filteredIds.filter((id) => selected.has(id)))}
+            onClear={() => setSelected(new Set())}
+          />
+          <BulkRemoveBar
+            count={selectedCount}
+            noun="thread"
+            onRemove={() => removeDrafts(filteredIds.filter((id) => selected.has(id)))}
+            onClear={() => setSelected(new Set())}
+          />
+        </>
       )}
       <Table>
         <TableHeader>
