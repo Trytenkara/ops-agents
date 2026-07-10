@@ -29,7 +29,7 @@ export default async function OrgMaterialsPage({ params }: { params: { slug: str
   // own approval status (pending_review / approved / dismissed).
   const { data: quoteRows } = await admin
     .from("staged_quotes")
-    .select("id, material_id, supplier_name, price, case_size, unit_of_measurement, unit_price, status, confidence, created_at")
+    .select("id, material_id, supplier_name, price, case_size, unit_of_measurement, unit_price, grade, status, confidence, created_at")
     .eq("org_id", org.id)
     .order("created_at", { ascending: false })
     .limit(1000);

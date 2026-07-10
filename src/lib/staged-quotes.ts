@@ -25,6 +25,7 @@ export interface StagedQuoteInput {
   caseSize: number | null;
   unitOfMeasurement: string | null;
   currency?: string | null;
+  grade?: string | null;
   confidence?: StagedQuoteConfidence;
   extractionNotes?: string | null;
   rawExtract?: Record<string, any> | null;
@@ -100,6 +101,7 @@ export async function insertStagedQuotes(
       case_size: r.caseSize,
       unit_of_measurement: r.unitOfMeasurement,
       currency: r.currency ?? "USD",
+      grade: r.grade ?? null,
       confidence: r.confidence ?? "needs_review",
       extraction_notes: r.extractionNotes ?? null,
       raw_extract: r.rawExtract ?? {},

@@ -27,7 +27,25 @@ export type RequoteRow = {
   assignedEmail: string | null;
   assignedRole: string | null;
   reviewerName: string | null;
+  // The price that came back from the supplier's reply (extracted into
+  // staged_quotes), matched by supplier + material. Null until they reply.
+  returnedPrice: number | null;
+  returnedUnitPrice: number | null;
+  returnedUnitOfMeasurement: string | null;
+  returnedCurrency: string | null;
+  returnedGrade: string | null;
+  returnedStatus: string | null;
 };
+
+function fmtReturnedPrice(r: RequoteRow): string {
+  if (r.returnedUnitPrice != null) {
+    return `${r.returnedCurrency ?? "USD"} ${r.returnedUnitPrice.toFixed(2)}/${r.returnedUnitOfMeasurement ?? "unit"}`;
+  }
+  if (r.returnedPrice != null) {
+    return `${r.returnedCurrency ?? "USD"} ${r.returnedPrice}`;
+  }
+  return "";
+}
 
 // Direct-supplier re-quote drafts (Agent 02). For non-marketplace suppliers we
 // can't read a public price, so an expiring quote becomes a draft email asking
@@ -51,6 +69,8 @@ export function RequoteList({ rows, slug }: { rows: RequoteRow[]; slug: string }
     r.materialName ?? r.materialId ?? "",
     r.quoteRef ?? "",
     r.quoteExpiry ? `Expires ${r.quoteExpiry}` : "",
+    fmtReturnedPrice(r),
+    r.returnedGrade ?? "",
     r.status,
     r.createdAt ?? "",
   ]);
@@ -61,7 +81,7 @@ export function RequoteList({ rows, slug }: { rows: RequoteRow[]; slug: string }
         {controls}
         <ListCsvButton
           filename={filenameFor(slug, "requotes")}
-          headers={["Subject", "Supplier", "Material", "Quote", "Reason", "Status", "Staged"]}
+          headers={["Subject", "Supplier", "Material", "Quote", "Reason", "Returned price", "Grade", "Status", "Staged"]}
           rows={csvRows}
         />
       </div>
@@ -73,6 +93,7 @@ export function RequoteList({ rows, slug }: { rows: RequoteRow[]; slug: string }
             <TableHead>Material</TableHead>
             <TableHead>Quote</TableHead>
             <TableHead>Reason</TableHead>
+            <TableHead>Returned price</TableHead>
             <TableHead>Assigned</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Staged</TableHead>
@@ -104,6 +125,21 @@ export function RequoteList({ rows, slug }: { rows: RequoteRow[]; slug: string }
                   <span className="text-muted-foreground text-xs">expiring</span>
                 )}
               </TableCell>
+              <TableCell>
+                {fmtReturnedPrice(d) ? (
+                  <div className="flex flex-col gap-0.5">
+                    <span className="font-medium text-foreground">{fmtReturnedPrice(d)}</span>
+                    {d.returnedGrade && <span className="text-xs text-muted-foreground">{d.returnedGrade}</span>}
+                    {d.returnedStatus && d.returnedStatus !== "approved" && (
+                      <Badge variant="secondary" title="Captured from the supplier's reply — review under Materials.">
+                        {d.returnedStatus === "pending_review" ? "pending review" : d.returnedStatus}
+                      </Badge>
+                    )}
+                  </div>
+                ) : (
+                  <span className="text-muted-foreground text-xs" title="No priced reply captured yet for this supplier + material.">awaiting reply</span>
+                )}
+              </TableCell>
               <TableCell><OperatorChip name={d.assignedName} email={d.assignedEmail} role={d.assignedRole} /></TableCell>
               <TableCell><DraftStatusBadge status={d.status} reviewerName={d.reviewerName} /></TableCell>
               <TableCell className="text-muted-foreground">{relativeTime(d.createdAt)}</TableCell>
@@ -112,7 +148,7 @@ export function RequoteList({ rows, slug }: { rows: RequoteRow[]; slug: string }
           ))}
           {filtered.length === 0 && (
             <TableRow>
-              <TableCell colSpan={9} className="text-center text-muted-foreground py-8">No re-quote drafts.</TableCell>
+              <TableCell colSpan={10} className="text-center text-muted-foreground py-8">No re-quote drafts.</TableCell>
             </TableRow>
           )}
         </TableBody>

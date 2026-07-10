@@ -16,6 +16,7 @@ export interface ExtractedQuote {
   case_size: number | null;
   unit_of_measurement: string | null;
   currency: string | null;
+  grade: string | null; // supplier-stated material grade, never guessed
   confidence: "high" | "medium" | "low";
   notes: string | null;
 }
@@ -34,6 +35,7 @@ Return ONLY a JSON object (no prose):
       "case_size": 25,                // numeric quantity the price covers (e.g. 25 for a 25 kg bag); null if unclear
       "unit_of_measurement": "kg",    // the unit case_size is in (kg, lb, L, each, ...)
       "currency": "USD",
+      "grade": "USP",                 // the material grade IF the supplier states one, else null
       "confidence": "high | medium | low",
       "notes": "anything ambiguous: MOQ, tiered pricing, unclear unit, sample vs bulk, etc."
     }
@@ -42,6 +44,7 @@ Return ONLY a JSON object (no prose):
 
 Rules:
 - price must be numeric or null. Strip "$", "USD", commas.
+- grade: only populate if the supplier EXPLICITLY names a grade/spec for the material (e.g. "USP", "EP", "Food grade", "Industrial", "SCI 80"). NEVER infer or guess a "typical" grade — if they don't state one, return null.
 - Populate case_size and unit_of_measurement so a PER-UNIT price (price / case_size) can be computed. If the price is already per-unit, set case_size = 1 and unit_of_measurement to that unit. Only leave case_size null if there is genuinely no quantity context.
 - Capture EVERY pack size and EVERY tiered price break as its OWN line; put quantity thresholds in notes (e.g. "tier: >=500 lb").
 - confidence "low" when the unit/case size is guessed or the figure might be an MOQ/sample price rather than a real quote.
