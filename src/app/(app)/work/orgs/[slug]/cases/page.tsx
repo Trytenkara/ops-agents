@@ -55,6 +55,7 @@ export default async function CasesPage({ params }: { params: { slug: string } }
           createdAt: c.created_at ?? null,
           formType: (c.metadata?.form_type as string | undefined) ?? null,
           formAvailable: c.type === "supplier_form" && !!c.metadata?.form_available,
+          canAddEmail: c.type === "manual_outreach" && !!c.metadata?.lead_id,
         }));
         return caseRows.length === 0 ? (
           <p className="text-center text-muted-foreground py-8 text-sm">No open cases.</p>

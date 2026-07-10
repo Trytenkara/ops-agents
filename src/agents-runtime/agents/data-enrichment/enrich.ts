@@ -38,7 +38,7 @@ export interface ContactDiscovery {
   phone: string | null;        // best discovered/known phone
   contact_url: string | null;  // contact page / quote-form URL used as a channel
   pages_tried: number;         // how many pages we actually fetched
-  source: "scout" | "discovered" | "path" | null; // where the channel came from
+  source: "scout" | "discovered" | "path" | "tenkara" | null; // where the channel came from
 }
 
 export interface SupplierEnrichment {
@@ -386,6 +386,19 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
         contactUrl = d.contact_url;
         if (!contactSource) contactSource = "discovered";
       }
+    }
+  }
+
+  // Platform fallback: if the public web gave us no direct email, use one the
+  // Tenkara supplier record already holds (shipping/billing). Generic addresses
+  // (info@, sales@) are fine — a reachable inbox beats a contact form.
+  if (!email && tenkara_supplier) {
+    const tenkEmail = [tenkara_supplier.shipping_email, tenkara_supplier.billing_email]
+      .map((e) => (e ?? "").trim().toLowerCase())
+      .find((e) => EMAIL_RE.test(e));
+    if (tenkEmail) {
+      email = tenkEmail;
+      contactSource = "tenkara";
     }
   }
 
