@@ -5,6 +5,11 @@ import { sanitizeDraft } from "@/lib/email-style";
 // short paragraphs separated by blank lines, conversational tone, no em
 // dashes, catalog ask, "Procurement Team / {Org}" sign-off.
 
+export interface DraftMaterial {
+  name: string;
+  inciName?: string | null;
+}
+
 export interface DraftInput {
   mode: OutreachMode; // 'active' | 'ghost'
   ghostBrand?: string;
@@ -13,6 +18,10 @@ export interface DraftInput {
   supplierCompanyName?: string | null;
   materialName: string;
   inciName: string | null;
+  // When set (>1 entry), the email is consolidated: one RFQ listing every
+  // material we're sourcing from this supplier. Single-material callers can keep
+  // passing materialName/inciName and omit this.
+  materials?: DraftMaterial[];
   signal: string | null; // how we found them — kept for telemetry, no longer changes copy
   isMarketplace?: boolean; // marketplace supplier → ask for bulk/wholesale pricing beyond listed retail
 }
@@ -45,25 +54,55 @@ const SUBJECT_TEMPLATES: ((m: string) => string)[] = [
   (m) => `RFQ — ${m}`,
 ];
 
+// Consolidated emails cover several materials, so the subject can't name one.
+// Keep it generic but still varied so a campaign isn't a wall of identical subjects.
+const MULTI_SUBJECT_TEMPLATES: string[] = [
+  "Sourcing inquiry",
+  "Wholesale pricing request",
+  "Supplier inquiry: pricing and availability",
+  "Quote request for several materials",
+  "RFQ — multiple raw materials",
+];
+
 function stableHash(s: string): number {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
   return Math.abs(h);
 }
 
+// Normalize to the list of materials this email covers. Consolidated callers
+// pass `materials`; single-material callers still pass materialName/inciName.
+function materialList(input: DraftInput): DraftMaterial[] {
+  const list = (input.materials ?? []).filter((m) => m.name && m.name.trim());
+  if (list.length) return list;
+  return [{ name: input.materialName, inciName: input.inciName }];
+}
+
+function labelFor(m: DraftMaterial): string {
+  return m.inciName ? `${m.name} (INCI: ${m.inciName})` : m.name;
+}
+
 function pickSubject(input: DraftInput): string {
-  const seed = `${input.supplierCompanyName ?? input.supplierContactName ?? ""}|${input.materialName}`;
+  const mats = materialList(input);
+  const seed = `${input.supplierCompanyName ?? input.supplierContactName ?? ""}|${mats.map((m) => m.name).join(",")}`;
+  if (mats.length > 1) {
+    return MULTI_SUBJECT_TEMPLATES[stableHash(seed) % MULTI_SUBJECT_TEMPLATES.length];
+  }
   const tpl = SUBJECT_TEMPLATES[stableHash(seed) % SUBJECT_TEMPLATES.length];
-  return tpl(input.materialName);
+  return tpl(mats[0].name);
 }
 
 export function composeOutreachDraft(input: DraftInput): ComposedDraft {
   const senderOrg = input.mode === "ghost" ? input.ghostBrand! : input.clientOrgName;
-  const materialLabel = input.inciName
-    ? `${input.materialName} (INCI: ${input.inciName})`
-    : input.materialName;
+  const mats = materialList(input);
+  const multi = mats.length > 1;
 
   const subject = pickSubject(input);
+
+  // Single material reads as a sentence; multiple materials read as a bulleted
+  // list so the supplier can quote each line item.
+  const bulletBlock = multi ? ["", ...mats.map((m) => `- ${labelFor(m)}`), ""] : [""];
+
   const body = (
     input.isMarketplace
       ? [
@@ -71,9 +110,11 @@ export function composeOutreachDraft(input: DraftInput): ComposedDraft {
           // ask for the bulk/wholesale tier and volume breaks beyond the listing.
           greeting(input.supplierContactName, input.supplierCompanyName),
           "",
-          `We are sourcing ${materialLabel} at ${senderOrg} and saw your listing.`,
-          "",
-          "Beyond your published pricing, could you share your bulk and wholesale rates? We're after volume price breaks (e.g. at larger pack sizes or full pallet/ton quantities), along with lead times and MOQs.",
+          multi
+            ? `We are sourcing the following raw materials at ${senderOrg} and saw your listing:`
+            : `We are sourcing ${labelFor(mats[0])} at ${senderOrg} and saw your listing.`,
+          ...bulletBlock,
+          `Beyond your published pricing, could you share your bulk and wholesale rates${multi ? " for these" : ""}? We're after volume price breaks (e.g. at larger pack sizes or full pallet/ton quantities), along with lead times and MOQs.`,
           "",
           "If you have a wholesale price list or catalog, please send it over. We evaluate suppliers across multiple raw materials and will share what you carry with the rest of our procurement team.",
           "",
@@ -85,9 +126,11 @@ export function composeOutreachDraft(input: DraftInput): ComposedDraft {
       : [
           greeting(input.supplierContactName, input.supplierCompanyName),
           "",
-          `We are expanding our supplier network at ${senderOrg} and are looking for ${materialLabel}.`,
-          "",
-          "Do you supply this? If so, could you kindly share current pricing, estimated lead times, and MOQs?",
+          multi
+            ? `We are expanding our supplier network at ${senderOrg} and are looking for the following raw materials:`
+            : `We are expanding our supplier network at ${senderOrg} and are looking for ${labelFor(mats[0])}.`,
+          ...bulletBlock,
+          `Do you supply ${multi ? "any of these" : "this"}? If so, could you kindly share current pricing, estimated lead times, and MOQs${multi ? " for each" : ""}?`,
           "",
           "Additionally, if you have a product catalog, please share it. We're evaluating suppliers across multiple raw materials and will share what you carry with the rest of our procurement team.",
           "",

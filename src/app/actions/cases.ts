@@ -2,6 +2,7 @@
 import { revalidatePath } from "next/cache";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isAggregatorEmail } from "@/agents-runtime/agents/data-enrichment/enrich";
 
 export async function resolveCase(caseId: string, resolutionNote: string) {
   const session = await getSession();
@@ -75,7 +76,7 @@ export async function addSupplierEmailToCase(caseId: string, email: string) {
     supplier_contact_email: clean,
     enrichment: {
       ...(payload.enrichment ?? {}),
-      email_check: { email: clean, format_valid: true, domain_matches_website: null },
+      email_check: { email: clean, format_valid: true, domain_matches_website: null, is_aggregator_domain: isAggregatorEmail(clean) },
     },
     email_source: "manual_operator",
     manual_email_added_by: session.userId,

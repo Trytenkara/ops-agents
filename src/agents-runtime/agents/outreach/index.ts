@@ -3,8 +3,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getOrgOperatorPool, resolveSupplierOperatorId, getSupplierAssignments, type OperatorRef } from "@/lib/operator-assignment";
 import { classifyClient } from "../quote-revalidation/config";
 import { onlyOrgName } from "@/lib/org-scope";
-import { runOutreachForLead } from "./run-outreach";
+import { runOutreachForSupplier, type OutreachLead } from "./run-outreach";
 import { composeOutreachDraft } from "./drafter";
+import { isAggregatorEmail } from "../data-enrichment/enrich";
 import { suppliersWithPriorRelationship } from "@/lib/tenkara-relationships";
 import { getSourcingExclusions, exclusionReason } from "@/lib/tenkara-sourcing-exclusions";
 import { resolveMaterialNames } from "@/lib/tenkara-names";
@@ -167,6 +168,17 @@ registerAgent({
     let heldForSpelling = 0;
     let heldForMissingName = 0;
 
+    // Suppliers with at least one material blocked this run (spelling flag /
+    // missing name). We hold the WHOLE supplier so they get one complete
+    // consolidated email later, never a partial now.
+    const blockedSupplierKeys = new Set<string>();
+    const supplierKeyForLead = (l: (typeof leads)[number]): string =>
+      l.supplier_id
+        ? `s:${l.supplier_id}`
+        : (l.payload as any)?.supplier_contact_email
+          ? `e:${String((l.payload as any).supplier_contact_email).toLowerCase()}`
+          : `l:${l.id}`;
+
     for (const lead of leads) {
       const payload = (lead.payload ?? {}) as any;
       // Never draft outreach without a material name. Prefer the stored name,
@@ -179,12 +191,18 @@ registerAgent({
         (lead.material_id ? matNamesById.get(lead.material_id) ?? null : null);
       if (!resolvedName) {
         heldForMissingName++;
+        blockedSupplierKeys.add(supplierKeyForLead(lead));
         continue;
       }
       lead.material_name = resolvedName; // normalize so every draft uses the real name
       const email = (payload.supplier_contact_email as string | undefined) ?? null;
       const formatValid = payload.enrichment?.email_check?.format_valid === true;
-      const hasEmail = !!email && formatValid;
+      // Never cold-email a marketplace/aggregator address (e.g. concierge@knowde.com)
+      // — it reaches the platform, not the supplier. Fall through to the manual
+      // channel so an operator handles it. Enrichment normally strips these, but
+      // guard here too for leads enriched before that landed.
+      const aggregatorEmail = isAggregatorEmail(email);
+      const hasEmail = !!email && formatValid && !aggregatorEmail;
       // A reachable non-email channel: a discovered contact/quote form, or the
       // supplier's own site/listing we can submit an inquiry through.
       const channelUrl =
@@ -213,6 +231,7 @@ registerAgent({
       // Hold if this material has an unresolved spelling flag.
       if (lead.material_name && pendingByOrg.get(lead.org_id)?.has(lead.material_name.toLowerCase())) {
         heldForSpelling++;
+        blockedSupplierKeys.add(supplierKeyForLead(lead));
         continue;
       }
       const cls = classifyClient(org.name);
@@ -321,85 +340,40 @@ registerAgent({
       { step: "prior_relationship" }
     );
 
-    // 4b. Dedup: email leads against an existing staged draft; manual leads
-    //     against an existing open manual_outreach case (same supplier × material).
-    const cleanCandidates: Candidate[] = [];
+    // 4b/5. Act. Manual leads dedupe per material against an open case. Email
+    //       leads CONSOLIDATE per supplier: one email lists every material we're
+    //       sourcing from that supplier, so a supplier never gets a separate
+    //       mail per material.
+    let staged = 0; // consolidated email drafts staged
+    let manualCased = 0;
+    let missiveErrors = 0;
+    let promoted = 0; // leads promoted to ready_for_outreach
     let dedupSkipped = 0;
-    for (const c of candidatesNoPrior) {
-      if (cleanCandidates.length >= maxDrafts) break;
-      let existing: { id: string } | null = null;
-      if (c.channel === "email") {
-        const { data } = await admin
-          .from("draft_references")
-          .select("id")
-          .eq("agent_id", tackleAgentId)
-          .eq("supplier_id", c.lead.supplier_id)
-          .eq("material_id", c.lead.material_id)
-          .eq("status", "staged")
-          .maybeSingle();
-        existing = data;
-      } else {
-        const { data } = await admin
-          .from("cases")
-          .select("id")
-          .eq("org_id", c.lead.org_id)
-          .eq("supplier_id", c.lead.supplier_id)
-          .eq("material_id", c.lead.material_id)
-          .eq("type", "manual_outreach")
-          .eq("status", "open")
-          .maybeSingle();
-        existing = data;
-      }
+    let heldSuppliers = 0; // suppliers held because a sibling material is blocked
+    let supersededDrafts = 0;
+
+    const emailCandidates = candidatesNoPrior.filter((c) => c.channel === "email");
+    const manualCandidates = candidatesNoPrior.filter((c) => c.channel === "manual");
+
+    // ---- Manual-contact cases (per material) --------------------------------
+    for (const c of manualCandidates) {
+      if (staged + manualCased >= maxDrafts) break;
+      const { data: existing } = await admin
+        .from("cases")
+        .select("id")
+        .eq("org_id", c.lead.org_id)
+        .eq("supplier_id", c.lead.supplier_id)
+        .eq("material_id", c.lead.material_id)
+        .eq("type", "manual_outreach")
+        .eq("status", "open")
+        .maybeSingle();
       if (existing) {
         dedupSkipped++;
         continue;
       }
-      cleanCandidates.push(c);
-    }
 
-    await ctx.log(`After dedup: ${cleanCandidates.length} actionable (skipped ${dedupSkipped} already-staged/cased)`, { step: "dedup" });
-
-    if (cleanCandidates.length === 0) {
-      ctx.setItemsProcessed(0);
-      ctx.setStatus("success");
-      ctx.setSummary(`All ${candidates.length} candidates already have staged drafts.`);
-      return;
-    }
-
-    // 5. Compose + act, serially. Email leads → staged Tenkara draft. Manual
-    //    leads → a manual_outreach case with ready-to-paste RFQ text so the
-    //    operator can reach out through the form/marketplace, then drop the lead.
-    let staged = 0;
-    let manualCased = 0;
-    let missiveErrors = 0;
-    let promoted = 0;
-
-    for (const c of cleanCandidates) {
-      if (c.channel === "email") {
-        const res = await runOutreachForLead({
-          admin,
-          agentId: tackleAgentId,
-          runId: ctx.runId,
-          lead: c.lead,
-          email: c.email!,
-          contactName: c.contactName,
-          mode: c.mode,
-          ghostBrand: c.ghostBrand,
-          clientOrgName: c.clientOrgName,
-          assignedOperator: c.assignedOperator,
-          log: (m, meta) => ctx.log(m, meta),
-        });
-        if (res.staged) {
-          staged++;
-          if (!res.reason) promoted++;
-        } else {
-          missiveErrors++;
-        }
-        continue;
-      }
-
-      // channel === "manual"
       const p = (c.lead.payload ?? {}) as any;
+      const aggregatorEmail = p.enrichment?.aggregator_contact_email ?? null;
       const draft = composeOutreachDraft({
         mode: c.mode,
         ghostBrand: c.ghostBrand,
@@ -417,7 +391,9 @@ registerAgent({
         status: "open",
         supplier_id: c.lead.supplier_id,
         material_id: c.lead.material_id,
-        recommended_action: `No public email for ${c.lead.supplier_name ?? "this supplier"}. Send the RFQ for ${c.lead.material_name?.trim() || "the material"} via their contact form / marketplace inquiry: ${c.channelUrl ?? "(see supplier site)"}`,
+        recommended_action:
+          `No direct supplier email for ${c.lead.supplier_name ?? "this supplier"}. Send the RFQ for ${c.lead.material_name?.trim() || "the material"} via their contact form / marketplace inquiry: ${c.channelUrl ?? "(see supplier site)"}` +
+          (aggregatorEmail ? ` · marketplace listing shows ${aggregatorEmail} — do not cold-email the marketplace` : ""),
         assigned_operator: c.assignedOperator,
         metadata: {
           source_agent: "agent-04-outreach",
@@ -426,6 +402,7 @@ registerAgent({
           supplier_name: c.lead.supplier_name,
           material_name: c.lead.material_name,
           contact_url: c.channelUrl,
+          aggregator_contact_email: aggregatorEmail,
           outreach_mode: c.mode,
           ghost_brand: c.ghostBrand ?? null,
           rfq_subject: draft.subject,
@@ -445,10 +422,146 @@ registerAgent({
         .eq("id", c.lead.id);
     }
 
+    // ---- Consolidated email drafts (per supplier) ---------------------------
+    // Group by supplier_id when present, else by the recipient inbox (scout
+    // leads without a Tenkara supplier row still dedupe by address).
+    const supplierKeyOf = (c: Candidate): string =>
+      c.lead.supplier_id ? `s:${c.lead.supplier_id}` : `e:${(c.email ?? "").toLowerCase()}`;
+    const emailBySupplier = new Map<string, Candidate[]>();
+    for (const c of emailCandidates) {
+      const k = supplierKeyOf(c);
+      const arr = emailBySupplier.get(k) ?? [];
+      arr.push(c);
+      emailBySupplier.set(k, arr);
+    }
+
+    for (const [key, group] of emailBySupplier) {
+      if (staged + manualCased >= maxDrafts) break;
+      const primary = group[0];
+      const supplierId = primary.lead.supplier_id;
+      const materialIds = group.map((c) => c.lead.material_id).filter(Boolean) as string[];
+
+      // Hold the whole supplier if any sibling material is blocked this run — we
+      // want ONE complete email later, not a partial now. Mark the ready siblings
+      // as "compiling" so they aren't lost and the UI can surface the wait.
+      if (blockedSupplierKeys.has(key)) {
+        heldSuppliers++;
+        for (const c of group) {
+          const p = (c.lead.payload ?? {}) as any;
+          await admin
+            .from("leads_in_flight")
+            .update({
+              payload: {
+                ...p,
+                outreach_hold: { reason: "awaiting_sibling_materials", at: new Date().toISOString(), run_id: ctx.runId },
+              },
+            })
+            .eq("id", c.lead.id);
+        }
+        continue;
+      }
+
+      // Overwrite handling. A staged consolidated draft may already exist for this
+      // supplier from a prior run. The already-drafted materials sit at
+      // stage=ready_for_outreach, so they're NOT in this enriched batch — if we
+      // just re-drafted `group` we'd drop them. So: if the current materials add
+      // nothing new → skip; if they add a new material → re-pull the prior draft's
+      // leads, merge, supersede the stale draft (flag for Tenkara deletion), and
+      // re-draft the FULL set as one email.
+      let mergedLeads: OutreachLead[] = group.map((c) => c.lead as OutreachLead);
+      let toSupersede: { id: string; metadata: any }[] = [];
+      if (supplierId) {
+        const { data: existing } = await admin
+          .from("draft_references")
+          .select("id, metadata")
+          .eq("agent_id", tackleAgentId)
+          .eq("supplier_id", supplierId)
+          .eq("status", "staged");
+        const rows = (existing ?? []) as { id: string; metadata: any }[];
+        const existingSet = new Set(rows.flatMap((r) => (r.metadata?.material_ids ?? []) as string[]).filter(Boolean));
+        // Nothing new for this supplier beyond what's already staged → leave it.
+        if (rows.length && materialIds.every((id) => existingSet.has(id))) {
+          dedupSkipped += group.length;
+          continue;
+        }
+        if (rows.length) {
+          toSupersede = rows;
+          const haveIds = new Set(mergedLeads.map((l) => l.id));
+          const priorLeadIds = Array.from(new Set(rows.flatMap((r) => (r.metadata?.lead_ids ?? []) as string[]))).filter(
+            (id) => id && !haveIds.has(id)
+          );
+          if (priorLeadIds.length) {
+            const { data: priorLeads } = await admin
+              .from("leads_in_flight")
+              .select("id, org_id, supplier_id, supplier_name, material_id, material_name, payload")
+              .in("id", priorLeadIds)
+              .eq("status", "active");
+            // Only re-include leads that still have a usable material name; a sent
+            // draft would have status!='staged' and never reach here.
+            for (const l of (priorLeads ?? []) as OutreachLead[]) {
+              if (l.material_name && l.material_name.trim()) mergedLeads.push(l);
+            }
+          }
+        }
+      }
+
+      for (const d of toSupersede) {
+        await admin
+          .from("draft_references")
+          .update({
+            status: "superseded",
+            metadata: {
+              ...(d.metadata ?? {}),
+              superseded: {
+                reason: "consolidated_material_set_changed",
+                at: new Date().toISOString(),
+                run_id: ctx.runId,
+                needs_tenkara_delete: true,
+              },
+            },
+          })
+          .eq("id", d.id);
+        supersededDrafts++;
+      }
+
+      const p0 = (primary.lead.payload ?? {}) as any;
+      const isMarketplace =
+        (primary.lead as any).market_kind === "marketplace" ||
+        p0.site_type === "M" ||
+        p0.site_type === "MS" ||
+        p0.enrichment?.tenkara_supplier?.is_marketplace === true;
+
+      const res = await runOutreachForSupplier({
+        admin,
+        agentId: tackleAgentId,
+        runId: ctx.runId,
+        orgId: primary.lead.org_id,
+        supplierId,
+        supplierName: primary.lead.supplier_name,
+        email: primary.email!,
+        contactName: primary.contactName,
+        mode: primary.mode,
+        ghostBrand: primary.ghostBrand,
+        clientOrgName: primary.clientOrgName,
+        assignedOperator: primary.assignedOperator,
+        isMarketplace,
+        leads: mergedLeads,
+        log: (m, meta) => ctx.log(m, meta),
+      });
+      if (res.staged) {
+        staged++;
+        promoted += res.promoted;
+      } else {
+        missiveErrors++;
+      }
+    }
+
     ctx.setItemsProcessed(staged + manualCased);
     ctx.setStatus(missiveErrors > 0 && staged + manualCased === 0 ? "failure" : missiveErrors > 0 ? "partial" : "success");
     ctx.setSummary(
-      `Staged ${staged} email draft${staged === 1 ? "" : "s"} · ${manualCased} manual-contact case${manualCased === 1 ? "" : "s"} · promoted ${promoted} to ready_for_outreach` +
+      `Staged ${staged} consolidated email draft${staged === 1 ? "" : "s"} · ${manualCased} manual-contact case${manualCased === 1 ? "" : "s"} · promoted ${promoted} to ready_for_outreach` +
+        (heldSuppliers ? ` · held ${heldSuppliers} supplier${heldSuppliers === 1 ? "" : "s"} (compiling materials)` : "") +
+        (supersededDrafts ? ` · superseded ${supersededDrafts} stale draft${supersededDrafts === 1 ? "" : "s"}` : "") +
         (missiveErrors ? ` · ${missiveErrors} errors` : "") +
         (priorRelSkipped ? ` · skipped ${priorRelSkipped} existing-relationship` : "") +
         (dedupSkipped ? ` · skipped ${dedupSkipped} already-staged/cased` : "") +

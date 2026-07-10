@@ -1,5 +1,5 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
-import { enrichLead, type RawLead } from "./enrich";
+import { enrichLead, isAggregatorEmail, type RawLead } from "./enrich";
 
 // Per-lead enrichment: run enrichLead(), merge the result into the lead payload,
 // and either promote to stage=enriched or leave at raw with a blocked_reason.
@@ -29,6 +29,11 @@ export async function enrichAndStageLead(
     return { status: "error", reason: e?.message ?? "threw" };
   }
 
+  // Never let a rejected marketplace address (e.g. concierge@knowde.com) survive
+  // as the outreach email via the raw-scout fallback below.
+  const priorScoutEmail = lead.payload?.supplier_contact_email ?? null;
+  const scoutEmailFallback = isAggregatorEmail(priorScoutEmail) ? null : priorScoutEmail;
+
   const mergedPayload = {
     ...(lead.payload ?? {}),
     enrichment: {
@@ -36,11 +41,12 @@ export async function enrichAndStageLead(
       email_check: result.email_check,
       contact: result.contact,
       tenkara_supplier: result.tenkara_supplier,
+      aggregator_contact_email: result.aggregator_contact_email,
       completeness_score: result.completeness_score,
       enriched_at: new Date().toISOString(),
       enrichment_run_id: runId,
     },
-    supplier_contact_email: result.contact.email ?? lead.payload?.supplier_contact_email ?? null,
+    supplier_contact_email: result.contact.email ?? scoutEmailFallback ?? null,
     supplier_phone: result.contact.phone ?? result.tenkara_supplier?.poc_phone ?? lead.payload?.supplier_phone ?? null,
     contact_url: result.contact.contact_url ?? lead.payload?.contact_url ?? null,
     supplier_country: lead.payload?.supplier_country ?? result.tenkara_supplier?.country ?? null,
