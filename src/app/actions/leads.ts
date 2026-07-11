@@ -289,6 +289,7 @@ export async function promoteLead(leadId: string): Promise<ActionResult> {
   });
 
   revalidatePath("/work/review/leads");
+  revalidatePath("/work/orgs/[slug]/leads", "page");
   return { ok: true };
 }
 
@@ -410,5 +411,6 @@ export async function dropLead(leadId: string, reason: DropReason, note?: string
   });
 
   revalidatePath("/work/review/leads");
+  revalidatePath("/work/orgs/[slug]/leads", "page");
   return { ok: true };
 }
