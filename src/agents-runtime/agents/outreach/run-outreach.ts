@@ -12,10 +12,11 @@ function nameHash(s: string): string {
   return h.toString(36);
 }
 
-// Per-supplier outreach: compose ONE email covering every material we're
-// sourcing from this supplier, stage it through the shared draft→QA pipeline,
-// and promote all the underlying leads to ready_for_outreach. Consolidating here
-// is what stops a supplier getting a separate email per material.
+// Per-supplier first contact: compose ONE email for the pool of materials passed
+// in (the caller leads with a small pool, not the whole list — ops flow), stage
+// it through the shared draft→QA pipeline, and promote those leads to
+// ready_for_outreach. Materials not in the pool are held by the caller for a
+// follow-up. Passing >1 material renders a bulleted multi-material RFQ.
 
 type Admin = ReturnType<typeof createAdminClient>;
 

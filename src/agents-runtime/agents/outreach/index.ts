@@ -30,6 +30,25 @@ function envMaxDrafts(): number {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_MAX_DRAFTS_PER_RUN;
 }
 
+// Phased outreach (ops flow, confirmed 2026-07-10): the FIRST email to a supplier
+// leads with a small pool of materials, not the whole list — "we don't want to
+// overwhelm the suppliers." The remaining materials are held (payload.phased_hold)
+// and introduced into the conversation only after the supplier engages (Phase 2,
+// reply loop). Pool size is small and env-overridable.
+const DEFAULT_FIRST_POOL_SIZE = 3;
+function envFirstPoolSize(): number {
+  const v = process.env.OUTREACH_FIRST_POOL_SIZE;
+  if (!v) return DEFAULT_FIRST_POOL_SIZE;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_FIRST_POOL_SIZE;
+}
+
+// Compile-gate: don't draft a supplier's first email until its full material list
+// is known — i.e. it has no sibling lead still being enriched (stage='raw' with no
+// enrichment_blocked_reason). Bounded so a permanently-stuck raw lead (enrichment
+// keeps failing without a reason) can't block the supplier's outreach forever.
+const COMPILE_WAIT_MAX_DAYS = 7;
+
 async function getAgentIdBySlug(admin: ReturnType<typeof createAdminClient>, slug: string): Promise<string | null> {
   const { data } = await admin.from("agents").select("id").eq("slug", slug).maybeSingle();
   return data?.id ?? null;
@@ -159,6 +178,34 @@ registerAgent({
       await ctx.log(`Material-name resolve failed: ${e?.message ?? e}`, { level: "warn", step: "material_names" });
     }
 
+    // Compile-gate: which suppliers still have a material being enriched? We only
+    // draft a supplier's first email once we have their ENTIRE list, so a supplier
+    // with a sibling lead still at stage='raw' (and not terminally blocked, and not
+    // stuck past the wait bound) is held this run. Batched so it's one query.
+    // Keyed by `${org_id}:${supplier_id}` — a supplier's material list is
+    // per-client, so a raw lead for the same supplier under a different org must
+    // not hold this org's outreach.
+    const compileKey = (orgId: string | null, supplierId: string | null) => `${orgId ?? ""}:${supplierId ?? ""}`;
+    const suppliersStillCompiling = new Set<string>();
+    {
+      const batchSupplierIds = Array.from(new Set(leads.map((l) => l.supplier_id).filter(Boolean) as string[]));
+      if (batchSupplierIds.length) {
+        const staleCutoff = new Date(Date.now() - COMPILE_WAIT_MAX_DAYS * 86_400_000).toISOString();
+        const { data: rawSibs } = await admin
+          .from("leads_in_flight")
+          .select("supplier_id, org_id, payload, created_at")
+          .in("supplier_id", batchSupplierIds)
+          .eq("stage", "raw")
+          .eq("status", "active");
+        for (const r of (rawSibs ?? []) as any[]) {
+          if (!r.supplier_id) continue;
+          if ((r.payload ?? {}).enrichment_blocked_reason) continue; // won't enrich without ops
+          if (r.created_at && r.created_at < staleCutoff) continue; // stuck too long — stop waiting
+          suppliersStillCompiling.add(compileKey(r.org_id, r.supplier_id));
+        }
+      }
+    }
+
     const candidates: Candidate[] = [];
     const onlyOrg = onlyOrgName();
     let droppedNoContact = 0;
@@ -167,6 +214,7 @@ registerAgent({
     let droppedOtherOrg = 0;
     let heldForSpelling = 0;
     let heldForMissingName = 0;
+    let heldPhasedCarry = 0; // leads already held for a follow-up from a prior run
 
     // Suppliers with at least one material blocked this run (spelling flag /
     // missing name). We hold the WHOLE supplier so they get one complete
@@ -181,6 +229,13 @@ registerAgent({
 
     for (const lead of leads) {
       const payload = (lead.payload ?? {}) as any;
+      // Already held for a follow-up (first-pool email went out; this material is
+      // queued to be introduced after the supplier engages). Not a fresh cold
+      // candidate — the reply loop (Phase 2) releases it, not this sweep.
+      if (payload.phased_hold) {
+        heldPhasedCarry++;
+        continue;
+      }
       // Never draft outreach without a material name. Prefer the stored name,
       // else the authoritative Tenkara name; if neither exists the material is
       // genuinely nameless — hold the lead (stays at stage=enriched) for ops to
@@ -258,7 +313,7 @@ registerAgent({
     const emailCount = candidates.filter((c) => c.channel === "email").length;
     const manualCount = candidates.filter((c) => c.channel === "manual").length;
     await ctx.log(
-      `Filtered: ${candidates.length} actionable (${emailCount} email, ${manualCount} manual-contact) · dropped ${droppedNoContact} (no contact channel), ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${onlyOrg ? `, ${droppedOtherOrg} (outside ${onlyOrg})` : ""}${heldForSpelling ? ` · held ${heldForSpelling} (pending spelling review)` : ""}${heldForMissingName ? ` · held ${heldForMissingName} (missing material name)` : ""}`,
+      `Filtered: ${candidates.length} actionable (${emailCount} email, ${manualCount} manual-contact) · dropped ${droppedNoContact} (no contact channel), ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${onlyOrg ? `, ${droppedOtherOrg} (outside ${onlyOrg})` : ""}${heldForSpelling ? ` · held ${heldForSpelling} (pending spelling review)` : ""}${heldForMissingName ? ` · held ${heldForMissingName} (missing material name)` : ""}${heldPhasedCarry ? ` · skipped ${heldPhasedCarry} (held for follow-up)` : ""}`,
       { step: "filter" }
     );
 
@@ -344,13 +399,14 @@ registerAgent({
     //       leads CONSOLIDATE per supplier: one email lists every material we're
     //       sourcing from that supplier, so a supplier never gets a separate
     //       mail per material.
-    let staged = 0; // consolidated email drafts staged
+    let staged = 0; // first-contact email drafts staged (one per supplier)
     let manualCased = 0;
     let missiveErrors = 0;
-    let promoted = 0; // leads promoted to ready_for_outreach
+    let promoted = 0; // leads promoted to ready_for_outreach (the first pool)
     let dedupSkipped = 0;
     let heldSuppliers = 0; // suppliers held because a sibling material is blocked
-    let supersededDrafts = 0;
+    let heldCompiling = 0; // suppliers held: full material list not yet enriched
+    let phasedHeld = 0; // materials held for a follow-up (not in the first pool)
 
     const emailCandidates = candidatesNoPrior.filter((c) => c.channel === "email");
     const manualCandidates = candidatesNoPrior.filter((c) => c.channel === "manual");
@@ -422,9 +478,12 @@ registerAgent({
         .eq("id", c.lead.id);
     }
 
-    // ---- Consolidated email drafts (per supplier) ---------------------------
-    // Group by supplier_id when present, else by the recipient inbox (scout
-    // leads without a Tenkara supplier row still dedupe by address).
+    // ---- First-contact email drafts (per supplier, small pool) --------------
+    // Phased outreach: group each supplier's actionable materials, then send ONE
+    // first email leading with a small pool (ops: "don't overwhelm the supplier
+    // with the whole list"). The rest are held (payload.phased_hold) for the reply
+    // loop to introduce after the supplier engages.
+    const firstPoolSize = envFirstPoolSize();
     const supplierKeyOf = (c: Candidate): string =>
       c.lead.supplier_id ? `s:${c.lead.supplier_id}` : `e:${(c.email ?? "").toLowerCase()}`;
     const emailBySupplier = new Map<string, Candidate[]>();
@@ -435,15 +494,38 @@ registerAgent({
       emailBySupplier.set(k, arr);
     }
 
+    // Stamp payload.phased_hold on leads whose material isn't in the first email —
+    // queued for a follow-up once the supplier engages (Phase 2, reply loop).
+    const holdForFollowup = async (leadsToHold: Candidate[], poolMaterialIds: string[], draftRefId?: string) => {
+      for (const c of leadsToHold) {
+        // Drop any stale compile-hold — this material is now past first contact.
+        const { outreach_hold, ...p } = (c.lead.payload ?? {}) as any;
+        await admin
+          .from("leads_in_flight")
+          .update({
+            payload: {
+              ...p,
+              phased_hold: {
+                reason: "awaiting_engagement",
+                first_pool_material_ids: poolMaterialIds,
+                first_pool_draft_ref_id: draftRefId ?? null,
+                held_at: new Date().toISOString(),
+                run_id: ctx.runId,
+              },
+            },
+          })
+          .eq("id", c.lead.id);
+        phasedHeld++;
+      }
+    };
+
     for (const [key, group] of emailBySupplier) {
       if (staged + manualCased >= maxDrafts) break;
       const primary = group[0];
       const supplierId = primary.lead.supplier_id;
-      const materialIds = group.map((c) => c.lead.material_id).filter(Boolean) as string[];
 
-      // Hold the whole supplier if any sibling material is blocked this run — we
-      // want ONE complete email later, not a partial now. Mark the ready siblings
-      // as "compiling" so they aren't lost and the UI can surface the wait.
+      // Hold the WHOLE supplier if any sibling material is blocked this run
+      // (spelling flag / missing name) — no half-finished first contact.
       if (blockedSupplierKeys.has(key)) {
         heldSuppliers++;
         for (const c of group) {
@@ -451,78 +533,59 @@ registerAgent({
           await admin
             .from("leads_in_flight")
             .update({
-              payload: {
-                ...p,
-                outreach_hold: { reason: "awaiting_sibling_materials", at: new Date().toISOString(), run_id: ctx.runId },
-              },
+              payload: { ...p, outreach_hold: { reason: "awaiting_sibling_materials", at: new Date().toISOString(), run_id: ctx.runId } },
             })
             .eq("id", c.lead.id);
         }
         continue;
       }
 
-      // Overwrite handling. A staged consolidated draft may already exist for this
-      // supplier from a prior run. The already-drafted materials sit at
-      // stage=ready_for_outreach, so they're NOT in this enriched batch — if we
-      // just re-drafted `group` we'd drop them. So: if the current materials add
-      // nothing new → skip; if they add a new material → re-pull the prior draft's
-      // leads, merge, supersede the stale draft (flag for Tenkara deletion), and
-      // re-draft the FULL set as one email.
-      let mergedLeads: OutreachLead[] = group.map((c) => c.lead as OutreachLead);
-      let toSupersede: { id: string; metadata: any }[] = [];
+      // Compile-gate: don't make first contact until we have the supplier's full
+      // material list — i.e. nothing of theirs is still being enriched.
+      if (supplierId && suppliersStillCompiling.has(compileKey(primary.lead.org_id, supplierId))) {
+        heldCompiling++;
+        for (const c of group) {
+          const p = (c.lead.payload ?? {}) as any;
+          await admin
+            .from("leads_in_flight")
+            .update({
+              payload: { ...p, outreach_hold: { reason: "awaiting_full_list", at: new Date().toISOString(), run_id: ctx.runId } },
+            })
+            .eq("id", c.lead.id);
+        }
+        continue;
+      }
+
+      // Already contacted? If a live draft exists for this supplier, first contact
+      // already happened — these newly-enriched materials are follow-ups, so hold
+      // them for the reply loop rather than opening a second cold thread.
       if (supplierId) {
         const { data: existing } = await admin
           .from("draft_references")
-          .select("id, metadata")
+          .select("id")
           .eq("agent_id", tackleAgentId)
+          .eq("org_id", primary.lead.org_id)
           .eq("supplier_id", supplierId)
-          .eq("status", "staged");
-        const rows = (existing ?? []) as { id: string; metadata: any }[];
-        const existingSet = new Set(rows.flatMap((r) => (r.metadata?.material_ids ?? []) as string[]).filter(Boolean));
-        // Nothing new for this supplier beyond what's already staged → leave it.
-        if (rows.length && materialIds.every((id) => existingSet.has(id))) {
-          dedupSkipped += group.length;
+          .in("status", ["staged", "reviewed", "sent"])
+          .limit(1);
+        if (existing && existing.length) {
+          await holdForFollowup(group, [], existing[0].id);
           continue;
-        }
-        if (rows.length) {
-          toSupersede = rows;
-          const haveIds = new Set(mergedLeads.map((l) => l.id));
-          const priorLeadIds = Array.from(new Set(rows.flatMap((r) => (r.metadata?.lead_ids ?? []) as string[]))).filter(
-            (id) => id && !haveIds.has(id)
-          );
-          if (priorLeadIds.length) {
-            const { data: priorLeads } = await admin
-              .from("leads_in_flight")
-              .select("id, org_id, supplier_id, supplier_name, material_id, material_name, payload")
-              .in("id", priorLeadIds)
-              .eq("status", "active");
-            // Only re-include leads that still have a usable material name; a sent
-            // draft would have status!='staged' and never reach here.
-            for (const l of (priorLeads ?? []) as OutreachLead[]) {
-              if (l.material_name && l.material_name.trim()) mergedLeads.push(l);
-            }
-          }
         }
       }
 
-      for (const d of toSupersede) {
-        await admin
-          .from("draft_references")
-          .update({
-            status: "superseded",
-            metadata: {
-              ...(d.metadata ?? {}),
-              superseded: {
-                reason: "consolidated_material_set_changed",
-                at: new Date().toISOString(),
-                run_id: ctx.runId,
-                needs_tenkara_delete: true,
-              },
-            },
-          })
-          .eq("id", d.id);
-        supersededDrafts++;
-      }
+      // First contact. Lead with a small pool of the supplier's materials
+      // (highest confidence first); hold the remainder for a follow-up. No
+      // material category on the lead, so "closely related" degrades to the
+      // top-N by readiness — good enough for a first touch.
+      const ranked = [...group].sort(
+        (a, b) =>
+          (b.lead.confidence_score ?? 0) - (a.lead.confidence_score ?? 0) ||
+          (a.lead.material_name ?? "").localeCompare(b.lead.material_name ?? "")
+      );
+      const pool = ranked.slice(0, firstPoolSize);
+      const remainder = ranked.slice(firstPoolSize);
+      const poolMaterialIds = pool.map((c) => c.lead.material_id).filter(Boolean) as string[];
 
       const p0 = (primary.lead.payload ?? {}) as any;
       const isMarketplace =
@@ -545,12 +608,13 @@ registerAgent({
         clientOrgName: primary.clientOrgName,
         assignedOperator: primary.assignedOperator,
         isMarketplace,
-        leads: mergedLeads,
+        leads: pool.map((c) => c.lead as OutreachLead),
         log: (m, meta) => ctx.log(m, meta),
       });
       if (res.staged) {
         staged++;
         promoted += res.promoted;
+        if (remainder.length) await holdForFollowup(remainder, poolMaterialIds, res.draftRefId);
       } else {
         missiveErrors++;
       }
@@ -559,9 +623,9 @@ registerAgent({
     ctx.setItemsProcessed(staged + manualCased);
     ctx.setStatus(missiveErrors > 0 && staged + manualCased === 0 ? "failure" : missiveErrors > 0 ? "partial" : "success");
     ctx.setSummary(
-      `Staged ${staged} consolidated email draft${staged === 1 ? "" : "s"} · ${manualCased} manual-contact case${manualCased === 1 ? "" : "s"} · promoted ${promoted} to ready_for_outreach` +
-        (heldSuppliers ? ` · held ${heldSuppliers} supplier${heldSuppliers === 1 ? "" : "s"} (compiling materials)` : "") +
-        (supersededDrafts ? ` · superseded ${supersededDrafts} stale draft${supersededDrafts === 1 ? "" : "s"}` : "") +
+      `Staged ${staged} first-contact email${staged === 1 ? "" : "s"} · ${manualCased} manual-contact case${manualCased === 1 ? "" : "s"} · promoted ${promoted} to ready_for_outreach${phasedHeld ? ` · ${phasedHeld} material${phasedHeld === 1 ? "" : "s"} held for follow-up` : ""}` +
+        (heldSuppliers ? ` · held ${heldSuppliers} supplier${heldSuppliers === 1 ? "" : "s"} (blocked material)` : "") +
+        (heldCompiling ? ` · held ${heldCompiling} supplier${heldCompiling === 1 ? "" : "s"} (compiling full list)` : "") +
         (missiveErrors ? ` · ${missiveErrors} errors` : "") +
         (priorRelSkipped ? ` · skipped ${priorRelSkipped} existing-relationship` : "") +
         (dedupSkipped ? ` · skipped ${dedupSkipped} already-staged/cased` : "") +

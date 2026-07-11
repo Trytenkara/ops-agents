@@ -11,6 +11,7 @@ export type SourcingStatusKey =
   | "outreach"
   | "drafted"
   | "compiling"
+  | "followup"
   | "sourcing"
   | "expiring"
   | "current"
@@ -44,7 +45,7 @@ function rankLine(l: SourcingScorecardLine): number {
   return 3;
 }
 
-function compute(m: MaterialProfileRow, score: SourcingScorecardLine | undefined, leads: number, drafted: number, sent: number, compiling: number): MaterialSourcingStatus {
+function compute(m: MaterialProfileRow, score: SourcingScorecardLine | undefined, leads: number, drafted: number, sent: number, compiling: number, followup: number): MaterialSourcingStatus {
   const pct = score?.beats_client_pct != null ? Math.abs(score.beats_client_pct).toFixed(0) : null;
   if (score?.status === "beating") {
     return { key: "sourced", label: "Sourced", reason: pct ? `beats by ${pct}%` : "below current", cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400", tab: "/savings" };
@@ -63,6 +64,9 @@ function compute(m: MaterialProfileRow, score: SourcingScorecardLine | undefined
   }
   if (compiling > 0) {
     return { key: "compiling", label: "Compiling email", reason: "waiting on other materials", cls: "bg-amber-500/15 text-amber-700 dark:text-amber-300", tab: "/leads" };
+  }
+  if (followup > 0) {
+    return { key: "followup", label: "Queued for follow-up", reason: "added after supplier replies", cls: "bg-sky-500/15 text-sky-700 dark:text-sky-300", tab: "/threads" };
   }
   if (leads > 0) {
     return { key: "sourcing", label: "Sourcing", reason: `${leads} lead${leads === 1 ? "" : "s"}`, cls: "bg-teal-500/15 text-teal-700 dark:text-teal-300", tab: "/leads" };
@@ -94,13 +98,17 @@ export async function getMaterialSourcingStatus(
     admin.from("draft_references").select("material_id, status, metadata").eq("org_id", orgId).in("status", ["staged", "reviewed", "sent"]),
   ]);
   const leadCount = new Map<string, number>();
-  // A lead held to compile a consolidated email (payload.outreach_hold) shows a
+  // A lead held to compile the first email (payload.outreach_hold) shows a
   // distinct "Compiling email" chip rather than a plain "Sourcing" lead count.
   const compilingCount = new Map<string, number>();
+  // A lead held for a follow-up (payload.phased_hold) — the supplier's first
+  // email went out for other materials; this one is introduced after they engage.
+  const followupCount = new Map<string, number>();
   for (const r of leadsRes.data ?? []) {
     if (!r.material_id) continue;
     leadCount.set(r.material_id, (leadCount.get(r.material_id) ?? 0) + 1);
     if ((r.payload as any)?.outreach_hold) compilingCount.set(r.material_id, (compilingCount.get(r.material_id) ?? 0) + 1);
+    if ((r.payload as any)?.phased_hold) followupCount.set(r.material_id, (followupCount.get(r.material_id) ?? 0) + 1);
   }
   const draftedCount = new Map<string, number>();
   const sentCount = new Map<string, number>();
@@ -126,7 +134,7 @@ export async function getMaterialSourcingStatus(
   const out: Record<string, MaterialSourcingStatus> = {};
   for (const m of profile.materials) {
     if (!m.tenkaraMaterialId) continue;
-    out[m.tenkaraMaterialId] = compute(m, scoreByMat.get(m.tenkaraMaterialId), leadCount.get(m.tenkaraMaterialId) ?? 0, draftedCount.get(m.tenkaraMaterialId) ?? 0, sentCount.get(m.tenkaraMaterialId) ?? 0, compilingCount.get(m.tenkaraMaterialId) ?? 0);
+    out[m.tenkaraMaterialId] = compute(m, scoreByMat.get(m.tenkaraMaterialId), leadCount.get(m.tenkaraMaterialId) ?? 0, draftedCount.get(m.tenkaraMaterialId) ?? 0, sentCount.get(m.tenkaraMaterialId) ?? 0, compilingCount.get(m.tenkaraMaterialId) ?? 0, followupCount.get(m.tenkaraMaterialId) ?? 0);
   }
   return out;
 }
