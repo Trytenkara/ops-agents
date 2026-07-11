@@ -31,6 +31,51 @@ export interface EmailCheck {
   // True when the email's domain matches the supplier_website's host (modulo www.).
   // Null when we can't compute (no website or invalid email).
   domain_matches_website: boolean | null;
+  // True when the email belongs to a marketplace / B2B directory / aggregator
+  // (e.g. concierge@knowde.com). We never cold-email these — it reaches the
+  // marketplace, not the supplier.
+  is_aggregator_domain: boolean;
+}
+
+// Marketplaces, B2B directories, and sourcing aggregators. An email at one of
+// these domains is the platform's inbox, not the supplier's — cold outreach to
+// it is wrong (the KH Neochem draft that went to concierge@knowde.com). Match is
+// on the registrable-ish host suffix so sub-domains (x.knowde.com) also hit.
+const AGGREGATOR_DOMAINS = [
+  "knowde.com",
+  "alibaba.com",
+  "aliexpress.com",
+  "1688.com",
+  "made-in-china.com",
+  "indiamart.com",
+  "tradeindia.com",
+  "exportersindia.com",
+  "thomasnet.com",
+  "globalsources.com",
+  "ec21.com",
+  "tradekey.com",
+  "go4worldbusiness.com",
+  "dhgate.com",
+  "europages.com",
+  "kompass.com",
+  "echemi.com",
+  "chemicalbook.com",
+  "guidechem.com",
+  "molbase.com",
+  "ingredientsonline.com",
+  "chemondis.com",
+  "spotchemi.com",
+];
+
+export function isAggregatorDomain(host: string | null | undefined): boolean {
+  if (!host) return false;
+  const h = host.toLowerCase().replace(/^www\./, "");
+  return AGGREGATOR_DOMAINS.some((d) => h === d || h.endsWith(`.${d}`));
+}
+
+export function isAggregatorEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  return isAggregatorDomain(email.split("@")[1] ?? null);
 }
 
 export interface ContactDiscovery {
@@ -67,6 +112,10 @@ export interface EnrichmentResult {
   // lead at stage=raw with payload.enrichment_blocked_reason set.
   outreach_ready: boolean;
   blocked_reason: string | null;
+  // The marketplace/aggregator email we rejected (e.g. concierge@knowde.com),
+  // kept for the operator's reference on the manual-contact case. Null when the
+  // resolved email is the supplier's own.
+  aggregator_contact_email: string | null;
 }
 
 const PROBE_TIMEOUT_MS = 8_000;
@@ -120,15 +169,15 @@ export async function probeWebsite(url: string): Promise<WebsiteProbe> {
 
 export function checkEmail(email: string, websiteUrl: string | null): EmailCheck {
   const format_valid = EMAIL_RE.test(email);
+  const emailHost = email.split("@")[1]?.toLowerCase().replace(/^www\./, "") ?? null;
   let domain_matches_website: boolean | null = null;
   if (websiteUrl) {
-    const emailHost = email.split("@")[1]?.toLowerCase().replace(/^www\./, "") ?? null;
     const siteHost = hostOf(websiteUrl);
     if (emailHost && siteHost) {
       domain_matches_website = emailHost === siteHost || emailHost.endsWith(`.${siteHost}`) || siteHost.endsWith(`.${emailHost}`);
     }
   }
-  return { email, format_valid, domain_matches_website };
+  return { email, format_valid, domain_matches_website, is_aggregator_domain: isAggregatorDomain(emailHost) };
 }
 
 // ---- Contact discovery (persistent multi-step fetch) -----------------------
@@ -361,25 +410,39 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     lead.supplier_id ? fetchTenkaraSupplier(lead.supplier_id).catch(() => null) : Promise.resolve(null),
   ]);
 
+  // A marketplace/aggregator email (concierge@knowde.com) is NOT the supplier's
+  // inbox — never seed outreach from it. Remember it for the operator, then try
+  // to resolve the supplier's real email below (site discovery / Tenkara record).
+  const scoutIsAggregator = isAggregatorEmail(scoutEmail);
+  let aggregatorEmail: string | null = scoutIsAggregator ? (scoutEmail as string).toLowerCase() : null;
+
   // Seed channels from what we already have.
-  let email: string | null = scoutEmail && EMAIL_RE.test(scoutEmail) ? scoutEmail.toLowerCase() : null;
+  let email: string | null =
+    scoutEmail && EMAIL_RE.test(scoutEmail) && !scoutIsAggregator ? scoutEmail.toLowerCase() : null;
   let phone: string | null =
     (scoutPhone && !isContactPath(scoutPhone) ? scoutPhone : null) ?? tenkara_supplier?.poc_phone ?? null;
   let contactUrl: string | null = isContactPath(scoutEmail) ? null : null;
   let contactSource: ContactDiscovery["source"] = email ? "scout" : null;
   let pagesTried = 0;
 
-  // If we're missing a direct email or a phone, go fetch — persistently.
+  // If we're missing a direct email or a phone, go fetch — persistently. This is
+  // also the auto-resolve path when the only email we had was a marketplace one.
   if (website && (!email || !phone)) {
     const d = await discoverContacts(website).catch(() => null);
     if (d) {
       pagesTried = d.pages_tried;
       if (!email && d.emails.length) {
-        // Prefer an email whose domain matches the site.
+        // Only accept the supplier's own inbox — skip any aggregator addresses
+        // the site might list. Prefer an email whose domain matches the site.
         const siteHost = hostOf(website);
-        email =
-          d.emails.find((e) => e.split("@")[1]?.replace(/^www\./, "") === siteHost) ?? d.emails[0];
-        contactSource = "discovered";
+        const own = d.emails.filter((e) => !isAggregatorEmail(e));
+        const pick = own.find((e) => e.split("@")[1]?.replace(/^www\./, "") === siteHost) ?? own[0] ?? null;
+        if (pick) {
+          email = pick;
+          contactSource = "discovered";
+        } else if (!aggregatorEmail) {
+          aggregatorEmail = d.emails.find((e) => isAggregatorEmail(e)) ?? null;
+        }
       }
       if (!phone && d.phones.length) phone = d.phones[0];
       if (!contactUrl && d.contact_url) {
@@ -391,11 +454,12 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
 
   // Platform fallback: if the public web gave us no direct email, use one the
   // Tenkara supplier record already holds (shipping/billing). Generic addresses
-  // (info@, sales@) are fine — a reachable inbox beats a contact form.
+  // (info@, sales@) are fine — a reachable inbox beats a contact form — but an
+  // aggregator address is never a valid fallback.
   if (!email && tenkara_supplier) {
     const tenkEmail = [tenkara_supplier.shipping_email, tenkara_supplier.billing_email]
       .map((e) => (e ?? "").trim().toLowerCase())
-      .find((e) => EMAIL_RE.test(e));
+      .find((e) => EMAIL_RE.test(e) && !isAggregatorEmail(e));
     if (tenkEmail) {
       email = tenkEmail;
       contactSource = "tenkara";
@@ -406,6 +470,14 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   if (!email && !phone && !contactUrl && (isContactPath(scoutEmail) || isContactPath(scoutPhone))) {
     contactUrl = website || null;
     contactSource = "path";
+  }
+
+  // Couldn't resolve the supplier's own email and all we had was a marketplace
+  // address — keep the lead reachable as a manual-contact case rather than cold-
+  // emailing the marketplace. Prefer the supplier site, else the listing URL.
+  if (!email && aggregatorEmail && !contactUrl) {
+    contactUrl = website || (payload.source_url as string | null) || null;
+    if (contactUrl && !contactSource) contactSource = "path";
   }
 
   const email_check = email ? checkEmail(email, website) : null;
@@ -430,5 +502,14 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
 
   const contact: ContactDiscovery = { email, phone, contact_url: contactUrl, pages_tried: pagesTried, source: contactSource };
 
-  return { website_probe, email_check, contact, tenkara_supplier, completeness_score, outreach_ready, blocked_reason };
+  return {
+    website_probe,
+    email_check,
+    contact,
+    tenkara_supplier,
+    completeness_score,
+    outreach_ready,
+    blocked_reason,
+    aggregator_contact_email: email ? null : aggregatorEmail,
+  };
 }

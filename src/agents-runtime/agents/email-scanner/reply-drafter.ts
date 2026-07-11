@@ -26,6 +26,21 @@ export interface ReplyInput {
   theirSubject: string | null;    // their reply subject
   theirPreview: string | null;    // snippet of their message
   threadContext?: string | null;  // compact transcript of the prior thread (oldest first)
+  // Phased outreach: other materials we also source from this supplier that were
+  // held back from the first email. If the supplier is engaged, the reply
+  // introduces them; otherwise they stay held.
+  heldMaterialNames?: string[] | null;
+}
+
+export interface ComposedReply {
+  subject: string;
+  body: string;
+  // True when the supplier engaged genuinely (gave pricing, asked a question,
+  // requested a sample/spec, or otherwise moved sourcing forward) vs declined /
+  // auto-reply / off-topic. Drives whether held materials are introduced.
+  engaged: boolean;
+  // The held material names the draft actually introduced ([] if none).
+  introducedMaterials: string[];
 }
 
 const SYSTEM = `You draft short, professional replies to suppliers on behalf of a procurement team. The operator will review and send — so:
@@ -34,20 +49,31 @@ const SYSTEM = `You draft short, professional replies to suppliers on behalf of 
 - NEVER invent prices, quantities, commitments, ship dates, or terms. If a specific is needed, ask for it rather than stating one.
 - Do not fabricate names or sign with a real person's name — end with the team sign-off provided.
 - In ghost mode, only reference the ghost brand; never name the underlying client.
-Return ONLY a JSON object: {"subject": "...", "body": "..."}. The body is plain text with line breaks; no greeting placeholders left unfilled.`;
 
-function extractJson(text: string): { subject: string; body: string } {
+Also judge engagement: set "engaged" true when the supplier showed genuine interest or willingness (gave pricing, asked a question, requested a sample/spec, said they can supply, or otherwise moved things forward); false for a decline / "can't supply" / out-of-office / automated / off-topic message.
+
+If "Other materials we also source from this supplier" is provided AND engaged is true, ALSO briefly introduce those materials in the same reply — naturally ask whether they can supply/quote them too (one short sentence or a compact list, never a wall of items). List the exact material names you introduced in "introduced_materials". If engaged is false, do NOT introduce them and return "introduced_materials": [].
+
+Return ONLY a JSON object: {"subject": "...", "body": "...", "engaged": true|false, "introduced_materials": ["..."]}. The body is plain text with line breaks; no greeting placeholders left unfilled.`;
+
+function extractJson(text: string): ComposedReply {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   const candidate = fenced ? fenced[1] : text;
   const start = candidate.indexOf("{");
   const end = candidate.lastIndexOf("}");
   if (start < 0 || end <= start) throw new Error("no JSON in reply output");
   const obj = JSON.parse(candidate.slice(start, end + 1));
-  return { subject: String(obj.subject ?? ""), body: String(obj.body ?? "") };
+  return {
+    subject: String(obj.subject ?? ""),
+    body: String(obj.body ?? ""),
+    engaged: obj.engaged === true,
+    introducedMaterials: Array.isArray(obj.introduced_materials) ? obj.introduced_materials.map((m: any) => String(m)) : [],
+  };
 }
 
-export async function composeReply(input: ReplyInput): Promise<{ subject: string; body: string }> {
+export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
   const signoff = input.mode === "ghost" ? `${input.ghostBrand ?? "Sourcing"} Sourcing` : `${input.clientOrgName} Purchasing Team`;
+  const held = (input.heldMaterialNames ?? []).filter((n) => n && n.trim());
   const lines = [
     `Mode: ${input.mode}`,
     `Sign off as: ${signoff}`,
@@ -57,6 +83,7 @@ export async function composeReply(input: ReplyInput): Promise<{ subject: string
     `Our original outreach subject: ${input.originalSubject ?? "(none)"}`,
     `Their reply subject: ${input.theirSubject ?? "(none)"}`,
     `Their message (snippet): ${input.theirPreview ?? "(not available)"}`,
+    ...(held.length ? ["", `Other materials we also source from this supplier (introduce only if engaged): ${held.join(", ")}`] : []),
     ...(input.threadContext
       ? ["", "Full thread so far (oldest first — use it to avoid repeating yourself and to answer what they actually asked):", input.threadContext]
       : []),
