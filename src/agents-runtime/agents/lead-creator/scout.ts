@@ -21,12 +21,13 @@ const MAX_WEB_USES = 64;       // breadth budget — covers majors pass + market
 const MAX_OUTPUT_TOKENS = 24000;  // room for 40-60 supplier rows with the full detail schema
 const MAX_SUPPLIERS = 60;
 const URL_PROBE_TIMEOUT_MS = 5_000;
-// Hard ceiling on a single material's web_search call. The streamed breadth run
-// can otherwise run to the ~524s Anthropic gateway timeout — longer than the
-// cron function's 300s maxDuration — which gets the whole function hard-killed
-// and orphans the agent lock. Bounding each call keeps a run within budget; a
-// material that times out simply yields no scout leads this pass and is retried.
-const SCOUT_CALL_TIMEOUT_MS = 120_000;
+// Hard ceiling on a single material's web_search call. Sized to let a breadth
+// run finish richly (it streams ~64 searches and can run several minutes) while
+// still landing inside the cron function's 800s maxDuration with room for graph
+// work + URL probing + inserts. An earlier 120s ceiling was too tight and
+// aborted slow materials (Soybean Oil, Coconut Milk, Maltodextrine) before they
+// produced any scout leads, leaving them with only a single catalog match.
+const SCOUT_CALL_TIMEOUT_MS = 480_000;
 
 // Field set mirrors Ben's "Vita Organica – Supplier Sourcing" sheet so a scout
 // lead carries the same actionable columns a human researcher would capture:

@@ -10,7 +10,13 @@ import { CronExpressionParser } from "cron-parser";
 // Auth: Vercel sets the Authorization header to `Bearer ${process.env.CRON_SECRET}`
 // for cron-triggered requests; manual hits with the same header also work.
 
-export const maxDuration = 300;
+// 800s (Pro + Fluid Compute cap). The scout web_search is a streamed, breadth
+// run that legitimately wants several minutes to surface a rich supplier set; a
+// 300s ceiling truncated it. Each due agent is dispatched to its OWN invocation
+// (see below), so one long agent-03 scout never starves the lightweight agents.
+// NOTE: the agent lock TTL and orphan-reaper cutoff in runtime.ts MUST stay
+// above this value, or a legitimately long run gets reclaimed and double-runs.
+export const maxDuration = 800;
 
 export async function GET(request: NextRequest) {
   const expected = process.env.CRON_SECRET;
