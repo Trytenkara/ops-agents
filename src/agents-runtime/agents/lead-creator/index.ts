@@ -199,8 +199,7 @@ registerAgent({
     //     `processed_material_ids` set in sourcing-trigger.json — once a
     //     material has any scout-discovered lead, we don't re-scout it (the
     //     model would just re-find the same hosts and we'd waste API calls
-    //     + risk duplicate inserts). Graph re-runs are still safe because
-    //     they're keyed on Tenkara supplier_id, which is unique per material.
+    //     + risk duplicate inserts).
     const materialIds = materials.map((m) => m.id);
     const { data: scoutedRows } = await admin
       .from("leads_in_flight")
@@ -213,6 +212,29 @@ registerAgent({
     if (alreadyScouted.size > 0) {
       await ctx.log(`${alreadyScouted.size} materials already have scout leads — skipping scout phase for them`, {
         step: "scout_dedup",
+      });
+    }
+
+    // 3d. Per-(material, supplier) idempotency for the GRAPH phase. Without this
+    //     a material sitting in the lookback window gets its graph candidates
+    //     re-inserted on every cron tick, since findCandidatesForMaterial is
+    //     deterministic. The mirror check below is NOT sufficient: it only sees
+    //     (supplier_name, material_name) pairs exported into lead_scanner_mirror
+    //     by Agent 11, which is frequently empty (Agent 11 is off) — so it silently
+    //     lets duplicates through. Guard directly against leads already in
+    //     leads_in_flight for these materials. Applies to targeted runs too:
+    //     re-inserting an identical (material, supplier) row is never useful.
+    const { data: existingGraphLeads } = await admin
+      .from("leads_in_flight")
+      .select("material_id, supplier_id")
+      .in("material_id", materialIds)
+      .not("supplier_id", "is", null);
+    const existingMaterialSupplier = new Set(
+      (existingGraphLeads ?? []).map((r: any) => `${r.material_id}|${r.supplier_id}`)
+    );
+    if (existingMaterialSupplier.size > 0) {
+      await ctx.log(`${existingMaterialSupplier.size} (material,supplier) pairs already staged — graph dedup active`, {
+        step: "graph_dedup",
       });
     }
 
@@ -233,6 +255,7 @@ registerAgent({
     let materialsWithoutLeads = 0;
     let materialsWithScoutLeads = 0;
     let skippedByMirror = 0;
+    let skippedByExisting = 0;
     let skippedByExclusion = 0;
     const noLeadMaterials: string[] = [];
 
@@ -299,9 +322,14 @@ registerAgent({
       }
       const unique = Array.from(seen.values());
 
-      // Mirror-based skip (supplier_name × material_name match).
+      // Skip candidates we've already staged for this material (real idempotency)
+      // then the legacy mirror-based skip (supplier_name × material_name match).
       const fresh: CandidateSupplier[] = [];
       for (const c of unique) {
+        if (existingMaterialSupplier.has(`${material.id}|${c.supplier_id}`)) {
+          skippedByExisting++;
+          continue;
+        }
         const key = `${c.supplier_name.trim().toLowerCase()}|${matLabel.trim().toLowerCase()}`;
         if (mirrorPairs.has(key)) {
           skippedByMirror++;
@@ -578,6 +606,7 @@ registerAgent({
     ctx.setSummary(
       `Staged ${leadsCreated} raw leads (${graphLeads} graph, ${scoutLeadsCreated} scout) across ${materialsWithLeads} material${materialsWithLeads === 1 ? "" : "s"} · ` +
         `${materialsWithScoutLeads} got scout leads · ${materialsWithoutLeads} empty · ${skippedByMirror} graph candidates skipped by 90d mirror` +
+        (skippedByExisting ? ` · ${skippedByExisting} skipped (already staged)` : "") +
         (skippedByExclusion ? ` · ${skippedByExclusion} skipped (do-not-contact / excluded country)` : "") +
         (scoutEnabled ? "" : " · scout off (no ANTHROPIC_API_KEY)") +
         (csvUrl ? ` · CSV ready` : "") +
