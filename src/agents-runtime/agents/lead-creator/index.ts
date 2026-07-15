@@ -1,6 +1,6 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { queryRecentMaterials, queryMaterialsByIds, findCandidatesForMaterial, existingQuotesForMaterials, type CandidateSupplier, type MaterialRow } from "./sql";
+import { queryRecentMaterials, queryMaterialsByIds, queryMaterialsForOrgs, findCandidatesForMaterial, existingQuotesForMaterials, type CandidateSupplier, type MaterialRow } from "./sql";
 import { scoutSuppliersForMaterial, scoreScoutConfidence, scoutCompleteness, type ScoutSupplier } from "./scout";
 import { toCsv } from "@/lib/csv";
 import { getSourcingExclusions, exclusionReason, type SourcingExclusions } from "@/lib/tenkara-sourcing-exclusions";
@@ -24,6 +24,22 @@ const EMPTY_OVERRIDES = new Map<string, string>();
 const DEFAULT_LOOKBACK_HOURS = 4;
 const RECENT_MIRROR_DAYS = 90;
 const MAX_NEW_LEADS_PER_RUN = 120;  // expansive runs: up to ~50 scout leads/material across marketplace + non-marketplace, plus graph leads
+
+// Richness floor: a material is considered "needs sourcing" until it has this
+// many active leads. Beyond the recency window, every run also pulls materials
+// below the floor (0 leads = never sourced, or under-sourced) so nothing is ever
+// stranded regardless of batch size — a self-draining work queue, no window
+// dependency. Re-scouting an under-floor material is throttled per material by
+// RESCOUT_BACKOFF (a marker in agent_state) so an expensive scout can't be
+// re-run every tick on a material that simply has few suppliers to find.
+const MIN_LEADS_PER_MATERIAL = envInt("LEAD_CREATOR_MIN_LEADS_PER_MATERIAL", 10);
+const RESCOUT_BACKOFF_MS = envInt("LEAD_CREATOR_RESCOUT_BACKOFF_HOURS", 72) * 3600 * 1000;
+const BACKLOG_ATTEMPT_KEY = (materialId: string) => `resource_attempt:${materialId}`;
+
+function envInt(name: string, dflt: number): number {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? n : dflt;
+}
 
 function envOverrideLookbackHours(): number | null {
   const v = process.env.LEAD_CREATOR_LOOKBACK_HOURS;
@@ -125,12 +141,14 @@ registerAgent({
     if (onlyMaterialId) await ctx.log(`Targeted single-material run: ${onlyMaterialId} (${materials.length} found)`, { step: "query" });
     await ctx.log(`${materials.length} materials in window`, { step: "query", data: { count: materials.length } });
 
-    if (materials.length === 0) {
+    if (onlyMaterialId && materials.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary("No new materials in lookback window.");
+      ctx.setSummary("Targeted material has no rows in Tenkara.");
       return;
     }
+    // An empty recency window is NOT terminal — the backlog queue (3b-iii) may
+    // still surface under-sourced materials. Final empty-check is after the merge.
 
     // 3. Pull recent mirror entries for dedup.
     const mirrorSince = new Date(Date.now() - RECENT_MIRROR_DAYS * 24 * 3600 * 1000).toISOString();
@@ -158,6 +176,102 @@ registerAgent({
       }
     }
     await ctx.log(`Loaded ${tenkaraOrgToOaOrg.size} tenkara→OA org mappings${onlyOrg ? ` · scoped to ${onlyOrg}` : ""}`, { step: "org_map" });
+
+    // 3b-iii. Backlog queue — the durable guarantee that every material gets rich
+    //         leads. Beyond the recency window, pull materials for our orgs that
+    //         are still below the richness floor (0 leads = never sourced, or
+    //         < MIN_LEADS_PER_MATERIAL) and merge them in. Nothing is stranded no
+    //         matter the batch size or when it was added, with no window
+    //         dependency. Re-scouting an under-floor material is throttled per
+    //         material by a backoff marker so an expensive scout isn't re-run
+    //         every tick on a material that simply has few suppliers to find.
+    const underservedIds = new Set<string>();
+    const existingHostsByMaterial = new Map<string, Set<string>>();
+    if (!onlyMaterialId) {
+      const targetTenkaraOrgIds = onlyOrg
+        ? Array.from(allowedTenkaraOrgIds)
+        : Array.from(tenkaraOrgToOaOrg.keys());
+      try {
+        const universe = await queryMaterialsForOrgs(targetTenkaraOrgIds);
+        // Paginate: Supabase caps a select at 1000 rows, and there are more than
+        // 1000 active leads — an un-paginated fetch would undercount and falsely
+        // mark materials as under-floor.
+        const leadCount = new Map<string, number>();
+        for (let from = 0; ; from += 1000) {
+          const { data: rows } = await admin
+            .from("leads_in_flight")
+            .select("material_id")
+            .eq("status", "active")
+            .range(from, from + 999);
+          const batch = (rows ?? []) as { material_id: string | null }[];
+          for (const r of batch) if (r.material_id) leadCount.set(r.material_id, (leadCount.get(r.material_id) ?? 0) + 1);
+          if (batch.length < 1000) break;
+        }
+        const lastAttempt = new Map<string, number>();
+        for (let from = 0; ; from += 1000) {
+          const { data: rows } = await admin
+            .from("agent_state")
+            .select("key, value")
+            .eq("agent_id", ctx.agentId)
+            .like("key", "resource_attempt:%")
+            .range(from, from + 999);
+          const batch = (rows ?? []) as { key: string; value: any }[];
+          for (const m of batch) {
+            const at = Date.parse(m.value?.at ?? "");
+            if (!Number.isNaN(at)) lastAttempt.set(m.key.slice("resource_attempt:".length), at);
+          }
+          if (batch.length < 1000) break;
+        }
+        const nowMs = Date.now();
+        const already = new Set(materials.map((m) => m.id));
+        const underserved = universe
+          .filter((m) => (leadCount.get(m.id) ?? 0) < MIN_LEADS_PER_MATERIAL)
+          .filter((m) => !already.has(m.id))
+          .filter((m) => {
+            const la = lastAttempt.get(m.id);
+            return la === undefined || nowMs - la > RESCOUT_BACKOFF_MS;
+          })
+          .sort((a, b) =>
+            (leadCount.get(a.id) ?? 0) - (leadCount.get(b.id) ?? 0) ||
+            (b.created_at ?? "").localeCompare(a.created_at ?? "")
+          );
+        const picked = underserved.slice(0, Math.max(0, 200 - materials.length));
+        for (const m of picked) underservedIds.add(m.id);
+        materials = [...materials, ...picked];
+        if (picked.length) {
+          const pickedIds = picked.map((m) => m.id);
+          for (let from = 0; ; from += 1000) {
+            const { data: rows } = await admin
+              .from("leads_in_flight")
+              .select("material_id, payload")
+              .eq("status", "active")
+              .in("material_id", pickedIds)
+              .range(from, from + 999);
+            const batch = (rows ?? []) as { material_id: string; payload: any }[];
+            for (const r of batch) {
+              const h = hostOf(r.payload?.supplier_website ?? r.payload?.source_url ?? "");
+              if (!h) continue;
+              if (!existingHostsByMaterial.has(r.material_id)) existingHostsByMaterial.set(r.material_id, new Set());
+              existingHostsByMaterial.get(r.material_id)!.add(h);
+            }
+            if (batch.length < 1000) break;
+          }
+        }
+        await ctx.log(
+          `Backlog queue: ${underserved.length} materials below ${MIN_LEADS_PER_MATERIAL}-lead floor · sourcing ${picked.length} this run`,
+          { step: "backlog", data: { below_floor: underserved.length, picked: picked.length } }
+        );
+      } catch (e: any) {
+        await ctx.log(`Backlog queue query failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "backlog" });
+      }
+    }
+
+    if (materials.length === 0) {
+      ctx.setItemsProcessed(0);
+      ctx.setStatus("success");
+      ctx.setSummary("No new materials in window and none below the lead floor.");
+      return;
+    }
 
     // 3b-ii. Flag misspelled material names (e.g. "Butylene G;ycol"). Names come
     // from Tenkara (read-only); Agent flags a suggestion + pings ops, who apply
@@ -455,11 +569,27 @@ registerAgent({
       //     already produced scout leads for this material in a prior run
       //     (Ben's processed_material_ids equivalent). Dedups by host vs graph
       //     hits so we don't double-stage the same supplier.
-      if (scoutEnabled && leadsCreated < MAX_NEW_LEADS_PER_RUN && !alreadyScouted.has(material.id)) {
+      // Scout when there are no scout leads yet, OR when this material is a
+      // backlog re-scout (below the richness floor and past its backoff window).
+      const isBacklogRescout = underservedIds.has(material.id);
+      if (scoutEnabled && leadsCreated < MAX_NEW_LEADS_PER_RUN && (!alreadyScouted.has(material.id) || isBacklogRescout)) {
+        // Record the attempt up-front so a scout that surfaces nothing new still
+        // backs off — it won't be re-run until RESCOUT_BACKOFF elapses.
+        if (isBacklogRescout) {
+          await admin.from("agent_state").upsert(
+            { agent_id: ctx.agentId, key: BACKLOG_ATTEMPT_KEY(material.id), value: { at: new Date().toISOString() } },
+            { onConflict: "agent_id,key" }
+          );
+        }
+        // Exclude hosts we already have for this material (graph hits this run +
+        // existing leads from prior runs) so a re-scout only adds NEW suppliers —
+        // scout leads carry no supplier_id, so the graph dedup can't catch dupes.
+        const excludeHosts = new Set<string>(graphHosts);
+        for (const h of existingHostsByMaterial.get(material.id) ?? []) excludeHosts.add(h);
         let scoutResults: ScoutSupplier[] = [];
         try {
           scoutResults = await scoutSuppliersForMaterial(material, {
-            excludeHosts: graphHosts,
+            excludeHosts,
             log: (msg, meta) => ctx.log(msg, { step: "scout", data: { ...meta, material_id: material.id } }),
           });
         } catch (e: any) {

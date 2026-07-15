@@ -53,6 +53,25 @@ export async function queryRecentMaterials(since: string): Promise<MaterialRow[]
   );
 }
 
+// All materials belonging to the given Tenkara orgs — the universe for the
+// "needs sourcing" backlog (materials with 0 or too-few leads), independent of
+// when they were created. Bounded so one run can't pull an unbounded set; the
+// per-run budget + lead-count filter in index.ts narrow this to what still
+// needs work, and the set self-drains as materials reach the richness floor.
+export async function queryMaterialsForOrgs(tenkaraOrgIds: string[]): Promise<MaterialRow[]> {
+  if (!tenkaraOrgIds.length) return [];
+  return tenkaraQuery<MaterialRow>(
+    `select m.id, m.name, m.trade_name, m.inci, m.created_at, m.user_id,
+            u.organization_id as tenkara_org_id
+       from public.materials m
+       join public.users u on u.id = m.user_id
+      where u.organization_id = any($1::uuid[])
+      order by m.created_at desc
+      limit 2000`,
+    [tenkaraOrgIds]
+  );
+}
+
 // Fetch specific materials by id (for an on-demand single-material discovery
 // run triggered from the dashboard, ignoring the recency window).
 export async function queryMaterialsByIds(ids: string[]): Promise<MaterialRow[]> {
