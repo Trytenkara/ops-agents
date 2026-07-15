@@ -233,7 +233,9 @@ registerAgent({
           })
           .sort((a, b) =>
             (leadCount.get(a.id) ?? 0) - (leadCount.get(b.id) ?? 0) ||
-            (b.created_at ?? "").localeCompare(a.created_at ?? "")
+            // created_at is a Date at runtime (pg driver), not the declared
+            // string — compare by epoch so this works for either.
+            (new Date(b.created_at as any).getTime() || 0) - (new Date(a.created_at as any).getTime() || 0)
           );
         const picked = underserved.slice(0, Math.max(0, 200 - materials.length));
         for (const m of picked) underservedIds.add(m.id);
