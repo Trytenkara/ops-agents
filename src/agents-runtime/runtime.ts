@@ -32,17 +32,20 @@ export async function claimRun(opts: {
 
   const admin = createAdminClient();
   const now = new Date();
-  // Lock TTL must sit just above the function's maxDuration (300s), NOT far beyond
-  // it. If a run is hard-killed by the serverless timeout, its `finally` never runs
-  // and the lock is only released when this TTL expires — and the dispatcher skips a
-  // locked agent before the orphan-reaper below can touch it. A 30-min TTL therefore
-  // froze the agent for 30 min after any timeout. 6 min = just past maxDuration, so a
-  // killed agent is eligible again on the next tick and the reaper marks its run failed.
-  const lockUntil = new Date(now.getTime() + 6 * 60 * 1000).toISOString();
+  // Lock TTL must sit just ABOVE the function's maxDuration (800s in api/cron),
+  // never below it: a run can legitimately execute for the full maxDuration, and
+  // if the lock expired first the dispatcher would start a second, concurrent run.
+  // It also must not be huge — on a hard kill the `finally` never runs, so the
+  // lock only releases when this TTL expires (the dispatcher skips a locked agent
+  // before the orphan-reaper can touch it). 15 min = maxDuration + margin: no
+  // double-run, and a killed agent self-heals within ~1 tick after it.
+  const LOCK_TTL_MS = 15 * 60 * 1000;
+  const lockUntil = new Date(now.getTime() + LOCK_TTL_MS).toISOString();
 
   // Reap orphans: agent_runs left in `running` past the function timeout were
   // killed by Vercel without finalizing. Mark them failed so the UI is honest.
-  const orphanCutoff = new Date(now.getTime() - 6 * 60 * 1000).toISOString();
+  // Cutoff must exceed maxDuration too, or we'd flag a still-live long run failed.
+  const orphanCutoff = new Date(now.getTime() - LOCK_TTL_MS).toISOString();
   await admin
     .from("agent_runs")
     .update({
