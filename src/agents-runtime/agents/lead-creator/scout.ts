@@ -21,6 +21,12 @@ const MAX_WEB_USES = 64;       // breadth budget — covers majors pass + market
 const MAX_OUTPUT_TOKENS = 24000;  // room for 40-60 supplier rows with the full detail schema
 const MAX_SUPPLIERS = 60;
 const URL_PROBE_TIMEOUT_MS = 5_000;
+// Hard ceiling on a single material's web_search call. The streamed breadth run
+// can otherwise run to the ~524s Anthropic gateway timeout — longer than the
+// cron function's 300s maxDuration — which gets the whole function hard-killed
+// and orphans the agent lock. Bounding each call keeps a run within budget; a
+// material that times out simply yields no scout leads this pass and is retried.
+const SCOUT_CALL_TIMEOUT_MS = 120_000;
 
 // Field set mirrors Ben's "Vita Organica – Supplier Sourcing" sheet so a scout
 // lead carries the same actionable columns a human researcher would capture:
@@ -221,12 +227,18 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
       } as any],
       messages: [{ role: "user", content: buildUserMessage(material) }],
     });
-    const res = await stream.finalMessage();
+    const timer = setTimeout(() => stream.abort(), SCOUT_CALL_TIMEOUT_MS);
+    let res;
+    try {
+      res = await stream.finalMessage();
+    } finally {
+      clearTimeout(timer);
+    }
     raw = res.content
       .map((b: any) => (b.type === "text" ? b.text : ""))
       .join("");
   } catch (e: any) {
-    await log(`scout: Anthropic call failed for ${matLabel}: ${e.message}`, { material_id: material.id });
+    await log(`scout: Anthropic call failed/timed out for ${matLabel}: ${e.message}`, { material_id: material.id });
     return [];
   }
 

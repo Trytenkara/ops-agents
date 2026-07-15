@@ -76,7 +76,11 @@ registerAgent({
     // run as their own scheduled, isolated invocations — each agent gets its own
     // 300s budget via the cron dispatcher, so a long scout can't starve them.
     // Budget-guard the scout loop so a backlog of new materials still fits 300s.
-    const DRIVE_BUDGET_MS = 250_000;
+    // This is checked BETWEEN materials, so it must leave room for one more full
+    // scout call (SCOUT_CALL_TIMEOUT_MS ≈ 120s) plus overhead before the 300s
+    // maxDuration: 150s + 120s + margin < 300s. A higher budget let a material
+    // start late and overrun, getting the whole function hard-killed.
+    const DRIVE_BUDGET_MS = 150_000;
     const driveStart = Date.now();
     const elapsedMs = () => Date.now() - driveStart;
 
