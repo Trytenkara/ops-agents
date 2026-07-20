@@ -14,7 +14,7 @@ export function OutreachTrackerPanel({ tracker }: { tracker: OutreachTracker }) 
       <div className="flex items-baseline justify-between gap-3">
         <h2 className="font-serif text-xl tracking-tight">Outreach tracker</h2>
         <div className="text-xs text-muted-foreground">
-          {t.drafted} draft{t.drafted === 1 ? "" : "s"} · {t.suppliers} supplier{t.suppliers === 1 ? "" : "s"}
+          {t.emails} email{t.emails === 1 ? "" : "s"} · {t.suppliers} supplier{t.suppliers === 1 ? "" : "s"}
           {t.qaFlagged > 0 && <> · <span className="text-amber-700 dark:text-amber-400">{t.qaFlagged} QA</span></>}
           {t.manual > 0 && <> · {t.manual} manual</>}
           {t.skipped > 0 && <> · {t.skipped} skipped</>}

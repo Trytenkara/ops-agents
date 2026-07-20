@@ -13,6 +13,11 @@ export interface DraftInput {
   supplierCompanyName?: string | null;
   materialName: string;
   inciName: string | null;
+  // Consolidated outreach: when a supplier can quote SEVERAL of a client's
+  // materials we send one email listing them all, instead of one email per
+  // material. When set with 2+ entries this drives the copy; otherwise the
+  // single materialName/inciName above is used. (#11)
+  materials?: { name: string; inci?: string | null }[];
   signal: string | null; // how we found them — kept for telemetry, no longer changes copy
   isMarketplace?: boolean; // marketplace supplier → ask for bulk/wholesale pricing beyond listed retail
 }
@@ -133,9 +138,90 @@ function pickBody(input: DraftInput, org: string, mat: string): string[] {
   return pool[stableHash(seed) % pool.length](org, mat);
 }
 
+// ---- Consolidated (multi-material) copy (#11) ----
+
+function materialLabel(m: { name: string; inci?: string | null }): string {
+  return m.inci ? `${m.name} (INCI: ${m.inci})` : m.name;
+}
+
+const MULTI_SUBJECTS: ((first: string, n: number) => string)[] = [
+  (first, n) => `Sourcing inquiry: ${first} + ${n - 1} more`,
+  (first, n) => `RFQ — ${n} materials`,
+  (first, n) => `Do you supply these ${n} materials?`,
+  (first, n) => `Quote request: ${first} and ${n - 1} others`,
+];
+
+// Each variant lists the materials as bullets, then asks for pricing/lead
+// time/MOQ across the list. Same content, varied phrasing (#10 + #11).
+const MULTI_COLD_BODIES: ((org: string, list: string[]) => string[])[] = [
+  (org, list) => [
+    `We are expanding our supplier network at ${org} and are sourcing the following materials:`,
+    "",
+    ...list.map((m) => `- ${m}`),
+    "",
+    "Do you supply any of these? If so, could you share current pricing, estimated lead times, and MOQs for each you carry?",
+    "",
+    "If you have a product catalog, please send it along. We source across many raw materials and share what you carry with the rest of our procurement team.",
+  ],
+  (org, list) => [
+    `${org} has ongoing demand for several raw materials and is looking to add a reliable supplier. We're currently after:`,
+    "",
+    ...list.map((m) => `- ${m}`),
+    "",
+    "Could you let us know which of these you carry, along with current pricing, lead times, and minimum order quantities?",
+    "",
+    "A catalog or line card would be great to have on file — we buy a broad range of materials and route capabilities to the whole team.",
+  ],
+];
+
+const MULTI_MARKETPLACE_BODIES: ((org: string, list: string[]) => string[])[] = [
+  (org, list) => [
+    `We are sourcing several materials at ${org} and saw your listings for the following:`,
+    "",
+    ...list.map((m) => `- ${m}`),
+    "",
+    "Beyond your published pricing, could you share bulk and wholesale rates for the ones you carry? We're after volume price breaks (larger pack sizes or pallet/ton quantities), plus lead times and MOQs.",
+    "",
+    "If you have a wholesale price list or catalog, please send it over. We evaluate suppliers across many materials and share what you carry with the rest of our procurement team.",
+  ],
+];
+
+function composeMultiMaterialDraft(input: DraftInput, senderOrg: string, materials: { name: string; inci?: string | null }[]): ComposedDraft {
+  const list = materials.map(materialLabel);
+  const seed = `${input.supplierCompanyName ?? input.supplierContactName ?? ""}|${materials.map((m) => m.name).join(",")}`;
+  const h = stableHash(seed);
+  const subject = MULTI_SUBJECTS[h % MULTI_SUBJECTS.length](materials[0].name, materials.length);
+  const pool = input.isMarketplace ? MULTI_MARKETPLACE_BODIES : MULTI_COLD_BODIES;
+  const body = [
+    greeting(input.supplierContactName, input.supplierCompanyName),
+    "",
+    ...pool[h % pool.length](senderOrg, list),
+    "",
+    "Thanks,",
+    "",
+    "Procurement Team",
+    senderOrg,
+  ].join("\n");
+  return sanitizeDraft({ subject, body });
+}
+
 export function composeOutreachDraft(input: DraftInput): ComposedDraft {
   const senderOrg = input.mode === "ghost" ? input.ghostBrand! : input.clientOrgName;
-  const materialLabel = input.inciName
+
+  // De-dup (keep first occurrence, preserving its casing) and drop blanks; a
+  // supplier quoting 2+ materials gets one listing.
+  const seenMat = new Set<string>();
+  const uniqueMulti = (input.materials ?? []).filter((m) => {
+    const name = m.name?.trim();
+    if (!name) return false;
+    const k = name.toLowerCase();
+    if (seenMat.has(k)) return false;
+    seenMat.add(k);
+    return true;
+  });
+  if (uniqueMulti.length >= 2) return composeMultiMaterialDraft(input, senderOrg, uniqueMulti);
+
+  const materialLabelStr = input.inciName
     ? `${input.materialName} (INCI: ${input.inciName})`
     : input.materialName;
 
@@ -143,7 +229,7 @@ export function composeOutreachDraft(input: DraftInput): ComposedDraft {
   const body = [
     greeting(input.supplierContactName, input.supplierCompanyName),
     "",
-    ...pickBody(input, senderOrg, materialLabel),
+    ...pickBody(input, senderOrg, materialLabelStr),
     "",
     "Thanks,",
     "",

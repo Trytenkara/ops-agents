@@ -26,7 +26,9 @@ export interface OutreachTrackerMaterial {
 
 export interface OutreachTracker {
   materials: OutreachTrackerMaterial[];
-  totals: { drafted: number; qaFlagged: number; manual: number; skipped: number; suppliers: number };
+  // Totals count DISTINCT emails/cases (a consolidated email covering N materials
+  // is one email), while per-material rows credit every material an email covers.
+  totals: { emails: number; qaFlagged: number; manual: number; skipped: number; suppliers: number };
 }
 
 const UNNAMED = "(unnamed material)";
@@ -75,20 +77,37 @@ export async function getOutreachTracker(admin: Admin, orgId: string): Promise<O
   };
 
   const supplierSets = new Map<string, Set<string>>(); // material key -> supplier names
+  const allSuppliers = new Set<string>();
+  let distinctEmails = 0;
+  let distinctQaFlagged = 0;
 
   for (const d of (drafts ?? []) as any[]) {
     const meta = (d.metadata ?? {}) as any;
     if (meta.draft_kind === "inbound_reply") continue; // outbound RFQs only
-    const m = get(d.material_id ?? null, meta.material_name ?? null);
-    m.drafted++;
-    if (d.status === "staged") m.staged++;
-    else m.progressed++;
-    if (Array.isArray(meta.qa_findings) && meta.qa_findings.length > 0) m.qaFlagged++;
+    distinctEmails++;
+    const qaFlagged = Array.isArray(meta.qa_findings) && meta.qa_findings.length > 0;
+    if (qaFlagged) distinctQaFlagged++;
     const supplierName = (meta.supplier_name as string | null) ?? null;
-    if (supplierName) {
-      const set = supplierSets.get(key(d.material_id ?? null, meta.material_name ?? null)) ?? new Set<string>();
-      set.add(supplierName);
-      supplierSets.set(key(d.material_id ?? null, meta.material_name ?? null), set);
+    if (supplierName) allSuppliers.add(supplierName);
+
+    // A consolidated email covers several materials; credit each so none looks
+    // un-drafted. Falls back to the single material_id/name for normal emails.
+    const covered: { id: string | null; name: string | null }[] =
+      Array.isArray(meta.consolidated_materials) && meta.consolidated_materials.length > 1
+        ? meta.consolidated_materials.map((c: any) => ({ id: c.id ?? null, name: c.name ?? null }))
+        : [{ id: d.material_id ?? null, name: meta.material_name ?? null }];
+
+    for (const cm of covered) {
+      const m = get(cm.id, cm.name);
+      m.drafted++;
+      if (d.status === "staged") m.staged++;
+      else m.progressed++;
+      if (qaFlagged) m.qaFlagged++;
+      if (supplierName) {
+        const set = supplierSets.get(key(cm.id, cm.name)) ?? new Set<string>();
+        set.add(supplierName);
+        supplierSets.set(key(cm.id, cm.name), set);
+      }
     }
   }
 
@@ -115,16 +134,13 @@ export async function getOutreachTracker(admin: Admin, orgId: string): Promise<O
     .filter((m) => m.drafted + m.manual + m.skipped > 0)
     .sort((a, b) => b.drafted - a.drafted || b.skipped - a.skipped || a.materialName.localeCompare(b.materialName));
 
-  const totals = materials.reduce(
-    (t, m) => ({
-      drafted: t.drafted + m.drafted,
-      qaFlagged: t.qaFlagged + m.qaFlagged,
-      manual: t.manual + m.manual,
-      skipped: t.skipped + m.skipped,
-      suppliers: t.suppliers + m.suppliers.length,
-    }),
-    { drafted: 0, qaFlagged: 0, manual: 0, skipped: 0, suppliers: 0 }
-  );
+  const totals = {
+    emails: distinctEmails,
+    qaFlagged: distinctQaFlagged,
+    manual: materials.reduce((n, m) => n + m.manual, 0),
+    skipped: materials.reduce((n, m) => n + m.skipped, 0),
+    suppliers: allSuppliers.size,
+  };
 
   return { materials, totals };
 }

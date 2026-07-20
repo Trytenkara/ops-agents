@@ -3,7 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getOrgOperatorPool, resolveSupplierOperatorId, getSupplierAssignments, type OperatorRef } from "@/lib/operator-assignment";
 import { classifyClient } from "../quote-revalidation/config";
 import { onlyOrgName } from "@/lib/org-scope";
-import { runOutreachForLead } from "./run-outreach";
+import { runOutreachForSupplier } from "./run-outreach";
 import { composeOutreachDraft } from "./drafter";
 import { suppliersWithPriorRelationship } from "@/lib/tenkara-relationships";
 import { getSourcingExclusions, exclusionReason } from "@/lib/tenkara-sourcing-exclusions";
@@ -347,75 +347,106 @@ registerAgent({
     let missiveErrors = 0;
     let promoted = 0;
 
+    // Group by supplier so a supplier who can quote several of this client's
+    // materials gets ONE email (or one manual case) listing them all, rather
+    // than a near-identical message per material (#11). Key on org + channel +
+    // mode + supplier identity; scout leads with no supplier_id fall back to
+    // email/URL/name so they still coalesce.
+    const supplierKey = (c: Candidate) =>
+      `${c.lead.org_id}|${c.channel}|${c.mode}|${c.ghostBrand ?? ""}|${c.lead.supplier_id ?? c.email ?? c.channelUrl ?? c.lead.supplier_name ?? c.lead.id}`;
+    const groups = new Map<string, Candidate[]>();
     for (const c of cleanCandidates) {
-      if (c.channel === "email") {
-        const res = await runOutreachForLead({
+      const arr = groups.get(supplierKey(c)) ?? [];
+      arr.push(c);
+      groups.set(supplierKey(c), arr);
+    }
+
+    for (const group of groups.values()) {
+      const head = group[0];
+      if (head.channel === "email") {
+        const res = await runOutreachForSupplier({
           admin,
           agentId: tackleAgentId,
           runId: ctx.runId,
-          lead: c.lead,
-          email: c.email!,
-          contactName: c.contactName,
-          mode: c.mode,
-          ghostBrand: c.ghostBrand,
-          clientOrgName: c.clientOrgName,
-          assignedOperator: c.assignedOperator,
+          leads: group.map((c) => c.lead),
+          email: head.email!,
+          contactName: head.contactName,
+          mode: head.mode,
+          ghostBrand: head.ghostBrand,
+          clientOrgName: head.clientOrgName,
+          assignedOperator: head.assignedOperator,
           log: (m, meta) => ctx.log(m, meta),
         });
         if (res.staged) {
           staged++;
-          if (!res.reason) promoted++;
+          if (!res.reason) promoted += res.leadsPromoted ?? group.length;
         } else {
           missiveErrors++;
         }
         continue;
       }
 
-      // channel === "manual"
-      const p = (c.lead.payload ?? {}) as any;
+      // channel === "manual": one case per supplier listing every material.
+      const p = (head.lead.payload ?? {}) as any;
+      const materials = group
+        .map((c) => ({
+          name: (c.lead.material_name ?? "").trim(),
+          inci: (c.lead.payload as any)?.inci ?? (c.lead.payload as any)?.inci_name ?? null,
+        }))
+        .filter((m) => m.name);
       const draft = composeOutreachDraft({
-        mode: c.mode,
-        ghostBrand: c.ghostBrand,
-        clientOrgName: c.clientOrgName,
-        supplierContactName: c.contactName,
-        supplierCompanyName: c.lead.supplier_name,
-        materialName: c.lead.material_name ?? "the material",
+        mode: head.mode,
+        ghostBrand: head.ghostBrand,
+        clientOrgName: head.clientOrgName,
+        supplierContactName: head.contactName,
+        supplierCompanyName: head.lead.supplier_name,
+        materialName: head.lead.material_name ?? "the material",
         inciName: p.inci ?? p.inci_name ?? null,
+        materials,
         signal: p.signal ?? null,
-        isMarketplace: (c.lead as any).market_kind === "marketplace" || p.site_type === "M" || p.site_type === "MS",
+        isMarketplace: (head.lead as any).market_kind === "marketplace" || p.site_type === "M" || p.site_type === "MS",
       });
+      const matLabel =
+        materials.length > 1
+          ? `${materials.length} materials (${materials.map((m) => m.name).join(", ")})`
+          : head.lead.material_name ?? "the material";
       const { error: caseErr } = await admin.from("cases").insert({
-        org_id: c.lead.org_id,
+        org_id: head.lead.org_id,
         type: "manual_outreach",
         status: "open",
-        supplier_id: c.lead.supplier_id,
-        material_id: c.lead.material_id,
-        recommended_action: `No public email for ${c.lead.supplier_name ?? "this supplier"}. Send the RFQ for ${c.lead.material_name ?? "the material"} via their contact form / marketplace inquiry: ${c.channelUrl ?? "(see supplier site)"}`,
-        assigned_operator: c.assignedOperator,
+        supplier_id: head.lead.supplier_id,
+        material_id: head.lead.material_id,
+        recommended_action: `No public email for ${head.lead.supplier_name ?? "this supplier"}. Send the RFQ for ${matLabel} via their contact form / marketplace inquiry: ${head.channelUrl ?? "(see supplier site)"}`,
+        assigned_operator: head.assignedOperator,
         metadata: {
           source_agent: "agent-04-outreach",
           source_run_id: ctx.runId,
-          lead_id: c.lead.id,
-          supplier_name: c.lead.supplier_name,
-          material_name: c.lead.material_name,
-          contact_url: c.channelUrl,
-          outreach_mode: c.mode,
-          ghost_brand: c.ghostBrand ?? null,
+          lead_id: head.lead.id,
+          lead_ids: group.map((c) => c.lead.id),
+          supplier_name: head.lead.supplier_name,
+          material_name: head.lead.material_name,
+          consolidated_materials: group.map((c) => ({ id: c.lead.material_id, name: c.lead.material_name })),
+          contact_url: head.channelUrl,
+          outreach_mode: head.mode,
+          ghost_brand: head.ghostBrand ?? null,
           rfq_subject: draft.subject,
           rfq_body: draft.body,
         },
       });
       if (caseErr) {
         missiveErrors++;
-        await ctx.log(`Manual-outreach case insert failed for ${c.lead.supplier_name}: ${caseErr.message}`, { level: "error", step: "manual_contact" });
+        await ctx.log(`Manual-outreach case insert failed for ${head.lead.supplier_name}: ${caseErr.message}`, { level: "error", step: "manual_contact" });
         continue;
       }
       manualCased++;
-      // Drop the lead so it isn't reprocessed (mirrors Agent 07's case handoff).
-      await admin
-        .from("leads_in_flight")
-        .update({ status: "dropped", payload: { ...p, drop_reason: "manual_outreach_case" } })
-        .eq("id", c.lead.id);
+      // Drop every lead in the group so none are reprocessed.
+      for (const c of group) {
+        const cp = (c.lead.payload ?? {}) as any;
+        await admin
+          .from("leads_in_flight")
+          .update({ status: "dropped", payload: { ...cp, drop_reason: "manual_outreach_case" } })
+          .eq("id", c.lead.id);
+      }
     }
 
     ctx.setItemsProcessed(staged + manualCased);

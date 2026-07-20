@@ -141,7 +141,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   // Per-material outreach funnel (drafts / to whom / QA held / manual / skipped).
   const tracker = await getOutreachTracker(admin, org.id).catch(() => ({
     materials: [],
-    totals: { drafted: 0, qaFlagged: 0, manual: 0, skipped: 0, suppliers: 0 },
+    totals: { emails: 0, qaFlagged: 0, manual: 0, skipped: 0, suppliers: 0 },
   }));
 
   return (

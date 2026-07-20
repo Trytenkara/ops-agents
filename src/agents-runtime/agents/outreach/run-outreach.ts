@@ -42,31 +42,55 @@ export interface RunOutreachInput {
   log?: (msg: string, meta?: any) => Promise<void> | void;
 }
 
+// Consolidated variant: several leads for the SAME supplier, drafted into one
+// email listing all their materials (#11). `leads` share supplier/contact/org.
+export interface RunOutreachGroupInput extends Omit<RunOutreachInput, "lead"> {
+  leads: OutreachLead[];
+}
+
 export interface RunOutreachResult {
   staged: boolean;
   reason?: string;
   draftRefId?: string;
+  leadsPromoted?: number;
 }
 
-export async function runOutreachForLead(input: RunOutreachInput): Promise<RunOutreachResult> {
-  const { admin, agentId, runId, lead, email, contactName, mode, ghostBrand, clientOrgName, assignedOperator } = input;
+// One email for one supplier, covering 1..N of the client's materials. A single
+// draft is staged and every lead in the group is promoted to point at it, so a
+// supplier who can quote five materials gets one RFQ listing all five instead of
+// five near-identical cold emails.
+export async function runOutreachForSupplier(input: RunOutreachGroupInput): Promise<RunOutreachResult> {
+  const { admin, agentId, runId, leads, email, contactName, mode, ghostBrand, clientOrgName, assignedOperator } = input;
   const log = input.log ?? (async () => {});
-  const payload = (lead.payload ?? {}) as any;
+  if (leads.length === 0) return { staged: false, reason: "no leads" };
 
-  const isMarketplace =
-    payload.site_type === "M" ||
-    payload.site_type === "MS" ||
-    payload.supplier_role === "Marketplace" ||
-    payload.enrichment?.tenkara_supplier?.is_marketplace === true;
+  const primary = leads[0];
+  const payload = (primary.payload ?? {}) as any;
+
+  // Marketplace flag is a property of the supplier, so any lead's signal applies.
+  const isMarketplace = leads.some((l) => {
+    const p = (l.payload ?? {}) as any;
+    return (
+      p.site_type === "M" ||
+      p.site_type === "MS" ||
+      p.supplier_role === "Marketplace" ||
+      p.enrichment?.tenkara_supplier?.is_marketplace === true
+    );
+  });
+
+  const materials = leads
+    .map((l) => ({ name: (l.material_name ?? "").trim(), inci: (l.payload as any)?.inci_name ?? (l.payload as any)?.inci ?? null }))
+    .filter((m) => m.name);
 
   const draft = composeOutreachDraft({
     mode,
     ghostBrand,
     clientOrgName,
     supplierContactName: contactName,
-    supplierCompanyName: lead.supplier_name ?? null,
-    materialName: lead.material_name ?? "the material",
+    supplierCompanyName: primary.supplier_name ?? null,
+    materialName: primary.material_name ?? "the material",
     inciName: payload.inci_name ?? null,
+    materials,
     signal: payload.signal ?? null,
     isMarketplace,
   });
@@ -76,72 +100,97 @@ export async function runOutreachForLead(input: RunOutreachInput): Promise<RunOu
   if (emailClient === "rod_app" && !emailAccountId) {
     await log(`No Tenkara inbox mapped for brand "${mode === "ghost" ? ghostBrand : clientOrgName}" — staging without a sender; operator must pick`, {
       step: "outreach",
-      data: { lead_id: lead.id, mode, ghost_brand: ghostBrand ?? null },
+      data: { lead_id: primary.id, mode, ghost_brand: ghostBrand ?? null },
     });
   }
+  // Stable externalId per supplier-group: primary lead + a hash of all material
+  // names, so a corrected/added material regenerates rather than reusing a stale
+  // Tenkara draft.
+  const groupKey = materials.map((m) => m.name.toLowerCase()).sort().join("|");
   const staged = await stageDraft({
     admin,
     agentId,
     runId,
-    orgId: lead.org_id,
-    supplierId: lead.supplier_id,
-    materialId: lead.material_id,
+    orgId: primary.org_id,
+    supplierId: primary.supplier_id,
+    materialId: primary.material_id,
     to: { name: contactName, address: email },
     subject: draft.subject,
     body: draft.body,
     assignedOperator,
     emailClient,
     emailAccountId,
-    supplierCompany: lead.supplier_name,
-    externalId: emailClient === "rod_app" ? `agent-04-outreach-${lead.id}-${nameHash((lead.material_name ?? "").toLowerCase())}` : undefined,
+    supplierCompany: primary.supplier_name,
+    externalId: emailClient === "rod_app" ? `agent-04-outreach-${primary.id}-${nameHash(groupKey)}` : undefined,
     metadata: {
       outreach_mode: mode,
       ghost_brand: ghostBrand ?? null,
       suggested_signoff: mode === "ghost" ? `${ghostBrand} Sourcing` : `${clientOrgName} Purchasing Team`,
-      lead_id: lead.id,
+      lead_id: primary.id,
+      lead_ids: leads.map((l) => l.id),
       // Scout leads have no Tenkara supplier_id/material row, so the draft views
       // can't resolve names by id — carry them on the draft for display.
-      supplier_name: lead.supplier_name ?? null,
-      material_name: lead.material_name ?? null,
+      supplier_name: primary.supplier_name ?? null,
+      material_name: primary.material_name ?? null,
+      // Consolidated outreach: every material this one email covers.
+      consolidated: leads.length > 1,
+      consolidated_materials: leads.map((l) => ({ id: l.material_id, name: l.material_name })),
     },
   });
 
+  const label = materials.length > 1 ? `${materials.length} materials` : primary.material_name;
   if (!staged.ok) {
-    await log(`Outreach staging failed for ${lead.supplier_name} × ${lead.material_name}: ${staged.error}`, {
+    await log(`Outreach staging failed for ${primary.supplier_name} × ${label}: ${staged.error}`, {
       step: "outreach",
-      data: { lead_id: lead.id },
+      data: { lead_id: primary.id },
     });
     return { staged: false, reason: staged.error };
   }
 
-  const newPayload = {
-    ...payload,
-    outreach: {
-      email_client: emailClient,
-      draft_id: staged.draftId ?? null,
-      conversation_id: staged.conversationId ?? null,
-      // back-compat: keep missive_* populated when staged into Missive
-      missive_draft_id: emailClient === "missive" ? staged.missiveDraftId : null,
-      missive_conversation_id: emailClient === "missive" ? (staged.conversationId ?? null) : null,
-      mode,
-      ghost_brand: ghostBrand ?? null,
-      staged_at: new Date().toISOString(),
-      staged_by_run_id: runId,
-    },
-  };
-  const { error: upErr } = await admin
-    .from("leads_in_flight")
-    .update({ stage: "ready_for_outreach", payload: newPayload })
-    .eq("id", lead.id);
-  if (upErr) {
-    await log(`Stage promotion failed for lead ${lead.id}: ${upErr.message}`, { step: "promote", data: { lead_id: lead.id } });
-    // Draft is staged but the lead didn't promote — surface as partial.
-    return { staged: true, reason: `promote_failed: ${upErr.message}`, draftRefId: staged.draftRefId };
+  // Promote every lead in the group to point at the shared draft/thread.
+  let leadsPromoted = 0;
+  let promoteErr: string | undefined;
+  for (const lead of leads) {
+    const lp = (lead.payload ?? {}) as any;
+    const newPayload = {
+      ...lp,
+      outreach: {
+        email_client: emailClient,
+        draft_id: staged.draftId ?? null,
+        conversation_id: staged.conversationId ?? null,
+        // back-compat: keep missive_* populated when staged into Missive
+        missive_draft_id: emailClient === "missive" ? staged.missiveDraftId : null,
+        missive_conversation_id: emailClient === "missive" ? (staged.conversationId ?? null) : null,
+        mode,
+        ghost_brand: ghostBrand ?? null,
+        consolidated_with: leads.length > 1 ? leads.map((l) => l.id).filter((id) => id !== lead.id) : [],
+        staged_at: new Date().toISOString(),
+        staged_by_run_id: runId,
+      },
+    };
+    const { error: upErr } = await admin
+      .from("leads_in_flight")
+      .update({ stage: "ready_for_outreach", payload: newPayload })
+      .eq("id", lead.id);
+    if (upErr) {
+      promoteErr = upErr.message;
+      await log(`Stage promotion failed for lead ${lead.id}: ${upErr.message}`, { step: "promote", data: { lead_id: lead.id } });
+    } else {
+      leadsPromoted++;
+    }
   }
 
-  await log(`Staged outreach draft: ${lead.supplier_name} → ${lead.material_name} (${mode})`, {
+  await log(`Staged outreach draft: ${primary.supplier_name} → ${label} (${mode})${leads.length > 1 ? ` · ${leads.length} materials consolidated` : ""}`, {
     step: "outreach",
-    data: { lead_id: lead.id, draft_ref_id: staged.draftRefId, qa_findings: staged.qaFindings?.length ?? 0 },
+    data: { lead_id: primary.id, draft_ref_id: staged.draftRefId, leads: leads.length, qa_findings: staged.qaFindings?.length ?? 0 },
   });
-  return { staged: true, draftRefId: staged.draftRefId };
+  if (promoteErr) return { staged: true, reason: `promote_failed: ${promoteErr}`, draftRefId: staged.draftRefId, leadsPromoted };
+  return { staged: true, draftRefId: staged.draftRefId, leadsPromoted };
+}
+
+// Single-lead outreach — thin wrapper over the supplier-group path. Kept for
+// Agent 03's inline drain and any caller that has exactly one lead.
+export async function runOutreachForLead(input: RunOutreachInput): Promise<RunOutreachResult> {
+  const { lead, ...rest } = input;
+  return runOutreachForSupplier({ ...rest, leads: [lead] });
 }
