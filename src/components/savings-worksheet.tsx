@@ -189,7 +189,10 @@ export function SavingsWorksheet({
                   <TableCell className="text-muted-foreground">{l.unit}</TableCell>
                   <TableCell className="text-right tabular-nums">
                     {l.has_client_price ? (
-                      money(l.their_unit_price)
+                      <span title={l.client_price_source === "po" ? "From an uploaded PO unit price" : "From the client's current quote in Tenkara"}>
+                        {money(l.their_unit_price)}
+                        {l.client_price_source === "po" && <span className="ml-1 text-[10px] text-muted-foreground">from PO</span>}
+                      </span>
                     ) : (
                       <span className="text-muted-foreground" title="No client current-supply price on file. Savings are benchmarked against the market average instead.">
                         not provided
