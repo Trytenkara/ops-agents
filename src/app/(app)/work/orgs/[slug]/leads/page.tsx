@@ -8,7 +8,7 @@ import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { ListPageHeader } from "@/components/list-page-header";
 import { LeadsTabs } from "@/components/leads-tabs";
 import { SuppliersCsvUpload } from "@/components/suppliers-csv-upload";
-import { resolveMaterialGrades, resolveSupplierMarketplace } from "@/lib/tenkara-names";
+import { resolveMaterialGrades, resolveSupplierMarketplace, resolveMaterialNames } from "@/lib/tenkara-names";
 import { leadMarketKind } from "@/components/lead-rich-row";
 import { getOrgOperatorPool, pickSupplierOperator, operatorBySupplier, getSupplierAssignments } from "@/lib/operator-assignment";
 import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
@@ -68,13 +68,17 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     .limit(200);
   let leads = (rows ?? []) as any[];
 
-  // Grade lives on the Tenkara material — resolve by material_id and attach.
+  // Grade + name live on the Tenkara material — resolve by material_id and
+  // attach. A lead's stored material_name can be blank/stale (unbranded
+  // materials carry trade_name=''), so we re-derive the authoritative name here.
   let leadGrades = new Map<string, string>();
   let leadMarketplace = new Map<string, boolean>();
+  let leadNames = new Map<string, string>();
   try {
-    [leadGrades, leadMarketplace] = await Promise.all([
+    [leadGrades, leadMarketplace, leadNames] = await Promise.all([
       resolveMaterialGrades(leads.map((r) => r.material_id).filter(Boolean)),
       resolveSupplierMarketplace(leads.map((r) => r.supplier_id).filter(Boolean)),
+      resolveMaterialNames(leads.map((r) => r.material_id).filter(Boolean)),
     ]);
   } catch {
     // Tenkara unreachable — fall back to payload grade / site_type in the row.
@@ -97,8 +101,13 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     const operator_name = pickSupplierOperator(operatorPool, r.supplier_id)?.name ?? null;
     const operator_assigned_id = r.supplier_id ? supplierAssignments.get(r.supplier_id) ?? null : null;
     const operator_auto_name = r.supplier_id ? autoOwners[r.supplier_id]?.name ?? null : null;
+    const resolvedName =
+      (r.material_name && r.material_name.trim()) ||
+      (r.material_id ? leadNames.get(r.material_id) ?? null : null);
     return {
       ...r,
+      material_name: resolvedName ?? r.material_name,
+      needs_material_name: !resolvedName,
       grade: r.material_id ? leadGrades.get(r.material_id) ?? null : null,
       market_kind,
       operator_name,
@@ -106,6 +115,10 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
       operator_auto_name,
     };
   });
+
+  // Leads whose material has no name anywhere (stored or Tenkara). Outreach holds
+  // these — surface them so ops can add the name in Tenkara before re-running.
+  const leadsNeedingName = leads.filter((r) => r.needs_material_name);
 
   // Promote/Drop gating: the operator can act if they see all orgs or this org
   // is in their assignment set, and they hold an acting role.
@@ -142,6 +155,21 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
       />
       <AgentRunsStrip runs={runStats} />
       <MaterialFlagsPrompt flags={materialFlags} />
+      {leadsNeedingName.length > 0 && (
+        <div className="rounded-lg border border-red-300/60 bg-red-500/10 px-4 py-3 space-y-1">
+          <div className="text-xs uppercase tracking-wider font-semibold text-red-800 dark:text-red-300">
+            {leadsNeedingName.length} lead{leadsNeedingName.length > 1 ? "s" : ""} held — missing material name
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Outreach won&apos;t draft these until the material has a name. Add the material name in Tenkara, then re-run
+            discovery/outreach. Affected suppliers:{" "}
+            <span className="text-foreground">
+              {Array.from(new Set(leadsNeedingName.map((r) => r.supplier_name).filter(Boolean))).slice(0, 8).join(", ")}
+              {leadsNeedingName.length > 8 ? "…" : ""}
+            </span>
+          </p>
+        </div>
+      )}
       {leads.length === 0 ? (
         <p className="text-sm text-muted-foreground py-4">No active leads for this org.</p>
       ) : (

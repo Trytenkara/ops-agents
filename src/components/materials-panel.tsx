@@ -144,17 +144,33 @@ export function MaterialsPanel({
                 if (fileRef.current) fileRef.current.value = "";
               }}
             />
-            <Button size="sm" variant="secondary" className="ml-auto" disabled={pending} onClick={() => fileRef.current?.click()}>
-              {pending ? "Working…" : "Upload PO"}
-            </Button>
+            <div className="ml-auto flex items-center gap-2">
+              {profile.tenkaraConnected && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={pending}
+                  title="Re-check every unconfirmed order against this client's Tenkara materials and fix or clear wrong matches. Confirmed orders are left alone."
+                  onClick={() => run(() => rematchOrders(orgId), "Re-matched orders")}
+                >
+                  {pending ? "Working…" : "Re-match orders"}
+                </Button>
+              )}
+              <Button size="sm" variant="secondary" disabled={pending} onClick={() => fileRef.current?.click()}>
+                {pending ? "Working…" : "Upload PO"}
+              </Button>
+            </div>
             <div className="w-full">
-              <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-1">Sourcing notes</div>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-1">Sourcing instructions</div>
+              <p className="text-[11px] text-muted-foreground mb-1">
+                Context and rules for sourcing this client. Country bans written here (e.g. “No China”) are now honored by discovery &amp; outreach, alongside preferred suppliers and other constraints.
+              </p>
               <textarea
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 disabled={!canEdit || pending}
                 rows={2}
-                placeholder="Context for sourcing this client — preferred suppliers, constraints, supplier notes…"
+                placeholder="e.g. No China. Prefer domestic manufacturers. Avoid brokers. Client already uses Brenntag for X…"
                 className="flex w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
               />
               <div className="mt-1 flex justify-end">
@@ -179,12 +195,29 @@ export function MaterialsPanel({
       {(() => {
         const gaps = profile.materials.filter((m) => gradeGap(m.grade));
         if (gaps.length === 0) return null;
+        const gapLabel: Record<string, string> = { missing: "no grade", weak: "purity only", ambiguous: "ambiguous code" };
         return (
-          <div className="rounded-lg border border-amber-300/60 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
-            <span className="font-medium">{gaps.length} material{gaps.length === 1 ? "" : "s"} need a clearer grade.</span>{" "}
-            A missing grade, a bare purity % (e.g. “100% purity”), or an ambiguous code (e.g. “GBB”) doesn&apos;t say which form/type (HCl, base, USP, anhydrous…). Specify it on{" "}
-            {gaps.slice(0, 4).map((m) => m.label).join(", ")}
-            {gaps.length > 4 ? `, +${gaps.length - 4} more` : ""} so sourcing matches the right product.
+          <div className="rounded-lg border border-amber-300/60 bg-amber-500/10 px-4 py-3 text-sm text-amber-800 dark:text-amber-300 space-y-2">
+            <div>
+              <span className="font-medium">{gaps.length} material{gaps.length === 1 ? "" : "s"} need a clearer grade.</span>{" "}
+              A missing grade, a bare purity % (e.g. “100% purity”), or an ambiguous code (e.g. “GBB”) doesn&apos;t say which form/type (HCl, base, USP, anhydrous…). Specify a grade on each so sourcing matches the right product:
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {gaps.map((m) => {
+                const gap = gradeGap(m.grade);
+                const name = m.label.length > 48 ? `${m.label.slice(0, 48)}…` : m.label;
+                return (
+                  <span
+                    key={m.tenkaraMaterialId ?? m.label}
+                    title={`${m.label} — ${gap ? gapLabel[gap] : ""}`}
+                    className="inline-flex items-center gap-1 rounded-md border border-amber-400/50 bg-amber-500/10 px-1.5 py-0.5 text-xs"
+                  >
+                    {name}
+                    {gap && <span className="opacity-70">· {gapLabel[gap]}</span>}
+                  </span>
+                );
+              })}
+            </div>
           </div>
         );
       })()}
@@ -309,15 +342,16 @@ function MaterialRow({
 }) {
   const [open, setOpen] = useState(false);
   const rec = m.recommendedShelfLifeMonths;
-  const expandable = m.orders.length > 0 || quotes.length > 0;
+  // Always expandable: even with no orders/quotes there are material details
+  // (grade, INCI, brand, need type) worth seeing to sanity-check matching.
   const detailCount = quotes.length + m.orders.length;
 
   return (
     <>
-      <TableRow className={expandable ? "cursor-pointer" : ""} onClick={() => expandable && setOpen((o) => !o)}>
+      <TableRow className="cursor-pointer" onClick={() => setOpen((o) => !o)}>
         <TableCell className="font-medium">
           {m.label}
-          {expandable && <span className="ml-2 text-xs text-muted-foreground">{open ? "▾" : "▸"} {detailCount}</span>}
+          <span className="ml-2 text-xs text-muted-foreground">{open ? "▾" : "▸"}{detailCount > 0 ? ` ${detailCount}` : ""}</span>
         </TableCell>
         <TableCell>
           {(() => {
@@ -376,10 +410,24 @@ function MaterialRow({
           )}
         </TableCell>
       </TableRow>
-      {open && expandable && (
+      {open && (
         <TableRow>
           <TableCell colSpan={9} className="bg-secondary/20">
             <div className="space-y-4 py-1">
+              <div>
+                <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-1">
+                  Material details
+                </div>
+                <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-xs">
+                  <dt className="text-muted-foreground">Grade / form</dt>
+                  <dd>{m.grade ? m.grade : <span className="text-amber-700 dark:text-amber-400">not specified — sourcing may match the wrong form</span>}</dd>
+                  {m.inci && (<><dt className="text-muted-foreground">INCI</dt><dd>{m.inci}</dd></>)}
+                  {m.tradeName && m.tradeName !== m.label && (<><dt className="text-muted-foreground">Brand / trade</dt><dd>{m.tradeName}</dd></>)}
+                  {m.needType && (<><dt className="text-muted-foreground">Need type</dt><dd>{m.needType}</dd></>)}
+                  <dt className="text-muted-foreground">Annual req.</dt>
+                  <dd>{m.annualVolume != null ? `${m.annualVolume.toLocaleString()}${m.volumeUnit ? ` ${m.volumeUnit}` : ""}/yr` : "—"}</dd>
+                </dl>
+              </div>
               <div>
                 <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-1">
                   Quotes <span className="text-foreground">· {quotes.length}</span>

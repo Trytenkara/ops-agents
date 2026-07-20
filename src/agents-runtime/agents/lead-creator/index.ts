@@ -4,9 +4,11 @@ import { queryRecentMaterials, queryMaterialsByIds, findCandidatesForMaterial, e
 import { scoutSuppliersForMaterial, scoreScoutConfidence, scoutCompleteness, type ScoutSupplier } from "./scout";
 import { toCsv } from "@/lib/csv";
 import { getSourcingExclusions, exclusionReason, type SourcingExclusions } from "@/lib/tenkara-sourcing-exclusions";
+import { getNoteDerivedCountryExclusions } from "@/lib/client-sourcing-rules";
 import { uploadCsvAndSign } from "@/lib/storage";
 import { onlyOrgName } from "@/lib/org-scope";
 import { flagMaterialNames, correctName } from "@/lib/material-name-flags";
+import { materialLabel } from "@/lib/material-label";
 
 const EMPTY_OVERRIDES = new Map<string, string>();
 
@@ -245,6 +247,21 @@ registerAgent({
       if (exclusionCache.has(tenkaraOrgId)) return exclusionCache.get(tenkaraOrgId)!;
       try {
         const ex = await getSourcingExclusions(tenkaraOrgId);
+        // Fold in free-text sourcing rules (e.g. "No China please") from the OA
+        // client notes so a written rule suppresses suppliers just like a typed
+        // country exclusion in Tenkara does.
+        const oaOrgId = tenkaraOrgToOaOrg.get(tenkaraOrgId) ?? null;
+        if (oaOrgId) {
+          const { aliases, hits } = await getNoteDerivedCountryExclusions(admin, oaOrgId);
+          if (aliases.size) {
+            aliases.forEach((a) => ex.excludedCountries.add(a));
+            ex.raw.countries += aliases.size;
+            await ctx.log(
+              `Note-derived country exclusions for org ${oaOrgId}: ${hits.map((h) => h.country).join(", ")} (from ops notes)`,
+              { step: "exclusions", data: { hits } }
+            );
+          }
+        }
         exclusionCache.set(tenkaraOrgId, ex);
         return ex;
       } catch (e: any) {
@@ -276,7 +293,7 @@ registerAgent({
       const matOaOrgId = material.tenkara_org_id ? tenkaraOrgToOaOrg.get(material.tenkara_org_id) ?? null : null;
       const matLabel = correctName(
         matOaOrgId ? overridesByOrg.get(matOaOrgId) ?? EMPTY_OVERRIDES : EMPTY_OVERRIDES,
-        material.trade_name ?? material.name ?? material.id
+        materialLabel(material, material.id) as string
       ) as string;
       let candidates: CandidateSupplier[];
       try {

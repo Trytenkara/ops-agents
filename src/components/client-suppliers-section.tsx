@@ -91,6 +91,7 @@ export function ClientSuppliersSection({
                 <TableRow>
                   <TableHead>Supplier</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Qualified</TableHead>
                   <TableHead>Operator</TableHead>
                   <TableHead>Contact</TableHead>
                   <TableHead>Notes</TableHead>
@@ -106,6 +107,9 @@ export function ClientSuppliersSection({
                       </span>
                     </TableCell>
                     <TableCell><StatusBadge s={s.approval} /></TableCell>
+                    <TableCell>
+                      {s.qualified ? <Badge variant="success">Qualified</Badge> : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
                     <TableCell className="text-xs">
                       {canAct ? (
                         <SupplierOperatorAssign
@@ -131,7 +135,7 @@ export function ClientSuppliersSection({
                 ))}
                 {filtered.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center text-muted-foreground py-8">No suppliers match.</TableCell>
+                    <TableCell colSpan={6} className="text-center text-muted-foreground py-8">No suppliers match.</TableCell>
                   </TableRow>
                 )}
               </TableBody>

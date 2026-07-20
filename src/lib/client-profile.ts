@@ -62,10 +62,10 @@ async function gatherTenkaraData(tenkaraOrgId: string): Promise<TenkaraData | nu
         [tenkaraOrgId]
       ),
       tenkaraQuery<any>(
-        `select coalesce(m.trade_name, m.name) as label,
+        `select coalesce(nullif(btrim(m.name), ''), nullif(btrim(m.trade_name), '')) as label,
                 m.annual_volume_expected, m.volume_unit, m.need_type
            from public.materials m join public.users u on u.id = m.user_id
-          where u.organization_id = $1::uuid and coalesce(m.trade_name, m.name) is not null
+          where u.organization_id = $1::uuid and coalesce(nullif(btrim(m.name), ''), nullif(btrim(m.trade_name), '')) is not null
           order by m.created_at desc limit 30`,
         [tenkaraOrgId]
       ),

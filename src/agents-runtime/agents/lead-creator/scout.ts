@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { MaterialRow } from "./sql";
+import { materialLabel } from "@/lib/material-label";
 
 // Web-discovery layer for Agent 03. When Tenkara's supplier graph returns
 // nothing (or thin coverage) for a material, this asks Anthropic with the
@@ -201,7 +202,7 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
   log?: (msg: string, meta?: any) => Promise<void> | void;
 }): Promise<ScoutSupplier[]> {
   const log = opts?.log ?? (async () => {});
-  const matLabel = material.trade_name ?? material.name ?? material.id;
+  const matLabel = materialLabel(material, material.id) as string;
 
   let raw: string;
   try {

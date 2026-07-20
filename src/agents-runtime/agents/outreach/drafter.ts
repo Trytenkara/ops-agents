@@ -57,6 +57,82 @@ function pickSubject(input: DraftInput): string {
   return tpl(input.materialName);
 }
 
+// Body variation: ops flagged that every outreach used an identical body, so a
+// campaign read as an obvious template blast. Each variant carries the SAME asks
+// (does-it-supply, pricing, lead time, MOQ, catalog) in different phrasing; we
+// pick one deterministically by a stable hash of recipient + material so the
+// same draft always re-renders identically (idempotent), while neighbouring
+// suppliers get visibly different copy. Sign-off stays constant on purpose.
+const COLD_BODIES: ((org: string, mat: string) => string[])[] = [
+  (org, mat) => [
+    `We are expanding our supplier network at ${org} and are looking for ${mat}.`,
+    "",
+    "Do you supply this? If so, could you kindly share current pricing, estimated lead times, and MOQs?",
+    "",
+    "Additionally, if you have a product catalog, please share it. We're evaluating suppliers across multiple raw materials and will share what you carry with the rest of our procurement team.",
+    "",
+    "We may have follow-up questions as we go along, and any context you can share is helpful.",
+  ],
+  (org, mat) => [
+    `${org} is actively sourcing ${mat} and your company came up as a potential supplier.`,
+    "",
+    "Could you let us know whether this is something you carry? A current price, typical lead time, and minimum order quantity would help us move quickly.",
+    "",
+    "If you have a catalog or line card handy, feel free to include it. We buy across a range of raw materials, so we'll keep what you offer on file for the rest of the team.",
+  ],
+  (org, mat) => [
+    `I'm reaching out from ${org}. We have ongoing demand for ${mat} and are looking to add a reliable supplier.`,
+    "",
+    "Is this in your range? If so, what does current pricing look like, and what are your lead times and MOQs?",
+    "",
+    "A product catalog would be great to have as well. We source many materials and share supplier capabilities across our procurement team.",
+  ],
+  (org, mat) => [
+    `We're building out sourcing for ${mat} at ${org} and would like to see if there's a fit.`,
+    "",
+    "Could you confirm availability and share pricing, lead times, and minimum order quantities?",
+    "",
+    "If it's easy to send a catalog or product list, please do. We evaluate suppliers across several raw materials and pass along what you carry to the wider team.",
+  ],
+  (org, mat) => [
+    `${org} is looking for a supplier of ${mat}, and we'd value a quote.`,
+    "",
+    "If you carry it, please share your current pricing along with lead times and MOQs so we can compare options.",
+    "",
+    "Any catalog or capability sheet is welcome too. We source a broad set of materials and keep strong suppliers on our shortlist.",
+  ],
+];
+
+const MARKETPLACE_BODIES: ((org: string, mat: string) => string[])[] = [
+  (org, mat) => [
+    `We are sourcing ${mat} at ${org} and saw your listing.`,
+    "",
+    "Beyond your published pricing, could you share your bulk and wholesale rates? We're after volume price breaks (e.g. at larger pack sizes or full pallet/ton quantities), along with lead times and MOQs.",
+    "",
+    "If you have a wholesale price list or catalog, please send it over. We evaluate suppliers across multiple raw materials and will share what you carry with the rest of our procurement team.",
+  ],
+  (org, mat) => [
+    `Your listing for ${mat} came up while we were sourcing for ${org}.`,
+    "",
+    "We typically buy in volume, so we'd like to understand your wholesale and bulk tiers rather than the listed retail price. What do price breaks look like at larger pack sizes or pallet quantities, and what are your lead times and MOQs?",
+    "",
+    "A wholesale price list or catalog would be helpful. We source across many materials and share supplier options with the rest of our team.",
+  ],
+  (org, mat) => [
+    `${org} is interested in ${mat} and found your listing.`,
+    "",
+    "Could you quote your bulk/wholesale pricing beyond the published rate? We're comparing volume price breaks, lead times, and MOQs across suppliers.",
+    "",
+    "If you can share a wholesale catalog or line card, we'll keep it on file. We buy a range of raw materials and route capabilities to the whole procurement team.",
+  ],
+];
+
+function pickBody(input: DraftInput, org: string, mat: string): string[] {
+  const seed = `body|${input.supplierCompanyName ?? input.supplierContactName ?? ""}|${input.materialName}`;
+  const pool = input.isMarketplace ? MARKETPLACE_BODIES : COLD_BODIES;
+  return pool[stableHash(seed) % pool.length](org, mat);
+}
+
 export function composeOutreachDraft(input: DraftInput): ComposedDraft {
   const senderOrg = input.mode === "ghost" ? input.ghostBrand! : input.clientOrgName;
   const materialLabel = input.inciName
@@ -64,41 +140,16 @@ export function composeOutreachDraft(input: DraftInput): ComposedDraft {
     : input.materialName;
 
   const subject = pickSubject(input);
-  const body = (
-    input.isMarketplace
-      ? [
-          // Marketplace supplier: they have public/listed retail pricing, so we
-          // ask for the bulk/wholesale tier and volume breaks beyond the listing.
-          greeting(input.supplierContactName, input.supplierCompanyName),
-          "",
-          `We are sourcing ${materialLabel} at ${senderOrg} and saw your listing.`,
-          "",
-          "Beyond your published pricing, could you share your bulk and wholesale rates? We're after volume price breaks (e.g. at larger pack sizes or full pallet/ton quantities), along with lead times and MOQs.",
-          "",
-          "If you have a wholesale price list or catalog, please send it over. We evaluate suppliers across multiple raw materials and will share what you carry with the rest of our procurement team.",
-          "",
-          "Thanks,",
-          "",
-          "Procurement Team",
-          senderOrg,
-        ]
-      : [
-          greeting(input.supplierContactName, input.supplierCompanyName),
-          "",
-          `We are expanding our supplier network at ${senderOrg} and are looking for ${materialLabel}.`,
-          "",
-          "Do you supply this? If so, could you kindly share current pricing, estimated lead times, and MOQs?",
-          "",
-          "Additionally, if you have a product catalog, please share it. We're evaluating suppliers across multiple raw materials and will share what you carry with the rest of our procurement team.",
-          "",
-          "We may have follow-up questions as we go along, and any context you can share is helpful.",
-          "",
-          "Thanks,",
-          "",
-          "Procurement Team",
-          senderOrg,
-        ]
-  ).join("\n");
+  const body = [
+    greeting(input.supplierContactName, input.supplierCompanyName),
+    "",
+    ...pickBody(input, senderOrg, materialLabel),
+    "",
+    "Thanks,",
+    "",
+    "Procurement Team",
+    senderOrg,
+  ].join("\n");
 
   return sanitizeDraft({ subject, body });
 }

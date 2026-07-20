@@ -180,6 +180,63 @@ export async function createTenkaraConversation(input: CreateTenkaraConversation
   };
 }
 
+// ---------- Conversation assignee (Rod, 2026-07-10) ----------
+//
+// Set/change/clear the operator a Tenkara conversation is assigned to, mirroring
+// a Control Room supplier assignment onto the email app so the operator sees the
+// thread as theirs (and is the only one notified of new drafts + supplier
+// replies). Keyed by the operator's Tenkara login email, matched case-insensitively.
+//
+//   PATCH /api/external/conversations/{id}  { "assignee_email": "..." | null }
+//   - null clears the assignee (back to everyone-notified behavior)
+//   - 422 assignee_not_found: email doesn't match an active Tenkara team member
+//   - 403: we can only reassign conversations our own agent/token created
+//   - idempotent: re-sending the current assignee returns changed:false, no re-notify
+//
+// Best-effort by design: returns a result rather than throwing, so a mirror miss
+// (unknown operator email, 403 on a thread we didn't create) never rolls back the
+// local Control Room assignment — the caller logs the warning instead.
+export interface SetAssigneeResult {
+  ok: boolean;
+  status: number;
+  changed?: boolean;
+  assigneeId?: string | null;
+  assigneeName?: string | null;
+  error?: string;
+}
+
+export async function setTenkaraConversationAssignee(
+  conversationId: string,
+  assigneeEmail: string | null
+): Promise<SetAssigneeResult> {
+  const token = process.env.TENKARA_API_TOKEN;
+  if (!token) return { ok: false, status: 0, error: "TENKARA_API_TOKEN not configured" };
+  if (!conversationId) return { ok: false, status: 0, error: "missing conversationId" };
+
+  let res: Response;
+  try {
+    res = await fetch(`${TENKARA_INBOX_BASE}/api/external/conversations/${encodeURIComponent(conversationId)}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ assignee_email: assigneeEmail ? assigneeEmail.toLowerCase() : null }),
+    });
+  } catch (e: any) {
+    return { ok: false, status: 0, error: e?.message ?? String(e) };
+  }
+
+  const body = await res.json().catch(() => ({} as any));
+  if (!res.ok) {
+    return { ok: false, status: res.status, error: body?.error ?? body?.code ?? `HTTP ${res.status}` };
+  }
+  return {
+    ok: true,
+    status: res.status,
+    changed: body.changed ?? false,
+    assigneeId: body.assignee_id ?? null,
+    assigneeName: body.assignee_name ?? null,
+  };
+}
+
 // Per-client Tenkara Inbox account UUIDs (from Rod, 2026-06-18). Conversations
 // MUST be created with an email_account_id — a null account makes the thread
 // invisible on Tenkara's side (placement is driven by the account label). The
