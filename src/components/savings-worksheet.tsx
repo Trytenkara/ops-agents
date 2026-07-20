@@ -2,6 +2,7 @@
 
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { SavingsExportCsvButton } from "@/components/savings-export-csv-button";
+import { DensityToggle } from "@/components/density-toggle";
 import { useListFilter, byString, byNumberDesc } from "@/components/use-list-filter";
 import type { SavingsReport } from "@/lib/savings-report";
 import type { SourcingScorecard, SourcingStatus, SourcingScorecardLine } from "@/lib/sourcing-scorecard";
@@ -33,6 +34,7 @@ export function SavingsWorksheet({
       { value: "client", label: "Client price", compare: byNumberDesc((l: SourcingScorecardLine) => l.client_unit_price) },
     ],
     defaultSort: "beats",
+    persistKey: "savings-sourcing",
   });
 
   const bench = useListFilter(report.lines, {
@@ -46,6 +48,7 @@ export function SavingsWorksheet({
       { value: "supplier", label: "Supplier (A–Z)", compare: byString((l) => l.recommended_supplier_name) },
     ],
     defaultSort: "savings_pct",
+    persistKey: "savings-bench",
   });
 
   return (
@@ -134,7 +137,10 @@ export function SavingsWorksheet({
             quote for the same material. Prices are normalized per-unit. Sample quotes and unit-mislabeled outliers are
             excluded. Read-only — acting on a recommendation is a human decision.
           </p>
-          <SavingsExportCsvButton slug={slug} disabled={withSavings.length === 0} count={withSavings.length} />
+          <div className="flex items-center gap-2">
+            <DensityToggle />
+            <SavingsExportCsvButton slug={slug} disabled={withSavings.length === 0} count={withSavings.length} />
+          </div>
         </div>
 
         <div className="flex gap-6 text-sm">

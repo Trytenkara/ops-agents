@@ -77,6 +77,7 @@ export function ThreadsList({ rows, slug, canAct = false }: { rows: ThreadRow[];
       { value: "status", label: "Status", compare: byString((r: ThreadRow) => r.status) },
     ],
     defaultSort: "newest",
+    persistKey: "threads",
   });
 
   const selectable = canAct;

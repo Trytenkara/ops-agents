@@ -18,6 +18,7 @@ import { RunNowButton } from "@/components/run-now-button";
 import { MaterialFlagsPrompt, type MaterialFlag } from "@/components/material-flags-prompt";
 import { getOutreachTracker } from "@/lib/outreach-tracker";
 import { OutreachTrackerPanel } from "@/components/outreach-tracker-panel";
+import { DensityToggle } from "@/components/density-toggle";
 
 export const dynamic = "force-dynamic";
 
@@ -162,6 +163,9 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           ) : undefined
         }
       />
+      <div className="flex justify-end -mt-2">
+        <DensityToggle />
+      </div>
       <AgentRunsStrip runs={runStats} />
       <MaterialFlagsPrompt flags={materialFlags} />
       {leadsNeedingName.length > 0 && (
