@@ -24,11 +24,22 @@ export interface OutreachTrackerMaterial {
   skipReasons: Record<string, number>; // drop_reason -> count
 }
 
+export interface MarketplaceOutreachSummary {
+  total: number;      // marketplace leads seen
+  emailed: number;    // an outreach draft/email was staged
+  manual: number;     // handed to an operator (no email → contact form/inquiry)
+  needsPull: number;  // price couldn't be auto-pulled — operator tagged (#4)
+  pending: number;    // not yet actioned
+}
+
 export interface OutreachTracker {
   materials: OutreachTrackerMaterial[];
   // Totals count DISTINCT emails/cases (a consolidated email covering N materials
   // is one email), while per-material rows credit every material an email covers.
   totals: { emails: number; qaFlagged: number; manual: number; skipped: number; suppliers: number };
+  // Marketplace-specific funnel so ops can confirm marketplace suppliers are
+  // being emailed (or handed to an operator), not silently missed. (#9)
+  marketplace: MarketplaceOutreachSummary;
 }
 
 const UNNAMED = "(unnamed material)";
@@ -40,7 +51,7 @@ function humanizeReason(r: string | null | undefined): string {
 }
 
 export async function getOutreachTracker(admin: Admin, orgId: string): Promise<OutreachTracker> {
-  const [{ data: drafts }, { data: manualCases }, { data: dropped }] = await Promise.all([
+  const [{ data: drafts }, { data: manualCases }, { data: dropped }, { data: mpLeads }] = await Promise.all([
     admin
       .from("draft_references")
       .select("supplier_id, material_id, status, metadata")
@@ -53,9 +64,14 @@ export async function getOutreachTracker(admin: Admin, orgId: string): Promise<O
       .in("status", ["open", "in_progress"]),
     admin
       .from("leads_in_flight")
-      .select("material_id, material_name, drop_reason")
+      .select("material_id, material_name, drop_reason, payload")
       .eq("org_id", orgId)
       .eq("status", "dropped"),
+    admin
+      .from("leads_in_flight")
+      .select("stage, status, drop_reason, payload")
+      .eq("org_id", orgId)
+      .or("payload->>site_type.in.(M,MS),payload->>supplier_role.eq.Marketplace"),
   ]);
 
   const byKey = new Map<string, OutreachTrackerMaterial>();
@@ -119,7 +135,8 @@ export async function getOutreachTracker(admin: Admin, orgId: string): Promise<O
   for (const l of (dropped ?? []) as any[]) {
     const m = get(l.material_id ?? null, l.material_name ?? null);
     m.skipped++;
-    const reason = humanizeReason(l.drop_reason);
+    // drop_reason lives on the column (escalation) or in payload (outreach).
+    const reason = humanizeReason(l.drop_reason ?? (l.payload as any)?.drop_reason);
     m.skipReasons[reason] = (m.skipReasons[reason] ?? 0) + 1;
   }
 
@@ -142,5 +159,15 @@ export async function getOutreachTracker(admin: Admin, orgId: string): Promise<O
     suppliers: allSuppliers.size,
   };
 
-  return { materials, totals };
+  const marketplace: MarketplaceOutreachSummary = { total: 0, emailed: 0, manual: 0, needsPull: 0, pending: 0 };
+  for (const l of (mpLeads ?? []) as any[]) {
+    marketplace.total++;
+    const p = (l.payload ?? {}) as any;
+    if (p.outreach) marketplace.emailed++;
+    else if (l.status === "dropped" && (l.drop_reason ?? p.drop_reason) === "manual_outreach_case") marketplace.manual++;
+    else if (p.marketplace_pull?.status === "needs_manual_pull") marketplace.needsPull++;
+    else marketplace.pending++;
+  }
+
+  return { materials, totals, marketplace };
 }

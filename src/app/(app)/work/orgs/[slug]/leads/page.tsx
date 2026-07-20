@@ -142,6 +142,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   const tracker = await getOutreachTracker(admin, org.id).catch(() => ({
     materials: [],
     totals: { emails: 0, qaFlagged: 0, manual: 0, skipped: 0, suppliers: 0 },
+    marketplace: { total: 0, emailed: 0, manual: 0, needsPull: 0, pending: 0 },
   }));
 
   return (

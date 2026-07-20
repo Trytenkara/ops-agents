@@ -24,6 +24,14 @@ export function OutreachTrackerPanel({ tracker }: { tracker: OutreachTracker }) 
         What actually happened per material once it entered outreach — drafts staged, who they went to, drafts QA held for
         review, suppliers with no email (handed to an operator), and skipped leads.
       </p>
+      {tracker.marketplace.total > 0 && (
+        <div className="rounded-md border border-border bg-secondary/30 px-3 py-2 text-xs">
+          <span className="font-medium">Marketplace suppliers ({tracker.marketplace.total}):</span>{" "}
+          {tracker.marketplace.emailed} emailed · {tracker.marketplace.manual} handed to operator
+          {tracker.marketplace.needsPull > 0 && <> · <span className="text-amber-700 dark:text-amber-400">{tracker.marketplace.needsPull} need manual price pull</span></>}
+          {tracker.marketplace.pending > 0 && <> · {tracker.marketplace.pending} pending</>}
+        </div>
+      )}
       <Table>
         <TableHeader>
           <TableRow>
