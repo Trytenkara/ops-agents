@@ -155,7 +155,8 @@ export function SavingsWorksheet({
               <TableHead>Material</TableHead>
               <TableHead>Grade</TableHead>
               <TableHead>Unit</TableHead>
-              <TableHead className="text-right">Their price</TableHead>
+              <TableHead className="text-right">Client cost</TableHead>
+              <TableHead className="text-right">Market avg</TableHead>
               <TableHead className="text-right">Best Tenkara</TableHead>
               <TableHead className="text-right">Savings/unit</TableHead>
               <TableHead className="text-right">%</TableHead>
@@ -166,7 +167,7 @@ export function SavingsWorksheet({
           <TableBody>
             {bench.filtered.length === 0 && (
               <TableRow>
-                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
                   No approved quotes to benchmark for this client yet.
                 </TableCell>
               </TableRow>
@@ -187,13 +188,15 @@ export function SavingsWorksheet({
                   </TableCell>
                   <TableCell className="text-muted-foreground">{l.unit}</TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {money(l.their_unit_price)}
-                    {!l.has_client_price && (
-                      <span className="ml-1 text-[10px] text-muted-foreground" title="No client current-supply price on file — benchmarked against the market average.">
-                        mkt avg
+                    {l.has_client_price ? (
+                      money(l.their_unit_price)
+                    ) : (
+                      <span className="text-muted-foreground" title="No client current-supply price on file. Savings are benchmarked against the market average instead.">
+                        not provided
                       </span>
                     )}
                   </TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">{money(l.market_avg_unit_price)}</TableCell>
                   <TableCell className="text-right tabular-nums">{money(l.best_unit_price)}</TableCell>
                   <TableCell className={"text-right tabular-nums " + (hasSaving ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>
                     {hasSaving ? money(l.savings_per_unit) : "—"}
