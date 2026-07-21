@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Select } from "@/components/ui/select";
 
 // Reusable client-side search + sort for per-client list tables. Pages pass
@@ -10,6 +10,33 @@ import { Select } from "@/components/ui/select";
 
 export type SortOption<T> = { value: string; label: string; compare: (a: T, b: T) => number };
 
+// useState that persists to localStorage under a stable key. For filter/toggle
+// selections that should survive navigation + refresh. SSR-safe.
+export function usePersistedState(key: string | undefined, initial: string): [string, (v: string) => void] {
+  const [value, setValue] = useState(() => readStored(key, "v") ?? initial);
+  useEffect(() => writeStored(key, "v", value), [key, value]);
+  return [value, setValue];
+}
+
+// localStorage helpers — persist search/sort per list so ops don't re-apply
+// them on every visit. No-ops on the server / when storage is unavailable.
+function readStored(key: string | undefined, field: string): string | null {
+  if (!key || typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(`listfilter:${key}:${field}`);
+  } catch {
+    return null;
+  }
+}
+function writeStored(key: string | undefined, field: string, value: string) {
+  if (!key || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(`listfilter:${key}:${field}`, value);
+  } catch {
+    /* ignore quota/availability errors */
+  }
+}
+
 export function useListFilter<T>(
   rows: T[],
   opts: {
@@ -17,10 +44,17 @@ export function useListFilter<T>(
     searchPlaceholder?: string;
     sorts: SortOption<T>[];
     defaultSort?: string;
+    // When set, the search text and sort selection persist under this key.
+    persistKey?: string;
   }
 ): { filtered: T[]; controls: React.ReactNode } {
-  const [q, setQ] = useState("");
-  const [sortKey, setSortKey] = useState(opts.defaultSort ?? opts.sorts[0]?.value ?? "");
+  const [q, setQ] = useState(() => readStored(opts.persistKey, "q") ?? "");
+  const [sortKey, setSortKey] = useState(
+    () => readStored(opts.persistKey, "sort") ?? opts.defaultSort ?? opts.sorts[0]?.value ?? ""
+  );
+
+  useEffect(() => writeStored(opts.persistKey, "q", q), [opts.persistKey, q]);
+  useEffect(() => writeStored(opts.persistKey, "sort", sortKey), [opts.persistKey, sortKey]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();

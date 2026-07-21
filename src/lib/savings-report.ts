@@ -1,4 +1,30 @@
 import { getClientBenchmark, type ClientBenchmark } from "@/lib/price-pulse";
+import type { createAdminClient } from "@/lib/supabase/admin";
+
+type Admin = ReturnType<typeof createAdminClient>;
+
+// Client current cost parsed from uploaded POs, keyed by
+// `${tenkara_material_id}|${unit}` (most recent order wins). Feeds the savings
+// benchmark as the client baseline when Tenkara has no current_quote. (#5)
+export async function clientCostFromOrders(admin: Admin, orgId: string): Promise<Map<string, number>> {
+  const { data } = await admin
+    .from("client_material_orders")
+    .select("tenkara_material_id, unit_price, qty_unit, order_date, created_at")
+    .eq("org_id", orgId)
+    .not("tenkara_material_id", "is", null)
+    .not("unit_price", "is", null)
+    .order("order_date", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: false });
+  const map = new Map<string, number>();
+  for (const o of (data ?? []) as any[]) {
+    const price = Number(o.unit_price);
+    if (!Number.isFinite(price) || price <= 0) continue;
+    const unit = (o.qty_unit ?? "?").toString().trim().toLowerCase() || "?";
+    const key = `${o.tenkara_material_id}|${unit}`;
+    if (!map.has(key)) map.set(key, price); // rows are newest-first, so first wins
+  }
+  return map;
+}
 
 // Material savings report (#6). For a client, compare what they currently pay
 // per material (their current Tenkara quote) against the cheapest current quote
@@ -16,6 +42,8 @@ export interface SavingsLine {
   their_unit_price: number;
   // false => no client current-supply price; their_unit_price is the market average.
   has_client_price: boolean;
+  // "tenkara" (current_quote) | "po" (uploaded PO unit price) | null (market avg).
+  client_price_source: "tenkara" | "po" | null;
   best_unit_price: number;
   recommended_supplier_id: string | null;
   recommended_supplier_name: string | null;
@@ -46,6 +74,7 @@ function toLine(b: ClientBenchmark): SavingsLine {
     unit: b.unit,
     their_unit_price: b.client_unit_price,
     has_client_price: b.has_client_price,
+    client_price_source: b.client_price_source,
     best_unit_price: b.min_unit_price,
     recommended_supplier_id: b.cheapest_supplier_id,
     recommended_supplier_name: b.cheapest_supplier_name,
@@ -59,9 +88,12 @@ function toLine(b: ClientBenchmark): SavingsLine {
 
 export async function buildSavingsReport(
   tenkaraOrgId: string,
-  opts?: { minQuotes?: number; onlyWithSavings?: boolean }
+  opts?: { minQuotes?: number; onlyWithSavings?: boolean; clientCostFallback?: Map<string, number> }
 ): Promise<SavingsReport> {
-  const benchmark = await getClientBenchmark(tenkaraOrgId, { minQuotes: opts?.minQuotes });
+  const benchmark = await getClientBenchmark(tenkaraOrgId, {
+    minQuotes: opts?.minQuotes,
+    clientCostFallback: opts?.clientCostFallback,
+  });
   let lines = benchmark.map(toLine);
   const materials_with_savings = lines.filter((l) => l.savings_per_unit > 0).length;
   if (opts?.onlyWithSavings) lines = lines.filter((l) => l.savings_per_unit > 0);

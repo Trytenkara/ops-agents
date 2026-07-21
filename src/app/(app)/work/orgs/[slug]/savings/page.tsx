@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { buildSavingsReport } from "@/lib/savings-report";
+import { buildSavingsReport, clientCostFromOrders } from "@/lib/savings-report";
 import { buildSourcingScorecard } from "@/lib/sourcing-scorecard";
 import { loadMaterialAttributes } from "@/lib/material-attributes";
 import { SavingsReportInteractive } from "@/components/savings-report-interactive";
@@ -44,7 +44,10 @@ export default async function OrgSavingsPage({
     );
   }
 
-  const report = await buildSavingsReport(org.tenkara_org_id);
+  // Client current cost from uploaded POs fills the baseline when Tenkara has no
+  // current_quote, so savings show against a real client cost where we have one.
+  const clientCostFallback = await clientCostFromOrders(admin, org.id).catch(() => new Map<string, number>());
+  const report = await buildSavingsReport(org.tenkara_org_id, { clientCostFallback });
   const scorecard = await buildSourcingScorecard(admin, org.id, org.tenkara_org_id);
 
   if (view === "report") {

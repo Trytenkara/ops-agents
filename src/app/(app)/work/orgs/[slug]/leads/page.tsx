@@ -16,6 +16,9 @@ import { orgDisplayName } from "@/lib/org-display";
 import { AgentRunsStrip, type RunStat } from "@/components/agent-runs-strip";
 import { RunNowButton } from "@/components/run-now-button";
 import { MaterialFlagsPrompt, type MaterialFlag } from "@/components/material-flags-prompt";
+import { getOutreachTracker } from "@/lib/outreach-tracker";
+import { OutreachTrackerPanel } from "@/components/outreach-tracker-panel";
+import { DensityToggle } from "@/components/density-toggle";
 
 export const dynamic = "force-dynamic";
 
@@ -136,6 +139,13 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     quotes = await existingQuotesForOrg(org.tenkara_org_id).catch(() => []);
   }
 
+  // Per-material outreach funnel (drafts / to whom / QA held / manual / skipped).
+  const tracker = await getOutreachTracker(admin, org.id).catch(() => ({
+    materials: [],
+    totals: { emails: 0, qaFlagged: 0, manual: 0, skipped: 0, suppliers: 0 },
+    marketplace: { total: 0, emailed: 0, manual: 0, needsPull: 0, pending: 0 },
+  }));
+
   return (
     <div className="space-y-6">
       <ListPageHeader
@@ -153,6 +163,9 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           ) : undefined
         }
       />
+      <div className="flex justify-end -mt-2">
+        <DensityToggle />
+      </div>
       <AgentRunsStrip runs={runStats} />
       <MaterialFlagsPrompt flags={materialFlags} />
       {leadsNeedingName.length > 0 && (
@@ -175,6 +188,8 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
       ) : (
         <LeadsTabs rows={leads} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} />
       )}
+
+      <OutreachTrackerPanel tracker={tracker} />
 
       <section className="space-y-2 pt-2">
         <h2 className="font-serif text-xl tracking-tight">

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Table, TableHeader, TableBody, TableRow, TableCell } from "@/components/ui/table";
 import { LeadRichRow, LeadRichHeaders, leadRichColSpan, leadMarketKind } from "@/components/lead-rich-row";
-import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
+import { useListFilter, byString, byDateDesc, usePersistedState } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { BulkRemoveBar } from "@/components/bulk-remove-bar";
 import { removeLeads } from "@/app/actions/leads";
@@ -23,6 +23,14 @@ const RECENCY_OPTIONS = [
   { value: "all", label: "All time" },
 ];
 
+const STAGE_OPTIONS = [
+  { value: "all", label: "All stages" },
+  { value: "raw", label: "Raw" },
+  { value: "enriched", label: "Enriched" },
+  { value: "ready_for_outreach", label: "Ready to send" },
+  { value: "held", label: "Held (needs name)" },
+];
+
 const countryOf = (r: any): string => (r.payload?.supplier_country ?? "").toString().trim();
 
 export function LeadsList({
@@ -38,9 +46,10 @@ export function LeadsList({
   orgId?: string;
   operatorOptions?: { id: string; name: string }[];
 }) {
-  const [type, setType] = useState("all");
-  const [country, setCountry] = useState("all");
-  const [recency, setRecency] = useState("all");
+  const [type, setType] = usePersistedState("leads-type", "all");
+  const [country, setCountry] = usePersistedState("leads-country", "all");
+  const [recency, setRecency] = usePersistedState("leads-recency", "all");
+  const [stage, setStage] = usePersistedState("leads-stage", "all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const toggleOne = (id: string, checked: boolean) =>
@@ -65,6 +74,9 @@ export function LeadsList({
       : rows.filter((r: any) => (r.market_kind ?? leadMarketKind(r.payload?.site_type)) === type)
   )
     .filter((r: any) => (country === "all" ? true : countryOf(r) === country))
+    .filter((r: any) =>
+      stage === "all" ? true : stage === "held" ? !!r.needs_material_name : r.stage === stage
+    )
     .filter((r: any) => {
       if (recencyCutoff == null) return true;
       const t = r.created_at ? new Date(r.created_at).getTime() : 0;
@@ -80,6 +92,7 @@ export function LeadsList({
       { value: "material", label: "Material (A–Z)", compare: byString((r: any) => r.material_name) },
     ],
     defaultSort: "newest",
+    persistKey: "leads",
   });
 
   const selectable = canAct;
@@ -112,6 +125,10 @@ export function LeadsList({
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="flex flex-wrap items-end gap-3">
           {controls}
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">Stage</span>
+            <Select size="sm" className="min-w-[9rem]" ariaLabel="Stage" value={stage} onValueChange={setStage} options={STAGE_OPTIONS} />
+          </label>
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">Type</span>
             <Select size="sm" className="min-w-[9rem]" ariaLabel="Type" value={type} onValueChange={setType} options={TYPE_OPTIONS} />

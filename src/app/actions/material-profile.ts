@@ -86,7 +86,11 @@ export async function uploadAndParsePO(orgId: string, form: FormData): Promise<R
 }
 
 // Re-run name + grade matching against the org's current Tenkara materials for
-// every order that isn't yet linked, and persist any newly-resolved ids.
+// every UNCONFIRMED order and persist any change. Unlike a one-way fill, this
+// also CORRECTS or CLEARS a previously wrong auto-match (the bug where "Onion
+// Powder" caught "Calamine Powder" left bad links that a null-only pass could
+// never undo). Confirmed orders are operator-reviewed and never touched; a
+// cleared match drops the line back into "Unmatched orders" for manual filing.
 export async function rematchOrders(orgId: string): Promise<Result> {
   const auth = await requireEditor();
   if (auth.error) return { ok: false, error: auth.error };
@@ -102,26 +106,26 @@ export async function rematchOrders(orgId: string): Promise<Result> {
     return { ok: false, error: `could not load materials: ${e?.message ?? "unknown"}` };
   }
 
-  const { data: unmatched, error: loadErr } = await admin
+  const { data: candidates, error: loadErr } = await admin
     .from("client_material_orders")
-    .select("id, material_label")
+    .select("id, material_label, tenkara_material_id")
     .eq("org_id", orgId)
-    .is("tenkara_material_id", null);
+    .neq("status", "confirmed");
   if (loadErr) return { ok: false, error: loadErr.message };
 
-  let matched = 0;
-  for (const o of unmatched ?? []) {
+  let changed = 0;
+  for (const o of candidates ?? []) {
     const id = matchOrderToMaterial(o.material_label, materials);
-    if (!id) continue;
+    if (id === o.tenkara_material_id) continue; // no change — leave it
     const { error } = await admin
       .from("client_material_orders")
       .update({ tenkara_material_id: id })
       .eq("id", o.id);
-    if (!error) matched++;
+    if (!error) changed++;
   }
 
   revalidatePath(`/work/orgs/[slug]/materials`, "page");
-  return { ok: true, parsed: matched };
+  return { ok: true, parsed: changed };
 }
 
 export async function confirmOrder(orderId: string): Promise<Result> {

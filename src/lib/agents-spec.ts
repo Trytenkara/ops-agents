@@ -38,7 +38,7 @@ export const AGENT_SPECS: AgentSpec[] = [
     slug: "agent-03-lead-creator",
     name: "Lead Creator",
     status: "shipped",
-    cadence: "Every 2 hours, 07:00–21:00 · America/New_York",
+    cadence: "Every 5 min, 24/7 · America/New_York",
     purpose: "Scout suppliers for newly-added materials and stage them as raw leads. Enrichment (06) and outreach (04) run as their own scheduled agents.",
     automatic: "Scans materials added since the last cursor, finds candidates from the supplier graph + web discovery (Anthropic web_search), inserts rows at stage=raw, and emits a downloadable sourcing CSV that also lists the saved quotes we already have for those materials (context). Budget-bounded so a big batch fits one invocation.",
     humanInput: "Download the sourcing CSV for the supplier index; Promote/Drop leads on /work/review/leads. (06 enriches and 04 drafts automatically on their own schedules.)",
