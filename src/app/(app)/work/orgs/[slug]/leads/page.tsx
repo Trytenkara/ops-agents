@@ -62,7 +62,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   const { data: rows } = await admin
     .from("leads_in_flight")
     .select(
-      "id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)"
+      "id, org_id, supplier_name, supplier_id, assigned_operator_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)"
     )
     .eq("org_id", org.id)
     .eq("status", "active")
@@ -96,13 +96,26 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   const autoOwners = operatorBySupplier(operatorPool, supplierIds);
   const supplierAssignments = await getSupplierAssignments(admin, org.id).catch(() => new Map<string, string>());
   const operatorOptions = operatorPool.map((op) => ({ id: op.id, name: op.name }));
+  const operatorNameById = new Map(operatorPool.map((op) => [op.id, op.name]));
   leads = leads.map((r) => {
     const flag = r.supplier_id ? leadMarketplace.get(r.supplier_id) : undefined;
     const market_kind =
       flag === true ? "marketplace" : flag === false ? "direct" : leadMarketKind(r.payload?.site_type);
-    const operator_name = pickSupplierOperator(operatorPool, r.supplier_id)?.name ?? null;
-    const operator_assigned_id = r.supplier_id ? supplierAssignments.get(r.supplier_id) ?? null : null;
-    const operator_auto_name = r.supplier_id ? autoOwners[r.supplier_id]?.name ?? null : null;
+    // A supplier-backed lead's owner syncs with its supplier (supplier_assignment);
+    // a Scout lead (no supplier_id) uses its own lead-level manual claim. In both
+    // cases the auto default is sticky-random over the pool — keyed by supplier_id
+    // when present, else the lead id so Scout leads spread across operators instead
+    // of all collapsing onto pool[0]. Same key outreach uses, so the displayed
+    // owner matches who actually gets the drafts.
+    const operator_assigned_id = r.supplier_id
+      ? supplierAssignments.get(r.supplier_id) ?? null
+      : r.assigned_operator_id ?? null;
+    const operator_auto_name = r.supplier_id
+      ? autoOwners[r.supplier_id]?.name ?? null
+      : pickSupplierOperator(operatorPool, r.id)?.name ?? null;
+    // Static label (rows without an assign control): a manual claim wins, else auto.
+    const operator_name =
+      (operator_assigned_id ? operatorNameById.get(operator_assigned_id) ?? null : null) ?? operator_auto_name;
     const resolvedName =
       (r.material_name && r.material_name.trim()) ||
       (r.material_id ? leadNames.get(r.material_id) ?? null : null);

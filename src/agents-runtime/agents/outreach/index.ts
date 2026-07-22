@@ -81,7 +81,7 @@ registerAgent({
     // 1. Pull enriched leads, best completeness first.
     const { data: leads, error: pullErr } = await admin
       .from("leads_in_flight")
-      .select("id, org_id, supplier_id, supplier_name, material_id, material_name, payload, confidence_score")
+      .select("id, org_id, supplier_id, assigned_operator_id, supplier_name, material_id, material_name, payload, confidence_score")
       .eq("stage", "enriched")
       .eq("status", "active")
       .order("created_at", { ascending: false })
@@ -303,9 +303,13 @@ registerAgent({
         mode: cls.mode,
         ghostBrand: cls.ghostBrand,
         clientOrgName: org.name,
-        // Manual supplier assignment wins; else sticky-random; else org primary.
+        // Manual lead claim wins (Scout leads); then manual supplier assignment;
+        // then sticky-random. Scout leads have no supplier_id — fall back to the
+        // lead id so the sticky default spreads across the pool instead of all
+        // landing on pool[0] (matches the Leads-tab display key). Else org primary.
         assignedOperator:
-          resolveSupplierOperatorId(assignmentsByOrg.get(lead.org_id) ?? new Map(), poolByOrg.get(lead.org_id) ?? [], lead.supplier_id) ??
+          lead.assigned_operator_id ??
+          resolveSupplierOperatorId(assignmentsByOrg.get(lead.org_id) ?? new Map(), poolByOrg.get(lead.org_id) ?? [], lead.supplier_id ?? lead.id) ??
           org.primary_user_id,
       });
     }
