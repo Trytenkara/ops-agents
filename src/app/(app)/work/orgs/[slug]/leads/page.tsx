@@ -17,7 +17,6 @@ import { AgentRunsStrip, type RunStat } from "@/components/agent-runs-strip";
 import { RunNowButton } from "@/components/run-now-button";
 import { MaterialFlagsPrompt, type MaterialFlag } from "@/components/material-flags-prompt";
 import { getOutreachTracker } from "@/lib/outreach-tracker";
-import { OutreachTrackerPanel } from "@/components/outreach-tracker-panel";
 import { DensityToggle } from "@/components/density-toggle";
 
 export const dynamic = "force-dynamic";
@@ -183,13 +182,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           </p>
         </div>
       )}
-      <OutreachTrackerPanel tracker={tracker} />
-
-      {leads.length === 0 ? (
-        <p className="text-sm text-muted-foreground py-4">No active leads for this org.</p>
-      ) : (
-        <LeadsTabs rows={leads} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} />
-      )}
+      <LeadsTabs rows={leads} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} />
 
       <section className="space-y-2 pt-2">
         <h2 className="font-serif text-xl tracking-tight">
