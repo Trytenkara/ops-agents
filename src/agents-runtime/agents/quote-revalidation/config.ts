@@ -8,6 +8,7 @@ export const ACTIVE_CLIENTS: string[] = [
   "Nutripro",
   "PharmaLab",
   "Vita Organica",
+  "California Chemicals",
 ];
 
 export const GHOST_CLIENTS: Record<string, string> = {
