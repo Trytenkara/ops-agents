@@ -8,7 +8,6 @@ export const ACTIVE_CLIENTS: string[] = [
   "Nutripro",
   "PharmaLab",
   "Vita Organica",
-  "California Chemicals",
 ];
 
 export const GHOST_CLIENTS: Record<string, string> = {
@@ -36,6 +35,11 @@ export const SKIP_CLIENTS: string[] = [
   "McGinley",
   "Sphere",
   "Ulo",
+  // California Chemicals: discovery + enrichment run (in ONLY_ORG scope) to build
+  // the supplier pool, but outreach is held here until Ben provides an email and
+  // Rod provisions its Tenkara inbox in TENKARA_EMAIL_ACCOUNT_IDS. Move to
+  // ACTIVE_CLIENTS once the inbox exists, or drafts would be sender-less/invisible.
+  "California Chemicals",
 ];
 
 export interface Classification {
