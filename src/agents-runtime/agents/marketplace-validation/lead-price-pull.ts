@@ -60,7 +60,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     .eq("status", "active")
     .is("payload->marketplace_pull", null)
     .or("payload->>site_type.in.(M,MS),payload->>supplier_role.eq.Marketplace")
-    .order("created_at", { ascending: false }) // newest discoveries first — an active test batch shouldn't wait behind stale parked-org leads
+    .order("created_at", { ascending: true }) // oldest first (FIFO) — drains the backlog in discovery order so no lead is starved by the continuous stream of new discoveries
     .limit(LEAD_CAP * 3);
   if (error) {
     await log(`Marketplace lead query failed (non-fatal): ${error.message}`, { level: "warn", step: "mp_leads" });
