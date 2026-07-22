@@ -13,7 +13,7 @@ type Admin = ReturnType<typeof createAdminClient>;
 // lead's operator to pull it by hand. Read-only on Tenkara — writes only to OA
 // leads_in_flight.payload + cases.
 
-const LEAD_CAP = 12;      // Opus+web_search per lead (~25s) — keep well inside budget.
+const LEAD_CAP = 30;      // Opus+web_search per lead (~25s), bounded-parallel — sized to clear a fresh discovery batch within a few hourly runs while staying inside the shared deadline.
 const CONCURRENCY = 4;
 
 interface LeadRow {
@@ -60,6 +60,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     .eq("status", "active")
     .is("payload->marketplace_pull", null)
     .or("payload->>site_type.in.(M,MS),payload->>supplier_role.eq.Marketplace")
+    .order("created_at", { ascending: false }) // newest discoveries first — an active test batch shouldn't wait behind stale parked-org leads
     .limit(LEAD_CAP * 3);
   if (error) {
     await log(`Marketplace lead query failed (non-fatal): ${error.message}`, { level: "warn", step: "mp_leads" });
