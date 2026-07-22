@@ -6,7 +6,7 @@ import { toCsv } from "@/lib/csv";
 import { getSourcingExclusions, exclusionReason, type SourcingExclusions } from "@/lib/tenkara-sourcing-exclusions";
 import { getNoteDerivedCountryExclusions } from "@/lib/client-sourcing-rules";
 import { uploadCsvAndSign } from "@/lib/storage";
-import { onlyOrgName } from "@/lib/org-scope";
+import { onlyOrgNames } from "@/lib/org-scope";
 import { flagMaterialNames, correctName } from "@/lib/material-name-flags";
 import { materialLabel } from "@/lib/material-label";
 
@@ -169,14 +169,14 @@ registerAgent({
     const { data: orgRows } = await admin.from("orgs").select("id, tenkara_org_id, name");
     const tenkaraOrgToOaOrg = new Map<string, string>();
     const allowedTenkaraOrgIds = new Set<string>();
-    const onlyOrg = onlyOrgName();
+    const onlyOrgs = onlyOrgNames();
     for (const r of (orgRows ?? []) as { id: string; tenkara_org_id: string | null; name: string }[]) {
       if (r.tenkara_org_id) {
         tenkaraOrgToOaOrg.set(r.tenkara_org_id, r.id);
-        if (onlyOrg && r.name === onlyOrg) allowedTenkaraOrgIds.add(r.tenkara_org_id);
+        if (onlyOrgs.length && onlyOrgs.includes(r.name)) allowedTenkaraOrgIds.add(r.tenkara_org_id);
       }
     }
-    await ctx.log(`Loaded ${tenkaraOrgToOaOrg.size} tenkara→OA org mappings${onlyOrg ? ` · scoped to ${onlyOrg}` : ""}`, { step: "org_map" });
+    await ctx.log(`Loaded ${tenkaraOrgToOaOrg.size} tenkara→OA org mappings${onlyOrgs.length ? ` · scoped to ${onlyOrgs.join(", ")}` : ""}`, { step: "org_map" });
 
     // 3b-iii. Backlog queue — the durable guarantee that every material gets rich
     //         leads. Beyond the recency window, pull materials for our orgs that
@@ -189,7 +189,7 @@ registerAgent({
     const underservedIds = new Set<string>();
     const existingHostsByMaterial = new Map<string, Set<string>>();
     if (!onlyMaterialId) {
-      const targetTenkaraOrgIds = onlyOrg
+      const targetTenkaraOrgIds = onlyOrgs.length
         ? Array.from(allowedTenkaraOrgIds)
         : Array.from(tenkaraOrgToOaOrg.keys());
       try {
@@ -418,8 +418,8 @@ registerAgent({
 
     for (const material of materials) {
       // Fleet-wide org scoping: when ONLY_ORG is set, only source for materials
-      // belonging to that org (matched via tenkara_org_id). Skip everything else.
-      if (!onlyMaterialId && onlyOrg && (!material.tenkara_org_id || !allowedTenkaraOrgIds.has(material.tenkara_org_id))) {
+      // belonging to those orgs (matched via tenkara_org_id). Skip everything else.
+      if (!onlyMaterialId && onlyOrgs.length && (!material.tenkara_org_id || !allowedTenkaraOrgIds.has(material.tenkara_org_id))) {
         continue;
       }
       if (leadsCreated >= MAX_NEW_LEADS_PER_RUN) {

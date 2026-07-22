@@ -2,7 +2,7 @@ import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getOrgOperatorPool, resolveSupplierOperatorId, getSupplierAssignments, type OperatorRef } from "@/lib/operator-assignment";
 import { classifyClient } from "../quote-revalidation/config";
-import { onlyOrgName } from "@/lib/org-scope";
+import { onlyOrgNames } from "@/lib/org-scope";
 import { runOutreachForSupplier, type OutreachLead } from "./run-outreach";
 import { composeOutreachDraft } from "./drafter";
 import { isAggregatorEmail } from "../data-enrichment/enrich";
@@ -207,7 +207,8 @@ registerAgent({
     }
 
     const candidates: Candidate[] = [];
-    const onlyOrg = onlyOrgName();
+    const onlyOrgs = onlyOrgNames();
+    const onlyOrgLabel = onlyOrgs.join(", ");
     let droppedNoContact = 0;
     let droppedNoOrg = 0;
     let droppedSkipClient = 0;
@@ -279,7 +280,7 @@ registerAgent({
         droppedNoOrg++;
         continue;
       }
-      if (onlyOrg && org.name !== onlyOrg) {
+      if (onlyOrgs.length && !onlyOrgs.includes(org.name)) {
         droppedOtherOrg++;
         continue;
       }
@@ -317,14 +318,14 @@ registerAgent({
     const emailCount = candidates.filter((c) => c.channel === "email").length;
     const manualCount = candidates.filter((c) => c.channel === "manual").length;
     await ctx.log(
-      `Filtered: ${candidates.length} actionable (${emailCount} email, ${manualCount} manual-contact) · dropped ${droppedNoContact} (no contact channel), ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${onlyOrg ? `, ${droppedOtherOrg} (outside ${onlyOrg})` : ""}${heldForSpelling ? ` · held ${heldForSpelling} (pending spelling review)` : ""}${heldForMissingName ? ` · held ${heldForMissingName} (missing material name)` : ""}${heldPhasedCarry ? ` · skipped ${heldPhasedCarry} (held for follow-up)` : ""}`,
+      `Filtered: ${candidates.length} actionable (${emailCount} email, ${manualCount} manual-contact) · dropped ${droppedNoContact} (no contact channel), ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${onlyOrgs.length ? `, ${droppedOtherOrg} (outside ${onlyOrgLabel})` : ""}${heldForSpelling ? ` · held ${heldForSpelling} (pending spelling review)` : ""}${heldForMissingName ? ` · held ${heldForMissingName} (missing material name)` : ""}${heldPhasedCarry ? ` · skipped ${heldPhasedCarry} (held for follow-up)` : ""}`,
       { step: "filter" }
     );
 
     if (candidates.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary(`No actionable leads after filters (no_contact=${droppedNoContact}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${onlyOrg ? `, other_org=${droppedOtherOrg}` : ""}${heldForSpelling ? `, held_spelling=${heldForSpelling}` : ""}${heldForMissingName ? `, held_missing_name=${heldForMissingName}` : ""}).`);
+      ctx.setSummary(`No actionable leads after filters (no_contact=${droppedNoContact}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${onlyOrgs.length ? `, other_org=${droppedOtherOrg}` : ""}${heldForSpelling ? `, held_spelling=${heldForSpelling}` : ""}${heldForMissingName ? `, held_missing_name=${heldForMissingName}` : ""}).`);
       return;
     }
 
