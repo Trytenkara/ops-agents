@@ -1,5 +1,6 @@
 import { tenkaraQuery } from "./tenkara-readonly";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { correctMaterialSpelling } from "@/lib/material-spelling";
 
 // Resolve supplier and material UUIDs to display names by hitting Tenkara prod.
 // Used by /work pages where rows reference IDs but humans need names. We cache
@@ -28,7 +29,9 @@ export async function resolveMaterialNames(ids: string[]): Promise<Map<string, s
        from materials where id = any($1::uuid[])`,
     [unique]
   );
-  for (const r of rows) if (r.name && r.name.trim()) out.set(r.id, r.name.trim());
+  // Tenkara is the read-only source of truth, so we can't fix a typo there —
+  // correct it on the way out so the Control Room never displays a known typo.
+  for (const r of rows) if (r.name && r.name.trim()) out.set(r.id, correctMaterialSpelling(r.name.trim()));
   return out;
 }
 

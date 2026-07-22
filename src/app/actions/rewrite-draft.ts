@@ -79,7 +79,7 @@ async function recompose(
     payload.supplier_role === "Marketplace" ||
     payload.enrichment?.tenkara_supplier?.is_marketplace === true;
 
-  const composed = composeOutreachDraft({
+  const composed = await composeOutreachDraft({
     mode,
     ghostBrand,
     clientOrgName: orgName,

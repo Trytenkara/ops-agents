@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getAssignedOrgIds } from "@/lib/org-access";
 import { toCsv } from "@/lib/csv";
 import { QUOTE_TEMPLATE_HEADERS } from "@/lib/tenkara-templates";
+import { correctMaterialSpelling } from "@/lib/material-spelling";
 
 // GET /api/staged-quotes/export-csv
 // Streams a Tenkara-ready CSV of all approved staged_quotes the caller can see,
@@ -38,7 +39,9 @@ export async function GET() {
   const body = toCsv(
     [...QUOTE_TEMPLATE_HEADERS],
     (rows ?? []).map((r: any) =>
-      QUOTE_TEMPLATE_HEADERS.map((col) => (r[col] != null ? r[col] : ""))
+      QUOTE_TEMPLATE_HEADERS.map((col) =>
+        col === "material_name" ? correctMaterialSpelling(r[col] ?? "") : r[col] != null ? r[col] : ""
+      )
     )
   );
 

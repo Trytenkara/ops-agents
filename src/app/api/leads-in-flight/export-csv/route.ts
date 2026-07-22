@@ -3,6 +3,7 @@ import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAssignedOrgIds } from "@/lib/org-access";
 import { toCsv, type CsvCell } from "@/lib/csv";
+import { correctMaterialSpelling } from "@/lib/material-spelling";
 
 // GET /api/leads-in-flight/export-csv?stage=raw&material=SCI&source=ai_discovery&drift=1
 // RLS-scoped to caller's assigned orgs. Mirrors the filters available on
@@ -124,7 +125,7 @@ export async function GET(request: NextRequest) {
         r.id,
         r.orgs?.slug ?? null,
         r.orgs?.name ?? null,
-        r.material_name,
+        correctMaterialSpelling(r.material_name),
         p.inci_name ?? null,
         p.trade_name ?? null,
         r.supplier_name,

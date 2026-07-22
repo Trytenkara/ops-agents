@@ -6,6 +6,7 @@ import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { orgDisplayName } from "@/lib/org-display";
 import { operatorRoles, primaryRole } from "@/lib/operator";
 import { resolveSupplierNamesWithFallback, resolveMaterialNames, resolveQuoteRefs, resolveQuoteExpiries } from "@/lib/tenkara-names";
+import { correctMaterialSpelling } from "@/lib/material-spelling";
 import { ListPageHeader } from "@/components/list-page-header";
 import { MarketplaceFindingsList } from "@/components/marketplace-findings-list";
 import { RequoteList, type RequoteRow } from "@/components/requote-list";
@@ -69,7 +70,7 @@ export default async function OrgPriceIndexPage({
       .limit(1000),
   ]);
 
-  const findings = findingsRes.data ?? [];
+  const findings = (findingsRes.data ?? []).map((f: any) => ({ ...f, material_name: correctMaterialSpelling(f.material_name) }));
   const draftRows = (draftsRes.data ?? []).filter((d: any) => d.agents?.slug === "agent-02-revalidation");
 
   // Latest captured supplier-reply quote — the price that came BACK for a direct

@@ -2,6 +2,8 @@
 // checks run both in the scheduled sweep (outreach-qa/index.ts) and inline when
 // an intake agent (02/03/08) stages a draft via stageDraft().
 
+import { findMisspellings } from "@/lib/material-spelling";
+
 export type Severity = "warn" | "error";
 export interface Finding { severity: Severity; code: string; message: string; }
 
@@ -53,6 +55,16 @@ export const RULES: Record<string, Rule> = {
       severity: "error",
       code: "empty_body",
       message: "Body is empty or suspiciously short (<50 chars).",
+    }];
+  },
+  likely_misspelling: ({ subject, body_preview }) => {
+    const found = findMisspellings(`${subject ?? ""}\n${body_preview ?? ""}`);
+    if (!found.length) return [];
+    const pairs = found.map(([wrong, right]) => `"${wrong}" → "${right}"`);
+    return [{
+      severity: "warn",
+      code: "likely_misspelling",
+      message: `Likely misspelled material name(s): ${pairs.join(", ")}. Confirm the ingredient before sending.`,
     }];
   },
   ghost_brand_leak: ({ body_preview, metadata }) => {

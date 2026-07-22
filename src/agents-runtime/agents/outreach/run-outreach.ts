@@ -72,7 +72,7 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
   const leadIds = ordered.map((l) => l.id);
   const primary = ordered[0];
 
-  const draft = composeOutreachDraft({
+  const draft = await composeOutreachDraft({
     mode,
     ghostBrand,
     clientOrgName,

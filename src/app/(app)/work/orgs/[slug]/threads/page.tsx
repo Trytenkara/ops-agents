@@ -4,6 +4,7 @@ import { getSession, hasAnyRole } from "@/lib/auth";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { operatorRoles, primaryRole } from "@/lib/operator";
 import { resolveSupplierNamesWithFallback, resolveMaterialNames, resolveQuoteRefs } from "@/lib/tenkara-names";
+import { correctMaterialSpelling } from "@/lib/material-spelling";
 import { ListPageHeader } from "@/components/list-page-header";
 import { ThreadsList, type ThreadRow, type ThreadKind } from "@/components/threads-list";
 
@@ -61,7 +62,7 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
     // back to the name carried on the draft metadata.
     supplierName: (d.supplier_id ? supplierNames.get(d.supplier_id) : null) ?? (d.metadata as any)?.supplier_name ?? null,
     materialId: d.material_id ?? null,
-    materialName: (d.material_id ? materialNames.get(d.material_id) : null) ?? (d.metadata as any)?.material_name ?? null,
+    materialName: correctMaterialSpelling((d.material_id ? materialNames.get(d.material_id) : null) ?? (d.metadata as any)?.material_name ?? null),
     quoteRef: d.quote_id ? quoteRefs.get(d.quote_id) ?? null : null,
     status: d.status,
     createdAt: d.created_at ?? null,

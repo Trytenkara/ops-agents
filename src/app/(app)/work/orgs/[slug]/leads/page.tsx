@@ -9,6 +9,7 @@ import { ListPageHeader } from "@/components/list-page-header";
 import { LeadsTabs } from "@/components/leads-tabs";
 import { SuppliersCsvUpload } from "@/components/suppliers-csv-upload";
 import { resolveMaterialGrades, resolveSupplierMarketplace, resolveMaterialNames } from "@/lib/tenkara-names";
+import { correctMaterialSpelling } from "@/lib/material-spelling";
 import { leadMarketKind } from "@/components/lead-rich-row";
 import { getOrgOperatorPool, pickSupplierOperator, operatorBySupplier, getSupplierAssignments } from "@/lib/operator-assignment";
 import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
@@ -116,12 +117,13 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     // Static label (rows without an assign control): a manual claim wins, else auto.
     const operator_name =
       (operator_assigned_id ? operatorNameById.get(operator_assigned_id) ?? null : null) ?? operator_auto_name;
-    const resolvedName =
+    const resolvedName = correctMaterialSpelling(
       (r.material_name && r.material_name.trim()) ||
-      (r.material_id ? leadNames.get(r.material_id) ?? null : null);
+        (r.material_id ? leadNames.get(r.material_id) ?? null : null)
+    );
     return {
       ...r,
-      material_name: resolvedName ?? r.material_name,
+      material_name: resolvedName ?? correctMaterialSpelling(r.material_name),
       needs_material_name: !resolvedName,
       grade: r.material_id ? leadGrades.get(r.material_id) ?? null : null,
       market_kind,

@@ -435,7 +435,7 @@ registerAgent({
 
       const p = (c.lead.payload ?? {}) as any;
       const aggregatorEmail = p.enrichment?.aggregator_contact_email ?? null;
-      const draft = composeOutreachDraft({
+      const draft = await composeOutreachDraft({
         mode: c.mode,
         ghostBrand: c.ghostBrand,
         clientOrgName: c.clientOrgName,
