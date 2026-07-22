@@ -55,7 +55,11 @@ export async function getOutreachTracker(admin: Admin, orgId: string): Promise<O
     admin
       .from("draft_references")
       .select("supplier_id, material_id, status, metadata")
-      .eq("org_id", orgId),
+      .eq("org_id", orgId)
+      // New email app only — exclude legacy Missive drafts carried over from
+      // before the cutover, which otherwise inflate the counts (e.g. Nutripro
+      // showing 66 old Missive drafts alongside 15 real new-app ones).
+      .in("email_client", ["rod_app", "tenkara"]),
     admin
       .from("cases")
       .select("material_id, metadata")
