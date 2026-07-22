@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Table, TableHeader, TableBody, TableRow, TableCell } from "@/components/ui/table";
-import { LeadRichRow, LeadRichHeaders, leadRichColSpan, leadMarketKind } from "@/components/lead-rich-row";
+import { LeadRichRow, LeadRichHeaders, leadRichColSpan, leadMarketKind, humanizeSignal } from "@/components/lead-rich-row";
 import { useListFilter, byString, byDateDesc, usePersistedState } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { BulkRemoveBar } from "@/components/bulk-remove-bar";
@@ -109,14 +109,37 @@ export function LeadsList({
       return next;
     });
 
+  // Returned price mirrors the on-screen cell (from a supplier's reply, if any).
+  const returnedPrice = (r: any): string => {
+    const sr = r.payload?.supplier_reply;
+    if (!sr || sr.captured_price == null) return "";
+    const cur = sr.captured_currency ?? "USD";
+    return sr.captured_unit_price != null
+      ? `${cur} ${sr.captured_unit_price}/${sr.captured_unit_of_measurement ?? "unit"}`
+      : `${cur} ${sr.captured_price}`;
+  };
+
+  // Columns mirror the on-screen table AND carry the fields the bulk-upload
+  // parser recognizes (Supplier/Email/Material/Contact name/Website/Country), so
+  // an exported file can be edited and re-uploaded. Exports the filtered rows.
+  const csvHeaders = [
+    "Supplier", "Email", "Material", "Grade", "Contact name", "Website", "Country",
+    "Type", "Signal", "Returned price", "Source", "Stage", "Operator", "Created",
+  ];
   const csvRows = filtered.map((r: any) => [
     r.supplier_name ?? "",
+    r.payload?.supplier_contact_email ?? "",
     r.material_name ?? "",
-    r.grade ?? "",
+    r.grade ?? r.payload?.grade ?? "",
+    r.payload?.supplier_contact_name ?? "",
+    r.payload?.supplier_website ?? r.payload?.source_url ?? "",
     countryOf(r),
     r.market_kind ?? leadMarketKind(r.payload?.site_type) ?? "",
+    r.payload?.signal ? humanizeSignal(r.payload.signal) : "",
+    returnedPrice(r),
     r.source ?? "",
-    r.status ?? "",
+    r.stage ?? "",
+    r.operator_name ?? r.operator_auto_name ?? "",
     r.created_at ?? "",
   ]);
 
@@ -144,7 +167,7 @@ export function LeadsList({
         </div>
         <ListCsvButton
           filename={filenameFor(slug, "leads")}
-          headers={["Supplier", "Material", "Grade", "Country", "Type", "Source", "Status", "Created"]}
+          headers={csvHeaders}
           rows={csvRows}
         />
       </div>

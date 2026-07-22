@@ -65,7 +65,7 @@ export function LeadsTabs({
       {tab === "marketplace" && <MarketplacePricing rows={rows} canAct={canAct} slug={slug} />}
       {tab === "outreach" &&
         (trackerCount > 0 ? (
-          <OutreachTrackerPanel tracker={tracker} />
+          <OutreachTrackerPanel tracker={tracker} slug={slug} />
         ) : (
           <p className="text-sm text-muted-foreground py-4">
             No outreach activity yet. Once outreach runs for this client, drafts, skipped leads, and manual cases show up here.

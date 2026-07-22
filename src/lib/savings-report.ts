@@ -108,16 +108,21 @@ export async function buildSavingsReport(
 }
 
 // CSV rows for a client-facing savings report. Pairs with lib/csv toCsv().
+// Mirrors the on-screen worksheet: client cost and market average are separate
+// columns (client cost reads "not provided" when there's no client price), then
+// the best Tenkara price + savings. `client_cost_source` records where the
+// client cost came from (tenkara current quote vs an uploaded PO).
 export const SAVINGS_CSV_HEADERS = [
   "material",
   "grade",
   "unit",
-  "their_price_per_unit",
+  "client_cost_per_unit",
+  "client_cost_source",
+  "market_avg_per_unit",
   "best_tenkara_price_per_unit",
   "recommended_supplier",
   "savings_per_unit",
   "savings_pct",
-  "market_avg_per_unit",
   "quotes_in_market",
   "suppliers_in_market",
 ] as const;
@@ -127,12 +132,13 @@ export function savingsCsvRows(report: SavingsReport): (string | number)[][] {
     l.material_name,
     l.grade ?? "",
     l.unit,
-    round(l.their_unit_price),
+    l.has_client_price ? round(l.their_unit_price) : "not provided",
+    l.has_client_price ? (l.client_price_source ?? "") : "",
+    round(l.market_avg_unit_price),
     round(l.best_unit_price),
     l.recommended_supplier_name ?? "",
     round(l.savings_per_unit),
     round(l.savings_pct, 1),
-    round(l.market_avg_unit_price),
     l.n_quotes,
     l.n_suppliers,
   ]);

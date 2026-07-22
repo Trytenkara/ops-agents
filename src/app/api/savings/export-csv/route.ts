@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { toCsv } from "@/lib/csv";
-import { buildSavingsReport, savingsCsvRows, SAVINGS_CSV_HEADERS } from "@/lib/savings-report";
+import { buildSavingsReport, savingsCsvRows, SAVINGS_CSV_HEADERS, clientCostFromOrders } from "@/lib/savings-report";
 
 // GET /api/savings/export-csv?org=<slug>
 // Client-facing per-material savings report: their accepted price vs the
@@ -27,7 +27,10 @@ export async function GET(req: NextRequest) {
   if (!org) return new NextResponse("org not found", { status: 404 });
   if (!org.tenkara_org_id) return new NextResponse("org not linked to Tenkara", { status: 400 });
 
-  const report = await buildSavingsReport(org.tenkara_org_id, { onlyWithSavings: true });
+  // Match the on-screen worksheet: fill the client baseline from uploaded POs
+  // when Tenkara has no current quote.
+  const clientCostFallback = await clientCostFromOrders(admin, org.id).catch(() => new Map<string, number>());
+  const report = await buildSavingsReport(org.tenkara_org_id, { onlyWithSavings: true, clientCostFallback });
   const body = toCsv([...SAVINGS_CSV_HEADERS], savingsCsvRows(report));
 
   const date = new Date().toISOString().slice(0, 10);
