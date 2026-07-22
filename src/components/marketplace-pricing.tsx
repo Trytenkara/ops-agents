@@ -150,6 +150,11 @@ function MarketplaceLeadCard({ row, canAct }: { row: Row; canAct: boolean }) {
                 needs manual pull{pull.reason ? ` · ${pullReasonLabel[pull.reason] ?? pull.reason}` : ""}
               </Badge>
             )}
+            {!pull && (
+              <Badge variant="outline" title="Not checked yet — the marketplace price agent will attempt to pull the listed price. You can also enter the price ladder manually now.">
+                price pull pending
+              </Badge>
+            )}
             <span className="text-xs text-muted-foreground">· {row.material_name ?? "—"}</span>
           </div>
           {sourceUrl && (
