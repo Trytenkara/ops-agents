@@ -10,8 +10,18 @@ import { ThreadsList, type ThreadRow, type ThreadKind } from "@/components/threa
 
 export const dynamic = "force-dynamic";
 
+// Every draft an agent composes in response to a supplier's incoming email,
+// regardless of which producer staged it. Agent 08 / the Tenkara webhook use
+// "inbound_reply" (+ "..._with_followup" when it introduces held materials);
+// Agent 15 uses "reply_manager_response". All are inbound replies to the operator.
+const INBOUND_REPLY_KINDS = new Set([
+  "inbound_reply",
+  "inbound_reply_with_followup",
+  "reply_manager_response",
+]);
+
 function kindOf(d: any): ThreadKind {
-  return d.metadata?.draft_kind === "inbound_reply" ? "inbound" : "outbound";
+  return INBOUND_REPLY_KINDS.has(d.metadata?.draft_kind) ? "inbound" : "outbound";
 }
 
 // Unified email-thread workspace: outbound RFQs + inbound supplier replies for
