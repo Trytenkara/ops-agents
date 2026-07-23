@@ -145,21 +145,24 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   const flowAt = (s: string) => (ADVANCED.includes(refMeta.flow_status) ? refMeta.flow_status : s);
 
   // 3. Stamp reply_detected on the originating draft (mirrors Agent 08).
+  // Held in a const so the final step-8 update (which also spreads refMeta) can
+  // re-apply it — otherwise step 8's stale-refMeta spread clobbers it back to null.
+  const replyDetected = {
+    detected_at: new Date().toISOString(),
+    source: "tenkara_webhook",
+    reply_message_id: msg.message_id,
+    reply_conversation_id: msg.conversation_id,
+    reply_sender_email: from.address,
+    reply_sender_name: from.name,
+    reply_subject: msg.subject ?? null,
+  };
   await admin
     .from("draft_references")
     .update({
       metadata: {
         ...refMeta,
         flow_status: flowAt("reply_received"),
-        reply_detected: {
-          detected_at: new Date().toISOString(),
-          source: "tenkara_webhook",
-          reply_message_id: msg.message_id,
-          reply_conversation_id: msg.conversation_id,
-          reply_sender_email: from.address,
-          reply_sender_name: from.name,
-          reply_subject: msg.subject ?? null,
-        },
+        reply_detected: replyDetected,
       },
     })
     .eq("id", ref.id);
@@ -393,6 +396,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       metadata: {
         ...refMeta,
         flow_status: flowAt("responded"),
+        reply_detected: replyDetected,
         reply_draft: {
           draft_ref_id: staged.draftRefId,
           staged_at: new Date().toISOString(),

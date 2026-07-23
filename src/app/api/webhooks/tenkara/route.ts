@@ -23,17 +23,37 @@ const statusSchema = z.object({
   occurred_at: z.string().optional(),
 });
 
-const inboundSchema = z.object({
-  event: z.literal("message.received"),
-  conversation_id: z.string().min(1),
-  message_id: z.string().min(1),
-  in_reply_to_draft_id: z.string().nullish(),
-  from: z.string().min(1),
-  subject: z.string().nullish(),
-  body_text: z.string().nullish(),
-  body_html: z.string().nullish(),
-  received_at: z.string().nullish(),
-});
+// Tenkara sends the sender as split from_email + from_name and the time as
+// `timestamp`; earlier/other callers may send a combined `from` / `received_at`.
+// Accept both and normalize to { from, received_at } so handleInboundReply is
+// unchanged. `from` is required only after we fail to derive it from from_email.
+const inboundSchema = z
+  .object({
+    event: z.literal("message.received"),
+    conversation_id: z.string().min(1),
+    message_id: z.string().min(1),
+    in_reply_to_draft_id: z.string().nullish(),
+    from: z.string().nullish(),
+    from_email: z.string().nullish(),
+    from_name: z.string().nullish(),
+    subject: z.string().nullish(),
+    body_text: z.string().nullish(),
+    body_html: z.string().nullish(),
+    received_at: z.string().nullish(),
+    timestamp: z.string().nullish(),
+  })
+  .transform((v) => {
+    const from =
+      v.from && v.from.trim()
+        ? v.from
+        : v.from_email
+          ? v.from_name
+            ? `${v.from_name} <${v.from_email}>`
+            : v.from_email
+          : "";
+    return { ...v, from, received_at: v.received_at ?? v.timestamp ?? null };
+  })
+  .refine((v) => v.from.trim().length > 0, { path: ["from"], message: "from or from_email is required" });
 
 // Fired after a cold-outbound conversation+draft is created via Tenkara's
 // /api/external/conversations. A resilience confirmation (fires once per real
