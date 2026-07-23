@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { postSlackMessage } from "@/lib/slack";
+import { correctMaterialSpelling } from "@/lib/material-spelling";
 
 // Material names come from Tenkara (read-only). When a name is clearly typo'd
 // (e.g. "Butylene G;ycol"), Agent 03 flags a suggested correction and pings the
@@ -97,8 +98,26 @@ type Admin = { from: (t: string) => any };
 // misspelling. Cheap: only suspicious names hit the LLM. Dedup via the unique
 // (org, lower(wrong)) index — a re-scan won't re-flag or re-ping.
 export async function flagMaterialNames(admin: Admin, orgId: string, names: string[], orgLabel: string): Promise<number> {
-  const suspicious = Array.from(new Set(names.filter(looksSuspicious)));
-  if (!suspicious.length) return 0;
+  const allNames = Array.from(new Set(names.filter(Boolean)));
+  const suspicious = allNames.filter(looksSuspicious);
+
+  // Clean dictionary typos that looksSuspicious() misses (no junk chars) — the
+  // raw source name matches the curated misspelling list, e.g. "Cayanne Pepper".
+  // Deterministic (no LLM). These are typos in the Tenkara source record, so the
+  // fix is a rename at the source, not just an OA-side override. We also detect
+  // the resulting DUPLICATE: if the corrected spelling already exists as another
+  // live material, the client has two records for the same thing.
+  const present = new Set(allNames.map((n) => n.toLowerCase()));
+  const sourceTypos = new Map<string, { suggested: string; duplicate: boolean }>();
+  for (const n of allNames) {
+    if (looksSuspicious(n)) continue; // covered by the suspicious path below
+    const fix = correctMaterialSpelling(n);
+    if (fix && fix.toLowerCase() !== n.toLowerCase()) {
+      sourceTypos.set(n, { suggested: fix, duplicate: present.has(fix.toLowerCase()) });
+    }
+  }
+
+  if (!suspicious.length && !sourceTypos.size) return 0;
 
   // Skip names already flagged (any status) so we don't re-ping.
   const { data: existing } = await admin
@@ -107,21 +126,23 @@ export async function flagMaterialNames(admin: Admin, orgId: string, names: stri
     .eq("org_id", orgId);
   const seen = new Set((existing ?? []).map((r: any) => (r.wrong_name as string).toLowerCase()));
   const fresh = suspicious.filter((n) => !seen.has(n.toLowerCase()));
-  if (!fresh.length) return 0;
 
-  // Two problem classes: typos (LLM suggests a spelling fix) and malformed junk
-  // (repeated-word spam / absurd length — likely test data) that must never be
-  // drafted. Malformed names get a deterministic flag so they don't depend on
-  // the LLM returning a "correction" for what isn't really a typo.
+  // Two problem classes on the suspicious path: typos (LLM suggests a spelling
+  // fix) and malformed junk (repeated-word spam / absurd length — likely test
+  // data) that must never be drafted. Malformed names get a deterministic flag.
   const malformed = fresh.filter(isMalformed);
   const typoCandidates = fresh.filter((n) => !isMalformed(n));
   const typoFixes = await suggestCorrections(typoCandidates);
 
-  type Flag = { wrong: string; suggested: string; malformed: boolean };
+  type Flag = { wrong: string; suggested: string; kind: "malformed" | "typo" | "source"; duplicate: boolean };
   const flags: Flag[] = [
-    ...malformed.map((wrong) => ({ wrong, suggested: cleanMalformed(wrong), malformed: true })),
-    ...Object.entries(typoFixes).map(([wrong, suggested]) => ({ wrong, suggested, malformed: false })),
+    ...malformed.map((wrong) => ({ wrong, suggested: cleanMalformed(wrong), kind: "malformed" as const, duplicate: false })),
+    ...Object.entries(typoFixes).map(([wrong, suggested]) => ({ wrong, suggested, kind: "typo" as const, duplicate: false })),
+    ...Array.from(sourceTypos.entries())
+      .filter(([wrong]) => !seen.has(wrong.toLowerCase()))
+      .map(([wrong, { suggested, duplicate }]) => ({ wrong, suggested, kind: "source" as const, duplicate })),
   ];
+  if (!flags.length) return 0;
 
   let flagged = 0;
   for (const f of flags) {
@@ -133,9 +154,16 @@ export async function flagMaterialNames(admin: Admin, orgId: string, names: stri
     if (!ins) continue; // already existed
     flagged++;
     const preview = f.wrong.length > 80 ? `${f.wrong.slice(0, 80)}…` : f.wrong;
-    const text = f.malformed
-      ? `:rotating_light: *Malformed material name* — *${orgLabel}*: "${preview}" looks like junk/test data (repeated or over-long text). Outreach is held; fix the name on the client's Materials/Leads page. Suggested cleanup: *"${f.suggested}"*.`
-      : `:pencil2: *Material spelling flag* — *${orgLabel}*: "${f.wrong}" looks misspelled → suggest *"${f.suggested}"*. Review on the client's Materials/Leads page to correct all instances.`;
+    let text: string;
+    if (f.kind === "malformed") {
+      text = `:rotating_light: *Malformed material name* — *${orgLabel}*: "${preview}" looks like junk/test data (repeated or over-long text). Outreach is held; fix the name on the client's Materials/Leads page. Suggested cleanup: *"${f.suggested}"*.`;
+    } else if (f.kind === "typo") {
+      text = `:pencil2: *Material spelling flag* — *${orgLabel}*: "${f.wrong}" looks misspelled → suggest *"${f.suggested}"*. Review on the client's Materials/Leads page to correct all instances.`;
+    } else {
+      text = `:pencil2: *Material name misspelled at source* — *${orgLabel}*: "${f.wrong}" should be *"${f.suggested}"*.` +
+        (f.duplicate ? ` :warning: A separate *"${f.suggested}"* material also exists — these are duplicates; consolidate them.` : "") +
+        ` The name comes from Tenkara (read-only here) — rename it in the Tenkara app. The Control Room shows it corrected meanwhile.`;
+    }
     await postSlackMessage({ channel: FEEDBACK_CHANNEL, text }).catch(() => {});
   }
   return flagged;
