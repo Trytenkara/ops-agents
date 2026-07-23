@@ -60,16 +60,28 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     .order("created_at", { ascending: false });
   const materialFlags = (flagRows ?? []) as MaterialFlag[];
 
-  const { data: rows } = await admin
-    .from("leads_in_flight")
-    .select(
-      "id, org_id, supplier_name, supplier_id, assigned_operator_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)"
-    )
-    .eq("org_id", org.id)
-    .eq("status", "active")
-    .order("created_at", { ascending: false })
-    .limit(200);
-  let leads = (rows ?? []) as any[];
+  // PostgREST hard-caps a single response at 1000 rows, so a plain .limit() can't
+  // return every active lead (a busy org runs to ~1k+ across all its materials).
+  // Page through with .range() so the tab counts and lists reflect the real total
+  // — otherwise the page silently showed only the newest 200.
+  const LEAD_PAGE = 1000;
+  const LEAD_HARD_CAP = 5000; // safety bound against a pathological org
+  const rawRows: any[] = [];
+  for (let from = 0; from < LEAD_HARD_CAP; from += LEAD_PAGE) {
+    const { data: page } = await admin
+      .from("leads_in_flight")
+      .select(
+        "id, org_id, supplier_name, supplier_id, assigned_operator_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)"
+      )
+      .eq("org_id", org.id)
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .range(from, from + LEAD_PAGE - 1);
+    if (!page || page.length === 0) break;
+    rawRows.push(...page);
+    if (page.length < LEAD_PAGE) break;
+  }
+  let leads = rawRows;
 
   // Grade + name live on the Tenkara material — resolve by material_id and
   // attach. A lead's stored material_name can be blank/stale (unbranded

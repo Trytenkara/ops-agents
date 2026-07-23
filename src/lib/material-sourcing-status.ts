@@ -81,6 +81,27 @@ function compute(m: MaterialProfileRow, score: SourcingScorecardLine | undefined
   return { key: "not_started", label: "Not started", reason: "no sourcing yet", cls: "border border-border text-muted-foreground", tab: "/leads" };
 }
 
+// Page through every active lead for an org (material_id + payload only).
+// PostgREST returns at most 1000 rows per request, so a single unbounded select
+// silently truncates on orgs with 1000+ active leads.
+async function fetchAllActiveLeads(admin: Admin, orgId: string): Promise<{ material_id: string | null; payload: any }[]> {
+  const PAGE = 1000;
+  const HARD_CAP = 10000;
+  const out: { material_id: string | null; payload: any }[] = [];
+  for (let from = 0; from < HARD_CAP; from += PAGE) {
+    const { data } = await admin
+      .from("leads_in_flight")
+      .select("material_id, payload")
+      .eq("org_id", orgId)
+      .eq("status", "active")
+      .range(from, from + PAGE - 1);
+    if (!data || data.length === 0) break;
+    out.push(...(data as { material_id: string | null; payload: any }[]));
+    if (data.length < PAGE) break;
+  }
+  return out;
+}
+
 // Per-material sourcing status, keyed by Tenkara material_id. Combines the
 // sourcing scorecard (collected quotes / beats-client), in-flight leads &
 // outreach drafts, and current-quote expiry into one chip per material.
@@ -90,13 +111,17 @@ export async function getMaterialSourcingStatus(
   tenkaraOrgId: string | null,
   profile: MaterialProfile
 ): Promise<Record<string, MaterialSourcingStatus>> {
-  const [leadsRes, draftsRes] = await Promise.all([
-    admin.from("leads_in_flight").select("material_id, payload").eq("org_id", orgId).eq("status", "active"),
+  const [leadRows, draftsRes] = await Promise.all([
+    // PostgREST caps a single response at 1000 rows; a busy org has more active
+    // leads than that, so page through — otherwise per-material lead counts
+    // undercount (the chip would read 203 when the real total is 207).
+    fetchAllActiveLeads(admin, orgId),
     // A 'staged'/'reviewed' draft is composed but NOT yet sent — an operator
     // still has to send it from Tenkara. Only 'sent' (flipped by the Tenkara
     // draft.sent webhook) means outreach actually went out.
     admin.from("draft_references").select("material_id, status, metadata").eq("org_id", orgId).in("status", ["staged", "reviewed", "sent"]),
   ]);
+  const leadsRes = { data: leadRows };
   const leadCount = new Map<string, number>();
   // A lead held to compile the first email (payload.outreach_hold) shows a
   // distinct "Compiling email" chip rather than a plain "Sourcing" lead count.
