@@ -9,8 +9,14 @@ import { uploadCsvAndSign } from "@/lib/storage";
 import { onlyOrgNames } from "@/lib/org-scope";
 import { flagMaterialNames, correctName } from "@/lib/material-name-flags";
 import { materialLabel } from "@/lib/material-label";
+import { sourceReadyEnabled, fireSourceReadyDiscovery } from "./sourceready";
 
 const EMPTY_OVERRIDES = new Map<string, string>();
+
+// SourceReady discovery is fired per material (bounded per run) to a Gamut
+// webhook that runs supplier_search_v3 and stages source='sourceready' leads
+// out-of-band. Inert unless SOURCEREADY_WEBHOOK_URL + _SECRET are set.
+const SOURCEREADY_MAX_MATERIALS_PER_RUN = envInt("SOURCEREADY_MAX_MATERIALS_PER_RUN", 25);
 
 // v1 trims (vs. full spec):
 //   - existing-DB only mode. BrowserBase external discovery is gated on
@@ -382,6 +388,7 @@ registerAgent({
     let skippedByMirror = 0;
     let skippedByExisting = 0;
     let skippedByExclusion = 0;
+    let sourceReadyFired = 0;
     const noLeadMaterials: string[] = [];
 
     // Per-client sourcing exclusions (do-not-contact companies + excluded
@@ -697,6 +704,36 @@ registerAgent({
             });
           }
         }
+      }
+
+      // 5c. SourceReady discovery — fire a signed webhook to the Gamut agent
+      //     that holds the SourceReady MCP; it runs supplier_search_v3 and
+      //     stages source='sourceready' leads out-of-band. Gated like scout
+      //     (new or backlog materials only) and capped per run to bound cost.
+      //     Exclusions here are best-effort; Agent 04 re-checks do-not-contact /
+      //     excluded countries before any email is sent.
+      const srBacklog = underservedIds.has(material.id);
+      if (
+        sourceReadyEnabled() &&
+        sourceReadyFired < SOURCEREADY_MAX_MATERIALS_PER_RUN &&
+        (!alreadyScouted.has(material.id) || srBacklog)
+      ) {
+        const excludeHosts = new Set<string>(graphHosts);
+        for (const h of existingHostsByMaterial.get(material.id) ?? []) excludeHosts.add(h);
+        const ok = await fireSourceReadyDiscovery({
+          oaOrgId,
+          materialId: material.id,
+          materialName: matLabel,
+          inci: material.inci ?? null,
+          tenkaraOrgId: material.tenkara_org_id ?? null,
+          excludeHosts: Array.from(excludeHosts),
+          excludedCountries: ex ? Array.from(ex.excludedCountries) : [],
+        });
+        if (ok) sourceReadyFired++;
+        await ctx.log(
+          ok ? `Fired SourceReady discovery for ${matLabel}` : `SourceReady discovery request failed for ${matLabel}`,
+          { step: "sourceready", level: ok ? "info" : "warn", data: { material_id: material.id } }
+        );
       }
 
       if (stagedThisMaterial > 0) {
