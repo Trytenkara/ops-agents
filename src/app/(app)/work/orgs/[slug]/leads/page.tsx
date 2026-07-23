@@ -160,6 +160,18 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     marketplace: { total: 0, emailed: 0, manual: 0, needsPull: 0, pending: 0 },
   }));
 
+  // Distinct material names across ALL active leads for the org (not just the 200
+  // shown) so the CSV-download material picker is complete. Uses stored names so
+  // the export route's material filter (ilike on material_name) matches.
+  const { data: matRows } = await admin
+    .from("leads_in_flight")
+    .select("material_name")
+    .eq("org_id", org.id)
+    .eq("status", "active");
+  const materialOptions = Array.from(
+    new Set(((matRows ?? []) as { material_name: string | null }[]).map((r) => r.material_name).filter(Boolean) as string[])
+  ).sort((a, b) => a.localeCompare(b));
+
   return (
     <div className="space-y-6">
       <ListPageHeader
@@ -197,7 +209,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           </p>
         </div>
       )}
-      <LeadsTabs rows={leads} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} />
+      <LeadsTabs rows={leads} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} materials={materialOptions} />
 
       <section className="space-y-2 pt-2">
         <h2 className="font-serif text-xl tracking-tight">

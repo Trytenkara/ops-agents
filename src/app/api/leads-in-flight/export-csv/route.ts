@@ -20,6 +20,9 @@ export async function GET(request: NextRequest) {
   }
 
   const sp = request.nextUrl.searchParams;
+  // stage=all (or allStages=1) exports every stage — the per-client Leads tab
+  // shows all active leads regardless of stage, so its download needs that.
+  const allStages = sp.get("stage") === "all" || sp.get("allStages") === "1";
   const stage: Stage = (STAGES as readonly string[]).includes(sp.get("stage") ?? "")
     ? (sp.get("stage") as Stage)
     : "raw";
@@ -29,6 +32,9 @@ export async function GET(request: NextRequest) {
   const status = (sp.get("status") ?? "").trim();
   const orgSlug = (sp.get("org") ?? "").trim();
   const channel = (sp.get("channel") ?? "").trim();
+  // market=marketplace → published-price listings (site_type M/MS); market=direct
+  // → everything else (non-marketplace suppliers). Mirrors the tab's split.
+  const market = (sp.get("market") ?? "").trim();
   const pricedOnly = sp.get("priced") === "1";
 
   const admin = createAdminClient();
@@ -52,13 +58,14 @@ export async function GET(request: NextRequest) {
     .select(
       "id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)"
     )
-    .eq("stage", stage)
     .order("confidence_score", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false });
 
+  if (!allStages) q = q.eq("stage", stage);
+
   if (status) {
     q = q.eq("status", status);
-  } else if (stage === "terminal") {
+  } else if (!allStages && stage === "terminal") {
     q = q.in("status", ["active", "dropped", "terminal"]);
   } else {
     q = q.eq("status", "active");
@@ -72,6 +79,8 @@ export async function GET(request: NextRequest) {
   }
   if (source) q = q.eq("source", source);
   if (channel === "M" || channel === "MS" || channel === "N") q = q.eq("payload->>site_type", channel);
+  if (market === "marketplace") q = q.in("payload->>site_type", ["M", "MS"]);
+  else if (market === "direct") q = q.or("payload->>site_type.eq.N,payload->>site_type.is.null");
   if (pricedOnly) q = q.not("payload->>pack_sizes_pricing", "is", null);
 
   const { data: rows, error } = await q;
@@ -160,7 +169,7 @@ export async function GET(request: NextRequest) {
   );
 
   const iso = new Date().toISOString().slice(0, 10);
-  const slug = buildFilterSlug({ stage, material, source, status, driftOnly, org: orgSlug });
+  const slug = buildFilterSlug({ stage: allStages ? "all" : stage, material, source, status, driftOnly, market, org: orgSlug });
   const filename = `leads-in-flight-${slug}-${iso}.csv`;
 
   return new NextResponse(body, {
@@ -179,6 +188,7 @@ function buildFilterSlug({
   source,
   status,
   driftOnly,
+  market,
   org,
 }: {
   stage: string;
@@ -186,11 +196,13 @@ function buildFilterSlug({
   source: string;
   status: string;
   driftOnly: boolean;
+  market: string;
   org: string;
 }) {
   const parts: string[] = [`stage-${stage}`];
   if (org) parts.push(`org-${slugify(org)}`);
   if (material) parts.push(`material-${slugify(material)}`);
+  if (market) parts.push(market === "marketplace" ? "marketplace" : "non-marketplace");
   if (source) parts.push(`source-${slugify(source)}`);
   if (status) parts.push(`status-${slugify(status)}`);
   if (driftOnly) parts.push("drift");
