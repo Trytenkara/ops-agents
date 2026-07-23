@@ -31,6 +31,8 @@ export interface ImportYetiRequest {
   tenkaraOrgId: string | null;
   product?: string; // ImportYeti search term; webhook defaults to materialName
   excludedCountries: string[]; // client-configured country names (best-effort)
+  size?: number; // page stride (maps to --page-size on the ImportYeti side)
+  page?: number; // 1-based; webhook maps to --offset = (page-1)*size to walk deeper
   dryRun?: boolean;
 }
 

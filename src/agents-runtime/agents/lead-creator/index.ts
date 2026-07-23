@@ -18,6 +18,12 @@ const EMPTY_OVERRIDES = new Map<string, string>();
 // webhook that runs supplier_search_v3 and stages source='sourceready' leads
 // out-of-band. Inert unless SOURCEREADY_WEBHOOK_URL + _SECRET are set.
 const SOURCEREADY_MAX_MATERIALS_PER_RUN = envInt("SOURCEREADY_MAX_MATERIALS_PER_RUN", 25);
+// Suppliers requested per discovery fire; also the page stride. Each pass sends
+// page = floor(existing source leads for this material / size) + 1 so repeated
+// runs walk deeper (page 1, 2, 3, …) instead of re-fetching the same top results.
+const SOURCEREADY_PAGE_SIZE = envInt("SOURCEREADY_PAGE_SIZE", 25);
+const IMPORTYETI_PAGE_SIZE = envInt("IMPORTYETI_PAGE_SIZE", 10);
+const pageFor = (count: number, size: number) => Math.floor(Math.max(0, count) / Math.max(1, size)) + 1;
 // ImportYeti discovery mirrors SourceReady: fired per material (bounded per run)
 // to a Gamut webhook that pulls US-customs suppliers and stages source='importyeti'
 // leads out-of-band. Inert unless IMPORTYETI_WEBHOOK_URL + _SECRET are set.
@@ -203,6 +209,12 @@ registerAgent({
     //         every tick on a material that simply has few suppliers to find.
     const underservedIds = new Set<string>();
     const existingHostsByMaterial = new Map<string, Set<string>>();
+    // Per-source active lead counts per material, used to page the SourceReady /
+    // ImportYeti discovery fires deeper on each pass (page = count/size + 1) so
+    // repeated runs walk past the first page instead of re-fetching the same top
+    // results. Populated from the same bulk fetch that computes the backlog floor.
+    const srLeadCount = new Map<string, number>();
+    const iyLeadCount = new Map<string, number>();
     if (!onlyMaterialId) {
       const targetTenkaraOrgIds = onlyOrgs.length
         ? Array.from(allowedTenkaraOrgIds)
@@ -216,11 +228,16 @@ registerAgent({
         for (let from = 0; ; from += 1000) {
           const { data: rows } = await admin
             .from("leads_in_flight")
-            .select("material_id")
+            .select("material_id, source")
             .eq("status", "active")
             .range(from, from + 999);
-          const batch = (rows ?? []) as { material_id: string | null }[];
-          for (const r of batch) if (r.material_id) leadCount.set(r.material_id, (leadCount.get(r.material_id) ?? 0) + 1);
+          const batch = (rows ?? []) as { material_id: string | null; source: string | null }[];
+          for (const r of batch) {
+            if (!r.material_id) continue;
+            leadCount.set(r.material_id, (leadCount.get(r.material_id) ?? 0) + 1);
+            if (r.source === "sourceready") srLeadCount.set(r.material_id, (srLeadCount.get(r.material_id) ?? 0) + 1);
+            else if (r.source === "importyeti") iyLeadCount.set(r.material_id, (iyLeadCount.get(r.material_id) ?? 0) + 1);
+          }
           if (batch.length < 1000) break;
         }
         const lastAttempt = new Map<string, number>();
@@ -726,6 +743,7 @@ registerAgent({
       ) {
         const excludeHosts = new Set<string>(graphHosts);
         for (const h of existingHostsByMaterial.get(material.id) ?? []) excludeHosts.add(h);
+        const srPage = pageFor(srLeadCount.get(material.id) ?? 0, SOURCEREADY_PAGE_SIZE);
         const ok = await fireSourceReadyDiscovery({
           oaOrgId,
           materialId: material.id,
@@ -734,11 +752,13 @@ registerAgent({
           tenkaraOrgId: material.tenkara_org_id ?? null,
           excludeHosts: Array.from(excludeHosts),
           excludedCountries: ex ? Array.from(ex.excludedCountries) : [],
+          size: SOURCEREADY_PAGE_SIZE,
+          page: srPage,
         });
         if (ok) sourceReadyFired++;
         await ctx.log(
-          ok ? `Fired SourceReady discovery for ${matLabel}` : `SourceReady discovery request failed for ${matLabel}`,
-          { step: "sourceready", level: ok ? "info" : "warn", data: { material_id: material.id } }
+          ok ? `Fired SourceReady discovery for ${matLabel} (page ${srPage})` : `SourceReady discovery request failed for ${matLabel}`,
+          { step: "sourceready", level: ok ? "info" : "warn", data: { material_id: material.id, page: srPage } }
         );
       }
 
@@ -752,6 +772,7 @@ registerAgent({
         importYetiFired < IMPORTYETI_MAX_MATERIALS_PER_RUN &&
         (!alreadyScouted.has(material.id) || srBacklog)
       ) {
+        const iyPage = pageFor(iyLeadCount.get(material.id) ?? 0, IMPORTYETI_PAGE_SIZE);
         const ok = await fireImportYetiDiscovery({
           oaOrgId,
           materialId: material.id,
@@ -759,11 +780,13 @@ registerAgent({
           inci: material.inci ?? null,
           tenkaraOrgId: material.tenkara_org_id ?? null,
           excludedCountries: ex ? Array.from(ex.excludedCountries) : [],
+          size: IMPORTYETI_PAGE_SIZE,
+          page: iyPage,
         });
         if (ok) importYetiFired++;
         await ctx.log(
-          ok ? `Fired ImportYeti discovery for ${matLabel}` : `ImportYeti discovery request failed for ${matLabel}`,
-          { step: "importyeti", level: ok ? "info" : "warn", data: { material_id: material.id } }
+          ok ? `Fired ImportYeti discovery for ${matLabel} (page ${iyPage})` : `ImportYeti discovery request failed for ${matLabel}`,
+          { step: "importyeti", level: ok ? "info" : "warn", data: { material_id: material.id, page: iyPage } }
         );
       }
 

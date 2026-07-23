@@ -30,6 +30,7 @@ export interface SourceReadyRequest {
   excludeHosts: string[];
   excludedCountries: string[]; // client-configured country names (best-effort)
   size?: number;
+  page?: number; // 1-based; each pass advances so repeated fires walk deeper
 }
 
 // POST a signed discovery request. Resolves to true on a 2xx acceptance.
