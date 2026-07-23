@@ -39,17 +39,22 @@ export function LeadsList({
   slug,
   orgId,
   operatorOptions,
+  forceStage,
 }: {
   rows: any[];
   canAct: boolean;
   slug: string;
   orgId?: string;
   operatorOptions?: { id: string; name: string }[];
+  // When set (e.g. the "Not enriched" tab), lock the stage filter to this value
+  // and hide the Stage dropdown — the tab already scopes the list.
+  forceStage?: string;
 }) {
   const [type, setType] = usePersistedState("leads-type", "all");
   const [country, setCountry] = usePersistedState("leads-country", "all");
   const [recency, setRecency] = usePersistedState("leads-recency", "all");
   const [stage, setStage] = usePersistedState("leads-stage", "all");
+  const effectiveStage = forceStage ?? stage;
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const toggleOne = (id: string, checked: boolean) =>
@@ -75,7 +80,7 @@ export function LeadsList({
   )
     .filter((r: any) => (country === "all" ? true : countryOf(r) === country))
     .filter((r: any) =>
-      stage === "all" ? true : stage === "held" ? !!r.needs_material_name : r.stage === stage
+      effectiveStage === "all" ? true : effectiveStage === "held" ? !!r.needs_material_name : r.stage === effectiveStage
     )
     .filter((r: any) => {
       if (recencyCutoff == null) return true;
@@ -148,10 +153,12 @@ export function LeadsList({
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="flex flex-wrap items-end gap-3">
           {controls}
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-muted-foreground">Stage</span>
-            <Select size="sm" className="min-w-[9rem]" ariaLabel="Stage" value={stage} onValueChange={setStage} options={STAGE_OPTIONS} />
-          </label>
+          {!forceStage && (
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">Stage</span>
+              <Select size="sm" className="min-w-[9rem]" ariaLabel="Stage" value={stage} onValueChange={setStage} options={STAGE_OPTIONS} />
+            </label>
+          )}
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">Type</span>
             <Select size="sm" className="min-w-[9rem]" ariaLabel="Type" value={type} onValueChange={setType} options={TYPE_OPTIONS} />
