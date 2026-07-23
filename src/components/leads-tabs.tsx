@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { LeadsList } from "@/components/leads-list";
 import { MarketplacePricing } from "@/components/marketplace-pricing";
 import { OutreachTrackerPanel } from "@/components/outreach-tracker-panel";
+import { LeadsCsvDownload } from "@/components/leads-csv-download";
 import { leadMarketKind } from "@/components/lead-rich-row";
 import type { OutreachTracker } from "@/lib/outreach-tracker";
 
@@ -20,6 +21,7 @@ export function LeadsTabs({
   orgId,
   operatorOptions,
   tracker,
+  materials,
 }: {
   rows: any[];
   canAct: boolean;
@@ -27,6 +29,7 @@ export function LeadsTabs({
   orgId?: string;
   operatorOptions?: { id: string; name: string }[];
   tracker: OutreachTracker;
+  materials: string[];
 }) {
   const marketCount = rows.filter(
     (r) => (r.market_kind ?? leadMarketKind(r.payload?.site_type)) === "marketplace"
@@ -54,10 +57,13 @@ export function LeadsTabs({
 
   return (
     <div className="space-y-4">
-      <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1">
-        {tabBtn("all", "All leads", rows.length)}
-        {tabBtn("marketplace", "Marketplace pricing", marketCount)}
-        {tabBtn("outreach", "Outreach", trackerCount)}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1">
+          {tabBtn("all", "All leads", rows.length)}
+          {tabBtn("marketplace", "Marketplace pricing", marketCount)}
+          {tabBtn("outreach", "Outreach", trackerCount)}
+        </div>
+        <LeadsCsvDownload slug={slug} materials={materials} />
       </div>
       {tab === "all" && (
         <LeadsList rows={rows} canAct={canAct} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
