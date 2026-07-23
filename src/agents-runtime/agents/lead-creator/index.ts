@@ -24,17 +24,21 @@ const EMPTY_OVERRIDES = new Map<string, string>();
 // logic. Production cron stays at the 4h cadence the spec asks for.
 const DEFAULT_LOOKBACK_HOURS = 4;
 const RECENT_MIRROR_DAYS = 90;
-const MAX_NEW_LEADS_PER_RUN = 120;  // expansive runs: up to ~50 scout leads/material across marketplace + non-marketplace, plus graph leads
+const MAX_NEW_LEADS_PER_RUN = 300;  // expansive runs: up to ~100 scout leads/material across marketplace + non-marketplace, plus graph leads. Real work-per-run is bounded by DRIVE_BUDGET_MS (scout call count), so this is a flood-guard, not the throttle.
 
-// Richness floor: a material is considered "needs sourcing" until it has this
-// many active leads. Beyond the recency window, every run also pulls materials
-// below the floor (0 leads = never sourced, or under-sourced) so nothing is ever
-// stranded regardless of batch size — a self-draining work queue, no window
-// dependency. Re-scouting an under-floor material is throttled per material by
+// Richness floor / breadth target: a material is considered "needs sourcing"
+// until it has this many active leads. This is Sam's minimum-suppliers-per-
+// material goal (breadth over depth — "find everyone"), not a stop-at number:
+// a material keeps getting re-scouted every backoff window until it reaches the
+// floor OR the market is genuinely exhausted (re-scouts exclude known hosts, so
+// each pass only adds NEW suppliers and naturally tapers off). Beyond the
+// recency window, every run also pulls materials below the floor (0 leads =
+// never sourced, or under-sourced) so nothing is stranded — a self-draining
+// work queue. Re-scouting an under-floor material is throttled per material by
 // RESCOUT_BACKOFF (a marker in agent_state) so an expensive scout can't be
 // re-run every tick on a material that simply has few suppliers to find.
-const MIN_LEADS_PER_MATERIAL = envInt("LEAD_CREATOR_MIN_LEADS_PER_MATERIAL", 10);
-const RESCOUT_BACKOFF_MS = envInt("LEAD_CREATOR_RESCOUT_BACKOFF_HOURS", 72) * 3600 * 1000;
+const MIN_LEADS_PER_MATERIAL = envInt("LEAD_CREATOR_MIN_LEADS_PER_MATERIAL", 100);
+const RESCOUT_BACKOFF_MS = envInt("LEAD_CREATOR_RESCOUT_BACKOFF_HOURS", 12) * 3600 * 1000;
 const BACKLOG_ATTEMPT_KEY = (materialId: string) => `resource_attempt:${materialId}`;
 
 function envInt(name: string, dflt: number): number {

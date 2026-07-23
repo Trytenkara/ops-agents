@@ -17,9 +17,9 @@ import { materialLabel } from "@/lib/material-label";
 // we just instruct it on what to look for and ask for a structured response.
 
 const MODEL = "claude-opus-4-5";
-const MAX_WEB_USES = 64;       // breadth budget — covers majors pass + marketplace seller drill-in + regional manufacturers + retail/EU shops
-const MAX_OUTPUT_TOKENS = 24000;  // room for 40-60 supplier rows with the full detail schema
-const MAX_SUPPLIERS = 60;
+const MAX_WEB_USES = 96;       // breadth budget — covers majors pass + marketplace seller drill-in + regional manufacturers + retail/EU shops
+const MAX_OUTPUT_TOKENS = 40000;  // room for up to ~100 supplier rows with the full detail schema
+const MAX_SUPPLIERS = 100;
 const URL_PROBE_TIMEOUT_MS = 5_000;
 // Hard ceiling on a single material's web_search call. Sized to let a breadth
 // run finish richly (it streams ~64 searches and can run several minutes) while
@@ -55,7 +55,7 @@ export interface ScoutSupplier {
 
 const SYSTEM_PROMPT = `You are a B2B sourcing analyst building a BROAD supplier landscape for a procurement team. Given an ingredient/material, find as many legitimate bulk suppliers as you can across the whole market, and capture the sourcing details a buyer needs to RFQ where they're available.
 
-BREADTH IS THE PRIMARY GOAL. A good run returns 40-60 suppliers spanning the full landscape — NOT a short list of the biggest names. Do NOT stop at 20: keep issuing searches across regions and channels until the landscape is genuinely exhausted. You MUST cover every bucket below and return each legitimate supplier you find in it:
+BREADTH IS THE PRIMARY GOAL. A good run returns as many legitimate suppliers as the market holds — aim for 80-100+ spanning the full landscape, NOT a short list of the biggest names. Do NOT stop at 20, and do NOT stop at 60: keep issuing searches across regions and channels until the landscape is genuinely exhausted. You MUST cover every bucket below and return each legitimate supplier you find in it:
 1. Originator / branded manufacturers — the trademark owners (e.g. for SCI: BASF Jordapon, Clariant Hostapon, Innospec Pureact/Iselux, Galaxy Galsoft). Never omit these.
 2. Regional bulk manufacturers — India, China, EU, and USA producers.
 3. Distributors & traders — e.g. Univar, Brenntag, Azelis, IMCD, DeWolf, Parchem, Silver Fern.
@@ -133,7 +133,7 @@ Return ONLY a JSON code block (no prose around it) with this exact shape:
 \`\`\`
 
 Rules:
-- Return up to 60 suppliers per material, spread across the four buckets above. Aim for 40+ when the market supports it; do NOT stop at 15-20 — keep searching until you've genuinely exhausted the major producers, regional manufacturers, distributors, and individual marketplace sellers.
+- Return up to 100 suppliers per material, spread across the four buckets above. Aim for 80+ when the market supports it; do NOT stop at 15-20 or 60 — keep searching until you've genuinely exhausted the major producers, regional manufacturers, distributors, and individual marketplace sellers.
 - A run that returns only manufacturers (or only marketplace listings) is incomplete — balance non-marketplace (manufacturers/distributors) AND marketplace/retail leads.
 - Skip suppliers without a usable public URL.
 - Do NOT include retail consumer brands (Amazon listings, eBay, Walmart, Etsy).
