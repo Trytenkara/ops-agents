@@ -127,6 +127,10 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
       lead_id: primary.id,
       lead_ids: leadIds,
       supplier_name: supplierName ?? null,
+      // Persist the recipient so the no-reply follow-up sweep can address nudges
+      // (it reads metadata.supplier_contact_email, not the draft's to-address).
+      supplier_contact_email: email,
+      supplier_contact_name: contactName ?? null,
       // Consolidated draft covers several materials — carry the full set so the
       // Materials chip can mark every one as drafted, not just the primary.
       material_name: materialNames[0] ?? null,
