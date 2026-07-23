@@ -58,6 +58,20 @@ const MIN_LEADS_PER_MATERIAL = envInt("LEAD_CREATOR_MIN_LEADS_PER_MATERIAL", 100
 const RESCOUT_BACKOFF_MS = envInt("LEAD_CREATOR_RESCOUT_BACKOFF_HOURS", 12) * 3600 * 1000;
 const BACKLOG_ATTEMPT_KEY = (materialId: string) => `resource_attempt:${materialId}`;
 
+// Diminishing-returns autopause. With the richness floor raised high (keep
+// sourcing to maximum), a material would otherwise be re-scouted every backoff
+// window forever — burning web-search + MCP calls long after its sources are
+// exhausted. So we track, in the same attempt marker, the lead count at each
+// attempt and a "dry streak": consecutive backoff cycles where the material grew
+// by fewer than DISCOVERY_MIN_NEW_PER_CYCLE leads (across ALL sources, so this
+// also sees out-of-band SourceReady/ImportYeti leads that landed since). After
+// DISCOVERY_DRY_STREAK_LIMIT dry cycles the material is "saturated" and drops
+// from the normal backoff to SATURATED_BACKOFF (a weekly re-check, not a
+// permanent stop — a market can grow, and a manual marker clear resumes it).
+const DISCOVERY_MIN_NEW_PER_CYCLE = envInt("DISCOVERY_MIN_NEW_PER_CYCLE", 5);
+const DISCOVERY_DRY_STREAK_LIMIT = envInt("DISCOVERY_DRY_STREAK_LIMIT", 3);
+const SATURATED_BACKOFF_MS = envInt("DISCOVERY_SATURATED_BACKOFF_HOURS", 168) * 3600 * 1000;
+
 function envInt(name: string, dflt: number): number {
   const n = Number(process.env[name]);
   return Number.isFinite(n) && n > 0 ? n : dflt;
@@ -215,6 +229,13 @@ registerAgent({
     // results. Populated from the same bulk fetch that computes the backlog floor.
     const srLeadCount = new Map<string, number>();
     const iyLeadCount = new Map<string, number>();
+    // Total active leads per material (function-scoped so the saturation marker
+    // write, deep in the per-material loop, can compare current vs last-attempt count).
+    const leadCount = new Map<string, number>();
+    // Saturation state loaded from the attempt markers: consecutive dry cycles and
+    // the lead count recorded at the last attempt, per material.
+    const dryStreak = new Map<string, number>();
+    const lastAttemptCount = new Map<string, number>();
     if (!onlyMaterialId) {
       const targetTenkaraOrgIds = onlyOrgs.length
         ? Array.from(allowedTenkaraOrgIds)
@@ -223,8 +244,7 @@ registerAgent({
         const universe = await queryMaterialsForOrgs(targetTenkaraOrgIds);
         // Paginate: Supabase caps a select at 1000 rows, and there are more than
         // 1000 active leads — an un-paginated fetch would undercount and falsely
-        // mark materials as under-floor.
-        const leadCount = new Map<string, number>();
+        // mark materials as under-floor. (leadCount is function-scoped above.)
         for (let from = 0; ; from += 1000) {
           const { data: rows } = await admin
             .from("leads_in_flight")
@@ -250,19 +270,30 @@ registerAgent({
             .range(from, from + 999);
           const batch = (rows ?? []) as { key: string; value: any }[];
           for (const m of batch) {
+            const id = m.key.slice("resource_attempt:".length);
             const at = Date.parse(m.value?.at ?? "");
-            if (!Number.isNaN(at)) lastAttempt.set(m.key.slice("resource_attempt:".length), at);
+            if (!Number.isNaN(at)) lastAttempt.set(id, at);
+            if (typeof m.value?.dry === "number") dryStreak.set(id, m.value.dry);
+            if (typeof m.value?.count === "number") lastAttemptCount.set(id, m.value.count);
           }
           if (batch.length < 1000) break;
         }
         const nowMs = Date.now();
         const already = new Set(materials.map((m) => m.id));
+        let saturatedSkipped = 0;
         const underserved = universe
           .filter((m) => (leadCount.get(m.id) ?? 0) < MIN_LEADS_PER_MATERIAL)
           .filter((m) => !already.has(m.id))
           .filter((m) => {
             const la = lastAttempt.get(m.id);
-            return la === undefined || nowMs - la > RESCOUT_BACKOFF_MS;
+            if (la === undefined) return true;
+            // Saturated materials (no meaningful growth for DRY_STREAK_LIMIT
+            // cycles) drop to a weekly re-check instead of every backoff window.
+            const saturated = (dryStreak.get(m.id) ?? 0) >= DISCOVERY_DRY_STREAK_LIMIT;
+            const backoff = saturated ? SATURATED_BACKOFF_MS : RESCOUT_BACKOFF_MS;
+            const ready = nowMs - la > backoff;
+            if (!ready && saturated) saturatedSkipped++;
+            return ready;
           })
           .sort((a, b) =>
             (leadCount.get(a.id) ?? 0) - (leadCount.get(b.id) ?? 0) ||
@@ -293,8 +324,9 @@ registerAgent({
           }
         }
         await ctx.log(
-          `Backlog queue: ${underserved.length} materials below ${MIN_LEADS_PER_MATERIAL}-lead floor · sourcing ${picked.length} this run`,
-          { step: "backlog", data: { below_floor: underserved.length, picked: picked.length } }
+          `Backlog queue: ${underserved.length} materials below ${MIN_LEADS_PER_MATERIAL}-lead floor · sourcing ${picked.length} this run` +
+            (saturatedSkipped ? ` · ${saturatedSkipped} saturated (weekly re-check)` : ""),
+          { step: "backlog", data: { below_floor: underserved.length, picked: picked.length, saturated_skipped: saturatedSkipped } }
         );
       } catch (e: any) {
         await ctx.log(`Backlog queue query failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "backlog" });
@@ -626,10 +658,28 @@ registerAgent({
       const isBacklogRescout = underservedIds.has(material.id);
       if (scoutEnabled && leadsCreated < MAX_NEW_LEADS_PER_RUN && (!alreadyScouted.has(material.id) || isBacklogRescout)) {
         // Record the attempt up-front so a scout that surfaces nothing new still
-        // backs off — it won't be re-run until RESCOUT_BACKOFF elapses.
+        // backs off — it won't be re-run until RESCOUT_BACKOFF elapses. Also track
+        // diminishing returns: compare the current lead count to the count at the
+        // last attempt; if the material grew by fewer than MIN_NEW_PER_CYCLE leads
+        // (across all sources, incl. out-of-band SR/IY that landed since), bump the
+        // dry streak. Once it hits the limit the selector above backs the material
+        // off to a weekly re-check instead of every window.
         if (isBacklogRescout) {
+          const curCount = leadCount.get(material.id) ?? 0;
+          const prevCount = lastAttemptCount.get(material.id);
+          const grew = prevCount === undefined || curCount - prevCount >= DISCOVERY_MIN_NEW_PER_CYCLE;
+          const nextDry = grew ? 0 : (dryStreak.get(material.id) ?? 0) + 1;
+          if (nextDry >= DISCOVERY_DRY_STREAK_LIMIT && nextDry !== (dryStreak.get(material.id) ?? -1)) {
+            await ctx.log(`${matLabel} saturated (${nextDry} dry cycles) — backing off to weekly re-check`, {
+              step: "backlog", data: { material_id: material.id, dry: nextDry, lead_count: curCount },
+            });
+          }
           await admin.from("agent_state").upsert(
-            { agent_id: ctx.agentId, key: BACKLOG_ATTEMPT_KEY(material.id), value: { at: new Date().toISOString() } },
+            {
+              agent_id: ctx.agentId,
+              key: BACKLOG_ATTEMPT_KEY(material.id),
+              value: { at: new Date().toISOString(), count: curCount, dry: nextDry },
+            },
             { onConflict: "agent_id,key" }
           );
         }
