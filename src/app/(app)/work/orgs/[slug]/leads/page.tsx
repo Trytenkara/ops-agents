@@ -221,7 +221,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           </p>
         </div>
       )}
-      <LeadsTabs rows={leads} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} materials={materialOptions} />
+      <LeadsTabs rows={leads} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} materials={materialOptions} runs={runStats} />
 
       <section className="space-y-2 pt-2">
         <h2 className="font-serif text-xl tracking-tight">
