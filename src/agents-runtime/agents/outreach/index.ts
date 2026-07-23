@@ -47,7 +47,14 @@ function envFirstPoolSize(): number {
 // is known — i.e. it has no sibling lead still being enriched (stage='raw' with no
 // enrichment_blocked_reason). Bounded so a permanently-stuck raw lead (enrichment
 // keeps failing without a reason) can't block the supplier's outreach forever.
-const COMPILE_WAIT_MAX_DAYS = 7;
+// How long to wait for sibling materials to finish enriching before sending
+// anyway. Prod default 7 days; OUTREACH_COMPILE_WAIT_MINUTES overrides for testing.
+const COMPILE_WAIT_MS: number = (() => {
+  const raw = (process.env.OUTREACH_COMPILE_WAIT_MINUTES ?? "").trim();
+  const mins = Number(raw);
+  if (raw && Number.isFinite(mins) && mins >= 0) return mins * 60_000;
+  return 7 * 86_400_000;
+})();
 
 async function getAgentIdBySlug(admin: ReturnType<typeof createAdminClient>, slug: string): Promise<string | null> {
   const { data } = await admin.from("agents").select("id").eq("slug", slug).maybeSingle();
@@ -190,7 +197,7 @@ registerAgent({
     {
       const batchSupplierIds = Array.from(new Set(leads.map((l) => l.supplier_id).filter(Boolean) as string[]));
       if (batchSupplierIds.length) {
-        const staleCutoff = new Date(Date.now() - COMPILE_WAIT_MAX_DAYS * 86_400_000).toISOString();
+        const staleCutoff = new Date(Date.now() - COMPILE_WAIT_MS).toISOString();
         const { data: rawSibs } = await admin
           .from("leads_in_flight")
           .select("supplier_id, org_id, payload, created_at")
