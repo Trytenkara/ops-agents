@@ -192,8 +192,23 @@ registerAgent({
     "Owns the supplier conversation after a reply is detected: classifies the reply and drafts the right next message (answer, reframe a no-record reply as a fresh pricing ask, or nudge for the missing price), staged for a human to send. Also drafts no-reply follow-ups (at 4d and 8d after a sent RFQ that got no reply). Tracks flow_status to a finalized price. Never sends.",
   async run(ctx) {
     if (!missivePollingEnabled()) {
+      // Missive reply-detection is retired (the Tenkara webhook drafts replies),
+      // but the no-reply follow-up sweep is transport-agnostic — it re-nudges
+      // Agent 04's sent RFQs via each draft's own email_client (rod_app now), so
+      // it still belongs here on the Rod path.
+      const admin = createAdminClient();
+      let followups = { drafted: 0, skipped: 0, escalated: 0 };
+      try {
+        followups = await runNoReplyFollowups(
+          { agentId: ctx.agentId, runId: ctx.runId, log: (m, o) => ctx.log(m, o) },
+          admin
+        );
+      } catch (e: any) {
+        await ctx.log(`No-reply follow-up sweep failed: ${e?.message ?? e}`, { level: "warn", step: "followup" });
+      }
+      ctx.setItemsProcessed(followups.drafted + followups.escalated);
       ctx.setStatus("success");
-      ctx.setSummary("Skipped: Missive polling disabled (Tenkara cutover). Supplier replies are drafted by the Tenkara message.received webhook.");
+      ctx.setSummary(`Missive polling off (Tenkara cutover). No-reply sweep: ${followups.drafted} follow-ups · ${followups.escalated} calling-escalations · ${followups.skipped} skipped.`);
       return;
     }
     if (!process.env.ANTHROPIC_API_KEY) {

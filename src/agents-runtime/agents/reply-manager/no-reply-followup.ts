@@ -7,12 +7,31 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 // supplier is still silent, route the supplier to Cases as a calling escalation
 // so a call operator can phone them. Nothing auto-sends.
 
-const FOLLOWUP_DAYS = [4, 8]; // days-after-sent for follow-up #1 and #2
 const DAY = 24 * 3600 * 1000;
+const MINUTE = 60 * 1000;
 const MAX_PER_RUN = 50;
-// Grace after the last (day-8) follow-up before we escalate to a phone call —
-// gives a slow supplier a final window to reply by email first (≈ day 10).
-const CALLING_ESCALATE_AFTER_DAYS = 2;
+
+// Delay before each no-reply nudge, as ms-after-sent. Prod default is 4d/8d.
+// FOLLOWUP_MINUTES (csv, e.g. "5,10") overrides for testing so both nudges fire
+// within a session; the list length also sets how many nudges we send.
+const FOLLOWUP_DELAYS_MS: number[] = (() => {
+  const raw = (process.env.FOLLOWUP_MINUTES ?? "").trim();
+  if (raw) {
+    const mins = raw.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n >= 0);
+    if (mins.length) return mins.map((m) => m * MINUTE);
+  }
+  return [4 * DAY, 8 * DAY];
+})();
+
+// Grace after the last follow-up before we escalate to a phone call — gives a
+// slow supplier a final window to reply by email first (prod ≈ day 10).
+// CALLING_ESCALATE_AFTER_MINUTES overrides for testing.
+const CALLING_ESCALATE_AFTER_MS: number = (() => {
+  const raw = (process.env.CALLING_ESCALATE_AFTER_MINUTES ?? "").trim();
+  const mins = Number(raw);
+  if (raw && Number.isFinite(mins) && mins >= 0) return mins * MINUTE;
+  return 2 * DAY;
+})();
 const MAX_ESCALATIONS_PER_RUN = 50;
 const TERMINAL = new Set(["stale", "closed_declined", "finalized", "price_captured", "escalated_to_calling"]);
 
@@ -73,7 +92,7 @@ async function escalateToCalling(
     supplier_id: r.supplier_id ?? null,
     material_id: r.material_id ?? null,
     originating_thread_id: r.thread_id ?? null,
-    recommended_action: `Call ${supplierName}${materialName ? ` re: ${materialName}` : ""} — no reply after ${FOLLOWUP_DAYS.length} email follow-ups. Confirm the RFQ was received and the right contact, and request a quote.`,
+    recommended_action: `Call ${supplierName}${materialName ? ` re: ${materialName}` : ""} — no reply after ${FOLLOWUP_DELAYS_MS.length} email follow-ups. Confirm the RFQ was received and the right contact, and request a quote.`,
     assigned_operator: r.assigned_operator ?? null,
     metadata: {
       source_agent: "agent-15-reply-manager",
@@ -97,7 +116,7 @@ async function escalateToCalling(
     .from("draft_references")
     .update({ metadata: { ...meta, calling_escalated_at: new Date().toISOString(), flow_status: "escalated_to_calling" } })
     .eq("id", r.id);
-  await ctx.log(`Calling escalation opened for ${supplierName} (no reply after ${FOLLOWUP_DAYS.length} follow-ups)`, { step: "calling_escalation" });
+  await ctx.log(`Calling escalation opened for ${supplierName} (no reply after ${FOLLOWUP_DELAYS_MS.length} follow-ups)`, { step: "calling_escalation" });
   return true;
 }
 
@@ -133,18 +152,18 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
     // Both follow-ups sent and still silent → escalate to a phone call once the
     // grace window has elapsed. Stamped via calling_escalated_at so we only do
     // this once per conversation.
-    if (fu >= FOLLOWUP_DAYS.length) {
+    if (fu >= FOLLOWUP_DELAYS_MS.length) {
       if (meta.calling_escalated_at) continue;
       if (escalated >= MAX_ESCALATIONS_PER_RUN) continue;
       const lastFu = meta.last_followup_at ? new Date(meta.last_followup_at).getTime() : null;
-      if (!lastFu || (now - lastFu) / DAY < CALLING_ESCALATE_AFTER_DAYS) continue; // grace not elapsed
+      if (!lastFu || (now - lastFu) < CALLING_ESCALATE_AFTER_MS) continue; // grace not elapsed
       if (await escalateToCalling(ctx, admin, r, meta)) escalated++;
       continue;
     }
 
     const sentAt = r.reviewed_at ? new Date(r.reviewed_at).getTime() : null;
     if (!sentAt) continue;
-    if ((now - sentAt) / DAY < FOLLOWUP_DAYS[fu]) continue; // not due yet
+    if ((now - sentAt) < FOLLOWUP_DELAYS_MS[fu]) continue; // not due yet
 
     const to = meta.supplier_contact_email as string | undefined;
     if (!to) {
