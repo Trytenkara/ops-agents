@@ -1,8 +1,10 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { stageDraft } from "@/lib/draft-staging";
 import { composeReply } from "@/agents-runtime/agents/email-scanner/reply-drafter";
-import { extractQuotesFromReplyText } from "@/lib/reply-quote-extract";
-import { insertStagedQuotes, type StagedQuoteInput } from "@/lib/staged-quotes";
+import { extractQuotesFromReplyText, type ExtractedQuote } from "@/lib/reply-quote-extract";
+import { insertStagedQuotes, type StagedQuoteInput, type StagedQuoteSource } from "@/lib/staged-quotes";
+import { getTenkaraMessageAttachments, downloadTenkaraAttachment } from "@/lib/tenkara-attachments";
+import { parseAttachmentBytes, deriveExt, isPricingCandidateExt } from "@/agents-runtime/agents/email-scanner/attachment-parser";
 import { getTenkaraConversationMessages } from "@/lib/tenkara";
 import { postAgentAlert } from "@/lib/slack-alert";
 
@@ -194,22 +196,50 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     return { status: 200, body: { reply_detected: true, drafted: false, reason: "no_anthropic_key" } };
   }
 
-  // 4b. Capture any pricing the supplier stated inline in the reply text into
-  // staged_quotes for ops review (the webhook only carries body text — attached
-  // price sheets need attachments in the payload, which Tenkara doesn't send).
-  // Best-effort: extraction failure must never block the reply draft.
+  // 4b. Capture supplier pricing into staged_quotes for ops review — from the
+  // reply body AND from file attachments (PDF quotes, Excel/CSV price lists,
+  // photographed price sheets). Best-effort: extraction must never block the
+  // reply draft.
   let quotesStaged = 0;
   try {
-    // Prefer the HTML body — suppliers put price ladders in tables that the
-    // flattened text loses. Falls back to plain text.
-    const quotes = await extractQuotesFromReplyText(msg.body_html || msg.body_text);
-    if (quotes.length) {
-      const staged: StagedQuoteInput[] = quotes.map((q) => ({
+    // Each captured line tagged with where it came from, so the staged row and
+    // the lead headline can tell body text from an attached price sheet.
+    const captured: {
+      q: ExtractedQuote;
+      source: StagedQuoteSource;
+      attachmentName: string | null;
+      attachmentUrl: string | null;
+    }[] = [];
+
+    // Inline: prefer the HTML body — suppliers put price ladders in tables that
+    // the flattened text loses. Falls back to plain text.
+    for (const q of await extractQuotesFromReplyText(msg.body_html || msg.body_text)) {
+      captured.push({ q, source: "email_body", attachmentName: null, attachmentUrl: null });
+    }
+
+    // Attachments: real (non-inline) pricing-candidate files on the inbound
+    // message. Inline images are signature logos, not price sheets — skip them.
+    const attachments = await getTenkaraMessageAttachments(msg.conversation_id, msg.message_id);
+    for (const att of attachments) {
+      if (att.is_inline) continue;
+      const ext = deriveExt(att.filename, att.content_type);
+      if (!isPricingCandidateExt(ext, att.size_bytes)) continue;
+      const buf = await downloadTenkaraAttachment(att);
+      if (!buf) continue;
+      for (const q of await parseAttachmentBytes(buf, att.filename, ext)) {
+        captured.push({ q, source: "attachment", attachmentName: att.filename, attachmentUrl: att.download_url });
+      }
+    }
+
+    if (captured.length) {
+      const staged: StagedQuoteInput[] = captured.map(({ q, source, attachmentName, attachmentUrl }) => ({
         orgId: ref.org_id,
         runId: null,
-        source: "email_body",
+        source,
         sourceConversationId: msg.conversation_id,
         sourceMessageId: msg.message_id,
+        sourceAttachmentName: attachmentName,
+        sourceAttachmentUrl: attachmentUrl,
         supplierId: ref.supplier_id,
         supplierName: q.supplier_name ?? leadRow?.supplier_name ?? null,
         materialId: ref.material_id,
@@ -227,19 +257,19 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       quotesStaged = res.inserted;
 
       // Mirror the freshest captured price/grade onto the lead so the Leads tab
-      // shows the returned quote, not just a "supplier replied" marker. Pick the
-      // lowest per-unit priced line as the headline; ops can refine in review.
+      // shows the returned quote, not just a "supplier replied" marker. Lowest
+      // per-unit line across body + attachments is the headline; ops refines.
       if (leadId && leadRow) {
-        const priced = quotes
-          .filter((q) => q.price != null)
-          .map((q) => ({
-            price: q.price,
-            case_size: q.case_size,
-            unit_price:
-              q.price != null && q.case_size ? q.price / q.case_size : q.price,
-            unit_of_measurement: q.unit_of_measurement,
-            currency: q.currency,
-            grade: q.grade,
+        const priced = captured
+          .filter((c) => c.q.price != null)
+          .map((c) => ({
+            price: c.q.price,
+            case_size: c.q.case_size,
+            unit_price: c.q.price != null && c.q.case_size ? c.q.price / c.q.case_size : c.q.price,
+            unit_of_measurement: c.q.unit_of_measurement,
+            currency: c.q.currency,
+            grade: c.q.grade,
+            source: c.source,
           }))
           .sort((a, b) => (a.unit_price ?? Infinity) - (b.unit_price ?? Infinity));
         if (priced.length) {
@@ -261,7 +291,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
             captured_currency: best.currency ?? "USD",
             captured_grade: best.grade ?? null,
             captured_at: msg.received_at ?? new Date().toISOString(),
-            captured_source: "reply_extract",
+            captured_source: best.source === "attachment" ? "reply_attachment" : "reply_extract",
           };
           await admin.from("leads_in_flight").update({ payload }).eq("id", leadId);
         }
