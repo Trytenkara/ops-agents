@@ -59,59 +59,87 @@ export function OperatorsTable({ actor, users, orgs }: { actor: Actor; users: Us
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<UserRow | null>(null);
 
+  const activeUsers = users.filter((u) => pickStatus(u) !== "inactive");
+  const deactivatedUsers = users.filter((u) => pickStatus(u) === "inactive");
+
+  function renderRow(u: UserRow) {
+    const role = primaryRole(u.user_roles.map((r) => r.role));
+    const status = pickStatus(u);
+    return (
+      <TableRow key={u.id}>
+        <TableCell>
+          <OperatorChip name={u.display_name} email={u.email} role={role} />
+        </TableCell>
+        <TableCell>{role ? roleLabel(role) : "—"}</TableCell>
+        <TableCell className="text-muted-foreground text-xs">
+          {u.user_org_assignments.length === 0 ? (
+            u.user_roles.some((r) => r.role === "admin" || r.role === "monitor")
+              ? <span title="Admins and Monitors have global access">all orgs</span>
+              : "—"
+          ) : (
+            u.user_org_assignments.map((a) => a.orgs && orgDisplayName(a.orgs)).filter(Boolean).join(", ")
+          )}
+        </TableCell>
+        <TableCell><StatusBadge s={status} /></TableCell>
+        <TableCell className="text-muted-foreground text-xs">
+          {u.last_login_at ? relativeTime(u.last_login_at) : (u.invited_at ? `invited ${relativeTime(u.invited_at)}` : "—")}
+        </TableCell>
+        <TableCell className="text-right">
+          <button onClick={() => setEditing(u)} className="text-primary hover:underline text-sm">Manage</button>
+        </TableCell>
+      </TableRow>
+    );
+  }
+
   return (
-    <div className="space-y-3">
-      <div className="flex justify-end">
-        {invitableRoles(actor).length > 0 && (
-          <Button onClick={() => setOpen(true)}>Invite operator</Button>
-        )}
+    <div className="space-y-6">
+      <div className="space-y-3">
+        <div className="flex justify-end">
+          {invitableRoles(actor).length > 0 && (
+            <Button onClick={() => setOpen(true)}>Invite operator</Button>
+          )}
+        </div>
+
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Name</TableHead>
+              <TableHead>Role</TableHead>
+              <TableHead>Orgs</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Last login</TableHead>
+              <TableHead></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {activeUsers.map(renderRow)}
+            {activeUsers.length === 0 && (
+              <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">No operators yet.</TableCell></TableRow>
+            )}
+          </TableBody>
+        </Table>
       </div>
 
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Name</TableHead>
-            <TableHead>Role</TableHead>
-            <TableHead>Orgs</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Last login</TableHead>
-            <TableHead></TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {users.map((u) => {
-            const role = primaryRole(u.user_roles.map((r) => r.role));
-            const status = pickStatus(u);
-            return (
-              <TableRow key={u.id}>
-                <TableCell>
-                  <OperatorChip name={u.display_name} email={u.email} role={role} />
-                </TableCell>
-                <TableCell>{role ? roleLabel(role) : "—"}</TableCell>
-                <TableCell className="text-muted-foreground text-xs">
-                  {u.user_org_assignments.length === 0 ? (
-                    u.user_roles.some((r) => r.role === "admin" || r.role === "monitor")
-                      ? <span title="Admins and Monitors have global access">all orgs</span>
-                      : "—"
-                  ) : (
-                    u.user_org_assignments.map((a) => a.orgs && orgDisplayName(a.orgs)).filter(Boolean).join(", ")
-                  )}
-                </TableCell>
-                <TableCell><StatusBadge s={status} /></TableCell>
-                <TableCell className="text-muted-foreground text-xs">
-                  {u.last_login_at ? relativeTime(u.last_login_at) : (u.invited_at ? `invited ${relativeTime(u.invited_at)}` : "—")}
-                </TableCell>
-                <TableCell className="text-right">
-                  <button onClick={() => setEditing(u)} className="text-primary hover:underline text-sm">Manage</button>
-                </TableCell>
+      {deactivatedUsers.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="text-xs uppercase tracking-wider text-muted-foreground font-medium">Deactivated ({deactivatedUsers.length})</h3>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Role</TableHead>
+                <TableHead>Orgs</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Last login</TableHead>
+                <TableHead></TableHead>
               </TableRow>
-            );
-          })}
-          {users.length === 0 && (
-            <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">No operators yet.</TableCell></TableRow>
-          )}
-        </TableBody>
-      </Table>
+            </TableHeader>
+            <TableBody>
+              {deactivatedUsers.map(renderRow)}
+            </TableBody>
+          </Table>
+        </div>
+      )}
 
       {open && <InviteModal onClose={() => setOpen(false)} actor={actor} orgs={orgs} />}
       {editing && <ManageModal user={editing} actor={actor} orgs={orgs} onClose={() => setEditing(null)} />}
