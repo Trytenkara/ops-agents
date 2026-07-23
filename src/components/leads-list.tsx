@@ -23,14 +23,6 @@ const RECENCY_OPTIONS = [
   { value: "all", label: "All time" },
 ];
 
-const STAGE_OPTIONS = [
-  { value: "all", label: "All stages" },
-  { value: "raw", label: "Raw" },
-  { value: "enriched", label: "Enriched" },
-  { value: "ready_for_outreach", label: "Ready to send" },
-  { value: "held", label: "Held (needs name)" },
-];
-
 const countryOf = (r: any): string => (r.payload?.supplier_country ?? "").toString().trim();
 
 export function LeadsList({
@@ -51,10 +43,9 @@ export function LeadsList({
   forceStage?: string;
 }) {
   const [type, setType] = usePersistedState("leads-type", "all");
-  const [country, setCountry] = usePersistedState("leads-country", "all");
   const [recency, setRecency] = usePersistedState("leads-recency", "all");
-  const [stage, setStage] = usePersistedState("leads-stage", "all");
-  const effectiveStage = forceStage ?? stage;
+  // Stage is driven by the pipeline tabs above (forceStage), not a dropdown here.
+  const effectiveStage = forceStage ?? "all";
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const toggleOne = (id: string, checked: boolean) =>
@@ -65,20 +56,12 @@ export function LeadsList({
       return next;
     });
 
-  const countryOptions = [
-    { value: "all", label: "All countries" },
-    ...Array.from(new Set(rows.map(countryOf).filter(Boolean)))
-      .sort((a, b) => a.localeCompare(b))
-      .map((c) => ({ value: c, label: c })),
-  ];
-
   const recencyCutoff = recency === "all" ? null : Date.now() - Number(recency) * 24 * 3600 * 1000;
   const typeRows = (
     type === "all"
       ? rows
       : rows.filter((r: any) => (r.market_kind ?? leadMarketKind(r.payload?.site_type)) === type)
   )
-    .filter((r: any) => (country === "all" ? true : countryOf(r) === country))
     .filter((r: any) =>
       effectiveStage === "all" ? true : effectiveStage === "held" ? !!r.needs_material_name : r.stage === effectiveStage
     )
@@ -124,48 +107,60 @@ export function LeadsList({
       : `${cur} ${sr.captured_price}`;
   };
 
-  // Columns mirror the on-screen table AND carry the fields the bulk-upload
-  // parser recognizes (Supplier/Email/Material/Contact name/Website/Country), so
-  // an exported file can be edited and re-uploaded. Exports the filtered rows.
+  // One export, mirroring exactly the rows on screen (search + filters + active
+  // stage tab). Columns match the manual supplier-sourcing index (material ->
+  // supplier identity -> RFQ fields -> provenance), plus a few on-screen extras
+  // (returned price, operator). All leads are loaded client-side, so this is
+  // complete — no separate server download needed.
   const csvHeaders = [
-    "Supplier", "Email", "Material", "Grade", "Contact name", "Website", "Country",
-    "Type", "Signal", "Returned price", "Source", "Stage", "Operator", "Created",
+    "Material", "INCI name", "Trade name", "Supplier", "Role", "Type", "Country",
+    "Website", "Pack sizes / pricing", "Email", "Phone", "HQ address",
+    "Supplier background", "Grades offered", "Certifications", "MOQ",
+    "Returned price", "Operator", "Signal", "Source", "Stage", "Status",
+    "Confidence", "Completeness", "Source citations", "Notes", "Created",
   ];
-  const csvRows = filtered.map((r: any) => [
-    r.supplier_name ?? "",
-    r.payload?.supplier_contact_email ?? "",
-    r.material_name ?? "",
-    r.grade ?? r.payload?.grade ?? "",
-    r.payload?.supplier_contact_name ?? "",
-    r.payload?.supplier_website ?? r.payload?.source_url ?? "",
-    countryOf(r),
-    r.market_kind ?? leadMarketKind(r.payload?.site_type) ?? "",
-    r.payload?.signal ? humanizeSignal(r.payload.signal) : "",
-    returnedPrice(r),
-    r.source ?? "",
-    r.stage ?? "",
-    r.operator_name ?? r.operator_auto_name ?? "",
-    r.created_at ?? "",
-  ]);
+  const csvRows = filtered.map((r: any) => {
+    const p = r.payload ?? {};
+    const citations: string[] = Array.isArray(p.source_citations) ? p.source_citations : [];
+    return [
+      r.material_name ?? "",
+      p.inci_name ?? "",
+      p.trade_name ?? "",
+      r.supplier_name ?? "",
+      p.supplier_role ?? "",
+      r.market_kind ?? leadMarketKind(p.site_type) ?? "",
+      countryOf(r),
+      p.supplier_website ?? p.source_url ?? "",
+      p.pack_sizes_pricing ?? "",
+      p.supplier_contact_email ?? "",
+      p.supplier_phone ?? "",
+      p.hq_address ?? "",
+      p.supplier_background ?? "",
+      p.grades_offered ?? r.grade ?? p.grade ?? "",
+      p.certifications ?? "",
+      p.moq ?? "",
+      returnedPrice(r),
+      r.operator_name ?? r.operator_auto_name ?? "",
+      p.signal ? humanizeSignal(p.signal) : "",
+      r.source ?? "",
+      r.stage ?? "",
+      r.status ?? "",
+      r.confidence_score ?? "",
+      p.completeness_score ?? "",
+      citations.join("; "),
+      p.scout_notes ?? p.scout_rationale ?? "",
+      r.created_at ?? "",
+    ];
+  });
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="flex flex-wrap items-end gap-3">
           {controls}
-          {!forceStage && (
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted-foreground">Stage</span>
-              <Select size="sm" className="min-w-[9rem]" ariaLabel="Stage" value={stage} onValueChange={setStage} options={STAGE_OPTIONS} />
-            </label>
-          )}
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">Type</span>
             <Select size="sm" className="min-w-[9rem]" ariaLabel="Type" value={type} onValueChange={setType} options={TYPE_OPTIONS} />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-muted-foreground">Country of origin</span>
-            <Select size="sm" className="min-w-[10rem]" ariaLabel="Country of origin" value={country} onValueChange={setCountry} options={countryOptions} />
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">Discovered</span>

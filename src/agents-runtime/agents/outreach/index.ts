@@ -570,16 +570,23 @@ registerAgent({
 
       // Already contacted? If a live draft exists for this supplier, first contact
       // already happened — these newly-enriched materials are follow-ups, so hold
-      // them for the reply loop rather than opening a second cold thread.
-      if (supplierId) {
-        const { data: existing } = await admin
+      // them for the reply loop rather than opening a second cold thread. Match on
+      // supplier_id when we have one; web-discovered suppliers (no supplier_id, the
+      // common case for Scout leads) are matched on the contact email so a second
+      // material to the same address in a LATER run is held, not sent as a fresh
+      // cold email. Grouping already consolidates same-run materials by email key.
+      {
+        let q = admin
           .from("draft_references")
           .select("id")
           .eq("agent_id", tackleAgentId)
           .eq("org_id", primary.lead.org_id)
-          .eq("supplier_id", supplierId)
           .in("status", ["staged", "reviewed", "sent"])
           .limit(1);
+        q = supplierId
+          ? q.eq("supplier_id", supplierId)
+          : q.ilike("metadata->>supplier_contact_email", primary.email!);
+        const { data: existing } = await q;
         if (existing && existing.length) {
           await holdForFollowup(group, [], existing[0].id);
           continue;

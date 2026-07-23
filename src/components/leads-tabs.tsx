@@ -5,7 +5,6 @@ import { cn, relativeTime } from "@/lib/utils";
 import { LeadsList } from "@/components/leads-list";
 import { MarketplacePricing } from "@/components/marketplace-pricing";
 import { OutreachTrackerPanel } from "@/components/outreach-tracker-panel";
-import { LeadsCsvDownload } from "@/components/leads-csv-download";
 import { leadMarketKind } from "@/components/lead-rich-row";
 import type { OutreachTracker } from "@/lib/outreach-tracker";
 import type { RunStat } from "@/components/agent-runs-strip";
@@ -39,7 +38,6 @@ export function LeadsTabs({
   orgId,
   operatorOptions,
   tracker,
-  materials,
   runs = [],
 }: {
   rows: any[];
@@ -48,7 +46,6 @@ export function LeadsTabs({
   orgId?: string;
   operatorOptions?: { id: string; name: string }[];
   tracker: OutreachTracker;
-  materials: string[];
   runs?: RunStat[];
 }) {
   const marketCount = rows.filter(
@@ -99,6 +96,8 @@ export function LeadsTabs({
           {PIPELINE.map((s, i) => {
             const active = tab === s.key;
             const run = s.runLabel ? runByLabel.get(s.runLabel) : undefined;
+            const count = stageCount(s.key);
+            const empty = count === 0;
             return (
               <Fragment key={s.key}>
                 <button
@@ -108,14 +107,15 @@ export function LeadsTabs({
                     "flex min-w-[9rem] flex-1 flex-col gap-1 rounded-lg border px-3.5 py-2.5 text-left transition-all",
                     active
                       ? "border-primary/50 bg-card shadow-sm ring-1 ring-primary/30"
-                      : "border-border bg-card/50 hover:bg-card hover:shadow-sm"
+                      : "border-border bg-card/50 hover:bg-card hover:shadow-sm",
+                    empty && !active && "opacity-55"
                   )}
                 >
                   <div className="flex items-center gap-1.5">
-                    <span className={cn("inline-block h-2 w-2 rounded-full", s.dot, active && "animate-pulse")} />
+                    <span className={cn("inline-block h-2 w-2 rounded-full", empty ? "bg-muted-foreground/30" : s.dot, active && "animate-pulse")} />
                     <span className="text-[11px] uppercase tracking-wide text-muted-foreground">{s.label}</span>
                   </div>
-                  <div className="text-2xl font-semibold leading-none tabular-nums">{stageCount(s.key)}</div>
+                  <div className={cn("text-2xl font-semibold leading-none tabular-nums", empty && "text-muted-foreground")}>{count}</div>
                   <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
                     {run ? (
                       <>
@@ -138,14 +138,11 @@ export function LeadsTabs({
         </div>
       </div>
 
-      {/* Lenses over the same client. */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1">
-          {tabBtn("all", "All leads", rows.length)}
-          {tabBtn("marketplace", "Marketplace pricing", marketCount)}
-          {tabBtn("outreach", "Outreach", trackerCount)}
-        </div>
-        <LeadsCsvDownload slug={slug} materials={materials} />
+      {/* Lenses over the same client. Export lives with the filters below. */}
+      <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1">
+        {tabBtn("all", "All leads", rows.length)}
+        {tabBtn("marketplace", "Marketplace pricing", marketCount)}
+        {tabBtn("outreach", "Outreach", trackerCount)}
       </div>
 
       {tab === "all" && (
