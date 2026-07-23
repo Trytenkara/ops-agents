@@ -10,6 +10,7 @@ import { onlyOrgNames } from "@/lib/org-scope";
 import { flagMaterialNames, correctName } from "@/lib/material-name-flags";
 import { materialLabel } from "@/lib/material-label";
 import { sourceReadyEnabled, fireSourceReadyDiscovery } from "./sourceready";
+import { importYetiEnabled, fireImportYetiDiscovery } from "./importyeti";
 
 const EMPTY_OVERRIDES = new Map<string, string>();
 
@@ -17,6 +18,10 @@ const EMPTY_OVERRIDES = new Map<string, string>();
 // webhook that runs supplier_search_v3 and stages source='sourceready' leads
 // out-of-band. Inert unless SOURCEREADY_WEBHOOK_URL + _SECRET are set.
 const SOURCEREADY_MAX_MATERIALS_PER_RUN = envInt("SOURCEREADY_MAX_MATERIALS_PER_RUN", 25);
+// ImportYeti discovery mirrors SourceReady: fired per material (bounded per run)
+// to a Gamut webhook that pulls US-customs suppliers and stages source='importyeti'
+// leads out-of-band. Inert unless IMPORTYETI_WEBHOOK_URL + _SECRET are set.
+const IMPORTYETI_MAX_MATERIALS_PER_RUN = envInt("IMPORTYETI_MAX_MATERIALS_PER_RUN", 25);
 
 // v1 trims (vs. full spec):
 //   - existing-DB only mode. BrowserBase external discovery is gated on
@@ -389,6 +394,7 @@ registerAgent({
     let skippedByExisting = 0;
     let skippedByExclusion = 0;
     let sourceReadyFired = 0;
+    let importYetiFired = 0;
     const noLeadMaterials: string[] = [];
 
     // Per-client sourcing exclusions (do-not-contact companies + excluded
@@ -733,6 +739,31 @@ registerAgent({
         await ctx.log(
           ok ? `Fired SourceReady discovery for ${matLabel}` : `SourceReady discovery request failed for ${matLabel}`,
           { step: "sourceready", level: ok ? "info" : "warn", data: { material_id: material.id } }
+        );
+      }
+
+      // 5d. ImportYeti discovery — mirror of 5c. Fires a signed webhook to the
+      //     Gamut agent that holds the ImportYeti API key; it pulls US-customs
+      //     suppliers, stages source='importyeti' leads, and resolves their
+      //     contacts out-of-band. Same gating (new/backlog materials only) and
+      //     per-run cap. Exclusions best-effort; Agent 04 re-checks before email.
+      if (
+        importYetiEnabled() &&
+        importYetiFired < IMPORTYETI_MAX_MATERIALS_PER_RUN &&
+        (!alreadyScouted.has(material.id) || srBacklog)
+      ) {
+        const ok = await fireImportYetiDiscovery({
+          oaOrgId,
+          materialId: material.id,
+          materialName: matLabel,
+          inci: material.inci ?? null,
+          tenkaraOrgId: material.tenkara_org_id ?? null,
+          excludedCountries: ex ? Array.from(ex.excludedCountries) : [],
+        });
+        if (ok) importYetiFired++;
+        await ctx.log(
+          ok ? `Fired ImportYeti discovery for ${matLabel}` : `ImportYeti discovery request failed for ${matLabel}`,
+          { step: "importyeti", level: ok ? "info" : "warn", data: { material_id: material.id } }
         );
       }
 
