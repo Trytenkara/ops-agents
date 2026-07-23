@@ -53,38 +53,57 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  let q = admin
-    .from("leads_in_flight")
-    .select(
-      "id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)"
-    )
-    .order("confidence_score", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false });
+  // Fully-filtered query, minus the page window. Rebuilt per page because a
+  // supabase-js builder can only be awaited once. The final .order("id") is a
+  // stable tiebreak so paging never skips or double-counts rows that share a
+  // confidence_score + created_at.
+  const buildQuery = () => {
+    let q = admin
+      .from("leads_in_flight")
+      .select(
+        "id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)"
+      )
+      .order("confidence_score", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: true });
 
-  if (!allStages) q = q.eq("stage", stage);
+    if (!allStages) q = q.eq("stage", stage);
 
-  if (status) {
-    q = q.eq("status", status);
-  } else if (!allStages && stage === "terminal") {
-    q = q.in("status", ["active", "dropped", "terminal"]);
-  } else {
-    q = q.eq("status", "active");
+    if (status) {
+      q = q.eq("status", status);
+    } else if (!allStages && stage === "terminal") {
+      q = q.in("status", ["active", "dropped", "terminal"]);
+    } else {
+      q = q.eq("status", "active");
+    }
+    if (selectedOrgId) q = q.eq("org_id", selectedOrgId);
+    else if (assigned) q = q.in("org_id", assigned);
+    if (driftOnly) q = q.eq("payload->>catalog_drift", "no_longer_listed");
+    if (material) {
+      const esc = material.replace(/[,()]/g, " ");
+      q = q.or(`material_name.ilike.%${esc}%,payload->>inci_name.ilike.%${esc}%`);
+    }
+    if (source) q = q.eq("source", source);
+    if (channel === "M" || channel === "MS" || channel === "N") q = q.eq("payload->>site_type", channel);
+    if (market === "marketplace") q = q.in("payload->>site_type", ["M", "MS"]);
+    else if (market === "direct") q = q.or("payload->>site_type.eq.N,payload->>site_type.is.null");
+    if (pricedOnly) q = q.not("payload->>pack_sizes_pricing", "is", null);
+    return q;
+  };
+
+  // PostgREST caps a single response at 1000 rows, so a plain select silently
+  // truncated the export — Evan would get only the top 1000 by confidence. Page
+  // through with .range() so the CSV holds every matching lead.
+  const PAGE = 1000;
+  const HARD_CAP = 50000;
+  const rows: any[] = [];
+  for (let from = 0; from < HARD_CAP; from += PAGE) {
+    const { data, error } = await buildQuery().range(from, from + PAGE - 1);
+    if (error) return new NextResponse(error.message, { status: 500 });
+    if (!data || data.length === 0) break;
+    rows.push(...data);
+    if (data.length < PAGE) break;
   }
-  if (selectedOrgId) q = q.eq("org_id", selectedOrgId);
-  else if (assigned) q = q.in("org_id", assigned);
-  if (driftOnly) q = q.eq("payload->>catalog_drift", "no_longer_listed");
-  if (material) {
-    const esc = material.replace(/[,()]/g, " ");
-    q = q.or(`material_name.ilike.%${esc}%,payload->>inci_name.ilike.%${esc}%`);
-  }
-  if (source) q = q.eq("source", source);
-  if (channel === "M" || channel === "MS" || channel === "N") q = q.eq("payload->>site_type", channel);
-  if (market === "marketplace") q = q.in("payload->>site_type", ["M", "MS"]);
-  else if (market === "direct") q = q.or("payload->>site_type.eq.N,payload->>site_type.is.null");
-  if (pricedOnly) q = q.not("payload->>pack_sizes_pricing", "is", null);
-
-  const { data: rows, error } = await q;
-  if (error) return new NextResponse(error.message, { status: 500 });
 
   // Column order mirrors Ben's "Vita Organica – Supplier Sourcing" sheet so the
   // export drops into the same workflow: material → supplier identity → the
