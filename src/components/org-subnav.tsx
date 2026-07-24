@@ -9,7 +9,13 @@ import { cn } from "@/lib/utils";
 // the tab you click, so switching feels responsive even while the next tab's
 // (sometimes slow, Tenkara-backed) data loads. The body also shows a skeleton
 // via the route's loading.tsx.
-export function OrgSubnav({ base, sections }: { base: string; sections: { href: string; label: string }[] }) {
+export function OrgSubnav({
+  base,
+  sections,
+}: {
+  base: string;
+  sections: { href: string; label: string; disabled?: boolean }[];
+}) {
   const pathname = usePathname() ?? "";
   const [pendingHref, setPendingHref] = useState<string | null>(null);
 
@@ -24,6 +30,19 @@ export function OrgSubnav({ base, sections }: { base: string; sections: { href: 
         const href = `${base}${s.href}`;
         const active = s.href === "" ? pathname === base : pathname === href || pathname.startsWith(href + "/");
         const pending = pendingHref === href && !active;
+        // Greyed, non-interactive tab (e.g. a surface that isn't ready to open yet).
+        if (s.disabled) {
+          return (
+            <span
+              key={s.href}
+              aria-disabled="true"
+              title="Coming soon"
+              className="inline-flex cursor-not-allowed items-center gap-1.5 rounded-md px-3 py-1.5 text-muted-foreground/40"
+            >
+              {s.label}
+            </span>
+          );
+        }
         return (
           <Link
             key={s.href}
