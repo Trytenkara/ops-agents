@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Table, TableHeader, TableBody, TableRow, TableCell } from "@/components/ui/table";
 import { LeadRichRow, LeadRichHeaders, leadRichColSpan, leadMarketKind, humanizeSignal } from "@/components/lead-rich-row";
+import { deriveMatchTier, matchTierRank } from "@/lib/lead-match-tier";
 import { useListFilter, byString, byDateDesc, usePersistedState } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { BulkRemoveBar } from "@/components/bulk-remove-bar";
@@ -21,6 +22,12 @@ const RECENCY_OPTIONS = [
   { value: "7", label: "Last 7 days" },
   { value: "30", label: "Last 30 days" },
   { value: "all", label: "All time" },
+];
+
+const MATCH_OPTIONS = [
+  { value: "all", label: "All matches" },
+  { value: "confirmed", label: "Confirmed only" },
+  { value: "potential", label: "Potential only" },
 ];
 
 const countryOf = (r: any): string => (r.payload?.supplier_country ?? "").toString().trim();
@@ -44,6 +51,7 @@ export function LeadsList({
 }) {
   const [type, setType] = usePersistedState("leads-type", "all");
   const [recency, setRecency] = usePersistedState("leads-recency", "all");
+  const [match, setMatch] = usePersistedState("leads-match", "all");
   // Stage is driven by the pipeline tabs above (forceStage), not a dropdown here.
   const effectiveStage = forceStage ?? "all";
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -69,17 +77,24 @@ export function LeadsList({
       if (recencyCutoff == null) return true;
       const t = r.created_at ? new Date(r.created_at).getTime() : 0;
       return t >= recencyCutoff;
-    });
+    })
+    .filter((r: any) => (match === "all" ? true : deriveMatchTier(r).tier === match));
 
   const { filtered, controls } = useListFilter(typeRows, {
     searchText: (r) => `${r.supplier_name ?? ""} ${r.material_name ?? ""} ${r.grade ?? ""} ${countryOf(r)}`,
     searchPlaceholder: "supplier, material, grade, country…",
     sorts: [
+      {
+        value: "match",
+        label: "Confirmed first",
+        compare: (a: any, b: any) =>
+          matchTierRank(a) - matchTierRank(b) || byDateDesc((r: any) => r.created_at)(a, b),
+      },
       { value: "newest", label: "Newest", compare: byDateDesc((r: any) => r.created_at) },
       { value: "supplier", label: "Supplier (A–Z)", compare: byString((r: any) => r.supplier_name) },
       { value: "material", label: "Material (A–Z)", compare: byString((r: any) => r.material_name) },
     ],
-    defaultSort: "newest",
+    defaultSort: "match",
     persistKey: "leads",
   });
 
@@ -116,7 +131,7 @@ export function LeadsList({
     "Material", "INCI name", "Trade name", "Supplier", "Role", "Type", "Country",
     "Website", "Pack sizes / pricing", "Email", "Phone", "HQ address",
     "Supplier background", "Grades offered", "Certifications", "MOQ",
-    "Returned price", "Operator", "Signal", "Source", "Stage", "Status",
+    "Returned price", "Operator", "Signal", "Source", "Match", "Stage", "Status",
     "Confidence", "Completeness", "Source citations", "Notes", "Created",
   ];
   const csvRows = filtered.map((r: any) => {
@@ -143,6 +158,7 @@ export function LeadsList({
       r.operator_name ?? r.operator_auto_name ?? "",
       p.signal ? humanizeSignal(p.signal) : "",
       r.source ?? "",
+      deriveMatchTier(r).tier,
       r.stage ?? "",
       r.status ?? "",
       r.confidence_score ?? "",
@@ -158,6 +174,10 @@ export function LeadsList({
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="flex flex-wrap items-end gap-3">
           {controls}
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">Match</span>
+            <Select size="sm" className="min-w-[9rem]" ariaLabel="Match" value={match} onValueChange={setMatch} options={MATCH_OPTIONS} />
+          </label>
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">Type</span>
             <Select size="sm" className="min-w-[9rem]" ariaLabel="Type" value={type} onValueChange={setType} options={TYPE_OPTIONS} />

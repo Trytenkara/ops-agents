@@ -4,6 +4,7 @@ import { relativeTime } from "@/lib/utils";
 import { LeadRowActions } from "@/components/lead-row-actions";
 import { SupplierOperatorAssign } from "@/components/supplier-operator-assign";
 import { LeadOperatorAssign } from "@/components/lead-operator-assign";
+import { deriveMatchTier } from "@/lib/lead-match-tier";
 
 // Shared rich-lead rendering used by both the cross-org Review queue
 // (/work/review/leads) and the per-client Leads tab. Keeping a single
@@ -32,12 +33,34 @@ const SOURCE_BADGE: Record<string, { label: string; variant: BadgeVariant; title
     variant: "warn",
     title: "Discovered by Agent 03 (Scout) via web search — verify before promoting.",
   },
+  sourceready: {
+    label: "SourceReady",
+    variant: "info",
+    title: "Discovered via the SourceReady supplier database (tag/keyword match) — verify the raw-material fit.",
+  },
+  importyeti: {
+    label: "ImportYeti",
+    variant: "info",
+    title: "Matched via ImportYeti US-customs shipment data.",
+  },
   human_bulk_upload: {
     label: "Ops upload",
     variant: "success",
     title: "Added by ops via the suppliers CSV upload.",
   },
 };
+
+// Material-match tier: does the evidence show this supplier actually makes THIS
+// material (Confirmed), or was it a looser tag/keyword surface that still needs
+// verification (Potential)? See lib/lead-match-tier.
+export function LeadMatchBadge({ r }: { r: any }) {
+  const { tier, reason } = deriveMatchTier(r);
+  return tier === "confirmed" ? (
+    <Badge variant="success" title={reason}>Confirmed</Badge>
+  ) : (
+    <Badge variant="outline" title={reason}>Potential</Badge>
+  );
+}
 
 export function LeadSourceBadge({ source }: { source: string | null | undefined }) {
   const s = source ? SOURCE_BADGE[source] : undefined;
@@ -293,7 +316,12 @@ export function LeadRichRow({
           <span className="text-muted-foreground">—</span>
         )}
       </TableCell>
-      <TableCell className="align-top"><LeadSourceBadge source={r.source} /></TableCell>
+      <TableCell className="align-top">
+        <div className="flex flex-col items-start gap-1">
+          <LeadSourceBadge source={r.source} />
+          <LeadMatchBadge r={r} />
+        </div>
+      </TableCell>
       {showOrg && (
         <TableCell className="text-muted-foreground">
           {r.orgs?.name ?? <span className="italic text-xs">cross-org</span>}
