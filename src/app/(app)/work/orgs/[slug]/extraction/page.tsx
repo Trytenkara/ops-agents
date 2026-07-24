@@ -175,6 +175,17 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
     return { ...r, _missing_docs: dealbreakerTypeList.filter(([dt]) => !provided.has(dt)).map(([, m]) => m.label) };
   });
 
+  // Two requirement families, mirroring Tenkara's Sourcing Rules screen:
+  // DOCUMENT requirements qualify the VENDOR (supplier-based); MATERIAL
+  // requirements (sample, shelf life) validate each QUOTE / material.
+  const SUPPLIER_KINDS = new Set(["document", "certificate", "statement", "testing"]);
+  const supplierReqLabels = Array.from(
+    new Map(requirements.filter((r) => SUPPLIER_KINDS.has(r.kind)).map((r) => [r.label, r])).values()
+  );
+  const materialReqs = Array.from(
+    new Map(requirements.filter((r) => !SUPPLIER_KINDS.has(r.kind)).map((r) => [r.label, r])).values()
+  );
+
   return (
     <div className="space-y-8">
       <ListPageHeader
@@ -205,14 +216,12 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
       <section className="space-y-3">
         <div className="flex items-baseline gap-2">
           <h3 className="font-serif text-lg tracking-tight">The bench</h3>
-          <span className="text-xs text-muted-foreground">
-            {requirements.length} qualification requirement{requirements.length === 1 ? "" : "s"}
-          </span>
+          <span className="text-xs text-muted-foreground">vendor qualification &amp; quote validation</span>
         </div>
         <p className="text-sm text-muted-foreground">
-          What this client requires to qualify a vendor, from their Tenkara sourcing rules. Items marked{" "}
-          <span className="font-medium text-foreground">Requested</span> are added to the supplier follow-up email so we
-          retrieve them; <span className="font-medium text-foreground">Dealbreaker</span> items block qualification if missing.
+          From {orgDisplayName(org)}&apos;s Tenkara sourcing rules. <span className="font-medium text-foreground">Document</span> requirements
+          qualify a vendor (supplier-based); <span className="font-medium text-foreground">material</span> requirements (sample, shelf
+          life) validate each quote. Requested items are asked for in follow-ups; Dealbreaker items are qualification blockers.
         </p>
         {unmetDealbreakers.length > 0 && (
           <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm">
@@ -223,50 +232,23 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
             <span className="text-foreground">{unmetDealbreakers.map((r) => r.label).join(", ")}</span>
           </div>
         )}
-        {requirements.length === 0 ? (
+        {requirements.length === 0 && (
           <p className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
             No qualification requirements configured for this client in Tenkara (Client Settings → Sourcing Rules).
           </p>
-        ) : (
-          <ul className="divide-y divide-border rounded-lg border border-border">
-            {requirements.map((r, i) => (
-              <li key={`${r.phase}-${r.key}-${i}`} className="flex items-center justify-between gap-3 px-4 py-2.5">
-                <div className="min-w-0">
-                  <span className="text-sm">{r.label}</span>
-                  {r.detail && r.kind !== "sample" && <span className="ml-2 text-xs text-muted-foreground">({r.detail})</span>}
-                </div>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">
-                    {r.phase === "pre_order" ? "Pre-order" : "Post-order"}
-                  </span>
-                  {r.requested && (
-                    <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-primary">
-                      Requested
-                    </span>
-                  )}
-                  {r.dealbreaker && (
-                    <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-destructive">
-                      Dealbreaker
-                    </span>
-                  )}
-                  {r.kind !== "sample" && r.kind !== "spec" && receivedFor(r.key) > 0 && (
-                    <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-emerald-600">
-                      {receivedFor(r.key)} received
-                    </span>
-                  )}
-                  {dealbreakerUnmet(r) && (
-                    <span className="rounded-full bg-destructive px-2 py-0.5 text-[10px] uppercase tracking-wider text-destructive-foreground">
-                      Not received
-                    </span>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
+        )}
+        {supplierReqLabels.length > 0 && (
+          <p className="text-sm text-muted-foreground">
+            Documents that qualify a vendor:{" "}
+            <span className="text-foreground">
+              {supplierReqLabels.map((r) => r.label + (r.dealbreaker ? " (dealbreaker)" : "")).join(", ")}
+            </span>
+            .
+          </p>
         )}
         {requiredTypeList.length > 0 && supplierRows.length > 0 && (
-          <div className="space-y-2 pt-2">
-            <h4 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">By supplier</h4>
+          <div className="space-y-2 pt-1">
+            <h4 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Vendor qualification · by supplier</h4>
             <ul className="divide-y divide-border rounded-lg border border-border">
               {supplierRows.map((s, i) => {
                 const blocked = s.missingDealbreakers.length > 0;
@@ -358,6 +340,35 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
                   </li>
                 );
               })}
+            </ul>
+          </div>
+        )}
+
+        {materialReqs.length > 0 && (
+          <div className="space-y-2 pt-2">
+            <h4 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Quote validation · per material</h4>
+            <p className="text-xs text-muted-foreground">Checked on each quote / material at review (e.g. sample received, shelf life on the CoA).</p>
+            <ul className="divide-y divide-border rounded-lg border border-border">
+              {materialReqs.map((r, i) => (
+                <li key={`${r.key}-${i}`} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                  <div className="min-w-0">
+                    <span className="text-sm">{r.label}</span>
+                    {r.detail && <span className="ml-2 text-xs text-muted-foreground">({r.detail})</span>}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {r.requested && (
+                      <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-primary">
+                        Requested
+                      </span>
+                    )}
+                    {r.dealbreaker && (
+                      <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-destructive">
+                        Dealbreaker
+                      </span>
+                    )}
+                  </div>
+                </li>
+              ))}
             </ul>
           </div>
         )}
