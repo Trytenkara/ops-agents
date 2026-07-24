@@ -17,6 +17,11 @@ export interface ExtractedQuote {
   unit_of_measurement: string | null;
   currency: string | null;
   grade: string | null; // supplier-stated material grade, never guessed
+  lead_time_days: number | null; // normalized to days when stated; else null
+  lead_time_text: string | null; // raw stated lead time ("2-3 weeks", "ARO")
+  moq_quantity: number | null; // minimum order quantity, numeric
+  moq_unit: string | null; // unit the MOQ is expressed in (kg, lb, cases, ...)
+  payment_terms: string | null; // "Net 30", "50% deposit", etc.
   confidence: "high" | "medium" | "low";
   notes: string | null;
 }
@@ -36,8 +41,13 @@ Return ONLY a JSON object (no prose):
       "unit_of_measurement": "kg",    // the unit case_size is in (kg, lb, L, each, ...)
       "currency": "USD",
       "grade": "USP",                 // the material grade IF the supplier states one, else null
+      "lead_time_days": 21,           // supplier's stated lead time normalized to DAYS, else null
+      "lead_time_text": "2-3 weeks ARO", // the raw lead-time phrasing as written, else null
+      "moq_quantity": 500,            // minimum order quantity as a number, else null
+      "moq_unit": "kg",               // the unit the MOQ is in (kg, lb, cases, drums, ...), else null
+      "payment_terms": "Net 30",      // stated payment terms, else null
       "confidence": "high | medium | low",
-      "notes": "anything ambiguous: MOQ, tiered pricing, unclear unit, sample vs bulk, etc."
+      "notes": "anything ambiguous not captured by a field above: sample vs bulk, unclear unit, etc."
     }
   ]
 }
@@ -47,6 +57,10 @@ Rules:
 - grade: only populate if the supplier EXPLICITLY names a grade/spec for the material (e.g. "USP", "EP", "Food grade", "Industrial", "SCI 80"). NEVER infer or guess a "typical" grade — if they don't state one, return null.
 - Populate case_size and unit_of_measurement so a PER-UNIT price (price / case_size) can be computed. If the price is already per-unit, set case_size = 1 and unit_of_measurement to that unit. Only leave case_size null if there is genuinely no quantity context.
 - Capture EVERY pack size and EVERY tiered price break as its OWN line; put quantity thresholds in notes (e.g. "tier: >=500 lb").
+- lead_time_days: only when the supplier states a lead/delivery time. Normalize to days (1 week = 7, "2-3 weeks" = 21 using the upper bound, "1 month" = 30). Keep the exact original wording in lead_time_text. If no lead time is stated, both are null. NEVER guess a "typical" lead time.
+- moq_quantity / moq_unit: the supplier's stated minimum order quantity and its unit. Null if not stated. Do not confuse MOQ with case_size — MOQ is the smallest total order they'll accept.
+- payment_terms: the stated payment/credit terms verbatim-ish ("Net 30", "Net 60", "50% deposit, balance on delivery", "prepaid"). Null if not stated. NEVER assume terms.
+- These per-supplier fields (lead_time_*, moq_*, payment_terms) are the SAME for every line in one reply unless the supplier differentiates — repeat them on each quote line.
 - confidence "low" when the unit/case size is guessed or the figure might be an MOQ/sample price rather than a real quote.
 - NEVER invent materials, pack sizes, or prices. If the reply states no price, return {"quotes": []}.`;
 

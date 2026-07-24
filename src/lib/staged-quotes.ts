@@ -26,6 +26,11 @@ export interface StagedQuoteInput {
   unitOfMeasurement: string | null;
   currency?: string | null;
   grade?: string | null;
+  leadTimeDays?: number | null;
+  leadTimeText?: string | null;
+  moqQuantity?: number | null;
+  moqUnit?: string | null;
+  paymentTerms?: string | null;
   confidence?: StagedQuoteConfidence;
   extractionNotes?: string | null;
   rawExtract?: Record<string, any> | null;
@@ -102,6 +107,11 @@ export async function insertStagedQuotes(
       unit_of_measurement: r.unitOfMeasurement,
       currency: r.currency ?? "USD",
       grade: r.grade ?? null,
+      lead_time_days: r.leadTimeDays ?? null,
+      lead_time_text: r.leadTimeText ?? null,
+      moq_quantity: r.moqQuantity ?? null,
+      moq_unit: r.moqUnit ?? null,
+      payment_terms: r.paymentTerms ?? null,
       confidence: r.confidence ?? "needs_review",
       extraction_notes: r.extractionNotes ?? null,
       raw_extract: r.rawExtract ?? {},
