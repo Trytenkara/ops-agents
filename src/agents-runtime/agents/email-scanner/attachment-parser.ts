@@ -20,6 +20,11 @@ export interface ExtractedQuote {
   unit_of_measurement: string | null;
   currency: string | null;
   grade: string | null; // supplier-stated material grade, never guessed
+  lead_time_days: number | null; // normalized to days when stated; else null
+  lead_time_text: string | null; // raw stated lead time ("2-3 weeks", "ARO")
+  moq_quantity: number | null; // minimum order quantity, numeric
+  moq_unit: string | null; // unit the MOQ is expressed in (kg, lb, cases, ...)
+  payment_terms: string | null; // "Net 30", "50% deposit", etc.
   confidence: "high" | "medium" | "low";
   notes: string | null;
 }
@@ -39,8 +44,13 @@ Return ONLY a JSON object (no prose):
       "unit_of_measurement": "kg",    // the unit case_size is in (kg, lb, L, each, ...)
       "currency": "USD",
       "grade": "USP",                 // the material grade IF the supplier states one, else null
+      "lead_time_days": 21,           // stated lead time normalized to DAYS, else null
+      "lead_time_text": "2-3 weeks ARO", // the raw lead-time phrasing as written, else null
+      "moq_quantity": 500,            // minimum order quantity as a number, else null
+      "moq_unit": "kg",               // the unit the MOQ is in (kg, lb, cases, drums, ...), else null
+      "payment_terms": "Net 30",      // stated payment terms, else null
       "confidence": "high | medium | low",
-      "notes": "anything ambiguous: MOQ, tiered pricing, unclear unit, etc."
+      "notes": "anything ambiguous not captured by a field above: unclear unit, etc."
     }
   ]
 }
@@ -48,6 +58,10 @@ Return ONLY a JSON object (no prose):
 Rules:
 - price must be numeric or null. Strip "$", "USD", commas.
 - grade: only populate if the document EXPLICITLY names a grade/spec for the material (e.g. "USP", "EP", "Food grade", "Industrial", "SCI 80"). NEVER infer or guess a "typical" grade — if it isn't stated, return null.
+- lead_time_days: only when a lead/delivery time is stated. Normalize to days (1 week = 7, "2-3 weeks" = 21 using the upper bound, "1 month" = 30). Keep the exact wording in lead_time_text. Both null if not stated. NEVER guess.
+- moq_quantity / moq_unit: the stated minimum order quantity and its unit. Null if not stated. Do not confuse MOQ with case_size — MOQ is the smallest total order accepted.
+- payment_terms: stated payment/credit terms ("Net 30", "50% deposit", "prepaid"). Null if not stated. NEVER assume.
+- These per-supplier fields (lead_time_*, moq_*, payment_terms) usually apply document-wide — repeat them on each quote line unless the document differentiates.
 - ALWAYS populate case_size and unit_of_measurement so a PER-UNIT price (price / case_size) can be computed. If the price is already per-unit, set case_size = 1 and unit_of_measurement to that unit. Only leave case_size null if there is genuinely no quantity context at all.
 - Capture EVERY pack size and EVERY tiered price break as its OWN line. If a material is offered in multiple pack sizes (e.g. 50 lb and 55 lb), output one line per pack size. If there are volume price breaks (e.g. $X/lb at 100 lb, $Y/lb at 500 lb), output one line per break and put the quantity threshold in notes (e.g. "tier: >=500 lb"). This is how available pack sizes per material get recorded.
 - confidence "low" when the unit/case size is guessed or the figure might be an MOQ/sample price rather than a real quote.
@@ -229,6 +243,11 @@ export async function parseAttachmentBytes(
         unit_of_measurement: q.unit_of_measurement ?? null,
         currency: q.currency ?? "USD",
         grade: q.grade ?? null,
+        lead_time_days: typeof q.lead_time_days === "number" ? q.lead_time_days : q.lead_time_days == null ? null : Number(q.lead_time_days) || null,
+        lead_time_text: q.lead_time_text ?? null,
+        moq_quantity: typeof q.moq_quantity === "number" ? q.moq_quantity : q.moq_quantity == null ? null : Number(q.moq_quantity) || null,
+        moq_unit: q.moq_unit ?? null,
+        payment_terms: q.payment_terms ?? null,
         confidence: ["high", "medium", "low"].includes(q.confidence) ? q.confidence : "low",
         notes: q.notes ?? null,
       }));
