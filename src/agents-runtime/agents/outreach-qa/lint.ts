@@ -2,6 +2,7 @@
 // checks run both in the scheduled sweep (outreach-qa/index.ts) and inline when
 // an intake agent (02/03/08) stages a draft via stageDraft().
 
+import { findFabricatedContacts } from "@/lib/contact-guard";
 import { findMisspellings } from "@/lib/material-spelling";
 
 export type Severity = "warn" | "error";
@@ -55,6 +56,24 @@ export const RULES: Record<string, Rule> = {
       severity: "error",
       code: "empty_body",
       message: "Body is empty or suspiciously short (<50 chars).",
+    }];
+  },
+  // Steadfast anti-fabrication guard: an outgoing supplier email must never
+  // state a shipping address, phone, or email that wasn't given to us. The
+  // allowlist (approved per-brand values + the recipient's own address) is
+  // injected by the caller as metadata.approved_contacts. An error here
+  // HARD-BLOCKS the draft in draft-staging.ts (status="blocked").
+  fabricated_contact_info: ({ body_preview, subject, metadata }) => {
+    const text = [subject ?? "", body_preview ?? ""].join("\n");
+    if (!text.trim()) return [];
+    const allowed = Array.isArray(metadata?.approved_contacts) ? (metadata.approved_contacts as string[]) : [];
+    const violations = findFabricatedContacts(text, allowed);
+    if (!violations.length) return [];
+    const detail = violations.map((v) => `${v.kind}: ${v.value}`).join("; ");
+    return [{
+      severity: "error",
+      code: "fabricated_contact_info",
+      message: `Draft states contact info not on the approved allowlist — likely fabricated: ${detail}. Defer to a human or add the real value to BRAND_CONTACTS.`,
     }];
   },
   likely_misspelling: ({ subject, body_preview }) => {
