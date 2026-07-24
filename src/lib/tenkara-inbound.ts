@@ -4,6 +4,7 @@ import { composeReply } from "@/agents-runtime/agents/email-scanner/reply-drafte
 import { extractQuotesFromReplyText, type ExtractedQuote } from "@/lib/reply-quote-extract";
 import { insertStagedQuotes, type StagedQuoteInput, type StagedQuoteSource } from "@/lib/staged-quotes";
 import { classifyDocType, insertSupplierDocuments, type SupplierDocumentInput } from "@/lib/supplier-documents";
+import { extractDocumentFields, isDocExtractableExt } from "@/lib/document-extract";
 import { getTenkaraMessageAttachments, downloadTenkaraAttachment } from "@/lib/tenkara-attachments";
 import { parseAttachmentBytes, deriveExt, isPricingCandidateExt } from "@/agents-runtime/agents/email-scanner/attachment-parser";
 import { getTenkaraConversationMessages } from "@/lib/tenkara";
@@ -245,19 +246,50 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     //     Classified from filename/type; a file that yielded price lines is a
     //     price_sheet. Best-effort — never blocks the reply or pricing capture.
     try {
-      const docRows: SupplierDocumentInput[] = nonInline.map((att, i) => ({
-        orgId: ref.org_id,
-        supplierId: ref.supplier_id,
-        supplierName: leadRow?.supplier_name ?? null,
-        materialId: ref.material_id,
-        docType: classifyDocType(att.filename, att.content_type, receivedAttachments[i]?.pricingExtracted ?? false),
-        fileName: att.filename ?? null,
-        contentType: att.content_type ?? null,
-        sizeBytes: att.size_bytes ?? null,
-        sourceConversationId: msg.conversation_id,
-        sourceMessageId: msg.message_id,
-        sourceUrl: att.download_url ?? null,
-      }));
+      const docRows: SupplierDocumentInput[] = [];
+      for (let i = 0; i < nonInline.length; i++) {
+        const att = nonInline[i];
+        const docType = classifyDocType(att.filename, att.content_type, receivedAttachments[i]?.pricingExtracted ?? false);
+
+        // Parse qualification fields out of the doc (CoA lot/assay/expiry, cert
+        // validity, ...). Skip price sheets (pricing handles those) and 'other'.
+        // Per-doc best-effort so one bad file doesn't drop the rest.
+        let extracted: Record<string, any> | null = null;
+        let expiresOn: string | null = null;
+        if (docType !== "price_sheet" && docType !== "other") {
+          const ext = deriveExt(att.filename, att.content_type);
+          if (isDocExtractableExt(ext)) {
+            try {
+              const buf = await downloadTenkaraAttachment(att);
+              if (buf) {
+                const res = await extractDocumentFields(buf, docType, ext);
+                if (res) {
+                  extracted = res.fields;
+                  expiresOn = res.expires_on;
+                }
+              }
+            } catch {
+              /* per-doc extraction best-effort */
+            }
+          }
+        }
+
+        docRows.push({
+          orgId: ref.org_id,
+          supplierId: ref.supplier_id,
+          supplierName: leadRow?.supplier_name ?? null,
+          materialId: ref.material_id,
+          docType,
+          fileName: att.filename ?? null,
+          contentType: att.content_type ?? null,
+          sizeBytes: att.size_bytes ?? null,
+          sourceConversationId: msg.conversation_id,
+          sourceMessageId: msg.message_id,
+          sourceUrl: att.download_url ?? null,
+          extracted,
+          expiresOn,
+        });
+      }
       if (docRows.length) await insertSupplierDocuments(admin, docRows);
     } catch {
       /* doc capture is best-effort */

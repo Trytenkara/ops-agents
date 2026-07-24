@@ -22,6 +22,8 @@ export interface SupplierDocumentInput {
   sourceConversationId?: string | null;
   sourceMessageId?: string | null;
   sourceUrl?: string | null;
+  extracted?: Record<string, any> | null;
+  expiresOn?: string | null; // YYYY-MM-DD
 }
 
 // Best-effort document type from a filename (+ content type). Callers pass
@@ -99,6 +101,8 @@ export async function insertSupplierDocuments(admin: Admin, rows: SupplierDocume
       source_conversation_id: r.sourceConversationId ?? null,
       source_message_id: r.sourceMessageId ?? null,
       source_url: r.sourceUrl ?? null,
+      extracted: r.extracted ?? {},
+      expires_on: r.expiresOn ?? null,
     });
     if (error) {
       result.errors++;
