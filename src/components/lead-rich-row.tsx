@@ -53,12 +53,14 @@ const SOURCE_BADGE: Record<string, { label: string; variant: BadgeVariant; title
 // Material-match tier: does the evidence show this supplier actually makes THIS
 // material (Confirmed), or was it a looser tag/keyword surface that still needs
 // verification (Potential)? See lib/lead-match-tier.
-export function LeadMatchBadge({ r }: { r: any }) {
+export function LeadMatchBadge({ r, large = false }: { r: any; large?: boolean }) {
   const { tier, reason } = deriveMatchTier(r);
+  const big = large ? "text-xs px-2.5 py-1 font-semibold" : "";
+  const hint = large ? " ⓘ" : "";
   return tier === "confirmed" ? (
-    <Badge variant="success" title={reason}>Confirmed</Badge>
+    <Badge variant="success" title={reason} className={big}>{large ? "✓ " : ""}Confirmed{hint}</Badge>
   ) : (
-    <Badge variant="outline" title={reason}>Potential</Badge>
+    <Badge variant="warn" title={reason} className={big}>Potential{hint}</Badge>
   );
 }
 
@@ -158,13 +160,16 @@ export function LeadRichRow({
   const marketKind = (r.market_kind as "marketplace" | "direct" | null | undefined) ?? leadMarketKind(siteType);
   const completeness = r.payload?.completeness_score != null ? Number(r.payload.completeness_score) : null;
   const completenessFactors = Array.isArray(r.payload?.completeness_factors) ? r.payload.completeness_factors : [];
+  // "% ready" only means something once Agent 06 enrichment has actually scored
+  // the profile (which records completeness_factors). Before that it's a fixed
+  // ingest-time placeholder (e.g. ImportYeti's constant 0.2), which reads as a
+  // relevance judgment it isn't — so only surface it once it's real.
+  const completenessScored = completenessFactors.length > 0;
   const completenessTitle =
-    completenessFactors.length > 0
-      ? "Enrichment completeness — " +
-        completenessFactors
-          .map((f: any) => `${f.label} (+${Math.round((Number(f.points) || 0) * 100)}%)`)
-          .join(", ")
-      : "Share of RFQ fields the scanner captured (pricing, contact, MOQ, grades, certs, HQ)";
+    "Profile completeness (not material fit) — share of outreach fields captured: " +
+    completenessFactors
+      .map((f: any) => `${f.label} (+${Math.round((Number(f.points) || 0) * 100)}%)`)
+      .join(", ");
   const confidenceReason = (r.payload?.confidence_reason as string | undefined) ?? undefined;
   const confidencePct = r.confidence_score != null ? Math.round(Number(r.confidence_score) * 100) : null;
   const citations = Array.isArray(r.payload?.source_citations) ? r.payload.source_citations : [];
@@ -185,14 +190,17 @@ export function LeadRichRow({
       <TableCell className="font-medium align-top">
         <div className="flex items-center gap-2 flex-wrap">
           <span>{r.supplier_name ?? "—"}</span>
-          {completeness != null && (
+          {completenessScored && completeness != null && (
             <span
-              className="text-[10px] font-normal text-muted-foreground"
+              className="text-[10px] font-normal text-muted-foreground cursor-help"
               title={completenessTitle}
             >
-              {Math.round(completeness * 100)}% ready
+              {Math.round(completeness * 100)}% ready ⓘ
             </span>
           )}
+        </div>
+        <div className="mt-1">
+          <LeadMatchBadge r={r} large />
         </div>
         {(r.payload?.supplier_country || r.payload?.supplier_role) && (
           <div className="text-xs text-muted-foreground">
@@ -343,7 +351,6 @@ export function LeadRichRow({
       <TableCell className="align-top">
         <div className="flex flex-col items-start gap-1">
           <LeadSourceBadge source={r.source} />
-          <LeadMatchBadge r={r} />
         </div>
       </TableCell>
       {showOrg && (
