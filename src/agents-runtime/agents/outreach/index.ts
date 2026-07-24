@@ -2,7 +2,7 @@ import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getOrgOperatorPool, resolveSupplierOperatorId, getSupplierAssignments, type OperatorRef } from "@/lib/operator-assignment";
 import { classifyClient } from "../quote-revalidation/config";
-import { onlyOrgNames } from "@/lib/org-scope";
+import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import { compileWaitMs } from "@/lib/agent-timing";
 import { runOutreachForSupplier, type OutreachLead } from "./run-outreach";
 import { composeOutreachDraft } from "./drafter";
@@ -211,12 +211,12 @@ registerAgent({
     }
 
     const candidates: Candidate[] = [];
-    const onlyOrgs = onlyOrgNames();
-    const onlyOrgLabel = onlyOrgs.join(", ");
+    // Per-org switch: outreach only acts for orgs whose sourcing_status is 'active'.
+    const orgStatuses = await loadOrgStatuses(admin);
     let droppedNoContact = 0;
     let droppedNoOrg = 0;
     let droppedSkipClient = 0;
-    let droppedOtherOrg = 0;
+    let droppedPausedOrg = 0;
     let heldForSpelling = 0;
     let heldForMissingName = 0;
     let heldPhasedCarry = 0; // leads already held for a follow-up from a prior run
@@ -284,8 +284,8 @@ registerAgent({
         droppedNoOrg++;
         continue;
       }
-      if (onlyOrgs.length && !onlyOrgs.includes(org.name)) {
-        droppedOtherOrg++;
+      if (!outreachAllowed(orgStatuses.byOaId.get(lead.org_id) ?? "off")) {
+        droppedPausedOrg++;
         continue;
       }
       // Hold if this material has an unresolved spelling flag.
@@ -322,14 +322,14 @@ registerAgent({
     const emailCount = candidates.filter((c) => c.channel === "email").length;
     const manualCount = candidates.filter((c) => c.channel === "manual").length;
     await ctx.log(
-      `Filtered: ${candidates.length} actionable (${emailCount} email, ${manualCount} manual-contact) · dropped ${droppedNoContact} (no contact channel), ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${onlyOrgs.length ? `, ${droppedOtherOrg} (outside ${onlyOrgLabel})` : ""}${heldForSpelling ? ` · held ${heldForSpelling} (pending spelling review)` : ""}${heldForMissingName ? ` · held ${heldForMissingName} (missing material name)` : ""}${heldPhasedCarry ? ` · skipped ${heldPhasedCarry} (held for follow-up)` : ""}`,
+      `Filtered: ${candidates.length} actionable (${emailCount} email, ${manualCount} manual-contact) · dropped ${droppedNoContact} (no contact channel), ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${droppedPausedOrg ? `, ${droppedPausedOrg} (org not active)` : ""}${heldForSpelling ? ` · held ${heldForSpelling} (pending spelling review)` : ""}${heldForMissingName ? ` · held ${heldForMissingName} (missing material name)` : ""}${heldPhasedCarry ? ` · skipped ${heldPhasedCarry} (held for follow-up)` : ""}`,
       { step: "filter" }
     );
 
     if (candidates.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary(`No actionable leads after filters (no_contact=${droppedNoContact}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${onlyOrgs.length ? `, other_org=${droppedOtherOrg}` : ""}${heldForSpelling ? `, held_spelling=${heldForSpelling}` : ""}${heldForMissingName ? `, held_missing_name=${heldForMissingName}` : ""}).`);
+      ctx.setSummary(`No actionable leads after filters (no_contact=${droppedNoContact}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${droppedPausedOrg ? `, paused_org=${droppedPausedOrg}` : ""}${heldForSpelling ? `, held_spelling=${heldForSpelling}` : ""}${heldForMissingName ? `, held_missing_name=${heldForMissingName}` : ""}).`);
       return;
     }
 

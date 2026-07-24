@@ -1,5 +1,6 @@
 import { stageDraft } from "@/lib/draft-staging";
 import { followupDelaysMs, callingEscalateAfterMs } from "@/lib/agent-timing";
+import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import type { createAdminClient } from "@/lib/supabase/admin";
 
 // No-reply follow-ups (part of Agent 15). When a supplier never replies to the
@@ -124,12 +125,17 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
     .not("reviewed_at", "is", null) // reviewed_at = the sent timestamp (set by the webhook)
     .limit(300);
 
+  // Per-org switch: only nudge/escalate for orgs whose switch is 'active'. A
+  // paused org's in-flight RFQs stop getting follow-ups.
+  const orgStatuses = await loadOrgStatuses(admin);
+
   const now = Date.now();
   for (const r of (sent ?? []) as any[]) {
     if (drafted >= MAX_PER_RUN) break;
     const meta = (r.metadata ?? {}) as any;
     const fu = Number(meta.followup_count ?? 0);
     if (TERMINAL.has(meta.flow_status)) continue;
+    if (!outreachAllowed(orgStatuses.byOaId.get(r.org_id) ?? "off")) continue;
 
     // Per-org cadence: compressed only for the Sierra test org, prod defaults elsewhere.
     const followupDelays = followupDelaysMs(r.org_id);

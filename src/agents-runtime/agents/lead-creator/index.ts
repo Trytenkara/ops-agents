@@ -7,6 +7,7 @@ import { getSourcingExclusions, exclusionReason, normalizeCompanyName, type Sour
 import { getNoteDerivedCountryExclusions } from "@/lib/client-sourcing-rules";
 import { uploadCsvAndSign } from "@/lib/storage";
 import { onlyOrgNames } from "@/lib/org-scope";
+import { normalizeStatus, sourcingAllowed } from "@/lib/org-status";
 import { flagMaterialNames, correctName } from "@/lib/material-name-flags";
 import { materialLabel } from "@/lib/material-label";
 import { sourceReadyEnabled, fireSourceReadyDiscovery } from "./sourceready";
@@ -201,17 +202,24 @@ registerAgent({
 
     // 3b. Build Tenkara→OA org map (orgs.tenkara_org_id is the join key).
     //     Cached for the run so we make one round-trip total.
-    const { data: orgRows } = await admin.from("orgs").select("id, tenkara_org_id, name");
+    const { data: orgRows } = await admin.from("orgs").select("id, tenkara_org_id, name, sourcing_status");
     const tenkaraOrgToOaOrg = new Map<string, string>();
-    const allowedTenkaraOrgIds = new Set<string>();
-    const onlyOrgs = onlyOrgNames();
-    for (const r of (orgRows ?? []) as { id: string; tenkara_org_id: string | null; name: string }[]) {
-      if (r.tenkara_org_id) {
-        tenkaraOrgToOaOrg.set(r.tenkara_org_id, r.id);
-        if (onlyOrgs.length && onlyOrgs.includes(r.name)) allowedTenkaraOrgIds.add(r.tenkara_org_id);
+    // Discovery is allowed for orgs whose sourcing_status is 'active' or 'sourcing_only'
+    // (see lib/org-status.ts). ONLY_ORG, if still set, is an AND-override during rollout.
+    const sourcingTenkaraOrgIds = new Set<string>();
+    const sourcingNames: string[] = [];
+    const only = new Set(onlyOrgNames());
+    for (const r of (orgRows ?? []) as { id: string; tenkara_org_id: string | null; name: string; sourcing_status: string | null }[]) {
+      if (!r.tenkara_org_id) continue;
+      tenkaraOrgToOaOrg.set(r.tenkara_org_id, r.id);
+      let status = normalizeStatus(r.sourcing_status);
+      if (only.size && !only.has(r.name)) status = "off";
+      if (sourcingAllowed(status)) {
+        sourcingTenkaraOrgIds.add(r.tenkara_org_id);
+        sourcingNames.push(r.name);
       }
     }
-    await ctx.log(`Loaded ${tenkaraOrgToOaOrg.size} tenkara→OA org mappings${onlyOrgs.length ? ` · scoped to ${onlyOrgs.join(", ")}` : ""}`, { step: "org_map" });
+    await ctx.log(`Loaded ${tenkaraOrgToOaOrg.size} tenkara→OA org mappings · sourcing ${sourcingTenkaraOrgIds.size} org(s): ${sourcingNames.join(", ") || "none"}`, { step: "org_map" });
 
     // 3b-iii. Backlog queue — the durable guarantee that every material gets rich
     //         leads. Beyond the recency window, pull materials for our orgs that
@@ -237,9 +245,7 @@ registerAgent({
     const dryStreak = new Map<string, number>();
     const lastAttemptCount = new Map<string, number>();
     if (!onlyMaterialId) {
-      const targetTenkaraOrgIds = onlyOrgs.length
-        ? Array.from(allowedTenkaraOrgIds)
-        : Array.from(tenkaraOrgToOaOrg.keys());
+      const targetTenkaraOrgIds = Array.from(sourcingTenkaraOrgIds);
       try {
         const universe = await queryMaterialsForOrgs(targetTenkaraOrgIds);
         // Paginate: Supabase caps a select at 1000 rows, and there are more than
@@ -518,9 +524,9 @@ registerAgent({
     };
 
     for (const material of materials) {
-      // Fleet-wide org scoping: when ONLY_ORG is set, only source for materials
-      // belonging to those orgs (matched via tenkara_org_id). Skip everything else.
-      if (!onlyMaterialId && onlyOrgs.length && (!material.tenkara_org_id || !allowedTenkaraOrgIds.has(material.tenkara_org_id))) {
+      // Per-org sourcing switch: only source for materials whose org allows
+      // discovery (status active/sourcing_only). Skip 'off' orgs entirely.
+      if (!onlyMaterialId && (!material.tenkara_org_id || !sourcingTenkaraOrgIds.has(material.tenkara_org_id))) {
         continue;
       }
       if (leadsCreated >= MAX_NEW_LEADS_PER_RUN) {

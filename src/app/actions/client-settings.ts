@@ -21,6 +21,29 @@ async function requireEditor() {
   return { session };
 }
 
+// Per-org sourcing pause switch (see migration 0045). Controls whether the agent
+// fleet works this org: active = full pipeline, sourcing_only = discovery+enrichment
+// only (outreach held), off = skipped entirely. Restricted to admin/ops_lead since
+// it decides whether real outreach goes out for a client.
+const SOURCING_STATUSES = ["active", "sourcing_only", "off"] as const;
+export type SourcingStatusInput = (typeof SOURCING_STATUSES)[number];
+
+export async function setOrgSourcingStatus(orgId: string, status: SourcingStatusInput): Promise<Result> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" };
+  if (!hasAnyRole(session, ["admin", "ops_lead"])) return { ok: false, error: "forbidden" };
+  if (!SOURCING_STATUSES.includes(status)) return { ok: false, error: "invalid status" };
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("orgs")
+    .update({ sourcing_status: status, updated_at: new Date().toISOString() })
+    .eq("id", orgId);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath(`/work/orgs`);
+  revalidatePath(`/work/orgs/${orgId}`);
+  return { ok: true };
+}
+
 export interface ClientSettingsInput {
   outreach_mode: "active" | "ghost" | "skip";
   ghost_brand: string | null;
