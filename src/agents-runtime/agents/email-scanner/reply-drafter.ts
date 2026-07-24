@@ -25,6 +25,10 @@ export interface ReplyInput {
   originalSubject: string | null; // our outreach subject
   theirSubject: string | null;    // their reply subject
   theirPreview: string | null;    // snippet of their message
+  // Non-inline files the supplier attached to THIS reply. When present, the draft
+  // must acknowledge them and MUST NOT claim the attachment didn't arrive or ask
+  // for it to be resent. pricingExtracted = we already read pricing out of it.
+  receivedAttachments?: { name: string; pricingExtracted: boolean }[] | null;
   threadContext?: string | null;  // compact transcript of the prior thread (oldest first)
   // Phased outreach: other materials we also source from this supplier that were
   // held back from the first email. If the supplier is engaged, the reply
@@ -49,6 +53,7 @@ const SYSTEM = `You draft short, professional replies to suppliers on behalf of 
 - NEVER invent prices, quantities, commitments, ship dates, or terms. If a specific is needed, ask for it rather than stating one.
 - Do not fabricate names or sign with a real person's name — end with the team sign-off provided.
 - In ghost mode, only reference the ghost brand; never name the underlying client.
+- Attachments: if the input lists files the supplier attached to this reply, treat them as RECEIVED. NEVER tell the supplier an attachment didn't arrive / isn't coming through / is missing, and never ask them to resend or re-share it. Acknowledge it (e.g. "thanks, we've got your quote/price sheet") and, if pricing was already read from it, say you're reviewing it. Only ask for a specific document if it is genuinely not among the attached files.
 
 Also judge engagement: set "engaged" true when the supplier showed genuine interest or willingness (gave pricing, asked a question, requested a sample/spec, said they can supply, or otherwise moved things forward); false for a decline / "can't supply" / out-of-office / automated / off-topic message.
 
@@ -74,6 +79,7 @@ function extractJson(text: string): ComposedReply {
 export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
   const signoff = input.mode === "ghost" ? `${input.ghostBrand ?? "Sourcing"} Sourcing` : `${input.clientOrgName} Purchasing Team`;
   const held = (input.heldMaterialNames ?? []).filter((n) => n && n.trim());
+  const atts = (input.receivedAttachments ?? []).filter((a) => a && a.name && a.name.trim());
   const lines = [
     `Mode: ${input.mode}`,
     `Sign off as: ${signoff}`,
@@ -83,6 +89,15 @@ export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
     `Our original outreach subject: ${input.originalSubject ?? "(none)"}`,
     `Their reply subject: ${input.theirSubject ?? "(none)"}`,
     `Their message (snippet): ${input.theirPreview ?? "(not available)"}`,
+    ...(atts.length
+      ? [
+          "",
+          `The supplier ATTACHED ${atts.length} file(s) to this reply: ${atts
+            .map((a) => a.name + (a.pricingExtracted ? " [pricing already read from this file]" : ""))
+            .join(", ")}.`,
+          `These files DID come through to us. Do NOT say the attachment is missing or ask them to resend it — acknowledge receipt.`,
+        ]
+      : []),
     ...(held.length ? ["", `Other materials we also source from this supplier (introduce only if engaged): ${held.join(", ")}`] : []),
     ...(input.threadContext
       ? ["", "Full thread so far (oldest first — use it to avoid repeating yourself and to answer what they actually asked):", input.threadContext]

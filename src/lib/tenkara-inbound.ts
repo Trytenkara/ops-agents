@@ -201,6 +201,10 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   // photographed price sheets). Best-effort: extraction must never block the
   // reply draft.
   let quotesStaged = 0;
+  // Non-inline files the supplier attached to THIS reply. Surfaced to the reply
+  // drafter so it acknowledges them instead of insisting the attachment "didn't
+  // come through" and asking the supplier to resend it.
+  let receivedAttachments: { name: string; pricingExtracted: boolean }[] = [];
   try {
     // Each captured line tagged with where it came from, so the staged row and
     // the lead headline can tell body text from an attached price sheet.
@@ -220,13 +224,17 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     // Attachments: real (non-inline) pricing-candidate files on the inbound
     // message. Inline images are signature logos, not price sheets — skip them.
     const attachments = await getTenkaraMessageAttachments(msg.conversation_id, msg.message_id);
-    for (const att of attachments) {
-      if (att.is_inline) continue;
+    const nonInline = attachments.filter((a) => !a.is_inline);
+    receivedAttachments = nonInline.map((a) => ({ name: a.filename ?? "attachment", pricingExtracted: false }));
+    for (let i = 0; i < nonInline.length; i++) {
+      const att = nonInline[i];
       const ext = deriveExt(att.filename, att.content_type);
       if (!isPricingCandidateExt(ext, att.size_bytes)) continue;
       const buf = await downloadTenkaraAttachment(att);
       if (!buf) continue;
-      for (const q of await parseAttachmentBytes(buf, att.filename, ext)) {
+      const qs = await parseAttachmentBytes(buf, att.filename, ext);
+      if (qs.length) receivedAttachments[i].pricingExtracted = true;
+      for (const q of qs) {
         captured.push({ q, source: "attachment", attachmentName: att.filename, attachmentUrl: att.download_url });
       }
     }
@@ -351,6 +359,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     originalSubject: ref.subject,
     theirSubject: msg.subject ?? null,
     theirPreview: msg.body_text ?? null,
+    receivedAttachments,
     threadContext,
     heldMaterialNames,
   });
