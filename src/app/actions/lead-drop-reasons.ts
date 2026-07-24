@@ -6,6 +6,7 @@ export const DROP_REASONS = [
   { value: "duplicate", label: "Duplicate of an existing lead" },
   { value: "wrong_material", label: "Wrong material" },
   { value: "not_a_supplier", label: "Not actually a supplier" },
+  { value: "non_material_supplier", label: "Freight/logistics, not a material supplier" },
   { value: "already_relationship", label: "Already an active relationship" },
   { value: "low_quality_signal", label: "Low quality signal" },
   { value: "out_of_scope_geo", label: "Out of geographic scope" },
