@@ -150,17 +150,20 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   // these — surface them so ops can add the name in Tenkara before re-running.
   const leadsNeedingName = leads.filter((r) => r.needs_material_name);
 
-  // Removed / filtered-out leads: dropped or terminal (manual drops, dedup,
-  // freight/non-material filter, escalations) PLUS active leads that outreach
-  // suppressed (do-not-contact / excluded country / prior relationship). Loaded
-  // separately since the main list is active-only. Capped at the most recent 500.
+  // Removed / filtered-out leads: GENUINE exits only — terminal (manual drops,
+  // freight/non-material filter), dropped-as-duplicate (dedup_canonical_name /
+  // duplicate_open_case), or active leads outreach suppressed (do-not-contact /
+  // excluded country / prior relationship). Deliberately EXCLUDES leads routed
+  // to manual handling (payload.drop_reason=manual_outreach_case) and
+  // escalated_to_case — those are active work shown under the Outreach tab, not
+  // removals. Loaded separately since the main list is active-only; capped at 500.
   const { data: removedRaw } = await admin
     .from("leads_in_flight")
     .select(
       "id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)"
     )
     .eq("org_id", org.id)
-    .or("status.in.(dropped,terminal),payload->>outreach_suppressed.not.is.null")
+    .or("status.eq.terminal,and(status.eq.dropped,drop_reason.in.(dedup_canonical_name,duplicate_open_case)),payload->>outreach_suppressed.not.is.null")
     .order("created_at", { ascending: false })
     .limit(500);
   const removedRows = (removedRaw ?? []).map((r) => ({

@@ -165,7 +165,7 @@ export function LeadsTabs({
         (removedRows.length > 0 ? (
           <>
             <p className="text-sm text-muted-foreground -mb-1">
-              Leads that left the pipeline — dropped, deduped, filtered out (freight/logistics), or suppressed before outreach (do-not-contact / excluded country / prior relationship). Each row shows the reason.
+              Leads that left the pipeline — filtered out (freight/logistics), duplicates, manual drops, or suppressed before outreach (do-not-contact / excluded country / prior relationship). Each row shows the reason. Leads routed to manual outreach or escalated to a case are active work — find those under Outreach.
             </p>
             <LeadsList rows={removedRows} canAct={false} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
           </>
