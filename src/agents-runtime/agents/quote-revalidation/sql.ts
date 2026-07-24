@@ -76,7 +76,15 @@ export async function queryOverdueRows(): Promise<OverdueRow[]> {
         -- they fall into a void and are never re-quoted.
         AND (
           mq.reanalyze < CURRENT_DATE + INTERVAL '7 days'
-          OR (mq.reanalyze IS NULL AND (mq.quote_date IS NULL OR mq.quote_date < CURRENT_DATE - INTERVAL '90 days'))
+          -- No reanalyze date, but a real final-expiry date: start re-quoting
+          -- ~1 month before product_expiry so analysis finishes before the quote
+          -- actually expires (never start after / too close to expiry).
+          OR (mq.reanalyze IS NULL AND mq.product_expiry IS NOT NULL
+                AND mq.product_expiry < CURRENT_DATE + INTERVAL '1 month')
+          -- No reanalyze AND no expiry: fall back to a default validity window
+          -- so these don't fall into a void and are never re-quoted.
+          OR (mq.reanalyze IS NULL AND mq.product_expiry IS NULL
+                AND (mq.quote_date IS NULL OR mq.quote_date < CURRENT_DATE - INTERVAL '90 days'))
         )
         AND s.poc_email IS NOT NULL
         AND s.poc_email <> ''
