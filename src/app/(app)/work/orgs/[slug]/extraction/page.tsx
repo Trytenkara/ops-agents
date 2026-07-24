@@ -125,6 +125,13 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
     custom_documentation: "other",
   };
   const receivedFor = (key: string): number => docCountByType.get(REQ_KEY_TO_DOCTYPE[key] ?? "") ?? 0;
+  const isDocRequirement = (r: RequirementItem) => !!REQ_KEY_TO_DOCTYPE[r.key];
+  const dealbreakerUnmet = (r: RequirementItem) => r.dealbreaker && isDocRequirement(r) && receivedFor(r.key) === 0;
+  // Dealbreaker documents the client requires that no supplier has provided yet.
+  // Deduped by label so a pre+post duplicate shows once in the banner.
+  const unmetDealbreakers = Array.from(
+    new Map(requirements.filter(dealbreakerUnmet).map((r) => [r.label, r])).values()
+  );
 
   return (
     <div className="space-y-8">
@@ -165,6 +172,15 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
           <span className="font-medium text-foreground">Requested</span> are added to the supplier follow-up email so we
           retrieve them; <span className="font-medium text-foreground">Dealbreaker</span> items block qualification if missing.
         </p>
+        {unmetDealbreakers.length > 0 && (
+          <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm">
+            <span className="font-medium text-destructive">
+              {unmetDealbreakers.length} dealbreaker document{unmetDealbreakers.length === 1 ? "" : "s"} not yet received
+            </span>
+            <span className="text-muted-foreground"> — qualification is blocked until these arrive: </span>
+            <span className="text-foreground">{unmetDealbreakers.map((r) => r.label).join(", ")}</span>
+          </div>
+        )}
         {requirements.length === 0 ? (
           <p className="rounded-lg border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
             No qualification requirements configured for this client in Tenkara (Client Settings → Sourcing Rules).
@@ -194,6 +210,11 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
                   {r.kind !== "sample" && r.kind !== "spec" && receivedFor(r.key) > 0 && (
                     <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-emerald-600">
                       {receivedFor(r.key)} received
+                    </span>
+                  )}
+                  {dealbreakerUnmet(r) && (
+                    <span className="rounded-full bg-destructive px-2 py-0.5 text-[10px] uppercase tracking-wider text-destructive-foreground">
+                      Not received
                     </span>
                   )}
                 </div>
