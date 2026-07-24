@@ -112,6 +112,7 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
     const brand = (callerMeta.ghost_brand as string | undefined) ?? (callerMeta.supplier_name as string | undefined) ?? "a supplier draft";
     await postAgentAlert(
       `:no_entry: Blocked a supplier draft with unverified contact info (possible fabrication). ${fabrication.message} — brand: ${brand}, supplier: ${callerMeta.supplier_name ?? "?"}, draft_ref: ${data?.id ?? "?"}. Held (status=blocked); not sent. Research the real value and add it to BRAND_CONTACTS if legitimate.`,
+      { channel: process.env.SLACK_CONTACT_GUARD_CHANNEL_ID ?? "C0B5M1QCE9E" },
     );
 
     if (error) return { ok: false, error: `draft_references(blocked): ${error.message}`, qaFindings, blocked: true };
