@@ -1,4 +1,5 @@
 import { stageDraft } from "@/lib/draft-staging";
+import { followupDelaysMs, callingEscalateAfterMs } from "@/lib/agent-timing";
 import type { createAdminClient } from "@/lib/supabase/admin";
 
 // No-reply follow-ups (part of Agent 15). When a supplier never replies to the
@@ -7,31 +8,11 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 // supplier is still silent, route the supplier to Cases as a calling escalation
 // so a call operator can phone them. Nothing auto-sends.
 
-const DAY = 24 * 3600 * 1000;
-const MINUTE = 60 * 1000;
 const MAX_PER_RUN = 50;
 
-// Delay before each no-reply nudge, as ms-after-sent. Prod default is 4d/8d.
-// FOLLOWUP_MINUTES (csv, e.g. "5,10") overrides for testing so both nudges fire
-// within a session; the list length also sets how many nudges we send.
-const FOLLOWUP_DELAYS_MS: number[] = (() => {
-  const raw = (process.env.FOLLOWUP_MINUTES ?? "").trim();
-  if (raw) {
-    const mins = raw.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n >= 0);
-    if (mins.length) return mins.map((m) => m * MINUTE);
-  }
-  return [4 * DAY, 8 * DAY];
-})();
-
-// Grace after the last follow-up before we escalate to a phone call — gives a
-// slow supplier a final window to reply by email first (prod ≈ day 10).
-// CALLING_ESCALATE_AFTER_MINUTES overrides for testing.
-const CALLING_ESCALATE_AFTER_MS: number = (() => {
-  const raw = (process.env.CALLING_ESCALATE_AFTER_MINUTES ?? "").trim();
-  const mins = Number(raw);
-  if (raw && Number.isFinite(mins) && mins >= 0) return mins * MINUTE;
-  return 2 * DAY;
-})();
+// No-reply nudge delays and calling-escalation grace are resolved per-org (see
+// lib/agent-timing.ts): the compressed test cadence applies only to the Sierra
+// test org, every other org uses the prod defaults (4d/8d nudges, ~day-10 call).
 const MAX_ESCALATIONS_PER_RUN = 50;
 const TERMINAL = new Set(["stale", "closed_declined", "finalized", "price_captured", "escalated_to_calling"]);
 
@@ -63,7 +44,8 @@ async function escalateToCalling(
   ctx: Ctx,
   admin: Admin,
   r: any,
-  meta: any
+  meta: any,
+  followupTotal: number
 ): Promise<boolean> {
   const { data: existing } = await admin
     .from("cases")
@@ -92,7 +74,7 @@ async function escalateToCalling(
     supplier_id: r.supplier_id ?? null,
     material_id: r.material_id ?? null,
     originating_thread_id: r.thread_id ?? null,
-    recommended_action: `Call ${supplierName}${materialName ? ` re: ${materialName}` : ""} — no reply after ${FOLLOWUP_DELAYS_MS.length} email follow-ups. Confirm the RFQ was received and the right contact, and request a quote.`,
+    recommended_action: `Call ${supplierName}${materialName ? ` re: ${materialName}` : ""} — no reply after ${followupTotal} email follow-ups. Confirm the RFQ was received and the right contact, and request a quote.`,
     assigned_operator: r.assigned_operator ?? null,
     metadata: {
       source_agent: "agent-15-reply-manager",
@@ -116,7 +98,7 @@ async function escalateToCalling(
     .from("draft_references")
     .update({ metadata: { ...meta, calling_escalated_at: new Date().toISOString(), flow_status: "escalated_to_calling" } })
     .eq("id", r.id);
-  await ctx.log(`Calling escalation opened for ${supplierName} (no reply after ${FOLLOWUP_DELAYS_MS.length} follow-ups)`, { step: "calling_escalation" });
+  await ctx.log(`Calling escalation opened for ${supplierName} (no reply after ${followupTotal} follow-ups)`, { step: "calling_escalation" });
   return true;
 }
 
@@ -149,21 +131,24 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
     const fu = Number(meta.followup_count ?? 0);
     if (TERMINAL.has(meta.flow_status)) continue;
 
+    // Per-org cadence: compressed only for the Sierra test org, prod defaults elsewhere.
+    const followupDelays = followupDelaysMs(r.org_id);
+
     // Both follow-ups sent and still silent → escalate to a phone call once the
     // grace window has elapsed. Stamped via calling_escalated_at so we only do
     // this once per conversation.
-    if (fu >= FOLLOWUP_DELAYS_MS.length) {
+    if (fu >= followupDelays.length) {
       if (meta.calling_escalated_at) continue;
       if (escalated >= MAX_ESCALATIONS_PER_RUN) continue;
       const lastFu = meta.last_followup_at ? new Date(meta.last_followup_at).getTime() : null;
-      if (!lastFu || (now - lastFu) < CALLING_ESCALATE_AFTER_MS) continue; // grace not elapsed
-      if (await escalateToCalling(ctx, admin, r, meta)) escalated++;
+      if (!lastFu || (now - lastFu) < callingEscalateAfterMs(r.org_id)) continue; // grace not elapsed
+      if (await escalateToCalling(ctx, admin, r, meta, followupDelays.length)) escalated++;
       continue;
     }
 
     const sentAt = r.reviewed_at ? new Date(r.reviewed_at).getTime() : null;
     if (!sentAt) continue;
-    if ((now - sentAt) < FOLLOWUP_DELAYS_MS[fu]) continue; // not due yet
+    if ((now - sentAt) < followupDelays[fu]) continue; // not due yet
 
     const to = meta.supplier_contact_email as string | undefined;
     if (!to) {
