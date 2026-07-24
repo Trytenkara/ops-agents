@@ -74,7 +74,7 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-export function ExtractionQuoteBoard({ rows, slug }: { rows: any[]; slug: string }) {
+export function ExtractionQuoteBoard({ rows, slug, showDocs = false }: { rows: any[]; slug: string; showDocs?: boolean }) {
   const { filtered, controls } = useListFilter(rows, {
     searchText: (r: any) => `${r.supplier_name ?? ""} ${r.material_name ?? ""} ${r.grade ?? ""} ${r.payment_terms ?? ""}`,
     searchPlaceholder: "supplier, material, grade, terms…",
@@ -106,6 +106,7 @@ export function ExtractionQuoteBoard({ rows, slug }: { rows: any[]; slug: string
     r.payment_terms ?? "",
     r.confidence ?? "",
     r.status ?? "",
+    ...(showDocs ? [Array.isArray(r._missing_docs) && r._missing_docs.length ? `Missing: ${r._missing_docs.join(", ")}` : "OK"] : []),
   ]);
 
   return (
@@ -129,6 +130,7 @@ export function ExtractionQuoteBoard({ rows, slug }: { rows: any[]; slug: string
             "Payment terms",
             "Confidence",
             "Status",
+            ...(showDocs ? ["Qualification docs"] : []),
           ]}
           rows={csvRows}
         />
@@ -147,6 +149,7 @@ export function ExtractionQuoteBoard({ rows, slug }: { rows: any[]; slug: string
             <TableHead>Source</TableHead>
             <TableHead>Conf.</TableHead>
             <TableHead>Status</TableHead>
+            {showDocs && <TableHead>Docs</TableHead>}
             <TableHead className="text-right">Pull</TableHead>
           </TableRow>
         </TableHeader>
@@ -200,6 +203,15 @@ export function ExtractionQuoteBoard({ rows, slug }: { rows: any[]; slug: string
                   {(r.status ?? "").replace("_", " ") || "—"}
                 </span>
               </TableCell>
+              {showDocs && (
+                <TableCell className="align-top text-xs">
+                  {Array.isArray(r._missing_docs) && r._missing_docs.length > 0 ? (
+                    <span className="text-destructive">Missing: {r._missing_docs.join(", ")}</span>
+                  ) : (
+                    <span className="text-emerald-600">✓</span>
+                  )}
+                </TableCell>
+              )}
               <TableCell className="text-right align-top">
                 <CopyButton text={pullLine(r)} />
               </TableCell>
@@ -207,7 +219,7 @@ export function ExtractionQuoteBoard({ rows, slug }: { rows: any[]; slug: string
           ))}
           {filtered.length === 0 && (
             <TableRow>
-              <TableCell colSpan={12} className="text-center py-8 text-muted-foreground">
+              <TableCell colSpan={showDocs ? 13 : 12} className="text-center py-8 text-muted-foreground">
                 No extracted quotes yet. Supplier replies and price sheets land here as the agents process them.
               </TableCell>
             </TableRow>

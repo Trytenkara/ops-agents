@@ -166,6 +166,15 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
     })
     .sort((a, b) => b.missingDealbreakers.length - a.missingDealbreakers.length || a.name.localeCompare(b.name));
 
+  // Attach each Quote board row's supplier's missing dealbreaker docs, so ops
+  // sees the qualification gap right where they pull the quote (flag + detail,
+  // no blocking). Only meaningful when the client has dealbreaker doc rules.
+  const dealbreakerTypeList = requiredTypeList.filter(([, m]) => m.dealbreaker);
+  const boardRows = rows.map((r: any) => {
+    const provided = suppliers.get(supKey(r.supplier_id ?? null, r.supplier_name ?? null))?.provided ?? new Set<string>();
+    return { ...r, _missing_docs: dealbreakerTypeList.filter(([dt]) => !provided.has(dt)).map(([, m]) => m.label) };
+  });
+
   return (
     <div className="space-y-8">
       <ListPageHeader
@@ -190,7 +199,7 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
         <p className="text-sm text-muted-foreground">
           Prices, grade, lead time, MOQ, and payment terms captured from what suppliers sent back.
         </p>
-        <ExtractionQuoteBoard rows={rows} slug={org.slug} />
+        <ExtractionQuoteBoard rows={boardRows} slug={org.slug} showDocs={dealbreakerTypeList.length > 0} />
       </section>
 
       <section className="space-y-3">
