@@ -3,7 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { queryRecentMaterials, queryMaterialsByIds, queryMaterialsForOrgs, findCandidatesForMaterial, existingQuotesForMaterials, type CandidateSupplier, type MaterialRow } from "./sql";
 import { scoutSuppliersForMaterial, scoreScoutConfidence, scoutCompleteness, type ScoutSupplier } from "./scout";
 import { toCsv } from "@/lib/csv";
-import { getSourcingExclusions, exclusionReason, type SourcingExclusions } from "@/lib/tenkara-sourcing-exclusions";
+import { getSourcingExclusions, exclusionReason, normalizeCompanyName, type SourcingExclusions } from "@/lib/tenkara-sourcing-exclusions";
 import { getNoteDerivedCountryExclusions } from "@/lib/client-sourcing-rules";
 import { uploadCsvAndSign } from "@/lib/storage";
 import { onlyOrgNames } from "@/lib/org-scope";
@@ -423,6 +423,40 @@ registerAgent({
       });
     }
 
+    // 3e. Per-(material, canonical company name) dedup. The supplier_id guard above
+    //     only catches graph leads (scout / SourceReady / ImportYeti carry
+    //     supplier_id=null), and the host guard can't unify a supplier listed under
+    //     different domains (e.g. chemicals.basf.com vs a pharmacompass listing) or
+    //     the same supplier under a name variant ("BASF" vs "BASF SE"). Key on
+    //     (material_id | normalizeCompanyName(name)) so distinct materials for the
+    //     same supplier remain separate leads, but the same supplier+material never
+    //     lands twice. Seeded from existing active leads, then updated as we stage.
+    const { data: existingNameRows } = await admin
+      .from("leads_in_flight")
+      .select("material_id, supplier_name")
+      .eq("status", "active")
+      .in("material_id", materialIds);
+    const stagedNameKeys = new Set<string>();
+    for (const r of (existingNameRows ?? []) as { material_id: string | null; supplier_name: string | null }[]) {
+      const norm = normalizeCompanyName(r.supplier_name);
+      if (r.material_id && norm) stagedNameKeys.add(`${r.material_id}|${norm}`);
+    }
+    // Returns true if this (material, company) was already seen; otherwise records
+    // it and returns false. Blank/normalize-to-empty names are never deduped.
+    const nameSeen = (materialId: string, name: string | null | undefined): boolean => {
+      const norm = normalizeCompanyName(name);
+      if (!norm) return false;
+      const key = `${materialId}|${norm}`;
+      if (stagedNameKeys.has(key)) return true;
+      stagedNameKeys.add(key);
+      return false;
+    };
+    if (stagedNameKeys.size > 0) {
+      await ctx.log(`${stagedNameKeys.size} (material,company) names already staged — name dedup active`, {
+        step: "name_dedup",
+      });
+    }
+
     // 4. AI scout config — Anthropic web_search tool. If no key, scout phase
     //    is skipped silently and we run graph-only.
     const scoutEnabled = !!process.env.ANTHROPIC_API_KEY;
@@ -442,6 +476,7 @@ registerAgent({
     let skippedByMirror = 0;
     let skippedByExisting = 0;
     let skippedByExclusion = 0;
+    let skippedByName = 0;
     let sourceReadyFired = 0;
     let importYetiFired = 0;
     const noLeadMaterials: string[] = [];
@@ -535,6 +570,10 @@ registerAgent({
         const key = `${c.supplier_name.trim().toLowerCase()}|${matLabel.trim().toLowerCase()}`;
         if (mirrorPairs.has(key)) {
           skippedByMirror++;
+          continue;
+        }
+        if (nameSeen(material.id, c.supplier_name)) {
+          skippedByName++;
           continue;
         }
         fresh.push(c);
@@ -714,9 +753,26 @@ registerAgent({
           );
         }
 
-        if (scoutAllowed.length > 0) {
+        // Same canonical-name dedup applied to graph leads (§3e): drop scout
+        // suppliers already staged for this material under any name variant,
+        // including the graph leads just inserted above this run.
+        const scoutDeduped = scoutAllowed.filter((s) => {
+          if (nameSeen(material.id, s.supplier_name)) {
+            skippedByName++;
+            return false;
+          }
+          return true;
+        });
+        if (scoutAllowed.length > scoutDeduped.length) {
+          await ctx.log(
+            `Deduped ${scoutAllowed.length - scoutDeduped.length} scout candidate(s) for ${matLabel} (same supplier already staged)`,
+            { step: "name_dedup", data: { material_id: material.id } }
+          );
+        }
+
+        if (scoutDeduped.length > 0) {
           const scoutBudget = MAX_NEW_LEADS_PER_RUN - leadsCreated;
-          const scoutToInsert = scoutAllowed.slice(0, scoutBudget).map((s) => ({
+          const scoutToInsert = scoutDeduped.slice(0, scoutBudget).map((s) => ({
             org_id: oaOrgId,
             supplier_name: s.supplier_name,
             supplier_id: null,                  // no Tenkara supplier_id — new discovery
@@ -904,6 +960,7 @@ registerAgent({
       `Staged ${leadsCreated} raw leads (${graphLeads} graph, ${scoutLeadsCreated} scout) across ${materialsWithLeads} material${materialsWithLeads === 1 ? "" : "s"} · ` +
         `${materialsWithScoutLeads} got scout leads · ${materialsWithoutLeads} empty · ${skippedByMirror} graph candidates skipped by 90d mirror` +
         (skippedByExisting ? ` · ${skippedByExisting} skipped (already staged)` : "") +
+        (skippedByName ? ` · ${skippedByName} skipped (same supplier already staged)` : "") +
         (skippedByExclusion ? ` · ${skippedByExclusion} skipped (do-not-contact / excluded country)` : "") +
         (scoutEnabled ? "" : " · scout off (no ANTHROPIC_API_KEY)") +
         (csvUrl ? ` · CSV ready` : "") +

@@ -42,7 +42,7 @@ export function normalizeCompanyName(name: string | null | undefined): string {
     .toLowerCase()
     .replace(/&/g, " and ")
     .replace(/[.,/#!$%^*;:{}=\-_`~()'"]/g, " ")
-    .replace(/\b(inc|incorporated|llc|ltd|limited|co|corp|corporation|company|gmbh|sa|srl|bv|plc|pvt|pte|group)\b/g, " ")
+    .replace(/\b(inc|incorporated|llc|ltd|limited|co|corp|corporation|company|gmbh|sa|se|ag|nv|kg|kk|srl|bv|plc|pvt|pte|group)\b/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
