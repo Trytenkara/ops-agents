@@ -21,6 +21,29 @@ async function requireEditor() {
   return { session };
 }
 
+// Per-org sourcing pause switch (see migration 0045). Controls whether the agent
+// fleet works this org: active = full pipeline, sourcing_only = discovery+enrichment
+// only (outreach held), off = skipped entirely. Restricted to admin/ops_lead since
+// it decides whether real outreach goes out for a client.
+const SOURCING_STATUSES = ["active", "sourcing_only", "off"] as const;
+export type SourcingStatusInput = (typeof SOURCING_STATUSES)[number];
+
+export async function setOrgSourcingStatus(orgId: string, status: SourcingStatusInput): Promise<Result> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" };
+  if (!hasAnyRole(session, ["admin", "ops_lead"])) return { ok: false, error: "forbidden" };
+  if (!SOURCING_STATUSES.includes(status)) return { ok: false, error: "invalid status" };
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("orgs")
+    .update({ sourcing_status: status, updated_at: new Date().toISOString() })
+    .eq("id", orgId);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath(`/work/orgs`);
+  revalidatePath(`/work/orgs/${orgId}`);
+  return { ok: true };
+}
+
 export interface ClientSettingsInput {
   outreach_mode: "active" | "ghost" | "skip";
   ghost_brand: string | null;
@@ -120,9 +143,40 @@ export async function addClientNote(orgId: string, text: string, autoGenerate = 
   return { ok: true };
 }
 
+const UPLOAD_BUCKET = "client-uploads";
+
+// Remove an uploaded document or note. Deletes the storage object (for files),
+// the client_uploads row, then re-runs generation so its content drops out of
+// the summary. Scoped to the passed org so an id from another org can't be hit.
+export async function deleteClientUpload(orgId: string, uploadId: string): Promise<Result> {
+  const auth = await requireEditor();
+  if (auth.error) return { ok: false, error: auth.error };
+  const admin = createAdminClient();
+
+  const { data: row, error: readErr } = await admin
+    .from("client_uploads")
+    .select("id, org_id, file_path")
+    .eq("id", uploadId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  if (readErr) return { ok: false, error: readErr.message };
+  if (!row) return { ok: false, error: "not found" };
+
+  if (row.file_path) {
+    // Best-effort: an already-missing object shouldn't block the row delete.
+    await admin.storage.from(UPLOAD_BUCKET).remove([row.file_path]);
+  }
+
+  const { error } = await admin.from("client_uploads").delete().eq("id", row.id);
+  if (error) return { ok: false, error: error.message };
+
+  await generateClientProfile(admin, orgId, { force: false });
+  revalidatePath(`/work/orgs`);
+  return { ok: true };
+}
+
 // Upload a file. Text/markdown content is extracted inline; other types are
 // stored and referenced (text extraction for those is a fast-follow).
-const UPLOAD_BUCKET = "client-uploads";
 export async function uploadClientFile(orgId: string, form: FormData): Promise<Result> {
   const auth = await requireEditor();
   if (auth.error) return { ok: false, error: auth.error };

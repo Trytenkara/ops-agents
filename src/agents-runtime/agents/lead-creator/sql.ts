@@ -1,4 +1,5 @@
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
+import { materialLabel } from "@/lib/material-label";
 
 // Tenkara prod schema (confirmed via mcp_readonly):
 //   materials(id, name, trade_name, inci, created_at, user_id, ...)
@@ -49,6 +50,25 @@ export async function queryRecentMaterials(since: string): Promise<MaterialRow[]
       order by m.created_at desc
       limit 200`,
     [since]
+  );
+}
+
+// All materials belonging to the given Tenkara orgs — the universe for the
+// "needs sourcing" backlog (materials with 0 or too-few leads), independent of
+// when they were created. Bounded so one run can't pull an unbounded set; the
+// per-run budget + lead-count filter in index.ts narrow this to what still
+// needs work, and the set self-drains as materials reach the richness floor.
+export async function queryMaterialsForOrgs(tenkaraOrgIds: string[]): Promise<MaterialRow[]> {
+  if (!tenkaraOrgIds.length) return [];
+  return tenkaraQuery<MaterialRow>(
+    `select m.id, m.name, m.trade_name, m.inci, m.created_at, m.user_id,
+            u.organization_id as tenkara_org_id
+       from public.materials m
+       join public.users u on u.id = m.user_id
+      where u.organization_id = any($1::uuid[])
+      order by m.created_at desc
+      limit 2000`,
+    [tenkaraOrgIds]
   );
 }
 
@@ -119,7 +139,7 @@ export async function findCandidatesForMaterial(material: MaterialRow): Promise<
   }
 
   // 3. Suppliers who have quoted materials with matching name (case-insensitive).
-  const nameKey = material.trade_name ?? material.name;
+  const nameKey = materialLabel(material);
   if (nameKey) {
     const sameName = await tenkaraQuery<CandidateSupplier>(
       `select s.id as supplier_id,

@@ -20,6 +20,7 @@ export type CaseRow = {
   createdAt: string | null;
   formType: string | null;     // present for supplier_form cases
   formAvailable: boolean;      // true when a downloadable file is stored
+  canAddEmail: boolean;        // true for manual_outreach cases with a linked lead
 };
 
 const FORM_TYPE_LABEL: Record<string, string> = {
@@ -101,7 +102,7 @@ export function CasesList({ rows, slug }: { rows: CaseRow[]; slug: string }) {
                 <OperatorChip name={c.assignedName} email={c.assignedEmail} role={c.assignedRole} />
               </TableCell>
               <TableCell className="text-muted-foreground text-xs">{relativeTime(c.createdAt)}</TableCell>
-              <TableCell className="text-right"><CaseResolve caseId={c.id} /></TableCell>
+              <TableCell className="text-right"><CaseResolve caseId={c.id} canAddEmail={c.canAddEmail} /></TableCell>
             </TableRow>
           ))}
           {filtered.length === 0 && (

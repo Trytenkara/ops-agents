@@ -93,6 +93,14 @@ function MarketplaceLeadCard({ row, canAct }: { row: Row; canAct: boolean }) {
   const [tiers, setTiers] = useState<PriceTier[]>(initial);
 
   const st = siteTypeMeta(row.payload?.site_type);
+  const pull = row.payload?.marketplace_pull as
+    | { status: "pulled" | "needs_manual_pull"; reason?: string; pulled_at?: string }
+    | undefined;
+  const pullReasonLabel: Record<string, string> = {
+    login_required: "needs login/account",
+    link_broken: "link broken",
+    needs_review: "no price found",
+  };
   const sourceUrl = (row.payload?.source_url ?? row.payload?.supplier_website) as string | undefined;
   const rawPricing = row.payload?.pack_sizes_pricing as string | undefined;
   const moq = row.payload?.moq as string | undefined;
@@ -132,6 +140,21 @@ function MarketplaceLeadCard({ row, canAct }: { row: Row; canAct: boolean }) {
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium">{row.supplier_name ?? "—"}</span>
             {st && <Badge variant="accent" title={st.title}>{st.label}</Badge>}
+            {pull?.status === "pulled" && (
+              <Badge variant="success" title={pull.pulled_at ? `Auto-pulled ${pull.pulled_at}` : "Price auto-pulled from the listing"}>
+                price auto-pulled
+              </Badge>
+            )}
+            {pull?.status === "needs_manual_pull" && (
+              <Badge variant="warn" title="Auto-pull couldn't get a price — an operator was tagged to pull it manually.">
+                needs manual pull{pull.reason ? ` · ${pullReasonLabel[pull.reason] ?? pull.reason}` : ""}
+              </Badge>
+            )}
+            {!pull && (
+              <Badge variant="outline" title="Not checked yet — the marketplace price agent will attempt to pull the listed price. You can also enter the price ladder manually now.">
+                price pull pending
+              </Badge>
+            )}
             <span className="text-xs text-muted-foreground">· {row.material_name ?? "—"}</span>
           </div>
           {sourceUrl && (

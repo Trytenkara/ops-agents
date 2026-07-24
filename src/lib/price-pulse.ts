@@ -149,6 +149,9 @@ export interface ClientBenchmark extends PricePulseStat {
   // false when there's no client current-supply price and we benchmarked against
   // the market average instead.
   has_client_price: boolean;
+  // Where the client cost came from: their Tenkara current_quote, or a unit price
+  // parsed off an uploaded PO. null when there's no client price (market-avg).
+  client_price_source: "tenkara" | "po" | null;
   // Where the client's price sits in the spread (0 = at min, 1 = at max).
   percentile: number;
   // Positive => client is paying above the market average.
@@ -162,7 +165,11 @@ export interface ClientBenchmark extends PricePulseStat {
 // (non-sample, outlier-guarded) quotes for the same material/unit.
 export async function getClientBenchmark(
   tenkaraOrgId: string,
-  opts?: { minQuotes?: number }
+  // clientCostFallback: unit prices parsed from uploaded POs, keyed by
+  // `${tenkara_material_id}|${unit}`. Used as the client's current cost only when
+  // Tenkara has no current_quote for that material+unit, so the client baseline
+  // is populated instead of silently falling back to the market average. (#5)
+  opts?: { minQuotes?: number; clientCostFallback?: Map<string, number> }
 ): Promise<ClientBenchmark[]> {
   const pulse = await getPricePulse({ tenkaraOrgId, minQuotes: opts?.minQuotes });
   const pulseByKey = new Map<string, PricePulseStat>();
@@ -197,9 +204,16 @@ export async function getClientBenchmark(
   // Iterate every material with market stats so a material still appears even
   // when the client hasn't entered a current-supply price — in that case we
   // benchmark against the market average instead of dropping it.
+  const fallback = opts?.clientCostFallback;
   const out: ClientBenchmark[] = [];
   for (const stat of pulse) {
-    const current = currentByKey.get(`${stat.material_id}|${stat.unit}`);
+    const key = `${stat.material_id}|${stat.unit}`;
+    let current = currentByKey.get(key);
+    let source: "tenkara" | "po" | null = current != null ? "tenkara" : null;
+    if (current == null && fallback?.has(key)) {
+      current = fallback.get(key)!;
+      source = "po";
+    }
     const hasClient = current != null;
     const clientPrice = hasClient ? current! : stat.avg_unit_price;
     const span = stat.max_unit_price - stat.min_unit_price;
@@ -208,7 +222,7 @@ export async function getClientBenchmark(
       stat.avg_unit_price > 0 ? ((clientPrice - stat.avg_unit_price) / stat.avg_unit_price) * 100 : 0;
     const position: ClientBenchmark["position"] =
       vs_avg_pct > 5 ? "above_market" : vs_avg_pct < -5 ? "below_market" : "at_market";
-    out.push({ ...stat, client_unit_price: clientPrice, has_client_price: hasClient, percentile, vs_avg_pct, position });
+    out.push({ ...stat, client_unit_price: clientPrice, has_client_price: hasClient, client_price_source: source, percentile, vs_avg_pct, position });
   }
   out.sort((x, y) => y.vs_avg_pct - x.vs_avg_pct);
   return out;

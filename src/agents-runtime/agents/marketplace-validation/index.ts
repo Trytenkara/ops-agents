@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
 import { recheckMarketplaceQuote, type RecheckResult } from "./price-recheck";
 import { convertToUsd } from "@/lib/fx";
+import { pullPricesForNewMarketplaceLeads } from "./lead-price-pull";
 
 // Agent 05 - Marketplace Price Re-check.
 //
@@ -124,12 +125,6 @@ registerAgent({
       return;
     }
     await ctx.log(`Pulled ${quotes.length} expiring marketplace quotes`, { step: "query" });
-    if (quotes.length === 0) {
-      ctx.setItemsProcessed(0);
-      ctx.setStatus("success");
-      ctx.setSummary("No marketplace quotes expiring within 7 days.");
-      return;
-    }
 
     // Build Tenkara->OA org map so findings inherit the right org_id.
     const { data: orgRows } = await admin.from("orgs").select("id, tenkara_org_id");
@@ -286,7 +281,20 @@ registerAgent({
       }
     }
 
-    ctx.setItemsProcessed(written);
+    // #4 — auto-pull listed prices for newly discovered marketplace leads (or
+    // flag + tag an operator when the price can't be pulled). Runs with the same
+    // wall-clock deadline so it never pushes the function past its budget.
+    const leadPull = await pullPricesForNewMarketplaceLeads({
+      admin,
+      runId: ctx.runId,
+      deadline,
+      log: (m, meta) => ctx.log(m, meta),
+    }).catch((e: any) => {
+      ctx.log(`Marketplace lead price-pull failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "mp_leads" });
+      return { processed: 0, pulled: 0, flagged: 0, stoppedEarly: false };
+    });
+
+    ctx.setItemsProcessed(written + leadPull.processed);
     ctx.setStatus("success");
     const interesting = counts.signal_diverges + counts.link_broken + counts.needs_review + counts.login_required;
     ctx.setSummary(
@@ -294,8 +302,9 @@ registerAgent({
         `${counts.signal_matches_baseline} unchanged · ${counts.signal_diverges} diverged · ` +
         `${counts.no_signal_found} no signal · ${counts.needs_review} needs review · ${counts.link_broken} link broken` +
         (counts.login_required ? ` · ${counts.login_required} need manual login` : "") +
+        (leadPull.processed ? ` · leads: pulled ${leadPull.pulled} price${leadPull.pulled === 1 ? "" : "s"}, flagged ${leadPull.flagged} for manual pull` : "") +
         (skippedPending ? ` · ${skippedPending} skipped (already pending)` : "") +
-        (stoppedEarly ? " · stopped at time budget (more next run)" : "")
+        (stoppedEarly || leadPull.stoppedEarly ? " · stopped at time budget (more next run)" : "")
     );
   },
 });

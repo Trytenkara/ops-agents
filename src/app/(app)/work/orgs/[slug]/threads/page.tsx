@@ -1,14 +1,27 @@
 import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getSession, hasAnyRole } from "@/lib/auth";
+import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { operatorRoles, primaryRole } from "@/lib/operator";
 import { resolveSupplierNamesWithFallback, resolveMaterialNames, resolveQuoteRefs } from "@/lib/tenkara-names";
+import { correctMaterialSpelling } from "@/lib/material-spelling";
 import { ListPageHeader } from "@/components/list-page-header";
 import { ThreadsList, type ThreadRow, type ThreadKind } from "@/components/threads-list";
 
 export const dynamic = "force-dynamic";
 
+// Every draft an agent composes in response to a supplier's incoming email,
+// regardless of which producer staged it. Agent 08 / the Tenkara webhook use
+// "inbound_reply" (+ "..._with_followup" when it introduces held materials);
+// Agent 15 uses "reply_manager_response". All are inbound replies to the operator.
+const INBOUND_REPLY_KINDS = new Set([
+  "inbound_reply",
+  "inbound_reply_with_followup",
+  "reply_manager_response",
+]);
+
 function kindOf(d: any): ThreadKind {
-  return d.metadata?.draft_kind === "inbound_reply" ? "inbound" : "outbound";
+  return INBOUND_REPLY_KINDS.has(d.metadata?.draft_kind) ? "inbound" : "outbound";
 }
 
 // Unified email-thread workspace: outbound RFQs + inbound supplier replies for
@@ -18,6 +31,12 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
   const admin = createAdminClient();
   const { data: org } = await admin.from("orgs").select("id, name").eq("slug", params.slug).maybeSingle();
   if (!org) notFound();
+
+  const session = (await getSession())!;
+  const assigned = await getAssignedOrgIds(session);
+  const canAct =
+    hasAnyRole(session, ["admin", "ops_lead", "ops_operator"]) &&
+    (seesAllOrgs(session) || (assigned?.includes(org.id) ?? false));
 
   const { data: drafts } = await admin
     .from("draft_references")
@@ -53,7 +72,7 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
     // back to the name carried on the draft metadata.
     supplierName: (d.supplier_id ? supplierNames.get(d.supplier_id) : null) ?? (d.metadata as any)?.supplier_name ?? null,
     materialId: d.material_id ?? null,
-    materialName: (d.material_id ? materialNames.get(d.material_id) : null) ?? (d.metadata as any)?.material_name ?? null,
+    materialName: correctMaterialSpelling((d.material_id ? materialNames.get(d.material_id) : null) ?? (d.metadata as any)?.material_name ?? null),
     quoteRef: d.quote_id ? quoteRefs.get(d.quote_id) ?? null : null,
     status: d.status,
     createdAt: d.created_at ?? null,
@@ -81,7 +100,7 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
       {threadRows.length === 0 ? (
         <p className="text-center text-muted-foreground py-8 text-sm">No threads yet. Promote a lead to start outreach.</p>
       ) : (
-        <ThreadsList rows={threadRows} slug={params.slug} />
+        <ThreadsList rows={threadRows} slug={params.slug} canAct={canAct} />
       )}
     </div>
   );

@@ -4,10 +4,43 @@ import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { getOrgOperatorPool } from "@/lib/operator-assignment";
+import { setTenkaraConversationAssignee } from "@/lib/tenkara";
 
 interface Result {
   ok: boolean;
   error?: string;
+}
+
+// Mirror a supplier's Control Room assignment onto its Tenkara conversations so
+// the email app shows the same assignee (and notifies only that operator). Runs
+// against every rod_app thread staged for the supplier; best-effort — a mirror
+// miss (unknown operator email, or a thread our token didn't create) is logged
+// but never fails the local assignment. Pass operatorEmail=null to clear.
+async function mirrorAssigneeToTenkara(
+  admin: ReturnType<typeof createAdminClient>,
+  orgId: string,
+  supplierId: string,
+  operatorEmail: string | null
+): Promise<void> {
+  const { data: refs } = await admin
+    .from("draft_references")
+    .select("thread_id")
+    .eq("org_id", orgId)
+    .eq("supplier_id", supplierId)
+    .eq("email_client", "rod_app")
+    .not("thread_id", "is", null);
+
+  const threadIds = Array.from(
+    new Set((refs ?? []).map((r: { thread_id: string | null }) => r.thread_id).filter((t): t is string => !!t))
+  );
+  if (threadIds.length === 0) return;
+
+  const results = await Promise.all(threadIds.map((id) => setTenkaraConversationAssignee(id, operatorEmail)));
+  results.forEach((res, i) => {
+    if (!res.ok) {
+      console.warn(`[assignSupplierOperator] Tenkara assignee mirror failed for conversation ${threadIds[i]}: ${res.status} ${res.error}`);
+    }
+  });
 }
 
 // Assign (or clear) the operator who owns a supplier for a client. ops_operator
@@ -28,6 +61,9 @@ export async function assignSupplierOperator(orgId: string, supplierId: string, 
 
   const admin = createAdminClient();
   const isLead = hasAnyRole(session, ["admin", "ops_lead"]);
+
+  // Tenkara keys assignees by email; null clears the assignee on the mirror.
+  let mirrorEmail: string | null = null;
 
   // Clear assignment.
   if (operatorId === null) {
@@ -71,6 +107,18 @@ export async function assignSupplierOperator(orgId: string, supplierId: string, 
       .eq("org_id", orgId)
       .eq("supplier_id", supplierId)
       .in("status", ["staged", "reviewed"]);
+
+    const { data: op } = await admin.from("users").select("email").eq("id", operatorId).maybeSingle();
+    mirrorEmail = op?.email ?? null;
+  }
+
+  // Mirror onto the supplier's Tenkara conversations (best-effort). On assign we
+  // only mirror once we have the operator's email — passing null there would
+  // wrongly CLEAR the Tenkara assignee. Unassign always mirrors (null = clear).
+  if (operatorId === null || mirrorEmail) {
+    await mirrorAssigneeToTenkara(admin, orgId, supplierId, mirrorEmail);
+  } else {
+    console.warn(`[assignSupplierOperator] skipped Tenkara mirror: operator ${operatorId} has no email`);
   }
 
   await admin.from("audit_log").insert({

@@ -2,9 +2,12 @@
 
 import { useState } from "react";
 import { Table, TableHeader, TableBody, TableRow, TableCell } from "@/components/ui/table";
-import { LeadRichRow, LeadRichHeaders, leadRichColSpan, leadMarketKind } from "@/components/lead-rich-row";
-import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
+import { LeadRichRow, LeadRichHeaders, leadRichColSpan, leadMarketKind, humanizeSignal } from "@/components/lead-rich-row";
+import { deriveMatchTier, matchTierRank } from "@/lib/lead-match-tier";
+import { useListFilter, byString, byDateDesc, usePersistedState } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
+import { BulkRemoveBar } from "@/components/bulk-remove-bar";
+import { removeLeads } from "@/app/actions/leads";
 import { Select } from "@/components/ui/select";
 import { filenameFor } from "@/lib/csv";
 
@@ -21,6 +24,24 @@ const RECENCY_OPTIONS = [
   { value: "all", label: "All time" },
 ];
 
+const MATCH_OPTIONS = [
+  { value: "all", label: "All matches" },
+  { value: "confirmed", label: "Confirmed only" },
+  { value: "potential", label: "Potential only" },
+];
+
+// Friendly labels for the Source filter — mirror the SOURCE column badges so the
+// dropdown reads the same as the rows. The option list is built from the sources
+// actually present in the loaded leads, so an org only sees sources it has.
+const SOURCE_LABELS: Record<string, string> = {
+  ai_discovery: "Scout",
+  sourceready: "SourceReady",
+  importyeti: "ImportYeti",
+  existing_db: "Platform DB",
+  marketplace: "Sourcing Index",
+  human_bulk_upload: "Ops upload",
+};
+
 const countryOf = (r: any): string => (r.payload?.supplier_country ?? "").toString().trim();
 
 export function LeadsList({
@@ -29,23 +50,39 @@ export function LeadsList({
   slug,
   orgId,
   operatorOptions,
+  forceStage,
 }: {
   rows: any[];
   canAct: boolean;
   slug: string;
   orgId?: string;
   operatorOptions?: { id: string; name: string }[];
+  // When set (e.g. the "Not enriched" tab), lock the stage filter to this value
+  // and hide the Stage dropdown — the tab already scopes the list.
+  forceStage?: string;
 }) {
-  const [type, setType] = useState("all");
-  const [country, setCountry] = useState("all");
-  const [recency, setRecency] = useState("all");
+  const [type, setType] = usePersistedState("leads-type", "all");
+  const [recency, setRecency] = usePersistedState("leads-recency", "all");
+  const [match, setMatch] = usePersistedState("leads-match", "all");
+  const [source, setSource] = usePersistedState("leads-source", "all");
 
-  const countryOptions = [
-    { value: "all", label: "All countries" },
-    ...Array.from(new Set(rows.map(countryOf).filter(Boolean)))
-      .sort((a, b) => a.localeCompare(b))
-      .map((c) => ({ value: c, label: c })),
+  const sourceOptions = [
+    { value: "all", label: "All sources" },
+    ...Array.from(new Set(rows.map((r: any) => r.source).filter(Boolean)))
+      .sort()
+      .map((s: any) => ({ value: s as string, label: SOURCE_LABELS[s] ?? s })),
   ];
+  // Stage is driven by the pipeline tabs above (forceStage), not a dropdown here.
+  const effectiveStage = forceStage ?? "all";
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const toggleOne = (id: string, checked: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
 
   const recencyCutoff = recency === "all" ? null : Date.now() - Number(recency) * 24 * 3600 * 1000;
   const typeRows = (
@@ -53,34 +90,110 @@ export function LeadsList({
       ? rows
       : rows.filter((r: any) => (r.market_kind ?? leadMarketKind(r.payload?.site_type)) === type)
   )
-    .filter((r: any) => (country === "all" ? true : countryOf(r) === country))
+    .filter((r: any) =>
+      effectiveStage === "all" ? true : effectiveStage === "held" ? !!r.needs_material_name : r.stage === effectiveStage
+    )
     .filter((r: any) => {
       if (recencyCutoff == null) return true;
       const t = r.created_at ? new Date(r.created_at).getTime() : 0;
       return t >= recencyCutoff;
-    });
+    })
+    .filter((r: any) => (match === "all" ? true : deriveMatchTier(r).tier === match))
+    .filter((r: any) => (source === "all" ? true : r.source === source));
 
   const { filtered, controls } = useListFilter(typeRows, {
     searchText: (r) => `${r.supplier_name ?? ""} ${r.material_name ?? ""} ${r.grade ?? ""} ${countryOf(r)}`,
     searchPlaceholder: "supplier, material, grade, country…",
     sorts: [
+      {
+        value: "match",
+        label: "Confirmed first",
+        compare: (a: any, b: any) =>
+          matchTierRank(a) - matchTierRank(b) || byDateDesc((r: any) => r.created_at)(a, b),
+      },
       { value: "newest", label: "Newest", compare: byDateDesc((r: any) => r.created_at) },
       { value: "supplier", label: "Supplier (A–Z)", compare: byString((r: any) => r.supplier_name) },
       { value: "material", label: "Material (A–Z)", compare: byString((r: any) => r.material_name) },
     ],
-    defaultSort: "newest",
+    defaultSort: "match",
+    persistKey: "leads",
   });
 
-  const csvRows = filtered.map((r: any) => [
-    r.supplier_name ?? "",
-    r.material_name ?? "",
-    r.grade ?? "",
-    countryOf(r),
-    r.market_kind ?? leadMarketKind(r.payload?.site_type) ?? "",
-    r.source ?? "",
-    r.status ?? "",
-    r.created_at ?? "",
-  ]);
+  const selectable = canAct;
+  const filteredIds = filtered.map((r: any) => r.id);
+  const selectedCount = filteredIds.filter((id: string) => selected.has(id)).length;
+  const allSelected = filteredIds.length > 0 && selectedCount === filteredIds.length;
+  const toggleAll = (checked: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of filteredIds) {
+        if (checked) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+
+  // Returned price mirrors the on-screen cell (from a supplier's reply, if any).
+  const returnedPrice = (r: any): string => {
+    const sr = r.payload?.supplier_reply;
+    if (!sr || sr.captured_price == null) return "";
+    const cur = sr.captured_currency ?? "USD";
+    return sr.captured_unit_price != null
+      ? `${cur} ${sr.captured_unit_price}/${sr.captured_unit_of_measurement ?? "unit"}`
+      : `${cur} ${sr.captured_price}`;
+  };
+
+  // One export, mirroring exactly the rows on screen (search + filters + active
+  // stage tab). Columns match the manual supplier-sourcing index (material ->
+  // supplier identity -> RFQ fields -> provenance), plus a few on-screen extras
+  // (returned price, operator). All leads are loaded client-side, so this is
+  // complete — no separate server download needed.
+  const csvHeaders = [
+    "Material", "INCI name", "Trade name", "Supplier", "Role", "Type", "Country",
+    "Website", "Pack sizes / pricing", "Email", "Phone", "HQ address",
+    "Supplier background", "Grades offered", "Certifications", "MOQ",
+    "Returned price", "Operator", "Signal", "Source", "Match", "Stage", "Status",
+    "Confidence", "Confidence reason", "Completeness", "Completeness reason",
+    "Source citations", "Notes", "Created",
+  ];
+  const csvRows = filtered.map((r: any) => {
+    const p = r.payload ?? {};
+    const citations: string[] = Array.isArray(p.source_citations) ? p.source_citations : [];
+    return [
+      r.material_name ?? "",
+      p.inci_name ?? "",
+      p.trade_name ?? "",
+      r.supplier_name ?? "",
+      p.supplier_role ?? "",
+      r.market_kind ?? leadMarketKind(p.site_type) ?? "",
+      countryOf(r),
+      p.supplier_website ?? p.source_url ?? "",
+      p.pack_sizes_pricing ?? "",
+      p.supplier_contact_email ?? "",
+      p.supplier_phone ?? "",
+      p.hq_address ?? "",
+      p.supplier_background ?? "",
+      p.grades_offered ?? r.grade ?? p.grade ?? "",
+      p.certifications ?? "",
+      p.moq ?? "",
+      returnedPrice(r),
+      r.operator_name ?? r.operator_auto_name ?? "",
+      p.signal ? humanizeSignal(p.signal) : "",
+      r.source ?? "",
+      deriveMatchTier(r).tier,
+      r.stage ?? "",
+      r.status ?? "",
+      r.confidence_score ?? "",
+      p.confidence_reason ?? "",
+      p.completeness_score ?? "",
+      Array.isArray(p.completeness_factors)
+        ? p.completeness_factors.map((f: any) => `${f.label} (+${Math.round((Number(f.points) || 0) * 100)}%)`).join("; ")
+        : "",
+      citations.join("; "),
+      p.scout_notes ?? p.scout_rationale ?? "",
+      r.created_at ?? "",
+    ];
+  });
 
   return (
     <div className="space-y-3">
@@ -88,12 +201,16 @@ export function LeadsList({
         <div className="flex flex-wrap items-end gap-3">
           {controls}
           <label className="flex flex-col gap-1">
-            <span className="text-xs text-muted-foreground">Type</span>
-            <Select size="sm" className="min-w-[9rem]" ariaLabel="Type" value={type} onValueChange={setType} options={TYPE_OPTIONS} />
+            <span className="text-xs text-muted-foreground">Match</span>
+            <Select size="sm" className="min-w-[9rem]" ariaLabel="Match" value={match} onValueChange={setMatch} options={MATCH_OPTIONS} />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-xs text-muted-foreground">Country of origin</span>
-            <Select size="sm" className="min-w-[10rem]" ariaLabel="Country of origin" value={country} onValueChange={setCountry} options={countryOptions} />
+            <span className="text-xs text-muted-foreground">Source</span>
+            <Select size="sm" className="min-w-[9rem]" ariaLabel="Source" value={source} onValueChange={setSource} options={sourceOptions} />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">Type</span>
+            <Select size="sm" className="min-w-[9rem]" ariaLabel="Type" value={type} onValueChange={setType} options={TYPE_OPTIONS} />
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">Discovered</span>
@@ -102,21 +219,39 @@ export function LeadsList({
         </div>
         <ListCsvButton
           filename={filenameFor(slug, "leads")}
-          headers={["Supplier", "Material", "Grade", "Country", "Type", "Source", "Status", "Created"]}
+          headers={csvHeaders}
           rows={csvRows}
         />
       </div>
+      {selectable && (
+        <BulkRemoveBar
+          count={selectedCount}
+          noun="lead"
+          onRemove={() => removeLeads(filteredIds.filter((id: string) => selected.has(id)))}
+          onClear={() => setSelected(new Set())}
+        />
+      )}
       <Table>
         <TableHeader>
-          <LeadRichHeaders showOrg={false} />
+          <LeadRichHeaders showOrg={false} selectable={selectable} allSelected={allSelected} onToggleAll={toggleAll} />
         </TableHeader>
         <TableBody>
           {filtered.map((r: any) => (
-            <LeadRichRow key={r.id} r={r} canAct={canAct} showOrg={false} orgId={orgId} operatorOptions={operatorOptions} />
+            <LeadRichRow
+              key={r.id}
+              r={r}
+              canAct={canAct}
+              showOrg={false}
+              orgId={orgId}
+              operatorOptions={operatorOptions}
+              selectable={selectable}
+              selected={selected.has(r.id)}
+              onToggleSelect={(checked) => toggleOne(r.id, checked)}
+            />
           ))}
           {filtered.length === 0 && (
             <TableRow>
-              <TableCell colSpan={leadRichColSpan(false)} className="text-center py-8 text-muted-foreground">
+              <TableCell colSpan={leadRichColSpan(false, selectable)} className="text-center py-8 text-muted-foreground">
                 No leads match.
               </TableCell>
             </TableRow>

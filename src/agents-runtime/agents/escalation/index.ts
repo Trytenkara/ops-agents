@@ -64,9 +64,32 @@ registerAgent({
       }
     }
 
+    // Dedup guard: an operator only needs one open case per supplier×material.
+    // Without this, every stale lead for the same item opens another identical
+    // case, so resolving one leaves a pile of siblings that look un-resolved.
+    // Key on (org, supplier, material); skip keys where we can't identify the
+    // item (both supplier and material null). Seed from cases already open, and
+    // extend it as we create cases this run so same-run duplicates collapse too.
+    const dedupKey = (orgId: string, supplierId: string | null, materialId: string | null) =>
+      supplierId || materialId ? `${orgId}|${supplierId ?? ""}|${materialId ?? ""}` : null;
+
+    const openCaseKeys = new Set<string>();
+    if (orgIds.length) {
+      const { data: openCases } = await admin
+        .from("cases")
+        .select("org_id, supplier_id, material_id")
+        .in("org_id", orgIds)
+        .in("status", ["open", "in_progress"]);
+      for (const c of (openCases ?? []) as any[]) {
+        const k = dedupKey(c.org_id, c.supplier_id, c.material_id);
+        if (k) openCaseKeys.add(k);
+      }
+    }
+
     let escalated = 0;
     let errored = 0;
     let skippedNoOrg = 0;
+    let deduped = 0;
 
     for (const lead of staleLeads) {
       if (!lead.org_id) {
@@ -87,6 +110,43 @@ registerAgent({
           : lead.stage === "enriched"
           ? "Operator review: lead sat at enriched without outreach; revive or drop."
           : "Operator review: stale raw lead — triage or drop.";
+
+      // Skip if an open case already covers this supplier×material — just drop
+      // the lead so it stops tripping the sweep, and point it at the existing
+      // pile instead of opening a duplicate.
+      const key = dedupKey(lead.org_id, lead.supplier_id, lead.material_id);
+      if (key && openCaseKeys.has(key)) {
+        const { error: dupDropErr } = await admin
+          .from("leads_in_flight")
+          .update({
+            status: "dropped",
+            drop_reason: "duplicate_open_case",
+            payload: {
+              ...(lead.payload ?? {}),
+              escalation: {
+                deduped_against_open_case: true,
+                escalated_by_run_id: ctx.runId,
+                stale_days: ageDays,
+              },
+            },
+          })
+          .eq("id", lead.id);
+        if (dupDropErr) {
+          errored++;
+          await ctx.log(`Dedup drop failed for lead ${lead.id}: ${dupDropErr.message}`, {
+            level: "error",
+            step: "dedup",
+            data: { lead_id: lead.id },
+          });
+        } else {
+          deduped++;
+          await ctx.log(`Skipped duplicate escalation for ${lead.supplier_name} × ${lead.material_name} (open case exists)`, {
+            step: "dedup",
+            data: { lead_id: lead.id },
+          });
+        }
+        continue;
+      }
 
       const assignedOperator = opByOrg.get(lead.org_id) ?? null;
 
@@ -150,6 +210,7 @@ registerAgent({
         continue;
       }
       escalated++;
+      if (key) openCaseKeys.add(key);
       await ctx.log(`Escalated ${lead.supplier_name} × ${lead.material_name} → case ${inserted.id} (${ageDays}d stale)`, {
         step: "escalated",
         data: { lead_id: lead.id, case_id: inserted.id, stale_days: ageDays },
@@ -221,7 +282,7 @@ registerAgent({
     ctx.setItemsProcessed(escalated);
     ctx.setStatus(errored > 0 && escalated === 0 ? "failure" : errored > 0 ? "partial" : "success");
     ctx.setSummary(
-      `Escalated ${escalated}/${staleLeads.length} stale lead${escalated === 1 ? "" : "s"} → cases${nudgedOrgs ? ` · nudged ${nudgedOrgs} org(s)` : ""}${skippedNoOrg ? ` · ${skippedNoOrg} skipped (no org)` : ""}${errored ? ` · ${errored} errors` : ""}`
+      `Escalated ${escalated}/${staleLeads.length} stale lead${escalated === 1 ? "" : "s"} → cases${deduped ? ` · ${deduped} deduped (open case exists)` : ""}${nudgedOrgs ? ` · nudged ${nudgedOrgs} org(s)` : ""}${skippedNoOrg ? ` · ${skippedNoOrg} skipped (no org)` : ""}${errored ? ` · ${errored} errors` : ""}`
     );
   },
 });

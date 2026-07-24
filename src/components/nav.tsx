@@ -102,7 +102,7 @@ export function Shell({
             <BookOpen className="h-[18px] w-[18px]" />
           </Link>
         </div>
-        <div className="px-10 py-8 max-w-6xl">{children}</div>
+        <div className="px-10 py-8 max-w-screen-2xl">{children}</div>
       </main>
     </div>
   );

@@ -5,6 +5,7 @@ import { getMaterialProfile } from "@/lib/material-profile";
 import { getMaterialSourcingStatus } from "@/lib/material-sourcing-status";
 import { MaterialsPanel } from "@/components/materials-panel";
 import { ListPageHeader } from "@/components/list-page-header";
+import { DensityToggle } from "@/components/density-toggle";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
@@ -29,7 +30,7 @@ export default async function OrgMaterialsPage({ params }: { params: { slug: str
   // own approval status (pending_review / approved / dismissed).
   const { data: quoteRows } = await admin
     .from("staged_quotes")
-    .select("id, material_id, supplier_name, price, case_size, unit_of_measurement, unit_price, status, confidence, created_at")
+    .select("id, material_id, supplier_name, price, case_size, unit_of_measurement, unit_price, grade, status, confidence, created_at")
     .eq("org_id", org.id)
     .order("created_at", { ascending: false })
     .limit(1000);
@@ -47,6 +48,10 @@ export default async function OrgMaterialsPage({ params }: { params: { slug: str
         description="What this client buys and where each one stands. Expand a row for its quotes, uploads, and approvals."
         collectedBy="Agent 08 (Email Scanner) extracts quotes from supplier replies"
       />
+
+      <div className="flex justify-end -mt-2">
+        <DensityToggle />
+      </div>
 
       <Link
         href={`/work/orgs/${org.slug}/suppliers`}

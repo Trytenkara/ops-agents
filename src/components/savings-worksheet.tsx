@@ -2,6 +2,7 @@
 
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { SavingsExportCsvButton } from "@/components/savings-export-csv-button";
+import { DensityToggle } from "@/components/density-toggle";
 import { useListFilter, byString, byNumberDesc } from "@/components/use-list-filter";
 import type { SavingsReport } from "@/lib/savings-report";
 import type { SourcingScorecard, SourcingStatus, SourcingScorecardLine } from "@/lib/sourcing-scorecard";
@@ -33,6 +34,7 @@ export function SavingsWorksheet({
       { value: "client", label: "Client price", compare: byNumberDesc((l: SourcingScorecardLine) => l.client_unit_price) },
     ],
     defaultSort: "beats",
+    persistKey: "savings-sourcing",
   });
 
   const bench = useListFilter(report.lines, {
@@ -46,6 +48,7 @@ export function SavingsWorksheet({
       { value: "supplier", label: "Supplier (A–Z)", compare: byString((l) => l.recommended_supplier_name) },
     ],
     defaultSort: "savings_pct",
+    persistKey: "savings-bench",
   });
 
   return (
@@ -134,7 +137,10 @@ export function SavingsWorksheet({
             quote for the same material. Prices are normalized per-unit. Sample quotes and unit-mislabeled outliers are
             excluded. Read-only — acting on a recommendation is a human decision.
           </p>
-          <SavingsExportCsvButton slug={slug} disabled={withSavings.length === 0} count={withSavings.length} />
+          <div className="flex items-center gap-2">
+            <DensityToggle />
+            <SavingsExportCsvButton slug={slug} disabled={withSavings.length === 0} count={withSavings.length} />
+          </div>
         </div>
 
         <div className="flex gap-6 text-sm">
@@ -155,7 +161,8 @@ export function SavingsWorksheet({
               <TableHead>Material</TableHead>
               <TableHead>Grade</TableHead>
               <TableHead>Unit</TableHead>
-              <TableHead className="text-right">Their price</TableHead>
+              <TableHead className="text-right">Client cost</TableHead>
+              <TableHead className="text-right">Market avg</TableHead>
               <TableHead className="text-right">Best Tenkara</TableHead>
               <TableHead className="text-right">Savings/unit</TableHead>
               <TableHead className="text-right">%</TableHead>
@@ -166,7 +173,7 @@ export function SavingsWorksheet({
           <TableBody>
             {bench.filtered.length === 0 && (
               <TableRow>
-                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
                   No approved quotes to benchmark for this client yet.
                 </TableCell>
               </TableRow>
@@ -187,13 +194,18 @@ export function SavingsWorksheet({
                   </TableCell>
                   <TableCell className="text-muted-foreground">{l.unit}</TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {money(l.their_unit_price)}
-                    {!l.has_client_price && (
-                      <span className="ml-1 text-[10px] text-muted-foreground" title="No client current-supply price on file — benchmarked against the market average.">
-                        mkt avg
+                    {l.has_client_price ? (
+                      <span title={l.client_price_source === "po" ? "From an uploaded PO unit price" : "From the client's current quote in Tenkara"}>
+                        {money(l.their_unit_price)}
+                        {l.client_price_source === "po" && <span className="ml-1 text-[10px] text-muted-foreground">from PO</span>}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground" title="No client current-supply price on file. Savings are benchmarked against the market average instead.">
+                        not provided
                       </span>
                     )}
                   </TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">{money(l.market_avg_unit_price)}</TableCell>
                   <TableCell className="text-right tabular-nums">{money(l.best_unit_price)}</TableCell>
                   <TableCell className={"text-right tabular-nums " + (hasSaving ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>
                     {hasSaving ? money(l.savings_per_unit) : "—"}

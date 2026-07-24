@@ -3,6 +3,7 @@ import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAssignedOrgIds } from "@/lib/org-access";
 import { toCsv, type CsvCell } from "@/lib/csv";
+import { correctMaterialSpelling } from "@/lib/material-spelling";
 
 // GET /api/marketplace-findings/export-csv
 // Streams a CSV of all approved marketplace_check_findings the caller can see,
@@ -49,7 +50,7 @@ export async function GET() {
       r.supplier_id,
       r.supplier_name,
       r.material_id,
-      r.material_name,
+      correctMaterialSpelling(r.material_name),
       r.current_price,
       r.currency,
       r.source_url,

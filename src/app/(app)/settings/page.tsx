@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { ResetClientData } from "@/components/reset-client-data";
+import { orgDisplayName } from "@/lib/org-display";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +24,13 @@ export default async function SettingsPage() {
   const isAdmin = hasAnyRole(session, ["admin"]);
   const isMonitor = hasAnyRole(session, ["admin", "monitor"]);
   const isLead = hasAnyRole(session, ["admin", "ops_lead"]);
+
+  // Client list for the admin-only data-reset tool.
+  let orgs: { id: string; name: string }[] = [];
+  if (isAdmin) {
+    const { data } = await createAdminClient().from("orgs").select("id, slug, name, display_name").order("name");
+    orgs = (data ?? []).map((o: any) => ({ id: o.id, name: orgDisplayName(o) }));
+  }
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -62,6 +72,19 @@ export default async function SettingsPage() {
             {isAdmin && <LinkRow href="/agents/config" label="Configuration" hint="Prompts, schedules, training wheels" />}
             <LinkRow href="/agents/audit" label="Audit log" />
             <LinkRow href="/agents/health" label="System health" hint="Connectors and last runs" />
+          </CardContent>
+        </Card>
+      )}
+
+      {isAdmin && (
+        <Card className="tb-surface shadow-none border-destructive/30">
+          <CardHeader>
+            <CardTitle className="text-sm uppercase tracking-wider text-destructive font-medium">
+              Danger zone <span className="ml-1 normal-case tracking-normal text-[11px] text-muted-foreground">· admin</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResetClientData orgs={orgs} />
           </CardContent>
         </Card>
       )}

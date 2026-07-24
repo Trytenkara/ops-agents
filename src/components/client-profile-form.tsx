@@ -12,6 +12,7 @@ import {
   editClientProfile,
   addClientNote,
   uploadClientFile,
+  deleteClientUpload,
   type ClientSettingsInput,
 } from "@/app/actions/client-settings";
 
@@ -285,6 +286,20 @@ function UploadsCard({ orgId, slug, uploads, canEdit, pending, run }: { orgId: s
               <Badge variant="secondary">{u.kind}</Badge>
               <span className="truncate">{u.file_name ?? (u.content_text ?? "").slice(0, 80)}</span>
               <span className="text-xs text-muted-foreground ml-auto">{new Date(u.created_at).toLocaleDateString()}</span>
+              {canEdit && (
+                <button
+                  type="button"
+                  disabled={pending}
+                  className="text-xs text-muted-foreground hover:text-red-700 disabled:opacity-50"
+                  onClick={() => {
+                    const label = u.file_name ?? "this note";
+                    if (!window.confirm(`Remove ${label}? Its content will be dropped from the client summary.`)) return;
+                    run(() => deleteClientUpload(orgId, u.id), "Removed — profile updated.");
+                  }}
+                >
+                  Delete
+                </button>
+              )}
             </li>
           ))}
         </ul>

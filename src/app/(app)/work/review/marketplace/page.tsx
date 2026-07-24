@@ -7,6 +7,7 @@ import { getAssignedOrgIds, seesAllOrgs } from "@/lib/org-access";
 import { MarketplaceFindingRow, MarketplaceFindingHeaders, marketplaceFindingColSpan } from "@/components/marketplace-finding-row";
 import { ExportApprovedCsvButton } from "@/components/marketplace-export-csv-button";
 import { ListPageHeader } from "@/components/list-page-header";
+import { correctMaterialSpelling } from "@/lib/material-spelling";
 
 export const dynamic = "force-dynamic";
 
@@ -66,7 +67,10 @@ export default async function MarketplaceFindingsPage({
   if (orgFilter) q = q.eq("org_id", orgFilter);
 
   const { data: rows, error } = await q;
-  const findings = (rows ?? []) as unknown as FindingRow[];
+  const findings = ((rows ?? []) as unknown as FindingRow[]).map((r) => ({
+    ...r,
+    material_name: correctMaterialSpelling(r.material_name),
+  }));
 
   // Org chips: distinct orgs in the current result set.
   const orgsSeen = new Map<string, string>();

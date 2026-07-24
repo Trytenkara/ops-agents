@@ -25,7 +25,26 @@ export interface ReplyInput {
   originalSubject: string | null; // our outreach subject
   theirSubject: string | null;    // their reply subject
   theirPreview: string | null;    // snippet of their message
+  // Non-inline files the supplier attached to THIS reply. When present, the draft
+  // must acknowledge them and MUST NOT claim the attachment didn't arrive or ask
+  // for it to be resent. pricingExtracted = we already read pricing out of it.
+  receivedAttachments?: { name: string; pricingExtracted: boolean }[] | null;
   threadContext?: string | null;  // compact transcript of the prior thread (oldest first)
+  // Phased outreach: other materials we also source from this supplier that were
+  // held back from the first email. If the supplier is engaged, the reply
+  // introduces them; otherwise they stay held.
+  heldMaterialNames?: string[] | null;
+}
+
+export interface ComposedReply {
+  subject: string;
+  body: string;
+  // True when the supplier engaged genuinely (gave pricing, asked a question,
+  // requested a sample/spec, or otherwise moved sourcing forward) vs declined /
+  // auto-reply / off-topic. Drives whether held materials are introduced.
+  engaged: boolean;
+  // The held material names the draft actually introduced ([] if none).
+  introducedMaterials: string[];
 }
 
 const SYSTEM = `You draft short, professional replies to suppliers on behalf of a procurement team. The operator will review and send — so:
@@ -35,20 +54,33 @@ const SYSTEM = `You draft short, professional replies to suppliers on behalf of 
 - NEVER state a shipping address, phone number, or email address. You do not have real ones. If a supplier asks for an address or contact number (e.g. to "assign a representative"), DEFER — say it will be provided once terms are agreed, and keep the thread as the point of contact. Do not make one up under any circumstances.
 - Do not fabricate names or sign with a real person's name — end with the team sign-off provided.
 - In ghost mode, only reference the ghost brand; never name the underlying client.
-Return ONLY a JSON object: {"subject": "...", "body": "..."}. The body is plain text with line breaks; no greeting placeholders left unfilled.`;
+- Attachments: if the input lists files the supplier attached to this reply, treat them as RECEIVED. NEVER tell the supplier an attachment didn't arrive / isn't coming through / is missing, and never ask them to resend or re-share it. Acknowledge it (e.g. "thanks, we've got your quote/price sheet") and, if pricing was already read from it, say you're reviewing it. Only ask for a specific document if it is genuinely not among the attached files.
 
-function extractJson(text: string): { subject: string; body: string } {
+Also judge engagement: set "engaged" true when the supplier showed genuine interest or willingness (gave pricing, asked a question, requested a sample/spec, said they can supply, or otherwise moved things forward); false for a decline / "can't supply" / out-of-office / automated / off-topic message.
+
+If "Other materials we also source from this supplier" is provided AND engaged is true, ALSO briefly introduce those materials in the same reply — naturally ask whether they can supply/quote them too (one short sentence or a compact list, never a wall of items). List the exact material names you introduced in "introduced_materials". If engaged is false, do NOT introduce them and return "introduced_materials": [].
+
+Return ONLY a JSON object: {"subject": "...", "body": "...", "engaged": true|false, "introduced_materials": ["..."]}. The body is plain text with line breaks; no greeting placeholders left unfilled.`;
+
+function extractJson(text: string): ComposedReply {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   const candidate = fenced ? fenced[1] : text;
   const start = candidate.indexOf("{");
   const end = candidate.lastIndexOf("}");
   if (start < 0 || end <= start) throw new Error("no JSON in reply output");
   const obj = JSON.parse(candidate.slice(start, end + 1));
-  return { subject: String(obj.subject ?? ""), body: String(obj.body ?? "") };
+  return {
+    subject: String(obj.subject ?? ""),
+    body: String(obj.body ?? ""),
+    engaged: obj.engaged === true,
+    introducedMaterials: Array.isArray(obj.introduced_materials) ? obj.introduced_materials.map((m: any) => String(m)) : [],
+  };
 }
 
-export async function composeReply(input: ReplyInput): Promise<{ subject: string; body: string }> {
+export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
   const signoff = input.mode === "ghost" ? `${input.ghostBrand ?? "Sourcing"} Sourcing` : `${input.clientOrgName} Purchasing Team`;
+  const held = (input.heldMaterialNames ?? []).filter((n) => n && n.trim());
+  const atts = (input.receivedAttachments ?? []).filter((a) => a && a.name && a.name.trim());
   const lines = [
     `Mode: ${input.mode}`,
     `Sign off as: ${signoff}`,
@@ -58,6 +90,16 @@ export async function composeReply(input: ReplyInput): Promise<{ subject: string
     `Our original outreach subject: ${input.originalSubject ?? "(none)"}`,
     `Their reply subject: ${input.theirSubject ?? "(none)"}`,
     `Their message (snippet): ${input.theirPreview ?? "(not available)"}`,
+    ...(atts.length
+      ? [
+          "",
+          `The supplier ATTACHED ${atts.length} file(s) to this reply: ${atts
+            .map((a) => a.name + (a.pricingExtracted ? " [pricing already read from this file]" : ""))
+            .join(", ")}.`,
+          `These files DID come through to us. Do NOT say the attachment is missing or ask them to resend it — acknowledge receipt.`,
+        ]
+      : []),
+    ...(held.length ? ["", `Other materials we also source from this supplier (introduce only if engaged): ${held.join(", ")}`] : []),
     ...(input.threadContext
       ? ["", "Full thread so far (oldest first — use it to avoid repeating yourself and to answer what they actually asked):", input.threadContext]
       : []),

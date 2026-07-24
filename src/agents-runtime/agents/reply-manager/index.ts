@@ -6,6 +6,7 @@ import { stageDraft } from "@/lib/draft-staging";
 import { runNoReplyFollowups } from "./no-reply-followup";
 import { handleSupplierForm } from "./form-handler";
 import { postAgentAlert } from "@/lib/slack-alert";
+import { getClientRequirements, requestedDocLabels } from "@/lib/tenkara-requirements";
 import Anthropic from "@anthropic-ai/sdk";
 
 // Real Bobber Labs context (from bobberlabs.com / how the client is set up).
@@ -71,6 +72,23 @@ function ensurePricingAsk(body: string, materials: string[]): string {
         ? materials[0]
         : `${materials.slice(0, -1).join(", ")} and ${materials[materials.length - 1]}`;
   const ask = `Could you share your tiered pricing (volume price breaks), lead time, and MOQ for ${list}? We can confirm exact volumes as we go.`;
+  const idx = body.search(/\n\s*Thanks,/i);
+  if (idx >= 0) return `${body.slice(0, idx).trimEnd()}\n\n${ask}\n\n${body.slice(idx).replace(/^\n+/, "")}`;
+  return `${body.trimEnd()}\n\n${ask}`;
+}
+
+// Append the client's requested vendor-qualification documents to the reply, so
+// an engaged supplier is asked for the CoA / SDS / sample / statements etc. the
+// client requires (read from Tenkara). Inserted after the pricing ask, before
+// the sign-off. Gated to once per thread by the caller so we don't re-ask every
+// turn. Returns the body unchanged when there are no requested docs.
+function ensureQualificationAsk(body: string, docLabels: string[]): string {
+  if (!docLabels.length) return body;
+  const list =
+    docLabels.length === 1
+      ? docLabels[0]
+      : `${docLabels.slice(0, -1).join(", ")} and ${docLabels[docLabels.length - 1]}`;
+  const ask = `Also, as part of qualifying new suppliers we collect a bit of documentation. When you have a chance, could you send over the following: ${list}?`;
   const idx = body.search(/\n\s*Thanks,/i);
   if (idx >= 0) return `${body.slice(0, idx).trimEnd()}\n\n${ask}\n\n${body.slice(idx).replace(/^\n+/, "")}`;
   return `${body.trimEnd()}\n\n${ask}`;
@@ -192,8 +210,23 @@ registerAgent({
     "Owns the supplier conversation after a reply is detected: classifies the reply and drafts the right next message (answer, reframe a no-record reply as a fresh pricing ask, or nudge for the missing price), staged for a human to send. Also drafts no-reply follow-ups (at 4d and 8d after a sent RFQ that got no reply). Tracks flow_status to a finalized price. Never sends.",
   async run(ctx) {
     if (!missivePollingEnabled()) {
+      // Missive reply-detection is retired (the Tenkara webhook drafts replies),
+      // but the no-reply follow-up sweep is transport-agnostic — it re-nudges
+      // Agent 04's sent RFQs via each draft's own email_client (rod_app now), so
+      // it still belongs here on the Rod path.
+      const admin = createAdminClient();
+      let followups = { drafted: 0, skipped: 0, escalated: 0 };
+      try {
+        followups = await runNoReplyFollowups(
+          { agentId: ctx.agentId, runId: ctx.runId, log: (m, o) => ctx.log(m, o) },
+          admin
+        );
+      } catch (e: any) {
+        await ctx.log(`No-reply follow-up sweep failed: ${e?.message ?? e}`, { level: "warn", step: "followup" });
+      }
+      ctx.setItemsProcessed(followups.drafted + followups.escalated);
       ctx.setStatus("success");
-      ctx.setSummary("Skipped: Missive polling disabled (Tenkara cutover). Supplier replies are drafted by the Tenkara message.received webhook.");
+      ctx.setSummary(`Missive polling off (Tenkara cutover). No-reply sweep: ${followups.drafted} follow-ups · ${followups.escalated} calling-escalations · ${followups.skipped} skipped.`);
       return;
     }
     if (!process.env.ANTHROPIC_API_KEY) {
@@ -225,6 +258,25 @@ registerAgent({
       const notes = (data as any)?.sourcing_notes ?? null;
       clientNotesByOrg.set(orgId, notes);
       return notes;
+    }
+
+    // Cache the client's requested qualification-document labels per org. Read
+    // from Tenkara (Client Settings → Sourcing Rules) via the org's tenkara_org_id.
+    // Best-effort: a Tenkara read hiccup just means no docs ask this run.
+    const reqLabelsByOrg = new Map<string, string[]>();
+    async function getRequestedDocLabels(orgId: string | null): Promise<string[]> {
+      if (!orgId) return [];
+      if (reqLabelsByOrg.has(orgId)) return reqLabelsByOrg.get(orgId)!;
+      let labels: string[] = [];
+      try {
+        const { data } = await admin.from("orgs").select("tenkara_org_id").eq("id", orgId).maybeSingle();
+        const tkId = (data as any)?.tenkara_org_id ?? null;
+        if (tkId) labels = requestedDocLabels(await getClientRequirements(tkId));
+      } catch {
+        labels = [];
+      }
+      reqLabelsByOrg.set(orgId, labels);
+      return labels;
     }
 
     const byThread = new Map<string, any[]>();
@@ -364,7 +416,38 @@ registerAgent({
         continue;
       }
 
-      if (cls.category === "price_given") { await setStatus(admin, rows, "price_captured", { note: "supplier provided price (await extraction)" }); priced++; continue; }
+      if (cls.category === "price_given") {
+        // They quoted immediately, so the normal follow-up (which carries the
+        // qualification-docs ask) never runs. Stage a short docs-only request so
+        // an instant-quoter is still asked for the client's required documents.
+        try {
+          const docLabels = await getRequestedDocLabels(head.org_id ?? null);
+          const addr = (senderAddr || meta.supplier_contact_email || "").toString();
+          if (docLabels.length && !meta.qualification_asked && addr) {
+            const first = contactName?.trim().split(/\s+/)[0];
+            const greet = first ? `Hi ${first},` : `Hi ${meta.supplier_name ?? "there"} Team,`;
+            const base = [greet, "", "Thanks for the pricing, that is a big help.", "", "Thanks,", "", "Procurement Team", "Bobber Labs"].join("\n");
+            const body = sani(ensureQualificationAsk(base, docLabels));
+            await stageDraft({
+              admin, agentId: ctx.agentId, runId: ctx.runId, orgId: head.org_id,
+              supplierId: head.supplier_id, materialId: head.material_id,
+              to: { name: contactName ?? meta.supplier_name ?? null, address: addr },
+              subject: `Re: ${head.subject ?? "your quote"}`, body,
+              assignedOperator: head.assigned_operator ?? null,
+              emailClient: "missive",
+              metadata: { outreach_mode: "ghost", ghost_brand: "Bobber Labs", supplier_contact_email: addr, draft_kind: "reply_manager_docs_request", staged_via: "agent-15", agent_version: "rm-v27" },
+            });
+          }
+          await setStatus(admin, rows, "price_captured", {
+            note: "supplier provided price (await extraction)",
+            extra: { qualification_asked: meta.qualification_asked || (docLabels.length > 0 && !!addr) },
+          });
+        } catch {
+          await setStatus(admin, rows, "price_captured", { note: "supplier provided price (await extraction)" });
+        }
+        priced++;
+        continue;
+      }
       if (cls.category === "auto_reply") { skipped++; continue; }
       if (!cls.needs_response || !cls.body) {
         if (cls.category === "declined") { await setStatus(admin, rows, "closed_declined", { note: cls.reason }); closed++; }
@@ -384,7 +467,13 @@ registerAgent({
         }
         await ctx.log(`Updated contact for ${meta.supplier_name ?? threadId} -> ${senderAddr}`, { step: "contact-update" });
       }
-      const finalBody = sani(ensurePricingAsk(cls.body, cls.supplyable_materials.length ? cls.supplyable_materials : materials));
+      // Pricing ask (always) + qualification-docs ask (once per thread, if the
+      // client requires any and we haven't already asked on this thread).
+      let bodyWithAsks = ensurePricingAsk(cls.body, cls.supplyable_materials.length ? cls.supplyable_materials : materials);
+      const docLabels = await getRequestedDocLabels(head.org_id ?? null);
+      const askQualificationNow = docLabels.length > 0 && !meta.qualification_asked;
+      if (askQualificationNow) bodyWithAsks = ensureQualificationAsk(bodyWithAsks, docLabels);
+      const finalBody = sani(bodyWithAsks);
       const staged = await stageDraft({
         admin, agentId: ctx.agentId, runId: ctx.runId, orgId: head.org_id,
         supplierId: head.supplier_id, materialId: head.material_id,
@@ -397,7 +486,11 @@ registerAgent({
         await setStatus(admin, rows, cls.category === "declined" ? "closed_declined" : "responded", {
           note: `${cls.category}: ${cls.reason}`,
           incrementTurns: cls.category !== "declined",
-          extra: { last_handled_reply_msg_id: replyMsgId ?? null, supplier_contact_email: replyAddr },
+          extra: {
+            last_handled_reply_msg_id: replyMsgId ?? null,
+            supplier_contact_email: replyAddr,
+            qualification_asked: meta.qualification_asked || askQualificationNow,
+          },
         });
         if (cls.category === "declined") closed++; else responded++;
         await ctx.log(`Responded to ${meta.supplier_name ?? to.address} (${cls.category})`, { step: "respond", data: { category: cls.category } });

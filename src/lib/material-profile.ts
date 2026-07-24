@@ -41,6 +41,8 @@ export interface FrequencyResult {
 export interface MaterialProfileRow {
   tenkaraMaterialId: string | null;
   label: string;
+  tradeName: string | null;
+  inci: string | null;
   grade: string | null;
   annualVolume: number | null;
   volumeUnit: string | null;
@@ -132,6 +134,34 @@ function matchTokens(s: string): string[] {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
 }
 
+// Physical form of the product ("Onion Powder" vs "Onion Oil"). If a material
+// and a PO line each carry a form word and they DON'T overlap, they're different
+// products even when the distinctive word matches — so a form clash is a hard no.
+const FORM_TOKENS = new Set([
+  "powder", "powdered", "oil", "flake", "flakes", "liquid", "granule", "granules",
+  "granular", "paste", "extract", "concentrate", "isolate", "crystal", "crystals",
+  "crystalline", "syrup", "butter", "wax", "gel", "solution", "emulsion", "beads",
+]);
+
+// Process/grade qualifiers that never distinguish one product from another
+// ("Organic USP Ascorbic Acid" is still Ascorbic Acid). Kept deliberately small:
+// colours (white/black/red) and words like "raw"/"whole" stay DISTINCTIVE because
+// they separate real products (White Pepper vs Black Pepper).
+const QUALIFIER_TOKENS = new Set([
+  "organic", "natural", "pure", "food", "grade", "usp", "fcc", "bp", "ep",
+  "kosher", "halal", "refined", "unrefined", "anhydrous", "hydrous", "technical",
+  "cosmetic", "premium", "certified", "nongmo", "gmo",
+]);
+
+// A token that actually identifies the material — not a form word, grade
+// qualifier, or bare number. Matching MUST share at least one of these; a shared
+// generic word like "powder" or "flakes" alone is not a match (the bug where
+// "Onion Powder" caught "Calamine Powder" and "Coconut Flakes" caught "Quinoa
+// Flakes" — both collided on the form word only).
+function isDistinctive(t: string): boolean {
+  return !FORM_TOKENS.has(t) && !QUALIFIER_TOKENS.has(t) && !/^\d+$/.test(t);
+}
+
 // Match a parsed PO line to exactly one Tenkara material using the material name
 // plus grade identifiers (e.g. "#5", "Quick", "Regular"). Clients often have
 // several materials sharing one base name (Nutripro has five "Oats"); a name-only
@@ -141,13 +171,14 @@ function matchTokens(s: string): string[] {
 export function matchOrderToMaterial(label: string, materials: MatchCandidate[]): string | null {
   const lineTokens = new Set(matchTokens(label));
   if (lineTokens.size === 0) return null;
+  const lineForms = new Set([...lineTokens].filter((t) => FORM_TOKENS.has(t)));
 
   // Score every material by how much of its name appears in the (often
-  // abbreviated) PO line. A candidate must have at least half its name tokens
-  // present — this catches abbreviations like "Organic Quinoa" → "Quinoa Flakes
-  // Organic" without matching on a single shared word. Grade tokens then
-  // disambiguate clients that have several materials sharing a base name.
-  const scored: { id: string; nameOverlap: number; nameCoverage: number; gradeOverlap: number }[] = [];
+  // abbreviated) PO line. A candidate must (a) share at least one distinctive
+  // (non-generic) word, (b) have at least half its name tokens present, and
+  // (c) not clash on physical form. Grade tokens then disambiguate clients that
+  // have several materials sharing a base name.
+  const scored: { id: string; distinctiveOverlap: number; nameOverlap: number; nameCoverage: number; gradeOverlap: number }[] = [];
   for (const m of materials) {
     const nameToks = matchTokens(m.label);
     if (nameToks.length === 0) continue;
@@ -155,20 +186,38 @@ export function matchOrderToMaterial(label: string, materials: MatchCandidate[])
     if (nameOverlap === 0) continue;
     const nameCoverage = nameOverlap / nameToks.length;
     if (nameCoverage < 0.5) continue;
+
+    // Must overlap on a distinctive word — not just "powder"/"flakes"/"organic".
+    const distinctiveOverlap = nameToks.reduce(
+      (n, t) => n + (isDistinctive(t) && lineTokens.has(t) ? 1 : 0),
+      0
+    );
+    if (distinctiveOverlap === 0) continue;
+
+    // Form clash: both sides name a form and they don't share one → different
+    // product (e.g. material "Onion Powder" vs PO line "Onion Oil").
+    const nameForms = nameToks.filter((t) => FORM_TOKENS.has(t));
+    if (nameForms.length && lineForms.size && !nameForms.some((f) => lineForms.has(f))) continue;
+
     const gradeOverlap = matchTokens(m.grade ?? "").reduce((n, t) => n + (lineTokens.has(t) ? 1 : 0), 0);
-    scored.push({ id: m.id, nameOverlap, nameCoverage, gradeOverlap });
+    scored.push({ id: m.id, distinctiveOverlap, nameOverlap, nameCoverage, gradeOverlap });
   }
   if (scored.length === 0) return null;
   if (scored.length === 1) return scored[0].id;
 
-  // Rank by name match, then grade disambiguation, then coverage. Only commit to
-  // a match when the top candidate is strictly better on name or grade overlap;
-  // a genuine tie stays unmatched for manual assignment rather than mis-filed.
+  // Rank by distinctive-word match, then grade disambiguation, then total name
+  // overlap and coverage. Only commit when the top candidate is strictly better
+  // on distinctive or grade overlap; a genuine tie stays unmatched for manual
+  // assignment rather than mis-filed.
   scored.sort(
-    (a, b) => b.nameOverlap - a.nameOverlap || b.gradeOverlap - a.gradeOverlap || b.nameCoverage - a.nameCoverage
+    (a, b) =>
+      b.distinctiveOverlap - a.distinctiveOverlap ||
+      b.gradeOverlap - a.gradeOverlap ||
+      b.nameOverlap - a.nameOverlap ||
+      b.nameCoverage - a.nameCoverage
   );
   const [first, second] = scored;
-  const decisive = first.nameOverlap > second.nameOverlap || first.gradeOverlap > second.gradeOverlap;
+  const decisive = first.distinctiveOverlap > second.distinctiveOverlap || first.gradeOverlap > second.gradeOverlap;
   return decisive ? first.id : null;
 }
 
@@ -176,13 +225,13 @@ export function matchOrderToMaterial(label: string, materials: MatchCandidate[])
 export async function loadMatchCandidates(tenkaraOrgId: string): Promise<MatchCandidate[]> {
   const rows = await tenkaraQuery<any>(
     `select m.id::text as id,
-            coalesce(m.trade_name, m.name) as label,
+            coalesce(nullif(btrim(m.name), ''), nullif(btrim(m.trade_name), '')) as label,
             (select string_agg(g->>'grade_name', ' ')
                from jsonb_array_elements(coalesce(m.grade, '[]'::jsonb)) g) as grade
        from public.materials m
        join public.users u on u.id = m.user_id
       where u.organization_id = $1::uuid
-        and coalesce(m.trade_name, m.name) is not null`,
+        and coalesce(nullif(btrim(m.name), ''), nullif(btrim(m.trade_name), '')) is not null`,
     [tenkaraOrgId]
   );
   return rows.map((r) => ({ id: r.id, label: r.label, grade: r.grade ?? null }));
@@ -210,7 +259,9 @@ export async function getMaterialProfile(orgId: string): Promise<MaterialProfile
   try {
     tenkaraMaterials = await tenkaraQuery<any>(
       `select m.id::text as id,
-              coalesce(m.trade_name, m.name) as label,
+              coalesce(nullif(btrim(m.name), ''), nullif(btrim(m.trade_name), '')) as label,
+              nullif(btrim(m.trade_name), '') as trade_name,
+              nullif(btrim(m.inci), '') as inci,
               (select string_agg(g->>'grade_name', ', ')
                  from jsonb_array_elements(coalesce(m.grade, '[]'::jsonb)) g) as grade,
               m.annual_volume_expected, m.volume_unit, m.need_type, m.accepts_blanket_orders,
@@ -219,7 +270,7 @@ export async function getMaterialProfile(orgId: string): Promise<MaterialProfile
          join public.users u on u.id = m.user_id
          left join public.material_quotes q on q.id = m.current_quote_id
         where u.organization_id = $1::uuid
-          and coalesce(m.trade_name, m.name) is not null
+          and coalesce(nullif(btrim(m.name), ''), nullif(btrim(m.trade_name), '')) is not null
         order by m.created_at desc limit 200`,
       [org.tenkara_org_id]
     );
@@ -246,6 +297,8 @@ export async function getMaterialProfile(orgId: string): Promise<MaterialProfile
     return {
       tenkaraMaterialId: m.id,
       label: m.label,
+      tradeName: m.trade_name ?? null,
+      inci: m.inci ?? null,
       grade: m.grade ?? null,
       annualVolume,
       volumeUnit: m.volume_unit ?? null,

@@ -9,6 +9,10 @@ import { OperatorChip } from "@/components/operator-chip";
 import { DraftSignals } from "@/components/draft-signals";
 import { DraftStatusBadge } from "@/components/draft-status-badge";
 import { ListCsvButton } from "@/components/list-csv-button";
+import { BulkRemoveBar } from "@/components/bulk-remove-bar";
+import { BulkRewriteBar } from "@/components/bulk-rewrite-bar";
+import { removeDrafts } from "@/app/actions/drafts";
+import { rewriteDrafts } from "@/app/actions/rewrite-draft";
 import { filenameFor } from "@/lib/csv";
 import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
 
@@ -44,8 +48,17 @@ const FILTERS: { value: "all" | ThreadKind; label: string }[] = [
   { value: "inbound", label: "Inbound replies" },
 ];
 
-export function ThreadsList({ rows, slug }: { rows: ThreadRow[]; slug: string }) {
+export function ThreadsList({ rows, slug, canAct = false }: { rows: ThreadRow[]; slug: string; canAct?: boolean }) {
   const [kind, setKind] = useState<"all" | ThreadKind>("all");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const toggleOne = (id: string, checked: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
 
   const byKind = useMemo(() => (kind === "all" ? rows : rows.filter((r) => r.kind === kind)), [kind, rows]);
   const counts = useMemo(() => {
@@ -64,7 +77,22 @@ export function ThreadsList({ rows, slug }: { rows: ThreadRow[]; slug: string })
       { value: "status", label: "Status", compare: byString((r: ThreadRow) => r.status) },
     ],
     defaultSort: "newest",
+    persistKey: "threads",
   });
+
+  const selectable = canAct;
+  const filteredIds = filtered.map((r) => r.id);
+  const selectedCount = filteredIds.filter((id) => selected.has(id)).length;
+  const allSelected = filteredIds.length > 0 && selectedCount === filteredIds.length;
+  const toggleAll = (checked: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of filteredIds) {
+        if (checked) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
 
   const csvRows = filtered.map((r) => [
     KIND_META[r.kind].label,
@@ -102,9 +130,35 @@ export function ThreadsList({ rows, slug }: { rows: ThreadRow[]; slug: string })
         />
       </div>
 
+      {selectable && (
+        <>
+          <BulkRewriteBar
+            count={selectedCount}
+            onRewrite={() => rewriteDrafts(filteredIds.filter((id) => selected.has(id)))}
+            onClear={() => setSelected(new Set())}
+          />
+          <BulkRemoveBar
+            count={selectedCount}
+            noun="thread"
+            onRemove={() => removeDrafts(filteredIds.filter((id) => selected.has(id)))}
+            onClear={() => setSelected(new Set())}
+          />
+        </>
+      )}
       <Table>
         <TableHeader>
           <TableRow>
+            {selectable && (
+              <TableHead className="w-8">
+                <input
+                  type="checkbox"
+                  aria-label="Select all threads"
+                  className="h-4 w-4 accent-destructive align-middle"
+                  checked={allSelected}
+                  onChange={(e) => toggleAll(e.target.checked)}
+                />
+              </TableHead>
+            )}
             <TableHead>Kind</TableHead>
             <TableHead>Subject</TableHead>
             <TableHead>Supplier</TableHead>
@@ -118,6 +172,17 @@ export function ThreadsList({ rows, slug }: { rows: ThreadRow[]; slug: string })
         <TableBody>
           {filtered.map((d) => (
             <TableRow key={d.id}>
+              {selectable && (
+                <TableCell>
+                  <input
+                    type="checkbox"
+                    aria-label="Select thread"
+                    className="h-4 w-4 accent-destructive align-middle"
+                    checked={selected.has(d.id)}
+                    onChange={(e) => toggleOne(d.id, e.target.checked)}
+                  />
+                </TableCell>
+              )}
               <TableCell>
                 <Badge variant={KIND_META[d.kind].variant as any} title={KIND_META[d.kind].title}>
                   {KIND_META[d.kind].label}
@@ -144,7 +209,7 @@ export function ThreadsList({ rows, slug }: { rows: ThreadRow[]; slug: string })
           ))}
           {filtered.length === 0 && (
             <TableRow>
-              <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+              <TableCell colSpan={selectable ? 9 : 8} className="text-center text-muted-foreground py-8">
                 No threads match.
               </TableCell>
             </TableRow>

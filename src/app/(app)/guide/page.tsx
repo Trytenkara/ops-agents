@@ -60,6 +60,12 @@ const TABS: { name: string; question: string; does: string; agents: string }[] =
     does: "Stale leads escalated after >14 days of no movement. Take the recommended action and resolve.",
     agents: "Agent 07 (Escalation)",
   },
+  {
+    name: "Platform Extraction (DEV)",
+    question: "What have we pulled from suppliers, and is each vendor qualified?",
+    does: "Dev-only surface (violet tab). Quote board: every field extracted from supplier replies/attachments (price, grade, lead time, MOQ, payment terms) with copy-to-Tenkara and CSV, plus a per-supplier Docs column. The bench: the client's Tenkara Sourcing Rules (CoA/SDS/certs, Requested/Dealbreaker), a by-supplier qualified/blocked view, and received documents with parsed fields (assay, cert validity, expiry). Read-only; nothing is blocked.",
+    agents: "Agent 15 (Reply Manager) asks for docs; the inbound webhook captures + extracts them",
+  },
 ];
 
 const AGENTS: { id: string; name: string; does: string; feeds: string }[] = [

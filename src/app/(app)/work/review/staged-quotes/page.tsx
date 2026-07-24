@@ -7,6 +7,7 @@ import { getAssignedOrgIds, seesAllOrgs } from "@/lib/org-access";
 import { StagedQuoteRow, StagedQuoteHeaders, stagedQuoteColSpan, STAGED_CONF_ORDER } from "@/components/staged-quote-row";
 import { StagedQuotesExportCsvButton } from "@/components/staged-quotes-export-csv-button";
 import { resolveMaterialGrades } from "@/lib/tenkara-names";
+import { correctMaterialSpelling } from "@/lib/material-spelling";
 import { ListPageHeader } from "@/components/list-page-header";
 
 export const dynamic = "force-dynamic";
@@ -72,7 +73,7 @@ export default async function StagedQuotesPage({
   } catch {
     // Tenkara unreachable — fall back to no grade.
   }
-  staged = staged.map((r) => ({ ...r, grade: r.material_id ? grades.get(r.material_id) ?? null : null }));
+  staged = staged.map((r) => ({ ...r, grade: r.material_id ? grades.get(r.material_id) ?? null : null, material_name: correctMaterialSpelling(r.material_name) }));
 
   const canAct = seesAllOrgs(session) || (assigned !== null && assigned.length > 0);
 

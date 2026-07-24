@@ -3,6 +3,7 @@ import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAssignedOrgIds } from "@/lib/org-access";
 import { toCsv, type CsvCell } from "@/lib/csv";
+import { correctMaterialSpelling } from "@/lib/material-spelling";
 
 // GET /api/leads-in-flight/export-csv?stage=raw&material=SCI&source=ai_discovery&drift=1
 // RLS-scoped to caller's assigned orgs. Mirrors the filters available on
@@ -19,6 +20,9 @@ export async function GET(request: NextRequest) {
   }
 
   const sp = request.nextUrl.searchParams;
+  // stage=all (or allStages=1) exports every stage — the per-client Leads tab
+  // shows all active leads regardless of stage, so its download needs that.
+  const allStages = sp.get("stage") === "all" || sp.get("allStages") === "1";
   const stage: Stage = (STAGES as readonly string[]).includes(sp.get("stage") ?? "")
     ? (sp.get("stage") as Stage)
     : "raw";
@@ -28,6 +32,9 @@ export async function GET(request: NextRequest) {
   const status = (sp.get("status") ?? "").trim();
   const orgSlug = (sp.get("org") ?? "").trim();
   const channel = (sp.get("channel") ?? "").trim();
+  // market=marketplace → published-price listings (site_type M/MS); market=direct
+  // → everything else (non-marketplace suppliers). Mirrors the tab's split.
+  const market = (sp.get("market") ?? "").trim();
   const pricedOnly = sp.get("priced") === "1";
 
   const admin = createAdminClient();
@@ -46,35 +53,57 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  let q = admin
-    .from("leads_in_flight")
-    .select(
-      "id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)"
-    )
-    .eq("stage", stage)
-    .order("confidence_score", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false });
+  // Fully-filtered query, minus the page window. Rebuilt per page because a
+  // supabase-js builder can only be awaited once. The final .order("id") is a
+  // stable tiebreak so paging never skips or double-counts rows that share a
+  // confidence_score + created_at.
+  const buildQuery = () => {
+    let q = admin
+      .from("leads_in_flight")
+      .select(
+        "id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)"
+      )
+      .order("confidence_score", { ascending: false, nullsFirst: false })
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: true });
 
-  if (status) {
-    q = q.eq("status", status);
-  } else if (stage === "terminal") {
-    q = q.in("status", ["active", "dropped", "terminal"]);
-  } else {
-    q = q.eq("status", "active");
-  }
-  if (selectedOrgId) q = q.eq("org_id", selectedOrgId);
-  else if (assigned) q = q.in("org_id", assigned);
-  if (driftOnly) q = q.eq("payload->>catalog_drift", "no_longer_listed");
-  if (material) {
-    const esc = material.replace(/[,()]/g, " ");
-    q = q.or(`material_name.ilike.%${esc}%,payload->>inci_name.ilike.%${esc}%`);
-  }
-  if (source) q = q.eq("source", source);
-  if (channel === "M" || channel === "MS" || channel === "N") q = q.eq("payload->>site_type", channel);
-  if (pricedOnly) q = q.not("payload->>pack_sizes_pricing", "is", null);
+    if (!allStages) q = q.eq("stage", stage);
 
-  const { data: rows, error } = await q;
-  if (error) return new NextResponse(error.message, { status: 500 });
+    if (status) {
+      q = q.eq("status", status);
+    } else if (!allStages && stage === "terminal") {
+      q = q.in("status", ["active", "dropped", "terminal"]);
+    } else {
+      q = q.eq("status", "active");
+    }
+    if (selectedOrgId) q = q.eq("org_id", selectedOrgId);
+    else if (assigned) q = q.in("org_id", assigned);
+    if (driftOnly) q = q.eq("payload->>catalog_drift", "no_longer_listed");
+    if (material) {
+      const esc = material.replace(/[,()]/g, " ");
+      q = q.or(`material_name.ilike.%${esc}%,payload->>inci_name.ilike.%${esc}%`);
+    }
+    if (source) q = q.eq("source", source);
+    if (channel === "M" || channel === "MS" || channel === "N") q = q.eq("payload->>site_type", channel);
+    if (market === "marketplace") q = q.in("payload->>site_type", ["M", "MS"]);
+    else if (market === "direct") q = q.or("payload->>site_type.eq.N,payload->>site_type.is.null");
+    if (pricedOnly) q = q.not("payload->>pack_sizes_pricing", "is", null);
+    return q;
+  };
+
+  // PostgREST caps a single response at 1000 rows, so a plain select silently
+  // truncated the export — Evan would get only the top 1000 by confidence. Page
+  // through with .range() so the CSV holds every matching lead.
+  const PAGE = 1000;
+  const HARD_CAP = 50000;
+  const rows: any[] = [];
+  for (let from = 0; from < HARD_CAP; from += PAGE) {
+    const { data, error } = await buildQuery().range(from, from + PAGE - 1);
+    if (error) return new NextResponse(error.message, { status: 500 });
+    if (!data || data.length === 0) break;
+    rows.push(...data);
+    if (data.length < PAGE) break;
+  }
 
   // Column order mirrors Ben's "Vita Organica – Supplier Sourcing" sheet so the
   // export drops into the same workflow: material → supplier identity → the
@@ -124,7 +153,7 @@ export async function GET(request: NextRequest) {
         r.id,
         r.orgs?.slug ?? null,
         r.orgs?.name ?? null,
-        r.material_name,
+        correctMaterialSpelling(r.material_name),
         p.inci_name ?? null,
         p.trade_name ?? null,
         r.supplier_name,
@@ -159,7 +188,7 @@ export async function GET(request: NextRequest) {
   );
 
   const iso = new Date().toISOString().slice(0, 10);
-  const slug = buildFilterSlug({ stage, material, source, status, driftOnly, org: orgSlug });
+  const slug = buildFilterSlug({ stage: allStages ? "all" : stage, material, source, status, driftOnly, market, org: orgSlug });
   const filename = `leads-in-flight-${slug}-${iso}.csv`;
 
   return new NextResponse(body, {
@@ -178,6 +207,7 @@ function buildFilterSlug({
   source,
   status,
   driftOnly,
+  market,
   org,
 }: {
   stage: string;
@@ -185,11 +215,13 @@ function buildFilterSlug({
   source: string;
   status: string;
   driftOnly: boolean;
+  market: string;
   org: string;
 }) {
   const parts: string[] = [`stage-${stage}`];
   if (org) parts.push(`org-${slugify(org)}`);
   if (material) parts.push(`material-${slugify(material)}`);
+  if (market) parts.push(market === "marketplace" ? "marketplace" : "non-marketplace");
   if (source) parts.push(`source-${slugify(source)}`);
   if (status) parts.push(`status-${slugify(status)}`);
   if (driftOnly) parts.push("drift");

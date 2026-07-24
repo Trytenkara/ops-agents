@@ -1,14 +1,34 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { queryRecentMaterials, queryMaterialsByIds, findCandidatesForMaterial, existingQuotesForMaterials, type CandidateSupplier, type MaterialRow } from "./sql";
-import { scoutSuppliersForMaterial, scoreScoutConfidence, scoutCompleteness, type ScoutSupplier } from "./scout";
+import { queryRecentMaterials, queryMaterialsByIds, queryMaterialsForOrgs, findCandidatesForMaterial, existingQuotesForMaterials, type CandidateSupplier, type MaterialRow } from "./sql";
+import { scoutSuppliersForMaterial, scoreScoutConfidence, describeScoutConfidence, scoutCompleteness, type ScoutSupplier } from "./scout";
 import { toCsv } from "@/lib/csv";
-import { getSourcingExclusions, exclusionReason, type SourcingExclusions } from "@/lib/tenkara-sourcing-exclusions";
+import { getSourcingExclusions, exclusionReason, normalizeCompanyName, type SourcingExclusions } from "@/lib/tenkara-sourcing-exclusions";
+import { getNoteDerivedCountryExclusions } from "@/lib/client-sourcing-rules";
 import { uploadCsvAndSign } from "@/lib/storage";
-import { onlyOrgName } from "@/lib/org-scope";
+import { onlyOrgNames } from "@/lib/org-scope";
+import { normalizeStatus, sourcingAllowed } from "@/lib/org-status";
 import { flagMaterialNames, correctName } from "@/lib/material-name-flags";
+import { materialLabel } from "@/lib/material-label";
+import { sourceReadyEnabled, fireSourceReadyDiscovery } from "./sourceready";
+import { importYetiEnabled, fireImportYetiDiscovery } from "./importyeti";
 
 const EMPTY_OVERRIDES = new Map<string, string>();
+
+// SourceReady discovery is fired per material (bounded per run) to a Gamut
+// webhook that runs supplier_search_v3 and stages source='sourceready' leads
+// out-of-band. Inert unless SOURCEREADY_WEBHOOK_URL + _SECRET are set.
+const SOURCEREADY_MAX_MATERIALS_PER_RUN = envInt("SOURCEREADY_MAX_MATERIALS_PER_RUN", 25);
+// Suppliers requested per discovery fire; also the page stride. Each pass sends
+// page = floor(existing source leads for this material / size) + 1 so repeated
+// runs walk deeper (page 1, 2, 3, …) instead of re-fetching the same top results.
+const SOURCEREADY_PAGE_SIZE = envInt("SOURCEREADY_PAGE_SIZE", 25);
+const IMPORTYETI_PAGE_SIZE = envInt("IMPORTYETI_PAGE_SIZE", 10);
+const pageFor = (count: number, size: number) => Math.floor(Math.max(0, count) / Math.max(1, size)) + 1;
+// ImportYeti discovery mirrors SourceReady: fired per material (bounded per run)
+// to a Gamut webhook that pulls US-customs suppliers and stages source='importyeti'
+// leads out-of-band. Inert unless IMPORTYETI_WEBHOOK_URL + _SECRET are set.
+const IMPORTYETI_MAX_MATERIALS_PER_RUN = envInt("IMPORTYETI_MAX_MATERIALS_PER_RUN", 25);
 
 // v1 trims (vs. full spec):
 //   - existing-DB only mode. BrowserBase external discovery is gated on
@@ -22,7 +42,41 @@ const EMPTY_OVERRIDES = new Map<string, string>();
 // logic. Production cron stays at the 4h cadence the spec asks for.
 const DEFAULT_LOOKBACK_HOURS = 4;
 const RECENT_MIRROR_DAYS = 90;
-const MAX_NEW_LEADS_PER_RUN = 120;  // expansive runs: up to ~50 scout leads/material across marketplace + non-marketplace, plus graph leads
+const MAX_NEW_LEADS_PER_RUN = 300;  // expansive runs: up to ~100 scout leads/material across marketplace + non-marketplace, plus graph leads. Real work-per-run is bounded by DRIVE_BUDGET_MS (scout call count), so this is a flood-guard, not the throttle.
+
+// Richness floor / breadth target: a material is considered "needs sourcing"
+// until it has this many active leads. This is Sam's minimum-suppliers-per-
+// material goal (breadth over depth — "find everyone"), not a stop-at number:
+// a material keeps getting re-scouted every backoff window until it reaches the
+// floor OR the market is genuinely exhausted (re-scouts exclude known hosts, so
+// each pass only adds NEW suppliers and naturally tapers off). Beyond the
+// recency window, every run also pulls materials below the floor (0 leads =
+// never sourced, or under-sourced) so nothing is stranded — a self-draining
+// work queue. Re-scouting an under-floor material is throttled per material by
+// RESCOUT_BACKOFF (a marker in agent_state) so an expensive scout can't be
+// re-run every tick on a material that simply has few suppliers to find.
+const MIN_LEADS_PER_MATERIAL = envInt("LEAD_CREATOR_MIN_LEADS_PER_MATERIAL", 100);
+const RESCOUT_BACKOFF_MS = envInt("LEAD_CREATOR_RESCOUT_BACKOFF_HOURS", 12) * 3600 * 1000;
+const BACKLOG_ATTEMPT_KEY = (materialId: string) => `resource_attempt:${materialId}`;
+
+// Diminishing-returns autopause. With the richness floor raised high (keep
+// sourcing to maximum), a material would otherwise be re-scouted every backoff
+// window forever — burning web-search + MCP calls long after its sources are
+// exhausted. So we track, in the same attempt marker, the lead count at each
+// attempt and a "dry streak": consecutive backoff cycles where the material grew
+// by fewer than DISCOVERY_MIN_NEW_PER_CYCLE leads (across ALL sources, so this
+// also sees out-of-band SourceReady/ImportYeti leads that landed since). After
+// DISCOVERY_DRY_STREAK_LIMIT dry cycles the material is "saturated" and drops
+// from the normal backoff to SATURATED_BACKOFF (a weekly re-check, not a
+// permanent stop — a market can grow, and a manual marker clear resumes it).
+const DISCOVERY_MIN_NEW_PER_CYCLE = envInt("DISCOVERY_MIN_NEW_PER_CYCLE", 5);
+const DISCOVERY_DRY_STREAK_LIMIT = envInt("DISCOVERY_DRY_STREAK_LIMIT", 3);
+const SATURATED_BACKOFF_MS = envInt("DISCOVERY_SATURATED_BACKOFF_HOURS", 168) * 3600 * 1000;
+
+function envInt(name: string, dflt: number): number {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? n : dflt;
+}
 
 function envOverrideLookbackHours(): number | null {
   const v = process.env.LEAD_CREATOR_LOOKBACK_HOURS;
@@ -52,6 +106,20 @@ function scoreCandidate(c: CandidateSupplier): number {
   return Math.min(cap, base + 0.01 * Math.max(0, (c.signal_count ?? 1) - 1));
 }
 
+// Human-readable rationale for the confidence_score above, stored on the lead so
+// operators (and the CSV) can see *why* a lead scored what it did.
+const SIGNAL_REASON: Record<CandidateSupplier["signal"], string> = {
+  quoted_same_material: "previously quoted this exact material",
+  catalog_match: "material appears in their catalog",
+  quoted_similar_inci: "previously quoted a material with a similar INCI",
+  quoted_similar_name: "previously quoted a similarly-named material",
+};
+function describeCandidateConfidence(c: CandidateSupplier): string {
+  const n = c.signal_count ?? 1;
+  const seen = n > 1 ? ` (seen ${n}×)` : "";
+  return `${SIGNAL_REASON[c.signal] ?? c.signal}${seen}`;
+}
+
 function sourceFromSignal(signal: CandidateSupplier["signal"]): "existing_db" | "marketplace" {
   // All graph signals come from Tenkara prod — the existing supplier graph.
   return signal === "catalog_match" ? "marketplace" : "existing_db";
@@ -75,7 +143,11 @@ registerAgent({
     // run as their own scheduled, isolated invocations — each agent gets its own
     // 300s budget via the cron dispatcher, so a long scout can't starve them.
     // Budget-guard the scout loop so a backlog of new materials still fits 300s.
-    const DRIVE_BUDGET_MS = 250_000;
+    // This is checked BETWEEN materials, so it must leave room for one more full
+    // scout call (SCOUT_CALL_TIMEOUT_MS ≈ 120s) plus overhead before the 300s
+    // maxDuration: 150s + 120s + margin < 300s. A higher budget let a material
+    // start late and overrun, getting the whole function hard-killed.
+    const DRIVE_BUDGET_MS = 150_000;
     const driveStart = Date.now();
     const elapsedMs = () => Date.now() - driveStart;
 
@@ -120,12 +192,14 @@ registerAgent({
     if (onlyMaterialId) await ctx.log(`Targeted single-material run: ${onlyMaterialId} (${materials.length} found)`, { step: "query" });
     await ctx.log(`${materials.length} materials in window`, { step: "query", data: { count: materials.length } });
 
-    if (materials.length === 0) {
+    if (onlyMaterialId && materials.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary("No new materials in lookback window.");
+      ctx.setSummary("Targeted material has no rows in Tenkara.");
       return;
     }
+    // An empty recency window is NOT terminal — the backlog queue (3b-iii) may
+    // still surface under-sourced materials. Final empty-check is after the merge.
 
     // 3. Pull recent mirror entries for dedup.
     const mirrorSince = new Date(Date.now() - RECENT_MIRROR_DAYS * 24 * 3600 * 1000).toISOString();
@@ -142,17 +216,149 @@ registerAgent({
 
     // 3b. Build Tenkara→OA org map (orgs.tenkara_org_id is the join key).
     //     Cached for the run so we make one round-trip total.
-    const { data: orgRows } = await admin.from("orgs").select("id, tenkara_org_id, name");
+    const { data: orgRows } = await admin.from("orgs").select("id, tenkara_org_id, name, sourcing_status");
     const tenkaraOrgToOaOrg = new Map<string, string>();
-    const allowedTenkaraOrgIds = new Set<string>();
-    const onlyOrg = onlyOrgName();
-    for (const r of (orgRows ?? []) as { id: string; tenkara_org_id: string | null; name: string }[]) {
-      if (r.tenkara_org_id) {
-        tenkaraOrgToOaOrg.set(r.tenkara_org_id, r.id);
-        if (onlyOrg && r.name === onlyOrg) allowedTenkaraOrgIds.add(r.tenkara_org_id);
+    // Discovery is allowed for orgs whose sourcing_status is 'active' or 'sourcing_only'
+    // (see lib/org-status.ts). ONLY_ORG, if still set, is an AND-override during rollout.
+    const sourcingTenkaraOrgIds = new Set<string>();
+    const sourcingNames: string[] = [];
+    const only = new Set(onlyOrgNames());
+    for (const r of (orgRows ?? []) as { id: string; tenkara_org_id: string | null; name: string; sourcing_status: string | null }[]) {
+      if (!r.tenkara_org_id) continue;
+      tenkaraOrgToOaOrg.set(r.tenkara_org_id, r.id);
+      let status = normalizeStatus(r.sourcing_status);
+      if (only.size && !only.has(r.name)) status = "off";
+      if (sourcingAllowed(status)) {
+        sourcingTenkaraOrgIds.add(r.tenkara_org_id);
+        sourcingNames.push(r.name);
       }
     }
-    await ctx.log(`Loaded ${tenkaraOrgToOaOrg.size} tenkara→OA org mappings${onlyOrg ? ` · scoped to ${onlyOrg}` : ""}`, { step: "org_map" });
+    await ctx.log(`Loaded ${tenkaraOrgToOaOrg.size} tenkara→OA org mappings · sourcing ${sourcingTenkaraOrgIds.size} org(s): ${sourcingNames.join(", ") || "none"}`, { step: "org_map" });
+
+    // 3b-iii. Backlog queue — the durable guarantee that every material gets rich
+    //         leads. Beyond the recency window, pull materials for our orgs that
+    //         are still below the richness floor (0 leads = never sourced, or
+    //         < MIN_LEADS_PER_MATERIAL) and merge them in. Nothing is stranded no
+    //         matter the batch size or when it was added, with no window
+    //         dependency. Re-scouting an under-floor material is throttled per
+    //         material by a backoff marker so an expensive scout isn't re-run
+    //         every tick on a material that simply has few suppliers to find.
+    const underservedIds = new Set<string>();
+    const existingHostsByMaterial = new Map<string, Set<string>>();
+    // Per-source active lead counts per material, used to page the SourceReady /
+    // ImportYeti discovery fires deeper on each pass (page = count/size + 1) so
+    // repeated runs walk past the first page instead of re-fetching the same top
+    // results. Populated from the same bulk fetch that computes the backlog floor.
+    const srLeadCount = new Map<string, number>();
+    const iyLeadCount = new Map<string, number>();
+    // Total active leads per material (function-scoped so the saturation marker
+    // write, deep in the per-material loop, can compare current vs last-attempt count).
+    const leadCount = new Map<string, number>();
+    // Saturation state loaded from the attempt markers: consecutive dry cycles and
+    // the lead count recorded at the last attempt, per material.
+    const dryStreak = new Map<string, number>();
+    const lastAttemptCount = new Map<string, number>();
+    if (!onlyMaterialId) {
+      const targetTenkaraOrgIds = Array.from(sourcingTenkaraOrgIds);
+      try {
+        const universe = await queryMaterialsForOrgs(targetTenkaraOrgIds);
+        // Paginate: Supabase caps a select at 1000 rows, and there are more than
+        // 1000 active leads — an un-paginated fetch would undercount and falsely
+        // mark materials as under-floor. (leadCount is function-scoped above.)
+        for (let from = 0; ; from += 1000) {
+          const { data: rows } = await admin
+            .from("leads_in_flight")
+            .select("material_id, source")
+            .eq("status", "active")
+            .range(from, from + 999);
+          const batch = (rows ?? []) as { material_id: string | null; source: string | null }[];
+          for (const r of batch) {
+            if (!r.material_id) continue;
+            leadCount.set(r.material_id, (leadCount.get(r.material_id) ?? 0) + 1);
+            if (r.source === "sourceready") srLeadCount.set(r.material_id, (srLeadCount.get(r.material_id) ?? 0) + 1);
+            else if (r.source === "importyeti") iyLeadCount.set(r.material_id, (iyLeadCount.get(r.material_id) ?? 0) + 1);
+          }
+          if (batch.length < 1000) break;
+        }
+        const lastAttempt = new Map<string, number>();
+        for (let from = 0; ; from += 1000) {
+          const { data: rows } = await admin
+            .from("agent_state")
+            .select("key, value")
+            .eq("agent_id", ctx.agentId)
+            .like("key", "resource_attempt:%")
+            .range(from, from + 999);
+          const batch = (rows ?? []) as { key: string; value: any }[];
+          for (const m of batch) {
+            const id = m.key.slice("resource_attempt:".length);
+            const at = Date.parse(m.value?.at ?? "");
+            if (!Number.isNaN(at)) lastAttempt.set(id, at);
+            if (typeof m.value?.dry === "number") dryStreak.set(id, m.value.dry);
+            if (typeof m.value?.count === "number") lastAttemptCount.set(id, m.value.count);
+          }
+          if (batch.length < 1000) break;
+        }
+        const nowMs = Date.now();
+        const already = new Set(materials.map((m) => m.id));
+        let saturatedSkipped = 0;
+        const underserved = universe
+          .filter((m) => (leadCount.get(m.id) ?? 0) < MIN_LEADS_PER_MATERIAL)
+          .filter((m) => !already.has(m.id))
+          .filter((m) => {
+            const la = lastAttempt.get(m.id);
+            if (la === undefined) return true;
+            // Saturated materials (no meaningful growth for DRY_STREAK_LIMIT
+            // cycles) drop to a weekly re-check instead of every backoff window.
+            const saturated = (dryStreak.get(m.id) ?? 0) >= DISCOVERY_DRY_STREAK_LIMIT;
+            const backoff = saturated ? SATURATED_BACKOFF_MS : RESCOUT_BACKOFF_MS;
+            const ready = nowMs - la > backoff;
+            if (!ready && saturated) saturatedSkipped++;
+            return ready;
+          })
+          .sort((a, b) =>
+            (leadCount.get(a.id) ?? 0) - (leadCount.get(b.id) ?? 0) ||
+            // created_at is a Date at runtime (pg driver), not the declared
+            // string — compare by epoch so this works for either.
+            (new Date(b.created_at as any).getTime() || 0) - (new Date(a.created_at as any).getTime() || 0)
+          );
+        const picked = underserved.slice(0, Math.max(0, 200 - materials.length));
+        for (const m of picked) underservedIds.add(m.id);
+        materials = [...materials, ...picked];
+        if (picked.length) {
+          const pickedIds = picked.map((m) => m.id);
+          for (let from = 0; ; from += 1000) {
+            const { data: rows } = await admin
+              .from("leads_in_flight")
+              .select("material_id, payload")
+              .eq("status", "active")
+              .in("material_id", pickedIds)
+              .range(from, from + 999);
+            const batch = (rows ?? []) as { material_id: string; payload: any }[];
+            for (const r of batch) {
+              const h = hostOf(r.payload?.supplier_website ?? r.payload?.source_url ?? "");
+              if (!h) continue;
+              if (!existingHostsByMaterial.has(r.material_id)) existingHostsByMaterial.set(r.material_id, new Set());
+              existingHostsByMaterial.get(r.material_id)!.add(h);
+            }
+            if (batch.length < 1000) break;
+          }
+        }
+        await ctx.log(
+          `Backlog queue: ${underserved.length} materials below ${MIN_LEADS_PER_MATERIAL}-lead floor · sourcing ${picked.length} this run` +
+            (saturatedSkipped ? ` · ${saturatedSkipped} saturated (weekly re-check)` : ""),
+          { step: "backlog", data: { below_floor: underserved.length, picked: picked.length, saturated_skipped: saturatedSkipped } }
+        );
+      } catch (e: any) {
+        await ctx.log(`Backlog queue query failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "backlog" });
+      }
+    }
+
+    if (materials.length === 0) {
+      ctx.setItemsProcessed(0);
+      ctx.setStatus("success");
+      ctx.setSummary("No new materials in window and none below the lead floor.");
+      return;
+    }
 
     // 3b-ii. Flag misspelled material names (e.g. "Butylene G;ycol"). Names come
     // from Tenkara (read-only); Agent flags a suggestion + pings ops, who apply
@@ -198,8 +404,7 @@ registerAgent({
     //     `processed_material_ids` set in sourcing-trigger.json — once a
     //     material has any scout-discovered lead, we don't re-scout it (the
     //     model would just re-find the same hosts and we'd waste API calls
-    //     + risk duplicate inserts). Graph re-runs are still safe because
-    //     they're keyed on Tenkara supplier_id, which is unique per material.
+    //     + risk duplicate inserts).
     const materialIds = materials.map((m) => m.id);
     const { data: scoutedRows } = await admin
       .from("leads_in_flight")
@@ -212,6 +417,63 @@ registerAgent({
     if (alreadyScouted.size > 0) {
       await ctx.log(`${alreadyScouted.size} materials already have scout leads — skipping scout phase for them`, {
         step: "scout_dedup",
+      });
+    }
+
+    // 3d. Per-(material, supplier) idempotency for the GRAPH phase. Without this
+    //     a material sitting in the lookback window gets its graph candidates
+    //     re-inserted on every cron tick, since findCandidatesForMaterial is
+    //     deterministic. The mirror check below is NOT sufficient: it only sees
+    //     (supplier_name, material_name) pairs exported into lead_scanner_mirror
+    //     by Agent 11, which is frequently empty (Agent 11 is off) — so it silently
+    //     lets duplicates through. Guard directly against leads already in
+    //     leads_in_flight for these materials. Applies to targeted runs too:
+    //     re-inserting an identical (material, supplier) row is never useful.
+    const { data: existingGraphLeads } = await admin
+      .from("leads_in_flight")
+      .select("material_id, supplier_id")
+      .in("material_id", materialIds)
+      .not("supplier_id", "is", null);
+    const existingMaterialSupplier = new Set(
+      (existingGraphLeads ?? []).map((r: any) => `${r.material_id}|${r.supplier_id}`)
+    );
+    if (existingMaterialSupplier.size > 0) {
+      await ctx.log(`${existingMaterialSupplier.size} (material,supplier) pairs already staged — graph dedup active`, {
+        step: "graph_dedup",
+      });
+    }
+
+    // 3e. Per-(material, canonical company name) dedup. The supplier_id guard above
+    //     only catches graph leads (scout / SourceReady / ImportYeti carry
+    //     supplier_id=null), and the host guard can't unify a supplier listed under
+    //     different domains (e.g. chemicals.basf.com vs a pharmacompass listing) or
+    //     the same supplier under a name variant ("BASF" vs "BASF SE"). Key on
+    //     (material_id | normalizeCompanyName(name)) so distinct materials for the
+    //     same supplier remain separate leads, but the same supplier+material never
+    //     lands twice. Seeded from existing active leads, then updated as we stage.
+    const { data: existingNameRows } = await admin
+      .from("leads_in_flight")
+      .select("material_id, supplier_name")
+      .eq("status", "active")
+      .in("material_id", materialIds);
+    const stagedNameKeys = new Set<string>();
+    for (const r of (existingNameRows ?? []) as { material_id: string | null; supplier_name: string | null }[]) {
+      const norm = normalizeCompanyName(r.supplier_name);
+      if (r.material_id && norm) stagedNameKeys.add(`${r.material_id}|${norm}`);
+    }
+    // Returns true if this (material, company) was already seen; otherwise records
+    // it and returns false. Blank/normalize-to-empty names are never deduped.
+    const nameSeen = (materialId: string, name: string | null | undefined): boolean => {
+      const norm = normalizeCompanyName(name);
+      if (!norm) return false;
+      const key = `${materialId}|${norm}`;
+      if (stagedNameKeys.has(key)) return true;
+      stagedNameKeys.add(key);
+      return false;
+    };
+    if (stagedNameKeys.size > 0) {
+      await ctx.log(`${stagedNameKeys.size} (material,company) names already staged — name dedup active`, {
+        step: "name_dedup",
       });
     }
 
@@ -232,7 +494,11 @@ registerAgent({
     let materialsWithoutLeads = 0;
     let materialsWithScoutLeads = 0;
     let skippedByMirror = 0;
+    let skippedByExisting = 0;
     let skippedByExclusion = 0;
+    let skippedByName = 0;
+    let sourceReadyFired = 0;
+    let importYetiFired = 0;
     const noLeadMaterials: string[] = [];
 
     // Per-client sourcing exclusions (do-not-contact companies + excluded
@@ -245,6 +511,21 @@ registerAgent({
       if (exclusionCache.has(tenkaraOrgId)) return exclusionCache.get(tenkaraOrgId)!;
       try {
         const ex = await getSourcingExclusions(tenkaraOrgId);
+        // Fold in free-text sourcing rules (e.g. "No China please") from the OA
+        // client notes so a written rule suppresses suppliers just like a typed
+        // country exclusion in Tenkara does.
+        const oaOrgId = tenkaraOrgToOaOrg.get(tenkaraOrgId) ?? null;
+        if (oaOrgId) {
+          const { aliases, hits } = await getNoteDerivedCountryExclusions(admin, oaOrgId);
+          if (aliases.size) {
+            aliases.forEach((a) => ex.excludedCountries.add(a));
+            ex.raw.countries += aliases.size;
+            await ctx.log(
+              `Note-derived country exclusions for org ${oaOrgId}: ${hits.map((h) => h.country).join(", ")} (from ops notes)`,
+              { step: "exclusions", data: { hits } }
+            );
+          }
+        }
         exclusionCache.set(tenkaraOrgId, ex);
         return ex;
       } catch (e: any) {
@@ -257,9 +538,9 @@ registerAgent({
     };
 
     for (const material of materials) {
-      // Fleet-wide org scoping: when ONLY_ORG is set, only source for materials
-      // belonging to that org (matched via tenkara_org_id). Skip everything else.
-      if (!onlyMaterialId && onlyOrg && (!material.tenkara_org_id || !allowedTenkaraOrgIds.has(material.tenkara_org_id))) {
+      // Per-org sourcing switch: only source for materials whose org allows
+      // discovery (status active/sourcing_only). Skip 'off' orgs entirely.
+      if (!onlyMaterialId && (!material.tenkara_org_id || !sourcingTenkaraOrgIds.has(material.tenkara_org_id))) {
         continue;
       }
       if (leadsCreated >= MAX_NEW_LEADS_PER_RUN) {
@@ -276,7 +557,7 @@ registerAgent({
       const matOaOrgId = material.tenkara_org_id ? tenkaraOrgToOaOrg.get(material.tenkara_org_id) ?? null : null;
       const matLabel = correctName(
         matOaOrgId ? overridesByOrg.get(matOaOrgId) ?? EMPTY_OVERRIDES : EMPTY_OVERRIDES,
-        material.trade_name ?? material.name ?? material.id
+        materialLabel(material, material.id) as string
       ) as string;
       let candidates: CandidateSupplier[];
       try {
@@ -298,12 +579,21 @@ registerAgent({
       }
       const unique = Array.from(seen.values());
 
-      // Mirror-based skip (supplier_name × material_name match).
+      // Skip candidates we've already staged for this material (real idempotency)
+      // then the legacy mirror-based skip (supplier_name × material_name match).
       const fresh: CandidateSupplier[] = [];
       for (const c of unique) {
+        if (existingMaterialSupplier.has(`${material.id}|${c.supplier_id}`)) {
+          skippedByExisting++;
+          continue;
+        }
         const key = `${c.supplier_name.trim().toLowerCase()}|${matLabel.trim().toLowerCase()}`;
         if (mirrorPairs.has(key)) {
           skippedByMirror++;
+          continue;
+        }
+        if (nameSeen(material.id, c.supplier_name)) {
+          skippedByName++;
           continue;
         }
         fresh.push(c);
@@ -384,6 +674,7 @@ registerAgent({
             supplier_country: c.supplier_country,
             signal: c.signal,
             signal_count: c.signal_count,
+            confidence_reason: describeCandidateConfidence(c),
             tenkara_org_id: material.tenkara_org_id,
           },
           confidence_score: scoreCandidate(c),
@@ -422,11 +713,45 @@ registerAgent({
       //     already produced scout leads for this material in a prior run
       //     (Ben's processed_material_ids equivalent). Dedups by host vs graph
       //     hits so we don't double-stage the same supplier.
-      if (scoutEnabled && leadsCreated < MAX_NEW_LEADS_PER_RUN && !alreadyScouted.has(material.id)) {
+      // Scout when there are no scout leads yet, OR when this material is a
+      // backlog re-scout (below the richness floor and past its backoff window).
+      const isBacklogRescout = underservedIds.has(material.id);
+      if (scoutEnabled && leadsCreated < MAX_NEW_LEADS_PER_RUN && (!alreadyScouted.has(material.id) || isBacklogRescout)) {
+        // Record the attempt up-front so a scout that surfaces nothing new still
+        // backs off — it won't be re-run until RESCOUT_BACKOFF elapses. Also track
+        // diminishing returns: compare the current lead count to the count at the
+        // last attempt; if the material grew by fewer than MIN_NEW_PER_CYCLE leads
+        // (across all sources, incl. out-of-band SR/IY that landed since), bump the
+        // dry streak. Once it hits the limit the selector above backs the material
+        // off to a weekly re-check instead of every window.
+        if (isBacklogRescout) {
+          const curCount = leadCount.get(material.id) ?? 0;
+          const prevCount = lastAttemptCount.get(material.id);
+          const grew = prevCount === undefined || curCount - prevCount >= DISCOVERY_MIN_NEW_PER_CYCLE;
+          const nextDry = grew ? 0 : (dryStreak.get(material.id) ?? 0) + 1;
+          if (nextDry >= DISCOVERY_DRY_STREAK_LIMIT && nextDry !== (dryStreak.get(material.id) ?? -1)) {
+            await ctx.log(`${matLabel} saturated (${nextDry} dry cycles) — backing off to weekly re-check`, {
+              step: "backlog", data: { material_id: material.id, dry: nextDry, lead_count: curCount },
+            });
+          }
+          await admin.from("agent_state").upsert(
+            {
+              agent_id: ctx.agentId,
+              key: BACKLOG_ATTEMPT_KEY(material.id),
+              value: { at: new Date().toISOString(), count: curCount, dry: nextDry },
+            },
+            { onConflict: "agent_id,key" }
+          );
+        }
+        // Exclude hosts we already have for this material (graph hits this run +
+        // existing leads from prior runs) so a re-scout only adds NEW suppliers —
+        // scout leads carry no supplier_id, so the graph dedup can't catch dupes.
+        const excludeHosts = new Set<string>(graphHosts);
+        for (const h of existingHostsByMaterial.get(material.id) ?? []) excludeHosts.add(h);
         let scoutResults: ScoutSupplier[] = [];
         try {
           scoutResults = await scoutSuppliersForMaterial(material, {
-            excludeHosts: graphHosts,
+            excludeHosts,
             log: (msg, meta) => ctx.log(msg, { step: "scout", data: { ...meta, material_id: material.id } }),
           });
         } catch (e: any) {
@@ -449,9 +774,26 @@ registerAgent({
           );
         }
 
-        if (scoutAllowed.length > 0) {
+        // Same canonical-name dedup applied to graph leads (§3e): drop scout
+        // suppliers already staged for this material under any name variant,
+        // including the graph leads just inserted above this run.
+        const scoutDeduped = scoutAllowed.filter((s) => {
+          if (nameSeen(material.id, s.supplier_name)) {
+            skippedByName++;
+            return false;
+          }
+          return true;
+        });
+        if (scoutAllowed.length > scoutDeduped.length) {
+          await ctx.log(
+            `Deduped ${scoutAllowed.length - scoutDeduped.length} scout candidate(s) for ${matLabel} (same supplier already staged)`,
+            { step: "name_dedup", data: { material_id: material.id } }
+          );
+        }
+
+        if (scoutDeduped.length > 0) {
           const scoutBudget = MAX_NEW_LEADS_PER_RUN - leadsCreated;
-          const scoutToInsert = scoutAllowed.slice(0, scoutBudget).map((s) => ({
+          const scoutToInsert = scoutDeduped.slice(0, scoutBudget).map((s) => ({
             org_id: oaOrgId,
             supplier_name: s.supplier_name,
             supplier_id: null,                  // no Tenkara supplier_id — new discovery
@@ -476,6 +818,7 @@ registerAgent({
               moq: s.moq,
               site_type: s.site_type,            // M / MS / N — surfaced in UI
               confidence_hint: s.confidence_hint,
+              confidence_reason: describeScoutConfidence(s.confidence_hint),
               completeness_score: scoutCompleteness(s),
               source_url: s.url,
               source_citations: s.source_citations,
@@ -512,6 +855,67 @@ registerAgent({
             });
           }
         }
+      }
+
+      // 5c. SourceReady discovery — fire a signed webhook to the Gamut agent
+      //     that holds the SourceReady MCP; it runs supplier_search_v3 and
+      //     stages source='sourceready' leads out-of-band. Gated like scout
+      //     (new or backlog materials only) and capped per run to bound cost.
+      //     Exclusions here are best-effort; Agent 04 re-checks do-not-contact /
+      //     excluded countries before any email is sent.
+      const srBacklog = underservedIds.has(material.id);
+      if (
+        sourceReadyEnabled() &&
+        sourceReadyFired < SOURCEREADY_MAX_MATERIALS_PER_RUN &&
+        (!alreadyScouted.has(material.id) || srBacklog)
+      ) {
+        const excludeHosts = new Set<string>(graphHosts);
+        for (const h of existingHostsByMaterial.get(material.id) ?? []) excludeHosts.add(h);
+        const srPage = pageFor(srLeadCount.get(material.id) ?? 0, SOURCEREADY_PAGE_SIZE);
+        const ok = await fireSourceReadyDiscovery({
+          oaOrgId,
+          materialId: material.id,
+          materialName: matLabel,
+          inci: material.inci ?? null,
+          tenkaraOrgId: material.tenkara_org_id ?? null,
+          excludeHosts: Array.from(excludeHosts),
+          excludedCountries: ex ? Array.from(ex.excludedCountries) : [],
+          size: SOURCEREADY_PAGE_SIZE,
+          page: srPage,
+        });
+        if (ok) sourceReadyFired++;
+        await ctx.log(
+          ok ? `Fired SourceReady discovery for ${matLabel} (page ${srPage})` : `SourceReady discovery request failed for ${matLabel}`,
+          { step: "sourceready", level: ok ? "info" : "warn", data: { material_id: material.id, page: srPage } }
+        );
+      }
+
+      // 5d. ImportYeti discovery — mirror of 5c. Fires a signed webhook to the
+      //     Gamut agent that holds the ImportYeti API key; it pulls US-customs
+      //     suppliers, stages source='importyeti' leads, and resolves their
+      //     contacts out-of-band. Same gating (new/backlog materials only) and
+      //     per-run cap. Exclusions best-effort; Agent 04 re-checks before email.
+      if (
+        importYetiEnabled() &&
+        importYetiFired < IMPORTYETI_MAX_MATERIALS_PER_RUN &&
+        (!alreadyScouted.has(material.id) || srBacklog)
+      ) {
+        const iyPage = pageFor(iyLeadCount.get(material.id) ?? 0, IMPORTYETI_PAGE_SIZE);
+        const ok = await fireImportYetiDiscovery({
+          oaOrgId,
+          materialId: material.id,
+          materialName: matLabel,
+          inci: material.inci ?? null,
+          tenkaraOrgId: material.tenkara_org_id ?? null,
+          excludedCountries: ex ? Array.from(ex.excludedCountries) : [],
+          size: IMPORTYETI_PAGE_SIZE,
+          page: iyPage,
+        });
+        if (ok) importYetiFired++;
+        await ctx.log(
+          ok ? `Fired ImportYeti discovery for ${matLabel} (page ${iyPage})` : `ImportYeti discovery request failed for ${matLabel}`,
+          { step: "importyeti", level: ok ? "info" : "warn", data: { material_id: material.id, page: iyPage } }
+        );
       }
 
       if (stagedThisMaterial > 0) {
@@ -577,6 +981,8 @@ registerAgent({
     ctx.setSummary(
       `Staged ${leadsCreated} raw leads (${graphLeads} graph, ${scoutLeadsCreated} scout) across ${materialsWithLeads} material${materialsWithLeads === 1 ? "" : "s"} · ` +
         `${materialsWithScoutLeads} got scout leads · ${materialsWithoutLeads} empty · ${skippedByMirror} graph candidates skipped by 90d mirror` +
+        (skippedByExisting ? ` · ${skippedByExisting} skipped (already staged)` : "") +
+        (skippedByName ? ` · ${skippedByName} skipped (same supplier already staged)` : "") +
         (skippedByExclusion ? ` · ${skippedByExclusion} skipped (do-not-contact / excluded country)` : "") +
         (scoutEnabled ? "" : " · scout off (no ANTHROPIC_API_KEY)") +
         (csvUrl ? ` · CSV ready` : "") +

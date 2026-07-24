@@ -4,7 +4,7 @@ import { tenkaraQuery } from "@/lib/tenkara-readonly";
 import { listLabelConversations, getConversationMessages } from "@/lib/missive";
 import { missivePollingEnabled } from "@/lib/tenkara";
 import { MISSIVE_BOBBER_LABS_LABEL_ID } from "../quote-revalidation/config";
-import { onlyOrgName } from "@/lib/org-scope";
+import { onlyOrgNames, onlyOrgLabel } from "@/lib/org-scope";
 import Anthropic from "@anthropic-ai/sdk";
 
 // Agent 13 - Inbox Context.
@@ -27,7 +27,8 @@ const MAX_LLM_SUMMARIES = 40;
 
 // Optional scope: reuse the same flag Agent 02 uses so a Bobber-Labs-only run
 // only builds context for Bobber Labs suppliers.
-const ONLY_ORG = onlyOrgName();
+const ONLY_ORGS = onlyOrgNames();
+const ONLY_ORG_LABEL = onlyOrgLabel();
 
 const SUMMARY_MODEL = "claude-opus-4-5";
 
@@ -68,9 +69,9 @@ async function loadSupplierMap(): Promise<Map<string, SupplierRef>> {
     JOIN users u ON u.id = m.user_id
     JOIN organizations client_org ON client_org.id = u.organization_id
     WHERE s.poc_email IS NOT NULL AND s.poc_email <> ''
-      ${ONLY_ORG ? "AND client_org.name = $1" : ""}
+      ${ONLY_ORGS.length ? "AND client_org.name = ANY($1)" : ""}
     `,
-    ONLY_ORG ? [ONLY_ORG] : []
+    ONLY_ORGS.length ? [ONLY_ORGS] : []
   );
   const map = new Map<string, SupplierRef>();
   for (const r of rows) {
@@ -149,9 +150,9 @@ registerAgent({
       ctx.setSummary(`Failed loading suppliers: ${e.message}`);
       return;
     }
-    await ctx.log(`Tracking ${supplierMap.size} supplier addresses${ONLY_ORG ? ` for ${ONLY_ORG}` : ""}`, {
+    await ctx.log(`Tracking ${supplierMap.size} supplier addresses${ONLY_ORG_LABEL ? ` for ${ONLY_ORG_LABEL}` : ""}`, {
       step: "suppliers",
-      data: { suppliers: supplierMap.size, scope: ONLY_ORG },
+      data: { suppliers: supplierMap.size, scope: ONLY_ORG_LABEL },
     });
     if (supplierMap.size === 0) {
       ctx.setStatus("success");

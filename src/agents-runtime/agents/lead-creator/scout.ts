@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { MaterialRow } from "./sql";
+import { materialLabel } from "@/lib/material-label";
 
 // Web-discovery layer for Agent 03. When Tenkara's supplier graph returns
 // nothing (or thin coverage) for a material, this asks Anthropic with the
@@ -16,10 +17,17 @@ import type { MaterialRow } from "./sql";
 // we just instruct it on what to look for and ask for a structured response.
 
 const MODEL = "claude-opus-4-5";
-const MAX_WEB_USES = 64;       // breadth budget — covers majors pass + marketplace seller drill-in + regional manufacturers + retail/EU shops
-const MAX_OUTPUT_TOKENS = 24000;  // room for 40-60 supplier rows with the full detail schema
-const MAX_SUPPLIERS = 60;
+const MAX_WEB_USES = 96;       // breadth budget — covers majors pass + marketplace seller drill-in + regional manufacturers + retail/EU shops
+const MAX_OUTPUT_TOKENS = 40000;  // room for up to ~100 supplier rows with the full detail schema
+const MAX_SUPPLIERS = 100;
 const URL_PROBE_TIMEOUT_MS = 5_000;
+// Hard ceiling on a single material's web_search call. Sized to let a breadth
+// run finish richly (it streams ~64 searches and can run several minutes) while
+// still landing inside the cron function's 800s maxDuration with room for graph
+// work + URL probing + inserts. An earlier 120s ceiling was too tight and
+// aborted slow materials (Soybean Oil, Coconut Milk, Maltodextrine) before they
+// produced any scout leads, leaving them with only a single catalog match.
+const SCOUT_CALL_TIMEOUT_MS = 480_000;
 
 // Field set mirrors Ben's "Vita Organica – Supplier Sourcing" sheet so a scout
 // lead carries the same actionable columns a human researcher would capture:
@@ -47,7 +55,7 @@ export interface ScoutSupplier {
 
 const SYSTEM_PROMPT = `You are a B2B sourcing analyst building a BROAD supplier landscape for a procurement team. Given an ingredient/material, find as many legitimate bulk suppliers as you can across the whole market, and capture the sourcing details a buyer needs to RFQ where they're available.
 
-BREADTH IS THE PRIMARY GOAL. A good run returns 40-60 suppliers spanning the full landscape — NOT a short list of the biggest names. Do NOT stop at 20: keep issuing searches across regions and channels until the landscape is genuinely exhausted. You MUST cover every bucket below and return each legitimate supplier you find in it:
+BREADTH IS THE PRIMARY GOAL. A good run returns as many legitimate suppliers as the market holds — aim for 80-100+ spanning the full landscape, NOT a short list of the biggest names. Do NOT stop at 20, and do NOT stop at 60: keep issuing searches across regions and channels until the landscape is genuinely exhausted. You MUST cover every bucket below and return each legitimate supplier you find in it:
 1. Originator / branded manufacturers — the trademark owners (e.g. for SCI: BASF Jordapon, Clariant Hostapon, Innospec Pureact/Iselux, Galaxy Galsoft). Never omit these.
 2. Regional bulk manufacturers — India, China, EU, and USA producers.
 3. Distributors & traders — e.g. Univar, Brenntag, Azelis, IMCD, DeWolf, Parchem, Silver Fern.
@@ -125,7 +133,7 @@ Return ONLY a JSON code block (no prose around it) with this exact shape:
 \`\`\`
 
 Rules:
-- Return up to 60 suppliers per material, spread across the four buckets above. Aim for 40+ when the market supports it; do NOT stop at 15-20 — keep searching until you've genuinely exhausted the major producers, regional manufacturers, distributors, and individual marketplace sellers.
+- Return up to 100 suppliers per material, spread across the four buckets above. Aim for 80+ when the market supports it; do NOT stop at 15-20 or 60 — keep searching until you've genuinely exhausted the major producers, regional manufacturers, distributors, and individual marketplace sellers.
 - A run that returns only manufacturers (or only marketplace listings) is incomplete — balance non-marketplace (manufacturers/distributors) AND marketplace/retail leads.
 - Skip suppliers without a usable public URL.
 - Do NOT include retail consumer brands (Amazon listings, eBay, Walmart, Etsy).
@@ -201,7 +209,7 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
   log?: (msg: string, meta?: any) => Promise<void> | void;
 }): Promise<ScoutSupplier[]> {
   const log = opts?.log ?? (async () => {});
-  const matLabel = material.trade_name ?? material.name ?? material.id;
+  const matLabel = materialLabel(material, material.id) as string;
 
   let raw: string;
   try {
@@ -220,12 +228,18 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
       } as any],
       messages: [{ role: "user", content: buildUserMessage(material) }],
     });
-    const res = await stream.finalMessage();
+    const timer = setTimeout(() => stream.abort(), SCOUT_CALL_TIMEOUT_MS);
+    let res;
+    try {
+      res = await stream.finalMessage();
+    } finally {
+      clearTimeout(timer);
+    }
     raw = res.content
       .map((b: any) => (b.type === "text" ? b.text : ""))
       .join("");
   } catch (e: any) {
-    await log(`scout: Anthropic call failed for ${matLabel}: ${e.message}`, { material_id: material.id });
+    await log(`scout: Anthropic call failed/timed out for ${matLabel}: ${e.message}`, { material_id: material.id });
     return [];
   }
 
@@ -312,6 +326,16 @@ export function scoreScoutConfidence(hint: ScoutSupplier["confidence_hint"]): nu
     case "strong": return 0.80; // High — primary/branded manufacturer or named authorized distributor
     case "medium": return 0.60; // Med — reputable distributor/marketplace, authorization unverified
     case "lead":   return 0.35; // Low — unverified reseller / thin signal, needs human follow-up
+  }
+}
+
+// Human-readable rationale for scoreScoutConfidence, stored on the lead so the
+// reason is visible to operators instead of just the bare score.
+export function describeScoutConfidence(hint: ScoutSupplier["confidence_hint"]): string {
+  switch (hint) {
+    case "strong": return "High — primary/branded manufacturer or named authorized distributor";
+    case "medium": return "Med — reputable distributor/marketplace, authorization unverified";
+    case "lead":   return "Low — unverified reseller / thin signal, needs human follow-up";
   }
 }
 

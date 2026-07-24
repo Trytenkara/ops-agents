@@ -1,9 +1,24 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { stageDraft } from "@/lib/draft-staging";
 import { composeReply } from "@/agents-runtime/agents/email-scanner/reply-drafter";
-import { extractQuotesFromReplyText } from "@/lib/reply-quote-extract";
-import { insertStagedQuotes, type StagedQuoteInput } from "@/lib/staged-quotes";
+import { extractQuotesFromReplyText, type ExtractedQuote } from "@/lib/reply-quote-extract";
+import { insertStagedQuotes, type StagedQuoteInput, type StagedQuoteSource } from "@/lib/staged-quotes";
+import { classifyDocType, insertSupplierDocuments, type SupplierDocumentInput } from "@/lib/supplier-documents";
+import { extractDocumentFields, isDocExtractableExt } from "@/lib/document-extract";
+import { getTenkaraMessageAttachments, downloadTenkaraAttachment } from "@/lib/tenkara-attachments";
+import { parseAttachmentBytes, deriveExt, isPricingCandidateExt } from "@/agents-runtime/agents/email-scanner/attachment-parser";
 import { getTenkaraConversationMessages } from "@/lib/tenkara";
+import { postAgentAlert } from "@/lib/slack-alert";
+
+// A "reply" from a mailer-daemon isn't the supplier — it's a delivery failure.
+// Detect it so we never draft a reply to the daemon and can restart outreach.
+function isBounce(senderAddr: string | null, subject: string | null): boolean {
+  const a = (senderAddr ?? "").toLowerCase();
+  const s = (subject ?? "").toLowerCase();
+  if (/mailer-daemon|postmaster@|maildelivery|mail-daemon/.test(a)) return true;
+  if (/undeliverable|delivery status notification|delivery (has )?failed|failure notice|returned mail|address not found|recipient.*(reject|not found)|message could not be delivered|mail delivery failed/.test(s)) return true;
+  return false;
+}
 
 // Handles a Tenkara `message.received` webhook: a supplier replied on a
 // conversation one of our agents originated. We match it back to the
@@ -77,6 +92,55 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
 
   const refMeta = (ref.metadata ?? {}) as Record<string, any>;
   const from = parseFrom(msg.from);
+  const bounceLeadId = refMeta.lead_id as string | undefined;
+
+  // 2b. Bounce / delivery failure. The inbound is a mailer-daemon, not the
+  //     supplier — never draft a reply to it. Retire the bounced draft (so a
+  //     requeued lead is treated as fresh first contact), alert ops, and open a
+  //     manual-outreach case an operator resolves by entering a working email
+  //     (addSupplierEmailToCase requeues the lead to restart outreach).
+  if (isBounce(from.address, msg.subject ?? null)) {
+    if (refMeta.flow_status === "bounced") return { status: 200, body: { deduped: true, reason: "already_bounced" } };
+    const supplierLabel = refMeta.supplier_name ?? ref.supplier_id ?? "a supplier";
+    await admin
+      .from("draft_references")
+      .update({
+        status: "superseded",
+        metadata: { ...refMeta, flow_status: "bounced", bounced: { at: new Date().toISOString(), from: from.address, needs_new_email: true } },
+      })
+      .eq("id", ref.id);
+    await postAgentAlert(
+      `:warning: *Bounce* on outreach to *${supplierLabel}*. The email didn't deliver — add a working email on the case to restart outreach.`
+    );
+    if (bounceLeadId) {
+      const { data: existingCase } = await admin
+        .from("cases")
+        .select("id")
+        .eq("type", "manual_outreach")
+        .eq("status", "open")
+        .eq("metadata->>lead_id", bounceLeadId)
+        .maybeSingle();
+      if (!existingCase) {
+        await admin.from("cases").insert({
+          org_id: ref.org_id,
+          type: "manual_outreach",
+          status: "open",
+          supplier_id: ref.supplier_id,
+          material_id: ref.material_id,
+          assigned_operator: ref.assigned_operator,
+          recommended_action: `Outreach to ${supplierLabel} bounced (${from.address}). Enter a working email to restart outreach.`,
+          metadata: {
+            source: "tenkara-inbound-bounce",
+            lead_id: bounceLeadId,
+            supplier_name: refMeta.supplier_name ?? null,
+            bounced_from: from.address,
+            bounced_at: new Date().toISOString(),
+          },
+        });
+      }
+    }
+    return { status: 200, body: { bounced: true, draft_ref_id: ref.id } };
+  }
 
   // Advance the pipeline board unless the thread is already further along
   // (mirrors Agent 08's flow_status handling so the /work board is consistent
@@ -85,21 +149,24 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   const flowAt = (s: string) => (ADVANCED.includes(refMeta.flow_status) ? refMeta.flow_status : s);
 
   // 3. Stamp reply_detected on the originating draft (mirrors Agent 08).
+  // Held in a const so the final step-8 update (which also spreads refMeta) can
+  // re-apply it — otherwise step 8's stale-refMeta spread clobbers it back to null.
+  const replyDetected = {
+    detected_at: new Date().toISOString(),
+    source: "tenkara_webhook",
+    reply_message_id: msg.message_id,
+    reply_conversation_id: msg.conversation_id,
+    reply_sender_email: from.address,
+    reply_sender_name: from.name,
+    reply_subject: msg.subject ?? null,
+  };
   await admin
     .from("draft_references")
     .update({
       metadata: {
         ...refMeta,
         flow_status: flowAt("reply_received"),
-        reply_detected: {
-          detected_at: new Date().toISOString(),
-          source: "tenkara_webhook",
-          reply_message_id: msg.message_id,
-          reply_conversation_id: msg.conversation_id,
-          reply_sender_email: from.address,
-          reply_sender_name: from.name,
-          reply_subject: msg.subject ?? null,
-        },
+        reply_detected: replyDetected,
       },
     })
     .eq("id", ref.id);
@@ -131,22 +198,112 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     return { status: 200, body: { reply_detected: true, drafted: false, reason: "no_anthropic_key" } };
   }
 
-  // 4b. Capture any pricing the supplier stated inline in the reply text into
-  // staged_quotes for ops review (the webhook only carries body text — attached
-  // price sheets need attachments in the payload, which Tenkara doesn't send).
-  // Best-effort: extraction failure must never block the reply draft.
+  // 4b. Capture supplier pricing into staged_quotes for ops review — from the
+  // reply body AND from file attachments (PDF quotes, Excel/CSV price lists,
+  // photographed price sheets). Best-effort: extraction must never block the
+  // reply draft.
   let quotesStaged = 0;
+  // Non-inline files the supplier attached to THIS reply. Surfaced to the reply
+  // drafter so it acknowledges them instead of insisting the attachment "didn't
+  // come through" and asking the supplier to resend it.
+  let receivedAttachments: { name: string; pricingExtracted: boolean }[] = [];
   try {
-    // Prefer the HTML body — suppliers put price ladders in tables that the
-    // flattened text loses. Falls back to plain text.
-    const quotes = await extractQuotesFromReplyText(msg.body_html || msg.body_text);
-    if (quotes.length) {
-      const staged: StagedQuoteInput[] = quotes.map((q) => ({
+    // Each captured line tagged with where it came from, so the staged row and
+    // the lead headline can tell body text from an attached price sheet.
+    const captured: {
+      q: ExtractedQuote;
+      source: StagedQuoteSource;
+      attachmentName: string | null;
+      attachmentUrl: string | null;
+    }[] = [];
+
+    // Inline: prefer the HTML body — suppliers put price ladders in tables that
+    // the flattened text loses. Falls back to plain text.
+    for (const q of await extractQuotesFromReplyText(msg.body_html || msg.body_text)) {
+      captured.push({ q, source: "email_body", attachmentName: null, attachmentUrl: null });
+    }
+
+    // Attachments: real (non-inline) pricing-candidate files on the inbound
+    // message. Inline images are signature logos, not price sheets — skip them.
+    const attachments = await getTenkaraMessageAttachments(msg.conversation_id, msg.message_id);
+    const nonInline = attachments.filter((a) => !a.is_inline);
+    receivedAttachments = nonInline.map((a) => ({ name: a.filename ?? "attachment", pricingExtracted: false }));
+    for (let i = 0; i < nonInline.length; i++) {
+      const att = nonInline[i];
+      const ext = deriveExt(att.filename, att.content_type);
+      if (!isPricingCandidateExt(ext, att.size_bytes)) continue;
+      const buf = await downloadTenkaraAttachment(att);
+      if (!buf) continue;
+      const qs = await parseAttachmentBytes(buf, att.filename, ext);
+      if (qs.length) receivedAttachments[i].pricingExtracted = true;
+      for (const q of qs) {
+        captured.push({ q, source: "attachment", attachmentName: att.filename, attachmentUrl: att.download_url });
+      }
+    }
+
+    // 4c. Record the qualification documents the supplier attached (CoA, SDS,
+    //     certs, statements, ...) so The bench can show received-vs-required.
+    //     Classified from filename/type; a file that yielded price lines is a
+    //     price_sheet. Best-effort — never blocks the reply or pricing capture.
+    try {
+      const docRows: SupplierDocumentInput[] = [];
+      for (let i = 0; i < nonInline.length; i++) {
+        const att = nonInline[i];
+        const docType = classifyDocType(att.filename, att.content_type, receivedAttachments[i]?.pricingExtracted ?? false);
+
+        // Parse qualification fields out of the doc (CoA lot/assay/expiry, cert
+        // validity, ...). Skip price sheets (pricing handles those) and 'other'.
+        // Per-doc best-effort so one bad file doesn't drop the rest.
+        let extracted: Record<string, any> | null = null;
+        let expiresOn: string | null = null;
+        if (docType !== "price_sheet" && docType !== "other") {
+          const ext = deriveExt(att.filename, att.content_type);
+          if (isDocExtractableExt(ext)) {
+            try {
+              const buf = await downloadTenkaraAttachment(att);
+              if (buf) {
+                const res = await extractDocumentFields(buf, docType, ext);
+                if (res) {
+                  extracted = res.fields;
+                  expiresOn = res.expires_on;
+                }
+              }
+            } catch {
+              /* per-doc extraction best-effort */
+            }
+          }
+        }
+
+        docRows.push({
+          orgId: ref.org_id,
+          supplierId: ref.supplier_id,
+          supplierName: leadRow?.supplier_name ?? null,
+          materialId: ref.material_id,
+          docType,
+          fileName: att.filename ?? null,
+          contentType: att.content_type ?? null,
+          sizeBytes: att.size_bytes ?? null,
+          sourceConversationId: msg.conversation_id,
+          sourceMessageId: msg.message_id,
+          sourceUrl: att.download_url ?? null,
+          extracted,
+          expiresOn,
+        });
+      }
+      if (docRows.length) await insertSupplierDocuments(admin, docRows);
+    } catch {
+      /* doc capture is best-effort */
+    }
+
+    if (captured.length) {
+      const staged: StagedQuoteInput[] = captured.map(({ q, source, attachmentName, attachmentUrl }) => ({
         orgId: ref.org_id,
         runId: null,
-        source: "email_body",
+        source,
         sourceConversationId: msg.conversation_id,
         sourceMessageId: msg.message_id,
+        sourceAttachmentName: attachmentName,
+        sourceAttachmentUrl: attachmentUrl,
         supplierId: ref.supplier_id,
         supplierName: q.supplier_name ?? leadRow?.supplier_name ?? null,
         materialId: ref.material_id,
@@ -155,12 +312,59 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
         caseSize: q.case_size,
         unitOfMeasurement: q.unit_of_measurement,
         currency: q.currency,
+        grade: q.grade,
+        leadTimeDays: q.lead_time_days ?? null,
+        leadTimeText: q.lead_time_text ?? null,
+        moqQuantity: q.moq_quantity ?? null,
+        moqUnit: q.moq_unit ?? null,
+        paymentTerms: q.payment_terms ?? null,
         confidence: q.confidence,
         extractionNotes: q.notes,
         rawExtract: q as any,
       }));
       const res = await insertStagedQuotes(admin, staged);
       quotesStaged = res.inserted;
+
+      // Mirror the freshest captured price/grade onto the lead so the Leads tab
+      // shows the returned quote, not just a "supplier replied" marker. Lowest
+      // per-unit line across body + attachments is the headline; ops refines.
+      if (leadId && leadRow) {
+        const priced = captured
+          .filter((c) => c.q.price != null)
+          .map((c) => ({
+            price: c.q.price,
+            case_size: c.q.case_size,
+            unit_price: c.q.price != null && c.q.case_size ? c.q.price / c.q.case_size : c.q.price,
+            unit_of_measurement: c.q.unit_of_measurement,
+            currency: c.q.currency,
+            grade: c.q.grade,
+            source: c.source,
+          }))
+          .sort((a, b) => (a.unit_price ?? Infinity) - (b.unit_price ?? Infinity));
+        if (priced.length) {
+          const best = priced[0];
+          // Re-read so we merge onto the supplier_reply marker written above
+          // instead of clobbering it with the stale pre-marker payload.
+          const { data: fresh } = await admin
+            .from("leads_in_flight")
+            .select("payload")
+            .eq("id", leadId)
+            .maybeSingle();
+          const payload = (fresh?.payload as any) ?? (leadRow.payload as any) ?? {};
+          payload.supplier_reply = {
+            ...(payload.supplier_reply ?? {}),
+            captured_price: best.price,
+            captured_case_size: best.case_size,
+            captured_unit_price: best.unit_price,
+            captured_unit_of_measurement: best.unit_of_measurement,
+            captured_currency: best.currency ?? "USD",
+            captured_grade: best.grade ?? null,
+            captured_at: msg.received_at ?? new Date().toISOString(),
+            captured_source: best.source === "attachment" ? "reply_attachment" : "reply_extract",
+          };
+          await admin.from("leads_in_flight").update({ payload }).eq("id", leadId);
+        }
+      }
     }
   } catch {
     // swallow — reply drafting proceeds regardless
@@ -186,6 +390,21 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   } catch {
     // no context — proceed with just the inbound message
   }
+  // Phased outreach: other materials for this supplier held back from the first
+  // email (payload.phased_hold). If the supplier is engaged, this reply
+  // introduces them and we release the hold; otherwise they stay held.
+  let heldLeads: { id: string; material_id: string | null; material_name: string | null; payload: any }[] = [];
+  if (ref.supplier_id) {
+    const { data: hl } = await admin
+      .from("leads_in_flight")
+      .select("id, material_id, material_name, payload")
+      .eq("org_id", ref.org_id)
+      .eq("supplier_id", ref.supplier_id)
+      .eq("status", "active");
+    heldLeads = ((hl ?? []) as any[]).filter((l) => (l.payload ?? {}).phased_hold);
+  }
+  const heldMaterialNames = heldLeads.map((l) => l.material_name).filter((n): n is string => !!n && !!n.trim());
+
   const reply = await composeReply({
     mode,
     clientOrgName: orgName,
@@ -196,8 +415,16 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     originalSubject: ref.subject,
     theirSubject: msg.subject ?? null,
     theirPreview: msg.body_text ?? null,
+    receivedAttachments,
     threadContext,
+    heldMaterialNames,
   });
+
+  // Introduce held materials only when the supplier engaged. The reply draft then
+  // covers the original material plus the introduced ones, so credit them all.
+  const introduceHeld = reply.engaged && heldLeads.length > 0;
+  const introducedMaterialIds = introduceHeld ? (heldLeads.map((l) => l.material_id).filter(Boolean) as string[]) : [];
+  const replyMaterialIds = Array.from(new Set([ref.material_id, ...introducedMaterialIds].filter(Boolean))) as string[];
 
   // 6. Resolve Agent 08 for attribution (best-effort).
   const { data: agent08 } = await admin
@@ -225,7 +452,9 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       ghost_brand: refMeta.ghost_brand ?? null,
       supplier_name: leadRow?.supplier_name ?? from.name ?? null,
       material_name: leadRow?.material_name ?? null,
-      draft_kind: "inbound_reply",
+      material_ids: replyMaterialIds,
+      introduced_material_ids: introducedMaterialIds,
+      draft_kind: introduceHeld ? "inbound_reply_with_followup" : "inbound_reply",
       in_reply_to_draft_ref: ref.id,
       in_reply_to_message_id: msg.message_id,
       reply_to_conversation_id: msg.conversation_id,
@@ -234,6 +463,32 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   });
   if (!staged.ok) return { status: 502, body: { error: `stage_reply_failed: ${staged.error}` } };
 
+  // Release the introduced materials: they're now part of this live conversation.
+  // Clear the hold and promote them. Fires once — the hold is gone, so a later
+  // reply won't re-introduce them.
+  if (introduceHeld) {
+    for (const hl of heldLeads) {
+      const { phased_hold, ...restPayload } = (hl.payload ?? {}) as any;
+      await admin
+        .from("leads_in_flight")
+        .update({
+          stage: "ready_for_outreach",
+          payload: {
+            ...restPayload,
+            outreach: {
+              ...(restPayload.outreach ?? {}),
+              email_client: "rod_app",
+              conversation_id: msg.conversation_id,
+              introduced_via: "reply_followup",
+              introduced_at: new Date().toISOString(),
+              introduced_in_draft_ref: staged.draftRefId ?? null,
+            },
+          },
+        })
+        .eq("id", hl.id);
+    }
+  }
+
   // 8. Point the originating draft at the reply we just staged.
   await admin
     .from("draft_references")
@@ -241,6 +496,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       metadata: {
         ...refMeta,
         flow_status: flowAt("responded"),
+        reply_detected: replyDetected,
         reply_draft: {
           draft_ref_id: staged.draftRefId,
           staged_at: new Date().toISOString(),
@@ -251,5 +507,5 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     })
     .eq("id", ref.id);
 
-  return { status: 200, body: { drafted: true, draft_ref_id: staged.draftRefId, draft_id: staged.draftId, quotes_staged: quotesStaged } };
+  return { status: 200, body: { drafted: true, draft_ref_id: staged.draftRefId, draft_id: staged.draftId, quotes_staged: quotesStaged, introduced_materials: introducedMaterialIds.length } };
 }

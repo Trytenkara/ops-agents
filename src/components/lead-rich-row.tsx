@@ -3,6 +3,8 @@ import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/lib/utils";
 import { LeadRowActions } from "@/components/lead-row-actions";
 import { SupplierOperatorAssign } from "@/components/supplier-operator-assign";
+import { LeadOperatorAssign } from "@/components/lead-operator-assign";
+import { deriveMatchTier } from "@/lib/lead-match-tier";
 
 // Shared rich-lead rendering used by both the cross-org Review queue
 // (/work/review/leads) and the per-client Leads tab. Keeping a single
@@ -31,6 +33,16 @@ const SOURCE_BADGE: Record<string, { label: string; variant: BadgeVariant; title
     variant: "warn",
     title: "Discovered by Agent 03 (Scout) via web search — verify before promoting.",
   },
+  sourceready: {
+    label: "SourceReady",
+    variant: "info",
+    title: "Discovered via the SourceReady supplier database (tag/keyword match) — verify the raw-material fit.",
+  },
+  importyeti: {
+    label: "ImportYeti",
+    variant: "info",
+    title: "Matched via ImportYeti US-customs shipment data.",
+  },
   human_bulk_upload: {
     label: "Ops upload",
     variant: "success",
@@ -38,17 +50,51 @@ const SOURCE_BADGE: Record<string, { label: string; variant: BadgeVariant; title
   },
 };
 
+// Material-match tier: does the evidence show this supplier actually makes THIS
+// material (Confirmed), or was it a looser tag/keyword surface that still needs
+// verification (Potential)? See lib/lead-match-tier.
+export function LeadMatchBadge({ r }: { r: any }) {
+  const { tier, reason } = deriveMatchTier(r);
+  return tier === "confirmed" ? (
+    <Badge variant="success" title={reason}>Confirmed</Badge>
+  ) : (
+    <Badge variant="outline" title={reason}>Potential</Badge>
+  );
+}
+
 export function LeadSourceBadge({ source }: { source: string | null | undefined }) {
   const s = source ? SOURCE_BADGE[source] : undefined;
   if (!s) return <span className="text-muted-foreground">{source ?? "—"}</span>;
   return <Badge variant={s.variant} title={s.title}>{s.label}</Badge>;
 }
 
-export function LeadRichHeaders({ showOrg = true }: { showOrg?: boolean }) {
+export function LeadRichHeaders({
+  showOrg = true,
+  selectable = false,
+  allSelected = false,
+  onToggleAll,
+}: {
+  showOrg?: boolean;
+  selectable?: boolean;
+  allSelected?: boolean;
+  onToggleAll?: (checked: boolean) => void;
+}) {
   return (
     <TableRow>
+      {selectable && (
+        <TableHead className="w-8">
+          <input
+            type="checkbox"
+            aria-label="Select all leads"
+            className="h-4 w-4 accent-destructive align-middle"
+            checked={allSelected}
+            onChange={(e) => onToggleAll?.(e.target.checked)}
+          />
+        </TableHead>
+      )}
       <TableHead>Supplier</TableHead>
       <TableHead>Material</TableHead>
+      <TableHead>Returned price</TableHead>
       <TableHead>Signal</TableHead>
       <TableHead>Type</TableHead>
       <TableHead>Source</TableHead>
@@ -61,8 +107,8 @@ export function LeadRichHeaders({ showOrg = true }: { showOrg?: boolean }) {
 }
 
 // Column count for empty-state colSpan. Matches LeadRichHeaders.
-export function leadRichColSpan(showOrg = true): number {
-  return showOrg ? 9 : 8;
+export function leadRichColSpan(showOrg = true, selectable = false): number {
+  return (showOrg ? 10 : 9) + (selectable ? 1 : 0);
 }
 
 // Marketplace vs direct (non-marketplace), derived from the scanner's site_type.
@@ -92,12 +138,18 @@ export function LeadRichRow({
   showOrg = true,
   orgId,
   operatorOptions,
+  selectable = false,
+  selected = false,
+  onToggleSelect,
 }: {
   r: any;
   canAct: boolean;
   showOrg?: boolean;
   orgId?: string;
   operatorOptions?: { id: string; name: string }[];
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (checked: boolean) => void;
 }) {
   const signal = r.payload?.signal as string | undefined;
   const signalCount = r.payload?.signal_count as number | undefined;
@@ -105,17 +157,38 @@ export function LeadRichRow({
   const siteType = r.payload?.site_type as "M" | "MS" | "N" | undefined;
   const marketKind = (r.market_kind as "marketplace" | "direct" | null | undefined) ?? leadMarketKind(siteType);
   const completeness = r.payload?.completeness_score != null ? Number(r.payload.completeness_score) : null;
+  const completenessFactors = Array.isArray(r.payload?.completeness_factors) ? r.payload.completeness_factors : [];
+  const completenessTitle =
+    completenessFactors.length > 0
+      ? "Enrichment completeness — " +
+        completenessFactors
+          .map((f: any) => `${f.label} (+${Math.round((Number(f.points) || 0) * 100)}%)`)
+          .join(", ")
+      : "Share of RFQ fields the scanner captured (pricing, contact, MOQ, grades, certs, HQ)";
+  const confidenceReason = (r.payload?.confidence_reason as string | undefined) ?? undefined;
+  const confidencePct = r.confidence_score != null ? Math.round(Number(r.confidence_score) * 100) : null;
   const citations = Array.isArray(r.payload?.source_citations) ? r.payload.source_citations : [];
 
   return (
     <TableRow>
+      {selectable && (
+        <TableCell className="align-top">
+          <input
+            type="checkbox"
+            aria-label="Select lead"
+            className="mt-1 h-4 w-4 accent-destructive"
+            checked={selected}
+            onChange={(e) => onToggleSelect?.(e.target.checked)}
+          />
+        </TableCell>
+      )}
       <TableCell className="font-medium align-top">
         <div className="flex items-center gap-2 flex-wrap">
           <span>{r.supplier_name ?? "—"}</span>
           {completeness != null && (
             <span
               className="text-[10px] font-normal text-muted-foreground"
-              title="Share of RFQ fields the scanner captured (pricing, contact, MOQ, grades, certs, HQ)"
+              title={completenessTitle}
             >
               {Math.round(completeness * 100)}% ready
             </span>
@@ -126,19 +199,36 @@ export function LeadRichRow({
             {[r.payload?.supplier_role, r.payload?.supplier_country].filter(Boolean).join(" · ")}
           </div>
         )}
-        {canAct && orgId && operatorOptions && r.supplier_id ? (
-          <div className="mt-1" title="Operator who owns this supplier for this client. Assigning here sets the supplier's operator, so the lead and supplier stay matched.">
+        {canAct && orgId && operatorOptions ? (
+          <div
+            className="mt-1"
+            title={
+              r.supplier_id
+                ? "Operator who owns this supplier for this client. Assigning here sets the supplier's operator, so the lead and supplier stay matched."
+                : "Operator who owns this discovery lead. Assigning here routes its outreach to the chosen operator; Auto spreads leads across the team."
+            }
+          >
             <div className="text-[11px] text-muted-foreground mb-0.5">Operator</div>
-            <SupplierOperatorAssign
-              orgId={orgId}
-              supplierId={r.supplier_id}
-              assignedId={r.operator_assigned_id ?? null}
-              autoName={r.operator_auto_name ?? null}
-              options={operatorOptions}
-            />
+            {r.supplier_id ? (
+              <SupplierOperatorAssign
+                orgId={orgId}
+                supplierId={r.supplier_id}
+                assignedId={r.operator_assigned_id ?? null}
+                autoName={r.operator_auto_name ?? null}
+                options={operatorOptions}
+              />
+            ) : (
+              <LeadOperatorAssign
+                orgId={orgId}
+                leadId={r.id}
+                assignedId={r.operator_assigned_id ?? null}
+                autoName={r.operator_auto_name ?? null}
+                options={operatorOptions}
+              />
+            )}
           </div>
         ) : (
-          <div className="text-[11px] text-muted-foreground" title="Operator who owns this supplier for this client (assigned to ops_operator-role team members)">
+          <div className="text-[11px] text-muted-foreground" title="Operator who owns this lead for this client (assigned to ops_operator/ops_lead team members)">
             Operator: <span className={r.operator_name ? "text-foreground" : "italic"}>{r.operator_name ?? "Unassigned"}</span>
           </div>
         )}
@@ -190,11 +280,44 @@ export function LeadRichRow({
         )}
       </TableCell>
       <TableCell className="align-top">
+        {(() => {
+          const sr = r.payload?.supplier_reply;
+          if (!sr || sr.captured_price == null) {
+            return <span className="text-muted-foreground text-xs">—</span>;
+          }
+          const cur = sr.captured_currency ?? "USD";
+          const headline =
+            sr.captured_unit_price != null
+              ? `${cur} ${Number(sr.captured_unit_price).toLocaleString(undefined, { maximumFractionDigits: 4 })}/${sr.captured_unit_of_measurement ?? "unit"}`
+              : `${cur} ${sr.captured_price}`;
+          return (
+            <div className="flex flex-col gap-0.5">
+              <span className="font-medium tabular-nums" title="Price the supplier stated in their reply — review under Materials.">{headline}</span>
+              {sr.captured_grade && <span className="text-xs text-muted-foreground">{sr.captured_grade}</span>}
+            </div>
+          );
+        })()}
+      </TableCell>
+      <TableCell className="align-top">
         {signal ? (
-          <Badge variant="secondary" title={`Why this supplier surfaced as a lead${signalCount != null ? ` — seen ${signalCount}×` : ""}`}>
+          <Badge
+            variant="secondary"
+            title={
+              confidenceReason
+                ? `Confidence ${confidencePct != null ? `${confidencePct}% — ` : ""}${confidenceReason}`
+                : `Why this supplier surfaced as a lead${signalCount != null ? ` — seen ${signalCount}×` : ""}`
+            }
+          >
             {humanizeSignal(signal)}
             {signalCount != null && signalCount > 1 && <span className="ml-1 text-muted-foreground">×{signalCount}</span>}
           </Badge>
+        ) : confidenceReason ? (
+          <span
+            className="text-xs text-muted-foreground"
+            title={`Confidence ${confidencePct != null ? `${confidencePct}% — ` : ""}${confidenceReason}`}
+          >
+            {confidencePct != null ? `${confidencePct}%` : "—"}
+          </span>
         ) : (
           <span className="text-muted-foreground text-xs">—</span>
         )}
@@ -217,7 +340,12 @@ export function LeadRichRow({
           <span className="text-muted-foreground">—</span>
         )}
       </TableCell>
-      <TableCell className="align-top"><LeadSourceBadge source={r.source} /></TableCell>
+      <TableCell className="align-top">
+        <div className="flex flex-col items-start gap-1">
+          <LeadSourceBadge source={r.source} />
+          <LeadMatchBadge r={r} />
+        </div>
+      </TableCell>
       {showOrg && (
         <TableCell className="text-muted-foreground">
           {r.orgs?.name ?? <span className="italic text-xs">cross-org</span>}

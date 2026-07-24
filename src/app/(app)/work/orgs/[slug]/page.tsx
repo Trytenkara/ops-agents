@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import { getSession, hasAnyRole, type AppRole } from "@/lib/auth";
 import { operatorRoles, primaryRole } from "@/lib/operator";
 import { OrgOperatorsEditor } from "@/components/org-operators-editor";
+import { OrgSourcingToggle } from "@/components/org-sourcing-toggle";
 import { getOrgNudgeCounts } from "@/lib/org-nudges";
 import { orgDisplayName } from "@/lib/org-display";
 
@@ -15,7 +16,7 @@ export default async function OrgOverview({ params }: { params: { slug: string }
   const admin = createAdminClient();
   const { data: org } = await admin
     .from("orgs")
-    .select("id, slug, name, display_name, tenkara_org_id, is_internal")
+    .select("id, slug, name, display_name, tenkara_org_id, is_internal, sourcing_status")
     .eq("slug", params.slug)
     .maybeSingle();
   if (!org) notFound();
@@ -96,6 +97,20 @@ export default async function OrgOverview({ params }: { params: { slug: string }
         <Metric label="Open cases" value={casesRes.data?.length ?? 0} href={`${base}/cases`} tone="red" />
         <Metric label="Pending approvals" value={approvalsRes.data?.length ?? 0} href={`${base}/materials`} tone="emerald" />
       </div>
+
+      <Card className="tb-surface shadow-none">
+        <CardHeader>
+          <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Sourcing</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <OrgSourcingToggle
+            orgId={org.id}
+            orgName={orgDisplayName(org)}
+            initial={(org.sourcing_status ?? "off") as any}
+            canEdit={canEditAssignment}
+          />
+        </CardContent>
+      </Card>
 
       <Card className="tb-surface shadow-none">
         <CardHeader>

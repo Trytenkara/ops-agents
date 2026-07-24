@@ -3,6 +3,7 @@
 // an intake agent (02/03/08) stages a draft via stageDraft().
 
 import { findFabricatedContacts } from "@/lib/contact-guard";
+import { findMisspellings } from "@/lib/material-spelling";
 
 export type Severity = "warn" | "error";
 export interface Finding { severity: Severity; code: string; message: string; }
@@ -73,6 +74,16 @@ export const RULES: Record<string, Rule> = {
       severity: "error",
       code: "fabricated_contact_info",
       message: `Draft states contact info not on the approved allowlist — likely fabricated: ${detail}. Defer to a human or add the real value to BRAND_CONTACTS.`,
+    }];
+  },
+  likely_misspelling: ({ subject, body_preview }) => {
+    const found = findMisspellings(`${subject ?? ""}\n${body_preview ?? ""}`);
+    if (!found.length) return [];
+    const pairs = found.map(([wrong, right]) => `"${wrong}" → "${right}"`);
+    return [{
+      severity: "warn",
+      code: "likely_misspelling",
+      message: `Likely misspelled material name(s): ${pairs.join(", ")}. Confirm the ingredient before sending.`,
     }];
   },
   ghost_brand_leak: ({ body_preview, metadata }) => {
