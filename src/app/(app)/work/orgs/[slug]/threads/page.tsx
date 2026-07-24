@@ -48,6 +48,17 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
     .limit(200);
 
   const rows = drafts ?? [];
+  // The fetch is capped, so tell operators exactly which window they're seeing
+  // (newest N threads and their date span). Older threads beyond the cap aren't
+  // shown; the range makes that explicit instead of silently truncating.
+  const THREADS_CAP = 200;
+  const capHit = rows.length >= THREADS_CAP;
+  const dates = rows.map((d: any) => d.created_at).filter(Boolean).sort();
+  const fmt = (s: string) => new Date(s).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  const rangeNote =
+    dates.length > 0
+      ? `Showing ${rows.length} thread${rows.length === 1 ? "" : "s"} — ${fmt(dates[0])} to ${fmt(dates[dates.length - 1])}${capHit ? ` (newest ${THREADS_CAP}; older threads not shown)` : ""}`
+      : null;
   let supplierNames = new Map<string, string>();
   let materialNames = new Map<string, string>();
   let quoteRefs = new Map<string, string>();
@@ -97,6 +108,9 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
           </>
         }
       />
+      {rangeNote && (
+        <p className="text-xs text-muted-foreground -mt-3">{rangeNote}</p>
+      )}
       {threadRows.length === 0 ? (
         <p className="text-center text-muted-foreground py-8 text-sm">No threads yet. Promote a lead to start outreach.</p>
       ) : (
