@@ -48,6 +48,9 @@ function pulseCte(orgFilter: string): string {
       select mq.material_id,
              mq.supplier_id,
              mq.product_url,
+             mq.minimum_amount,
+             mq.lead_time_days,
+             mq.is_international,
              lower(coalesce(nullif(trim(mq.unit_of_measurement), ''), '?')) as unit,
              (mq.price / nullif(mq.case_size, 0))::double precision as unit_price
         from public.material_quotes mq
@@ -139,6 +142,113 @@ export async function getPricePulse(opts?: {
     `,
     params
   );
+}
+
+// A single supplier quote in the market for a material/unit, normalized to a
+// per-unit price and enriched with the supplier's name, location, and MOQ.
+// Powers the per-material quote tables in the expedited client report.
+export interface MarketQuote {
+  material_id: string;
+  unit: string;
+  supplier_id: string | null;
+  supplier_name: string | null;
+  unit_price: number;
+  moq: string | null;
+  location: string | null;
+  product_url: string | null;
+  is_international: boolean | null;
+  lead_time_days: number | null;
+}
+
+function fmtMoq(min: unknown): string | null {
+  const m = min as { amount?: unknown; unit?: unknown } | null;
+  if (!m || m.amount == null) return null;
+  const amt = Number(m.amount);
+  if (!Number.isFinite(amt)) return null;
+  const unit = typeof m.unit === "string" ? m.unit.trim() : "";
+  return `${amt.toLocaleString()}${unit ? ` ${unit}` : ""}`;
+}
+
+function fmtLocation(city: string | null, state: string | null, country: string | null): string | null {
+  const co = (country ?? "").trim();
+  const st = (state ?? "").trim();
+  const ci = (city ?? "").trim();
+  if (/^(united states|usa|u\.?s\.?a?\.?)$/i.test(co)) {
+    const region = st || ci;
+    return region ? `${region}, USA` : "USA";
+  }
+  return co || st || ci || null;
+}
+
+// The top-N cheapest current market quotes for each of a client's materials,
+// using the same normalization + outlier guard as the pulse so quote rows never
+// disagree with the benchmark. Ordered cheapest-first within each material/unit.
+export async function getMaterialQuotes(
+  tenkaraOrgId: string,
+  opts?: { topN?: number }
+): Promise<MarketQuote[]> {
+  const topN = opts?.topN ?? 6;
+  const params: any[] = [tenkaraOrgId, topN];
+  const orgFilter = `and u.organization_id = $1::uuid`;
+
+  const rows = await tenkaraQuery<{
+    material_id: string;
+    unit: string;
+    supplier_id: string | null;
+    supplier_name: string | null;
+    unit_price: number;
+    minimum_amount: unknown;
+    city: string | null;
+    state: string | null;
+    country: string | null;
+    product_url: string | null;
+    is_international: boolean | null;
+    lead_time_days: number | null;
+  }>(
+    `
+    ${pulseCte(orgFilter)},
+    dedup as (
+      -- Collapse exact duplicate offers (same supplier at the same unit price)
+      -- so a material's quote table doesn't repeat identical rows.
+      select distinct on (f.material_id, f.unit, f.supplier_id, round(f.unit_price::numeric, 6)) f.*
+        from filt f
+       order by f.material_id, f.unit, f.supplier_id, round(f.unit_price::numeric, 6), f.unit_price
+    ),
+    ranked as (
+      select d.*,
+             row_number() over (partition by d.material_id, d.unit order by d.unit_price asc) as rn
+        from dedup d
+    )
+    select r.material_id::text as material_id,
+           r.unit,
+           r.supplier_id::text as supplier_id,
+           s.name as supplier_name,
+           round(r.unit_price::numeric, 6)::double precision as unit_price,
+           r.minimum_amount,
+           s.city, s.state, s.country,
+           r.product_url,
+           r.is_international,
+           r.lead_time_days
+      from ranked r
+      left join public.suppliers s on s.id = r.supplier_id
+     where r.rn <= $2
+     order by r.material_id, r.unit, r.unit_price asc
+    `,
+    params
+  );
+
+  return rows.map((r) => ({
+    material_id: r.material_id,
+    unit: r.unit,
+    supplier_id: r.supplier_id,
+    supplier_name: r.supplier_name,
+    unit_price: r.unit_price,
+    moq: fmtMoq(r.minimum_amount),
+    location: fmtLocation(r.city, r.state, r.country),
+    product_url: r.product_url,
+    is_international: r.is_international,
+    lead_time_days: r.lead_time_days,
+  }));
 }
 
 export interface ClientBenchmark extends PricePulseStat {
