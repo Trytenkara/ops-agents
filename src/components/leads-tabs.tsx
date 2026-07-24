@@ -9,7 +9,7 @@ import { leadMarketKind } from "@/components/lead-rich-row";
 import type { OutreachTracker } from "@/lib/outreach-tracker";
 import type { RunStat } from "@/components/agent-runs-strip";
 
-type Tab = "all" | "raw" | "enriched" | "ready" | "held" | "marketplace" | "outreach";
+type Tab = "all" | "raw" | "enriched" | "ready" | "held" | "marketplace" | "outreach" | "removed";
 
 // The sourcing pipeline as a live funnel: each stage is the output of one agent,
 // so surfacing raw -> enriched -> ready-to-send -> held (with counts + the
@@ -33,6 +33,7 @@ const PIPELINE: {
 
 export function LeadsTabs({
   rows,
+  removedRows = [],
   canAct,
   slug,
   orgId,
@@ -41,6 +42,7 @@ export function LeadsTabs({
   runs = [],
 }: {
   rows: any[];
+  removedRows?: any[];
   canAct: boolean;
   slug: string;
   orgId?: string;
@@ -143,6 +145,7 @@ export function LeadsTabs({
         {tabBtn("all", "All leads", rows.length)}
         {tabBtn("marketplace", "Marketplace pricing", marketCount)}
         {tabBtn("outreach", "Outreach", trackerCount)}
+        {tabBtn("removed", "Removed / filtered out", removedRows.length)}
       </div>
 
       {tab === "all" && (
@@ -158,6 +161,17 @@ export function LeadsTabs({
           forceStage={PIPELINE.find((p) => p.key === tab)!.stage}
         />
       )}
+      {tab === "removed" &&
+        (removedRows.length > 0 ? (
+          <>
+            <p className="text-sm text-muted-foreground -mb-1">
+              Leads that left the pipeline — dropped, deduped, filtered out (freight/logistics), or suppressed before outreach (do-not-contact / excluded country / prior relationship). Each row shows the reason.
+            </p>
+            <LeadsList rows={removedRows} canAct={false} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground py-4">Nothing has been removed or filtered out for this client yet.</p>
+        ))}
       {tab === "marketplace" && <MarketplacePricing rows={rows} canAct={canAct} slug={slug} />}
       {tab === "outreach" &&
         (trackerCount > 0 ? (
