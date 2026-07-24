@@ -30,6 +30,18 @@ const MATCH_OPTIONS = [
   { value: "potential", label: "Potential only" },
 ];
 
+// Friendly labels for the Source filter — mirror the SOURCE column badges so the
+// dropdown reads the same as the rows. The option list is built from the sources
+// actually present in the loaded leads, so an org only sees sources it has.
+const SOURCE_LABELS: Record<string, string> = {
+  ai_discovery: "Scout",
+  sourceready: "SourceReady",
+  importyeti: "ImportYeti",
+  existing_db: "Platform DB",
+  marketplace: "Sourcing Index",
+  human_bulk_upload: "Ops upload",
+};
+
 const countryOf = (r: any): string => (r.payload?.supplier_country ?? "").toString().trim();
 
 export function LeadsList({
@@ -52,6 +64,14 @@ export function LeadsList({
   const [type, setType] = usePersistedState("leads-type", "all");
   const [recency, setRecency] = usePersistedState("leads-recency", "all");
   const [match, setMatch] = usePersistedState("leads-match", "all");
+  const [source, setSource] = usePersistedState("leads-source", "all");
+
+  const sourceOptions = [
+    { value: "all", label: "All sources" },
+    ...Array.from(new Set(rows.map((r: any) => r.source).filter(Boolean)))
+      .sort()
+      .map((s: any) => ({ value: s as string, label: SOURCE_LABELS[s] ?? s })),
+  ];
   // Stage is driven by the pipeline tabs above (forceStage), not a dropdown here.
   const effectiveStage = forceStage ?? "all";
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -78,7 +98,8 @@ export function LeadsList({
       const t = r.created_at ? new Date(r.created_at).getTime() : 0;
       return t >= recencyCutoff;
     })
-    .filter((r: any) => (match === "all" ? true : deriveMatchTier(r).tier === match));
+    .filter((r: any) => (match === "all" ? true : deriveMatchTier(r).tier === match))
+    .filter((r: any) => (source === "all" ? true : r.source === source));
 
   const { filtered, controls } = useListFilter(typeRows, {
     searchText: (r) => `${r.supplier_name ?? ""} ${r.material_name ?? ""} ${r.grade ?? ""} ${countryOf(r)}`,
@@ -182,6 +203,10 @@ export function LeadsList({
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">Match</span>
             <Select size="sm" className="min-w-[9rem]" ariaLabel="Match" value={match} onValueChange={setMatch} options={MATCH_OPTIONS} />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">Source</span>
+            <Select size="sm" className="min-w-[9rem]" ariaLabel="Source" value={source} onValueChange={setSource} options={sourceOptions} />
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">Type</span>
