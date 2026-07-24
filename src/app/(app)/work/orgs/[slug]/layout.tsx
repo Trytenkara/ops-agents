@@ -18,7 +18,7 @@ const sections = [
   { href: "/threads", label: "All Threads" },
   { href: "/savings", label: "Savings" },
   { href: "/cases", label: "Cases" },
-  { href: "/extraction", label: "Platform Extraction", disabled: true },
+  { href: "/extraction", label: "Platform Extraction", dev: true },
 ];
 
 export default async function OrgLayout({
