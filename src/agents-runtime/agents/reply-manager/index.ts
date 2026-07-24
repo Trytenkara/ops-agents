@@ -416,7 +416,38 @@ registerAgent({
         continue;
       }
 
-      if (cls.category === "price_given") { await setStatus(admin, rows, "price_captured", { note: "supplier provided price (await extraction)" }); priced++; continue; }
+      if (cls.category === "price_given") {
+        // They quoted immediately, so the normal follow-up (which carries the
+        // qualification-docs ask) never runs. Stage a short docs-only request so
+        // an instant-quoter is still asked for the client's required documents.
+        try {
+          const docLabels = await getRequestedDocLabels(head.org_id ?? null);
+          const addr = (senderAddr || meta.supplier_contact_email || "").toString();
+          if (docLabels.length && !meta.qualification_asked && addr) {
+            const first = contactName?.trim().split(/\s+/)[0];
+            const greet = first ? `Hi ${first},` : `Hi ${meta.supplier_name ?? "there"} Team,`;
+            const base = [greet, "", "Thanks for the pricing, that is a big help.", "", "Thanks,", "", "Procurement Team", "Bobber Labs"].join("\n");
+            const body = sani(ensureQualificationAsk(base, docLabels));
+            await stageDraft({
+              admin, agentId: ctx.agentId, runId: ctx.runId, orgId: head.org_id,
+              supplierId: head.supplier_id, materialId: head.material_id,
+              to: { name: contactName ?? meta.supplier_name ?? null, address: addr },
+              subject: `Re: ${head.subject ?? "your quote"}`, body,
+              assignedOperator: head.assigned_operator ?? null,
+              emailClient: "missive",
+              metadata: { outreach_mode: "ghost", ghost_brand: "Bobber Labs", supplier_contact_email: addr, draft_kind: "reply_manager_docs_request", staged_via: "agent-15", agent_version: "rm-v27" },
+            });
+          }
+          await setStatus(admin, rows, "price_captured", {
+            note: "supplier provided price (await extraction)",
+            extra: { qualification_asked: meta.qualification_asked || (docLabels.length > 0 && !!addr) },
+          });
+        } catch {
+          await setStatus(admin, rows, "price_captured", { note: "supplier provided price (await extraction)" });
+        }
+        priced++;
+        continue;
+      }
       if (cls.category === "auto_reply") { skipped++; continue; }
       if (!cls.needs_response || !cls.body) {
         if (cls.category === "declined") { await setStatus(admin, rows, "closed_declined", { note: cls.reason }); closed++; }
