@@ -3,6 +3,7 @@ import { stageDraft } from "@/lib/draft-staging";
 import { composeReply } from "@/agents-runtime/agents/email-scanner/reply-drafter";
 import { extractQuotesFromReplyText, type ExtractedQuote } from "@/lib/reply-quote-extract";
 import { insertStagedQuotes, type StagedQuoteInput, type StagedQuoteSource } from "@/lib/staged-quotes";
+import { classifyDocType, insertSupplierDocuments, type SupplierDocumentInput } from "@/lib/supplier-documents";
 import { getTenkaraMessageAttachments, downloadTenkaraAttachment } from "@/lib/tenkara-attachments";
 import { parseAttachmentBytes, deriveExt, isPricingCandidateExt } from "@/agents-runtime/agents/email-scanner/attachment-parser";
 import { getTenkaraConversationMessages } from "@/lib/tenkara";
@@ -237,6 +238,29 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       for (const q of qs) {
         captured.push({ q, source: "attachment", attachmentName: att.filename, attachmentUrl: att.download_url });
       }
+    }
+
+    // 4c. Record the qualification documents the supplier attached (CoA, SDS,
+    //     certs, statements, ...) so The bench can show received-vs-required.
+    //     Classified from filename/type; a file that yielded price lines is a
+    //     price_sheet. Best-effort — never blocks the reply or pricing capture.
+    try {
+      const docRows: SupplierDocumentInput[] = nonInline.map((att, i) => ({
+        orgId: ref.org_id,
+        supplierId: ref.supplier_id,
+        supplierName: leadRow?.supplier_name ?? null,
+        materialId: ref.material_id,
+        docType: classifyDocType(att.filename, att.content_type, receivedAttachments[i]?.pricingExtracted ?? false),
+        fileName: att.filename ?? null,
+        contentType: att.content_type ?? null,
+        sizeBytes: att.size_bytes ?? null,
+        sourceConversationId: msg.conversation_id,
+        sourceMessageId: msg.message_id,
+        sourceUrl: att.download_url ?? null,
+      }));
+      if (docRows.length) await insertSupplierDocuments(admin, docRows);
+    } catch {
+      /* doc capture is best-effort */
     }
 
     if (captured.length) {

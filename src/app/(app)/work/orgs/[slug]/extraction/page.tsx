@@ -45,6 +45,24 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
     requirements = [];
   }
 
+  // Documents suppliers have actually sent back, captured from reply
+  // attachments. Counted per type so The bench can mark a requirement received.
+  const { data: docs } = await admin.from("supplier_documents").select("doc_type").eq("org_id", org.id);
+  const docCountByType = new Map<string, number>();
+  for (const d of (docs ?? []) as any[]) docCountByType.set(d.doc_type, (docCountByType.get(d.doc_type) ?? 0) + 1);
+  // Requirement key → the document type that satisfies it. Sample is physical
+  // (no document), so it has no mapping.
+  const REQ_KEY_TO_DOCTYPE: Record<string, string> = {
+    coa: "coa",
+    sds: "sds",
+    tds: "tds",
+    certifications: "certificate",
+    custom_statements: "statement",
+    custom_testing: "testing",
+    custom_documentation: "other",
+  };
+  const receivedFor = (key: string): number => docCountByType.get(REQ_KEY_TO_DOCTYPE[key] ?? "") ?? 0;
+
   return (
     <div className="space-y-8">
       <ListPageHeader
@@ -110,14 +128,19 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
                       Dealbreaker
                     </span>
                   )}
+                  {r.kind !== "sample" && r.kind !== "spec" && receivedFor(r.key) > 0 && (
+                    <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-emerald-600">
+                      {receivedFor(r.key)} received
+                    </span>
+                  )}
                 </div>
               </li>
             ))}
           </ul>
         )}
         <p className="text-xs text-muted-foreground">
-          Matching returned documents back to each requirement arrives with document extraction (parsing SDS/CoA
-          attachments); today attachments are parsed for pricing only.
+          Received counts come from documents suppliers attached to their replies, classified by file type. Parsing values
+          out of each document (e.g. CoA assay/expiry) is the next step.
         </p>
       </section>
     </div>
