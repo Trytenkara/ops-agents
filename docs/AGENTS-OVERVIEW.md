@@ -134,6 +134,26 @@ The only human gate in the happy path is **Send**. Promote/Drop on the Leads tab
 
 ---
 
+## Platform Extraction (per-client tab · DEV-only for now)
+
+**What it is:** a per-client surface (`/work/orgs/[slug]/extraction`, the violet **DEV** tab at the end of the org sub-nav) that shows everything the agents have pulled out of supplier emails for that client, framed the way the Tenkara platform frames it, so it can be pulled into Tenkara. Read-only; Tenkara is never written from here.
+
+**Two sections:**
+- **Quote board** — every quote line extracted from supplier replies + attachments: price, per-unit, pack, grade, **lead time, MOQ, payment terms**, source, confidence. Each row has a **Copy** button (tab-separated line to paste into Tenkara) and the table exports to CSV. When the client has dealbreaker document rules, a **Docs** column shows per-supplier ✓ / "Missing: CoA, SDS".
+- **The bench** — vendor qualification. Reads the client's **Sourcing Rules** from Tenkara (`user_supplier_settings.pre/post_order_requirements`): CoA, SDS, TDS, sample, certifications, custom statements/testing/documentation, shelf life — each with **Requested** / **Dealbreaker** flags. Shows: the requirement checklist (with a warning banner for unmet dealbreakers), a **By-supplier** qualified/blocked view, and a **Documents received** list with parsed fields (CoA assay/lot, cert validity, expiry badges) and a link to the original.
+
+**The qualification loop (how the data gets there):**
+1. **Ask** — Agent 15 (reply-manager) appends the client's *Requested* documents to the follow-up reply, once per thread. Instant-quoters (a `price_given` first reply) get a short docs-only follow-up so they're asked too.
+2. **Capture** — the Tenkara inbound webhook (`lib/tenkara-inbound.ts`) records every non-inline reply attachment into `supplier_documents`, classified by filename/type (`lib/supplier-documents.ts`).
+3. **Extract** — content is parsed per doc type (`lib/document-extract.ts`): CoA lot/assay/dates, cert validity, SDS revision, plus a promoted `expires_on`.
+4. **Surface** — all of the above renders on The bench / Quote board.
+
+**Key files:** page `app/(app)/work/orgs/[slug]/extraction/page.tsx`; `components/extraction-quote-board.tsx`; libs `tenkara-requirements.ts`, `supplier-documents.ts`, `document-extract.ts`; migrations `0042` (quote terms), `0043`/`0044` (supplier_documents + extracted). Requirements read the live Tenkara DB via `tenkaraQuery` (read-only).
+
+**Status / caveats:** DEV-only tab (`dev: true` in the org `layout.tsx` sub-nav) — flag-and-show, **nothing is blocked/held/excluded**. Only **new** inbound is captured (no backfill). Per-supplier matching is by `supplier_id` else normalized name. Legacy Missive `email-scanner` path is not wired for doc capture (Tenkara webhook only).
+
+---
+
 ## Manual trigger / inspection
 
 ```bash
