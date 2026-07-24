@@ -17,27 +17,43 @@ const GENERIC_TOKENS = new Set([
   "flower", "fragrance", "blend", "juice", "dried", "pure", "food", "cosmetic",
 ]);
 
-function materialTokens(r: any): string[] {
-  const src = `${r?.material_name ?? ""} ${r?.payload?.inci_name ?? ""}`.toLowerCase();
-  return Array.from(
-    new Set(
-      src
-        .replace(/[^a-z0-9\s-]/g, " ")
-        .split(/[\s-]+/)
-        .filter((t) => t.length >= 5 && !GENERIC_TOKENS.has(t))
-    )
+// ImportYeti confirmation thresholds — a specialised exporter with a real
+// customs footprint, not a one-off shipment.
+const IY_MIN_SHIPMENTS = 5;
+const IY_MIN_SPECIALIZATION = 15; // percent
+
+// Distinctive tokens of a string: drop parenthetical abbreviations (e.g.
+// "(CAPB)"), split, then keep only the material-identifying words (>=4 chars,
+// not a generic filler like "extract"/"powder").
+function distinctiveTokens(s: string | null | undefined): Set<string> {
+  return new Set(
+    (s ?? "")
+      .toLowerCase()
+      .replace(/\(.*?\)/g, " ")
+      .replace(/[^a-z0-9\s-]/g, " ")
+      .split(/[\s-]+/)
+      .filter((t) => t.length >= 4 && !GENERIC_TOKENS.has(t))
   );
 }
 
-// Strict SourceReady match: the material must show up in the supplier's own
-// SourceReady tags (their product categorisation) — not merely in a product
-// title, which surfaces finished-goods makers that only USE the material.
+function setEq(a: Set<string>, b: Set<string>): boolean {
+  return a.size > 0 && a.size === b.size && [...a].every((x) => b.has(x));
+}
+
+// Strict SourceReady match: the material must appear as a STANDALONE tag in the
+// supplier's own SourceReady categorisation — i.e. a tag whose distinctive
+// tokens equal the material's (or its INCI's). A tag that merely contains the
+// material as a qualifier ("glycerin soap base", "propylene glycol ethers")
+// does NOT confirm — those are finished-goods makers that only use it.
 function sourceReadyTagsNameMaterial(r: any): boolean {
   const tags = Array.isArray(r?.payload?.sourceready_tags) ? r.payload.sourceready_tags : [];
-  const hay = tags.join(" ").toLowerCase();
-  if (!hay) return false;
-  const toks = materialTokens(r);
-  return toks.length > 0 && toks.some((t) => hay.includes(t));
+  if (tags.length === 0) return false;
+  const mat = distinctiveTokens(r?.material_name);
+  const inci = distinctiveTokens(r?.payload?.inci_name);
+  return tags.some((tag: string) => {
+    const t = distinctiveTokens(tag);
+    return setEq(t, mat) || setEq(t, inci);
+  });
 }
 
 export function deriveMatchTier(r: any): { tier: MatchTier; reason: string } {
@@ -63,12 +79,15 @@ export function deriveMatchTier(r: any): { tier: MatchTier; reason: string } {
       const iy = p.importyeti ?? {};
       const shipments = Number(iy.matching_shipments ?? 0);
       const spec = Number(iy.specialization ?? 0);
-      return shipments >= 2
+      return shipments >= IY_MIN_SHIPMENTS && spec >= IY_MIN_SPECIALIZATION
         ? {
             tier: "confirmed",
-            reason: `US-customs proof — ${shipments} matching shipments${spec ? `, ${Math.round(spec)}% specialised` : ""}.`,
+            reason: `US-customs proof — ${shipments} matching shipments, ${Math.round(spec)}% specialised.`,
           }
-        : { tier: "potential", reason: "ImportYeti match with weak customs signal — verify the material fit." };
+        : {
+            tier: "potential",
+            reason: `Thin ImportYeti signal (${shipments} shipments, ${Math.round(spec)}% specialised) — verify the material fit.`,
+          };
     }
     case "sourceready":
       return sourceReadyTagsNameMaterial(r)
