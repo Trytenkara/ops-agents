@@ -3,10 +3,12 @@ import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { buildSavingsReport, clientCostFromOrders } from "@/lib/savings-report";
+import { buildSavingsReport, clientCostFromOrders, clientOrderDetails } from "@/lib/savings-report";
 import { buildSourcingScorecard } from "@/lib/sourcing-scorecard";
 import { loadMaterialAttributes } from "@/lib/material-attributes";
 import { SavingsReportInteractive } from "@/components/savings-report-interactive";
+import { ExpeditedReportInteractive } from "@/components/expedited-report-interactive";
+import { toExpeditedReport, type ExpeditedMeta } from "@/lib/expedited-report";
 import { SavingsWorksheet } from "@/components/savings-worksheet";
 import { orgDisplayName } from "@/lib/org-display";
 import { cn } from "@/lib/utils";
@@ -23,7 +25,8 @@ export default async function OrgSavingsPage({
   const session = (await getSession())!;
   if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator", "monitor"])) redirect("/work");
   const view = searchParams?.view === "report" ? "report" : "table";
-  const reportType = searchParams?.type === "freight" ? "freight" : "savings";
+  const reportType =
+    searchParams?.type === "freight" ? "freight" : searchParams?.type === "expedited" ? "expedited" : "savings";
   const canEdit = hasAnyRole(session, ["admin", "ops_lead", "ops_operator"]);
 
   const admin = createAdminClient();
@@ -54,6 +57,22 @@ export default async function OrgSavingsPage({
     // Loaded for both types: the "freight" view shows the detail editor, and the
     // "savings" view uses freight to optionally compute landed-cost savings.
     const attributes = await loadMaterialAttributes(org.id);
+
+    // The expedited report needs the market quotes attached + the PO-derived
+    // curated layer; build both once here so meta and render share one report.
+    const expedited =
+      reportType === "expedited"
+        ? await (async () => {
+            const enriched = await buildSavingsReport(org.tenkara_org_id!, { clientCostFallback, includeQuotes: true });
+            const meta = await buildExpeditedMeta(admin, org.id, enriched);
+            return toExpeditedReport(enriched, {
+              clientName: orgName,
+              reportDate: new Date().toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric" }),
+              meta,
+            });
+          })()
+        : null;
+
     return (
       <div className="space-y-6">
         <div className="space-y-3">
@@ -66,15 +85,19 @@ export default async function OrgSavingsPage({
             <ReportTypeToggle slug={org.slug} type={reportType} />
           </div>
         </div>
-        <SavingsReportInteractive
-          report={report}
-          clientName={orgName}
-          slug={org.slug}
-          variant={reportType}
-          attributes={attributes}
-          orgId={org.id}
-          canEdit={canEdit}
-        />
+        {expedited ? (
+          <ExpeditedReportInteractive report={expedited} slug={org.slug} />
+        ) : (
+          <SavingsReportInteractive
+            report={report}
+            clientName={orgName}
+            slug={org.slug}
+            variant={reportType === "freight" ? "freight" : "savings"}
+            attributes={attributes}
+            orgId={org.id}
+            canEdit={canEdit}
+          />
+        )}
       </div>
     );
   }
@@ -85,6 +108,44 @@ export default async function OrgSavingsPage({
       <SavingsWorksheet report={report} scorecard={scorecard} slug={org.slug} clientName={orgName} />
     </div>
   );
+}
+
+// Builds the curated layer for the expedited report from uploaded-PO data:
+// incumbent supplier, typical order quantity, est spend, and the run-level
+// baseline + identified-savings dollars. Materials without an order are omitted
+// (they render "—"), and dollars only appear when at least one order carries qty.
+async function buildExpeditedMeta(
+  admin: ReturnType<typeof createAdminClient>,
+  orgId: string,
+  report: Awaited<ReturnType<typeof buildSavingsReport>>
+): Promise<ExpeditedMeta> {
+  const orders = await clientOrderDetails(admin, orgId).catch(() => new Map());
+  const materials: NonNullable<ExpeditedMeta["materials"]> = {};
+  let baselineSpend = 0;
+  let identified = 0;
+  let haveSpend = false;
+
+  for (const l of report.lines) {
+    const key = `${l.material_id}|${l.unit}`;
+    const od = orders.get(key);
+    if (!od) continue;
+    const entry: NonNullable<ExpeditedMeta["materials"]>[string] = {};
+    if (od.incumbent_name) entry.incumbent_name = od.incumbent_name;
+    if (od.ordered_qty != null) {
+      entry.typical_order = `${od.ordered_qty.toLocaleString()} ${l.unit}`;
+      const spend = od.ordered_qty * l.their_unit_price;
+      entry.est_spend = spend;
+      baselineSpend += spend;
+      haveSpend = true;
+      if (l.savings_per_unit > 0) identified += od.ordered_qty * l.savings_per_unit;
+    }
+    materials[key] = entry;
+  }
+
+  return {
+    materials,
+    ...(haveSpend ? { baseline_spend: baselineSpend, identified_savings: identified } : {}),
+  };
 }
 
 function ViewToggle({ slug, view }: { slug: string; view: "table" | "report" }) {
@@ -108,9 +169,9 @@ function ViewToggle({ slug, view }: { slug: string; view: "table" | "report" }) 
   );
 }
 
-function ReportTypeToggle({ slug, type }: { slug: string; type: "savings" | "freight" }) {
+function ReportTypeToggle({ slug, type }: { slug: string; type: "savings" | "freight" | "expedited" }) {
   const base = `/work/orgs/${slug}/savings?view=report`;
-  const tab = (key: "savings" | "freight", label: string, href: string) => (
+  const tab = (key: "savings" | "freight" | "expedited", label: string, href: string) => (
     <Link
       href={href}
       className={cn(
@@ -125,6 +186,7 @@ function ReportTypeToggle({ slug, type }: { slug: string; type: "savings" | "fre
     <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1 print:hidden">
       {tab("savings", "Cost savings", base)}
       {tab("freight", "Freight & suppliers", `${base}&type=freight`)}
+      {tab("expedited", "Expedited report", `${base}&type=expedited`)}
     </div>
   );
 }
