@@ -15,6 +15,11 @@ import { correctMaterialSpelling } from "@/lib/material-spelling";
 export interface DraftMaterial {
   name: string;
   inciName?: string | null;
+  // The grade(s) the client's material is specified at (from materials.grade in
+  // Tenkara), comma-joined. When present we name it in the RFQ as what we're
+  // after, but still ask which grades the supplier carries — we never present it
+  // as a fixed hard requirement, and never invent one when it's absent.
+  grade?: string | null;
 }
 
 export interface DraftInput {
@@ -92,6 +97,24 @@ function labelFor(m: DraftMaterial): string {
   return m.inciName ? `${m.name} (INCI: ${m.inciName})` : m.name;
 }
 
+// The grade ask. We always ask which grades the supplier can supply; when we
+// know the grade(s) the client wants, we name them too — framed as what we're
+// looking for, not a hard requirement, so a supplier carrying a nearby grade
+// still replies. Returns null only if there are no materials (never happens).
+function gradeAsk(mats: DraftMaterial[]): string | null {
+  if (!mats.length) return null;
+  const multi = mats.length > 1;
+  const withGrade = mats.filter((m) => m.grade && m.grade.trim());
+  if (!withGrade.length) {
+    return `Also, which grades do you supply${multi ? " for these" : ""}?`;
+  }
+  if (!multi) {
+    return `We're looking for ${withGrade[0].grade!.trim()} specifically, and would like to know which grades you can supply.`;
+  }
+  const specifics = withGrade.map((m) => `${m.name} (${m.grade!.trim()})`).join(", ");
+  return `On grades, we're looking for ${specifics}. Please also let us know which grades you can supply.`;
+}
+
 function pickSubject(input: DraftInput): string {
   const mats = materialList(input);
   const seed = `${input.supplierCompanyName ?? input.supplierContactName ?? ""}|${mats.map((m) => m.name).join(",")}`;
@@ -113,6 +136,9 @@ function composeTemplateDraft(input: DraftInput): ComposedDraft {
   // list so the supplier can quote each line item.
   const bulletBlock = multi ? ["", ...mats.map((m) => `- ${labelFor(m)}`), ""] : [""];
 
+  const gradeLine = gradeAsk(mats);
+  const gradeBlock = gradeLine ? [gradeLine, ""] : [];
+
   const body = (
     input.isMarketplace
       ? [
@@ -126,6 +152,7 @@ function composeTemplateDraft(input: DraftInput): ComposedDraft {
           ...bulletBlock,
           `Beyond your published pricing, could you share your bulk and wholesale rates${multi ? " for these" : ""}? We're after volume price breaks (e.g. at larger pack sizes or full pallet/ton quantities), along with lead times and MOQs.`,
           "",
+          ...gradeBlock,
           "If you have a wholesale price list or catalog, please send it over. We evaluate suppliers across multiple raw materials and will share what you carry with the rest of our procurement team.",
           "",
           "Thanks,",
@@ -142,6 +169,7 @@ function composeTemplateDraft(input: DraftInput): ComposedDraft {
           ...bulletBlock,
           `Do you supply ${multi ? "any of these" : "this"}? If so, could you kindly share current pricing, estimated lead times, and MOQs${multi ? " for each" : ""}?`,
           "",
+          ...gradeBlock,
           "Additionally, if you have a product catalog, please share it. We're evaluating suppliers across multiple raw materials and will share what you carry with the rest of our procurement team.",
           "",
           "We may have follow-up questions as we go along, and any context you can share is helpful.",
@@ -188,6 +216,7 @@ STYLE RULES (non-negotiable):
 WHAT THE EMAIL MUST DO:
 - Say we're sourcing the listed material(s) at {sender org}.
 - Ask whether they supply it/them and request current pricing, estimated lead times, and MOQs.
+- GRADE: always ask which grade(s) the supplier can supply. When a "target grade" is given for a material, name it as what we're looking for, but keep it soft (we still want to hear what they carry), never a rigid hard requirement. When no target grade is given, just ask which grades they supply. NEVER invent, assume, or expand a grade that wasn't provided.
 - Ask for a product catalog or line card, noting we evaluate suppliers across multiple raw materials.
 - One material: write it inline as a sentence. Two or more: a short intro line, then a clean bullet list (one material per line), then the ask.
 - MARKETPLACE supplier: they already publish retail pricing, so instead ask for their bulk/wholesale rates and volume price breaks (larger pack sizes, pallet/ton quantities) beyond the listing.
@@ -208,7 +237,7 @@ function buildUserMessage(input: DraftInput): string {
     `Supplier contact name: ${input.supplierContactName ?? "(unknown)"}`,
     `Marketplace supplier: ${input.isMarketplace ? "yes — ask for bulk/wholesale beyond listed retail" : "no"}`,
     `Materials we are sourcing (${mats.length}):`,
-    ...mats.map((m) => `  - ${labelFor(m)}`),
+    ...mats.map((m) => `  - ${labelFor(m)}${m.grade && m.grade.trim() ? ` (target grade: ${m.grade.trim()})` : " (no target grade — just ask which grades they supply)"}`),
     "",
     "Write the RFQ email.",
   ];

@@ -2,6 +2,7 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 import { composeOutreachDraft, type DraftMaterial } from "./drafter";
 import { stageDraft } from "@/lib/draft-staging";
 import { coldOutboundEmailClient, tenkaraEmailAccountIdFor } from "@/lib/tenkara";
+import { resolveMaterialGrades } from "@/lib/tenkara-names";
 
 // Short stable hash so a corrected/changed material set yields a NEW Tenkara
 // externalId (Tenkara is idempotent on externalId — reusing it would return the
@@ -63,11 +64,24 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
   // Sort for determinism so the same material set always renders (and hashes)
   // identically across runs.
   const ordered = [...leads].sort((a, b) => (a.material_name ?? "").localeCompare(b.material_name ?? ""));
+  const materialIds = ordered.map((l) => l.material_id).filter(Boolean) as string[];
+  // The grade(s) each material is specified at in Tenkara, so the RFQ can name
+  // what we're after. Best-effort: a resolve failure just omits grade, leaving
+  // the generic "which grades do you supply?" ask.
+  let gradesById = new Map<string, string>();
+  try {
+    gradesById = await resolveMaterialGrades(materialIds);
+  } catch (e: any) {
+    await log(`Grade resolve failed: ${e?.message ?? e}`, { level: "warn", step: "material_grades" });
+  }
   const materials: DraftMaterial[] = ordered.map((l) => {
     const p = (l.payload ?? {}) as any;
-    return { name: l.material_name ?? "the material", inciName: p.inci_name ?? p.inci ?? null };
+    return {
+      name: l.material_name ?? "the material",
+      inciName: p.inci_name ?? p.inci ?? null,
+      grade: l.material_id ? gradesById.get(l.material_id) ?? null : null,
+    };
   });
-  const materialIds = ordered.map((l) => l.material_id).filter(Boolean) as string[];
   const materialNames = ordered.map((l) => l.material_name ?? "").filter(Boolean);
   const leadIds = ordered.map((l) => l.id);
   const primary = ordered[0];

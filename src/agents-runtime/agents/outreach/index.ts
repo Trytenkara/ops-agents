@@ -9,7 +9,7 @@ import { composeOutreachDraft } from "./drafter";
 import { isAggregatorEmail } from "../data-enrichment/enrich";
 import { suppliersWithPriorRelationship } from "@/lib/tenkara-relationships";
 import { getSourcingExclusions, exclusionReason } from "@/lib/tenkara-sourcing-exclusions";
-import { resolveMaterialNames } from "@/lib/tenkara-names";
+import { resolveMaterialNames, resolveMaterialGrades } from "@/lib/tenkara-names";
 
 // v1 trim (vs. full spec):
 //   - pre-outreach only. Reply tracking + follow-up cadence land with Agent 08.
@@ -178,6 +178,16 @@ registerAgent({
       matNamesById = await resolveMaterialNames(leads.map((l) => l.material_id).filter(Boolean) as string[]);
     } catch (e: any) {
       await ctx.log(`Material-name resolve failed: ${e?.message ?? e}`, { level: "warn", step: "material_names" });
+    }
+
+    // Client-specified grade per material (materials.grade in Tenkara), so the
+    // manual-channel RFQ below can name what we're after. Best-effort: a failure
+    // just omits grade and the draft falls back to the generic grade ask.
+    let matGradesById = new Map<string, string>();
+    try {
+      matGradesById = await resolveMaterialGrades(leads.map((l) => l.material_id).filter(Boolean) as string[]);
+    } catch (e: any) {
+      await ctx.log(`Material-grade resolve failed: ${e?.message ?? e}`, { level: "warn", step: "material_grades" });
     }
 
     // Compile-gate: which suppliers still have a material being enriched? We only
@@ -439,14 +449,17 @@ registerAgent({
 
       const p = (c.lead.payload ?? {}) as any;
       const aggregatorEmail = p.enrichment?.aggregator_contact_email ?? null;
+      const manualMatName = c.lead.material_name?.trim() || "the material";
+      const manualGrade = c.lead.material_id ? matGradesById.get(c.lead.material_id) ?? null : null;
       const draft = await composeOutreachDraft({
         mode: c.mode,
         ghostBrand: c.ghostBrand,
         clientOrgName: c.clientOrgName,
         supplierContactName: c.contactName,
         supplierCompanyName: c.lead.supplier_name,
-        materialName: c.lead.material_name?.trim() || "the material",
+        materialName: manualMatName,
         inciName: p.inci ?? p.inci_name ?? null,
+        materials: [{ name: manualMatName, inciName: p.inci ?? p.inci_name ?? null, grade: manualGrade }],
         signal: p.signal ?? null,
         isMarketplace: (c.lead as any).market_kind === "marketplace" || p.site_type === "M" || p.site_type === "MS",
       });
