@@ -83,7 +83,7 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
   const { data: staged } = await admin
     .from("staged_quotes")
     .select(
-      "id, supplier_name, material_name, grade, price, case_size, unit_of_measurement, unit_price, currency, lead_time_days, lead_time_text, moq_quantity, moq_unit, payment_terms, source, source_attachment_name, confidence, status, created_at"
+      "id, supplier_id, supplier_name, material_name, grade, price, case_size, unit_of_measurement, unit_price, currency, lead_time_days, lead_time_text, moq_quantity, moq_unit, payment_terms, source, source_attachment_name, confidence, status, created_at"
     )
     .eq("org_id", org.id)
     .neq("status", "dismissed")
@@ -106,7 +106,7 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
   // bench can mark a requirement received, and listed with their key values.
   const { data: docs } = await admin
     .from("supplier_documents")
-    .select("id, doc_type, file_name, supplier_name, source_url, expires_on, extracted, created_at")
+    .select("id, doc_type, supplier_id, file_name, supplier_name, source_url, expires_on, extracted, created_at")
     .eq("org_id", org.id)
     .order("created_at", { ascending: false })
     .limit(500);
@@ -132,6 +132,39 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
   const unmetDealbreakers = Array.from(
     new Map(requirements.filter(dealbreakerUnmet).map((r) => [r.label, r])).values()
   );
+
+  // Per-supplier qualification: which required document types each supplier we've
+  // heard from has provided, vs. what the client requires. Keyed by supplier_id
+  // when known, else normalized name, so quotes and documents from the same
+  // supplier line up. The client-level counts above answer "has anyone sent this";
+  // this answers "is THIS vendor qualified".
+  const normName = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
+  const supKey = (id: string | null, name: string | null) => id || `name:${normName(name)}`;
+  const requiredDocTypes = new Map<string, { label: string; dealbreaker: boolean }>();
+  for (const r of requirements) {
+    const dt = REQ_KEY_TO_DOCTYPE[r.key];
+    if (!dt) continue;
+    const cur = requiredDocTypes.get(dt);
+    requiredDocTypes.set(dt, { label: DOC_TYPE_LABEL[dt] ?? dt, dealbreaker: (cur?.dealbreaker ?? false) || r.dealbreaker });
+  }
+  const suppliers = new Map<string, { name: string; provided: Set<string> }>();
+  for (const r of rows) {
+    const k = supKey(r.supplier_id ?? null, r.supplier_name ?? null);
+    if (!suppliers.has(k)) suppliers.set(k, { name: r.supplier_name ?? "Unknown supplier", provided: new Set() });
+  }
+  for (const d of docList) {
+    const k = supKey(d.supplier_id ?? null, d.supplier_name ?? null);
+    const s = suppliers.get(k) ?? { name: d.supplier_name ?? "Unknown supplier", provided: new Set<string>() };
+    s.provided.add(d.doc_type);
+    suppliers.set(k, s);
+  }
+  const requiredTypeList = Array.from(requiredDocTypes.entries()); // [docType, {label, dealbreaker}]
+  const supplierRows = Array.from(suppliers.values())
+    .map((s) => {
+      const missingDealbreakers = requiredTypeList.filter(([dt, m]) => m.dealbreaker && !s.provided.has(dt));
+      return { ...s, missingDealbreakers };
+    })
+    .sort((a, b) => b.missingDealbreakers.length - a.missingDealbreakers.length || a.name.localeCompare(b.name));
 
   return (
     <div className="space-y-8">
@@ -222,9 +255,51 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
             ))}
           </ul>
         )}
+        {requiredTypeList.length > 0 && supplierRows.length > 0 && (
+          <div className="space-y-2 pt-2">
+            <h4 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">By supplier</h4>
+            <ul className="divide-y divide-border rounded-lg border border-border">
+              {supplierRows.map((s, i) => {
+                const blocked = s.missingDealbreakers.length > 0;
+                return (
+                  <li key={`${s.name}-${i}`} className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="truncate text-sm font-medium">{s.name}</span>
+                      {blocked ? (
+                        <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-destructive">
+                          Blocked: missing {s.missingDealbreakers.map(([, m]) => m.label).join(", ")}
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-emerald-600">
+                          Qualified
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 flex-wrap items-center gap-1">
+                      {requiredTypeList.map(([dt, m]) => {
+                        const has = s.provided.has(dt);
+                        const tone = has
+                          ? "bg-emerald-500/10 text-emerald-600"
+                          : m.dealbreaker
+                          ? "bg-destructive/10 text-destructive"
+                          : "bg-secondary text-muted-foreground";
+                        return (
+                          <span key={dt} className={cn("rounded-full px-2 py-0.5 text-[10px]", tone)}>
+                            {has ? "✓" : "✗"} {m.label}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+
         <p className="text-xs text-muted-foreground">
           Received counts and the documents below come from what suppliers attached to their replies, classified and parsed
-          on arrival.
+          on arrival. Per-supplier status matches documents to that vendor by id or name.
         </p>
 
         {docList.length > 0 && (
