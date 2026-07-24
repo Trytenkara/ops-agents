@@ -6,6 +6,7 @@ import { stageDraft } from "@/lib/draft-staging";
 import { runNoReplyFollowups } from "./no-reply-followup";
 import { handleSupplierForm } from "./form-handler";
 import { postAgentAlert } from "@/lib/slack-alert";
+import { getClientRequirements, requestedDocLabels } from "@/lib/tenkara-requirements";
 import Anthropic from "@anthropic-ai/sdk";
 
 // Real Bobber Labs context (from bobberlabs.com / how the client is set up).
@@ -71,6 +72,23 @@ function ensurePricingAsk(body: string, materials: string[]): string {
         ? materials[0]
         : `${materials.slice(0, -1).join(", ")} and ${materials[materials.length - 1]}`;
   const ask = `Could you share your tiered pricing (volume price breaks), lead time, and MOQ for ${list}? We can confirm exact volumes as we go.`;
+  const idx = body.search(/\n\s*Thanks,/i);
+  if (idx >= 0) return `${body.slice(0, idx).trimEnd()}\n\n${ask}\n\n${body.slice(idx).replace(/^\n+/, "")}`;
+  return `${body.trimEnd()}\n\n${ask}`;
+}
+
+// Append the client's requested vendor-qualification documents to the reply, so
+// an engaged supplier is asked for the CoA / SDS / sample / statements etc. the
+// client requires (read from Tenkara). Inserted after the pricing ask, before
+// the sign-off. Gated to once per thread by the caller so we don't re-ask every
+// turn. Returns the body unchanged when there are no requested docs.
+function ensureQualificationAsk(body: string, docLabels: string[]): string {
+  if (!docLabels.length) return body;
+  const list =
+    docLabels.length === 1
+      ? docLabels[0]
+      : `${docLabels.slice(0, -1).join(", ")} and ${docLabels[docLabels.length - 1]}`;
+  const ask = `Also, as part of qualifying new suppliers we collect a bit of documentation. When you have a chance, could you send over the following: ${list}?`;
   const idx = body.search(/\n\s*Thanks,/i);
   if (idx >= 0) return `${body.slice(0, idx).trimEnd()}\n\n${ask}\n\n${body.slice(idx).replace(/^\n+/, "")}`;
   return `${body.trimEnd()}\n\n${ask}`;
@@ -242,6 +260,25 @@ registerAgent({
       return notes;
     }
 
+    // Cache the client's requested qualification-document labels per org. Read
+    // from Tenkara (Client Settings → Sourcing Rules) via the org's tenkara_org_id.
+    // Best-effort: a Tenkara read hiccup just means no docs ask this run.
+    const reqLabelsByOrg = new Map<string, string[]>();
+    async function getRequestedDocLabels(orgId: string | null): Promise<string[]> {
+      if (!orgId) return [];
+      if (reqLabelsByOrg.has(orgId)) return reqLabelsByOrg.get(orgId)!;
+      let labels: string[] = [];
+      try {
+        const { data } = await admin.from("orgs").select("tenkara_org_id").eq("id", orgId).maybeSingle();
+        const tkId = (data as any)?.tenkara_org_id ?? null;
+        if (tkId) labels = requestedDocLabels(await getClientRequirements(tkId));
+      } catch {
+        labels = [];
+      }
+      reqLabelsByOrg.set(orgId, labels);
+      return labels;
+    }
+
     const byThread = new Map<string, any[]>();
     for (const r of refs ?? []) {
       const key = (r as any).thread_id ?? (r as any).id;
@@ -399,7 +436,13 @@ registerAgent({
         }
         await ctx.log(`Updated contact for ${meta.supplier_name ?? threadId} -> ${senderAddr}`, { step: "contact-update" });
       }
-      const finalBody = sani(ensurePricingAsk(cls.body, cls.supplyable_materials.length ? cls.supplyable_materials : materials));
+      // Pricing ask (always) + qualification-docs ask (once per thread, if the
+      // client requires any and we haven't already asked on this thread).
+      let bodyWithAsks = ensurePricingAsk(cls.body, cls.supplyable_materials.length ? cls.supplyable_materials : materials);
+      const docLabels = await getRequestedDocLabels(head.org_id ?? null);
+      const askQualificationNow = docLabels.length > 0 && !meta.qualification_asked;
+      if (askQualificationNow) bodyWithAsks = ensureQualificationAsk(bodyWithAsks, docLabels);
+      const finalBody = sani(bodyWithAsks);
       const staged = await stageDraft({
         admin, agentId: ctx.agentId, runId: ctx.runId, orgId: head.org_id,
         supplierId: head.supplier_id, materialId: head.material_id,
@@ -412,7 +455,11 @@ registerAgent({
         await setStatus(admin, rows, cls.category === "declined" ? "closed_declined" : "responded", {
           note: `${cls.category}: ${cls.reason}`,
           incrementTurns: cls.category !== "declined",
-          extra: { last_handled_reply_msg_id: replyMsgId ?? null, supplier_contact_email: replyAddr },
+          extra: {
+            last_handled_reply_msg_id: replyMsgId ?? null,
+            supplier_contact_email: replyAddr,
+            qualification_asked: meta.qualification_asked || askQualificationNow,
+          },
         });
         if (cls.category === "declined") closed++; else responded++;
         await ctx.log(`Responded to ${meta.supplier_name ?? to.address} (${cls.category})`, { step: "respond", data: { category: cls.category } });
