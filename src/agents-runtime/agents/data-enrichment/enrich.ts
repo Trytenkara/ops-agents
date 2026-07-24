@@ -102,12 +102,21 @@ export interface SupplierEnrichment {
   supplier_type: string[] | null;
 }
 
+// One contribution to the completeness score, so the UI/CSV can explain *why* a
+// lead scored what it did instead of just showing a bare number.
+export interface CompletenessFactor {
+  label: string;   // human-readable reason, e.g. "valid email"
+  points: number;  // signed contribution to the 0..1 score
+}
+
 export interface EnrichmentResult {
   website_probe: WebsiteProbe | null;
   email_check: EmailCheck | null;
   contact: ContactDiscovery;
   tenkara_supplier: SupplierEnrichment | null;
   completeness_score: number; // 0..1
+  // The factors that produced completeness_score, in scoring order.
+  completeness_factors: CompletenessFactor[];
   // Fields we consider "minimum to outreach". When this is false we leave the
   // lead at stage=raw with payload.enrichment_blocked_reason set.
   outreach_ready: boolean;
@@ -374,23 +383,26 @@ export async function fetchTenkaraSupplier(supplierId: string): Promise<Supplier
 }
 
 // Cheap heuristic score from what we know. A lead with a valid website + valid
-// email + domain match + a phone clears ~0.85.
+// email + domain match + a phone clears ~0.85. Returns the score alongside the
+// factors that produced it so the reason can be surfaced to operators.
 function scoreCompleteness(args: {
   websiteProbe: WebsiteProbe | null;
   emailCheck: EmailCheck | null;
   hasPhone: boolean;
   hasContactUrl: boolean;
   hasCountry: boolean;
-}): number {
-  let s = 0;
-  if (args.websiteProbe?.ok) s += 0.3;
-  else if (args.websiteProbe) s += 0.1; // we tried, didn't resolve
-  if (args.emailCheck?.format_valid) s += 0.25;
-  if (args.emailCheck?.domain_matches_website === true) s += 0.1;
-  if (args.hasPhone) s += 0.15;
-  else if (args.hasContactUrl) s += 0.05; // a contact form is a weaker channel than a phone
-  if (args.hasCountry) s += 0.15;
-  return Math.min(1, Math.round(s * 100) / 100);
+}): { score: number; factors: CompletenessFactor[] } {
+  const factors: CompletenessFactor[] = [];
+  if (args.websiteProbe?.ok) factors.push({ label: "website resolves", points: 0.3 });
+  else if (args.websiteProbe) factors.push({ label: "website tried, didn't resolve", points: 0.1 });
+  if (args.emailCheck?.format_valid) factors.push({ label: "valid email", points: 0.25 });
+  if (args.emailCheck?.domain_matches_website === true) factors.push({ label: "email domain matches site", points: 0.1 });
+  if (args.hasPhone) factors.push({ label: "phone found", points: 0.15 });
+  else if (args.hasContactUrl) factors.push({ label: "contact form only (no direct phone)", points: 0.05 });
+  if (args.hasCountry) factors.push({ label: "country known", points: 0.15 });
+  const raw = factors.reduce((sum, f) => sum + f.points, 0);
+  const score = Math.min(1, Math.round(raw * 100) / 100);
+  return { score, factors };
 }
 
 // Treat scout-captured "via IndiaMART inquiry" / "contact form" strings as a
@@ -482,7 +494,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
 
   const email_check = email ? checkEmail(email, website) : null;
 
-  const completeness_score = scoreCompleteness({
+  const { score: completeness_score, factors: completeness_factors } = scoreCompleteness({
     websiteProbe: website_probe,
     emailCheck: email_check,
     hasPhone: !!phone,
@@ -508,6 +520,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     contact,
     tenkara_supplier,
     completeness_score,
+    completeness_factors,
     outreach_ready,
     blocked_reason,
     aggregator_contact_email: email ? null : aggregatorEmail,

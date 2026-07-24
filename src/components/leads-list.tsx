@@ -132,7 +132,8 @@ export function LeadsList({
     "Website", "Pack sizes / pricing", "Email", "Phone", "HQ address",
     "Supplier background", "Grades offered", "Certifications", "MOQ",
     "Returned price", "Operator", "Signal", "Source", "Match", "Stage", "Status",
-    "Confidence", "Completeness", "Source citations", "Notes", "Created",
+    "Confidence", "Confidence reason", "Completeness", "Completeness reason",
+    "Source citations", "Notes", "Created",
   ];
   const csvRows = filtered.map((r: any) => {
     const p = r.payload ?? {};
@@ -162,7 +163,11 @@ export function LeadsList({
       r.stage ?? "",
       r.status ?? "",
       r.confidence_score ?? "",
+      p.confidence_reason ?? "",
       p.completeness_score ?? "",
+      Array.isArray(p.completeness_factors)
+        ? p.completeness_factors.map((f: any) => `${f.label} (+${Math.round((Number(f.points) || 0) * 100)}%)`).join("; ")
+        : "",
       citations.join("; "),
       p.scout_notes ?? p.scout_rationale ?? "",
       r.created_at ?? "",

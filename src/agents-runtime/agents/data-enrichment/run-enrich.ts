@@ -43,6 +43,7 @@ export async function enrichAndStageLead(
       tenkara_supplier: result.tenkara_supplier,
       aggregator_contact_email: result.aggregator_contact_email,
       completeness_score: result.completeness_score,
+      completeness_factors: result.completeness_factors,
       enriched_at: new Date().toISOString(),
       enrichment_run_id: runId,
     },
@@ -51,6 +52,7 @@ export async function enrichAndStageLead(
     contact_url: result.contact.contact_url ?? lead.payload?.contact_url ?? null,
     supplier_country: lead.payload?.supplier_country ?? result.tenkara_supplier?.country ?? null,
     completeness_score: result.completeness_score,
+    completeness_factors: result.completeness_factors,
   };
 
   if (result.outreach_ready) {

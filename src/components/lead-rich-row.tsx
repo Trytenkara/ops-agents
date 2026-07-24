@@ -157,6 +157,16 @@ export function LeadRichRow({
   const siteType = r.payload?.site_type as "M" | "MS" | "N" | undefined;
   const marketKind = (r.market_kind as "marketplace" | "direct" | null | undefined) ?? leadMarketKind(siteType);
   const completeness = r.payload?.completeness_score != null ? Number(r.payload.completeness_score) : null;
+  const completenessFactors = Array.isArray(r.payload?.completeness_factors) ? r.payload.completeness_factors : [];
+  const completenessTitle =
+    completenessFactors.length > 0
+      ? "Enrichment completeness — " +
+        completenessFactors
+          .map((f: any) => `${f.label} (+${Math.round((Number(f.points) || 0) * 100)}%)`)
+          .join(", ")
+      : "Share of RFQ fields the scanner captured (pricing, contact, MOQ, grades, certs, HQ)";
+  const confidenceReason = (r.payload?.confidence_reason as string | undefined) ?? undefined;
+  const confidencePct = r.confidence_score != null ? Math.round(Number(r.confidence_score) * 100) : null;
   const citations = Array.isArray(r.payload?.source_citations) ? r.payload.source_citations : [];
 
   return (
@@ -178,7 +188,7 @@ export function LeadRichRow({
           {completeness != null && (
             <span
               className="text-[10px] font-normal text-muted-foreground"
-              title="Share of RFQ fields the scanner captured (pricing, contact, MOQ, grades, certs, HQ)"
+              title={completenessTitle}
             >
               {Math.round(completeness * 100)}% ready
             </span>
@@ -290,10 +300,24 @@ export function LeadRichRow({
       </TableCell>
       <TableCell className="align-top">
         {signal ? (
-          <Badge variant="secondary" title={`Why this supplier surfaced as a lead${signalCount != null ? ` — seen ${signalCount}×` : ""}`}>
+          <Badge
+            variant="secondary"
+            title={
+              confidenceReason
+                ? `Confidence ${confidencePct != null ? `${confidencePct}% — ` : ""}${confidenceReason}`
+                : `Why this supplier surfaced as a lead${signalCount != null ? ` — seen ${signalCount}×` : ""}`
+            }
+          >
             {humanizeSignal(signal)}
             {signalCount != null && signalCount > 1 && <span className="ml-1 text-muted-foreground">×{signalCount}</span>}
           </Badge>
+        ) : confidenceReason ? (
+          <span
+            className="text-xs text-muted-foreground"
+            title={`Confidence ${confidencePct != null ? `${confidencePct}% — ` : ""}${confidenceReason}`}
+          >
+            {confidencePct != null ? `${confidencePct}%` : "—"}
+          </span>
         ) : (
           <span className="text-muted-foreground text-xs">—</span>
         )}

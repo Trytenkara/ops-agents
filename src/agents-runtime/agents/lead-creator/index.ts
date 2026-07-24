@@ -1,7 +1,7 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { queryRecentMaterials, queryMaterialsByIds, queryMaterialsForOrgs, findCandidatesForMaterial, existingQuotesForMaterials, type CandidateSupplier, type MaterialRow } from "./sql";
-import { scoutSuppliersForMaterial, scoreScoutConfidence, scoutCompleteness, type ScoutSupplier } from "./scout";
+import { scoutSuppliersForMaterial, scoreScoutConfidence, describeScoutConfidence, scoutCompleteness, type ScoutSupplier } from "./scout";
 import { toCsv } from "@/lib/csv";
 import { getSourcingExclusions, exclusionReason, normalizeCompanyName, type SourcingExclusions } from "@/lib/tenkara-sourcing-exclusions";
 import { getNoteDerivedCountryExclusions } from "@/lib/client-sourcing-rules";
@@ -104,6 +104,20 @@ function scoreCandidate(c: CandidateSupplier): number {
     quoted_similar_name: 0.70,
   }[c.signal];
   return Math.min(cap, base + 0.01 * Math.max(0, (c.signal_count ?? 1) - 1));
+}
+
+// Human-readable rationale for the confidence_score above, stored on the lead so
+// operators (and the CSV) can see *why* a lead scored what it did.
+const SIGNAL_REASON: Record<CandidateSupplier["signal"], string> = {
+  quoted_same_material: "previously quoted this exact material",
+  catalog_match: "material appears in their catalog",
+  quoted_similar_inci: "previously quoted a material with a similar INCI",
+  quoted_similar_name: "previously quoted a similarly-named material",
+};
+function describeCandidateConfidence(c: CandidateSupplier): string {
+  const n = c.signal_count ?? 1;
+  const seen = n > 1 ? ` (seen ${n}×)` : "";
+  return `${SIGNAL_REASON[c.signal] ?? c.signal}${seen}`;
 }
 
 function sourceFromSignal(signal: CandidateSupplier["signal"]): "existing_db" | "marketplace" {
@@ -660,6 +674,7 @@ registerAgent({
             supplier_country: c.supplier_country,
             signal: c.signal,
             signal_count: c.signal_count,
+            confidence_reason: describeCandidateConfidence(c),
             tenkara_org_id: material.tenkara_org_id,
           },
           confidence_score: scoreCandidate(c),
@@ -803,6 +818,7 @@ registerAgent({
               moq: s.moq,
               site_type: s.site_type,            // M / MS / N — surfaced in UI
               confidence_hint: s.confidence_hint,
+              confidence_reason: describeScoutConfidence(s.confidence_hint),
               completeness_score: scoutCompleteness(s),
               source_url: s.url,
               source_citations: s.source_citations,

@@ -329,6 +329,16 @@ export function scoreScoutConfidence(hint: ScoutSupplier["confidence_hint"]): nu
   }
 }
 
+// Human-readable rationale for scoreScoutConfidence, stored on the lead so the
+// reason is visible to operators instead of just the bare score.
+export function describeScoutConfidence(hint: ScoutSupplier["confidence_hint"]): string {
+  switch (hint) {
+    case "strong": return "High — primary/branded manufacturer or named authorized distributor";
+    case "medium": return "Med — reputable distributor/marketplace, authorization unverified";
+    case "lead":   return "Low — unverified reseller / thin signal, needs human follow-up";
+  }
+}
+
 // How "ready to contact" a scout lead is, based on how many of the actionable
 // sourcing fields came back filled. Lets operators sort the shortlist by the
 // leads they can RFQ immediately vs. ones still needing research. Range 0..1.
