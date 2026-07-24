@@ -11,7 +11,7 @@ import { bodyToHtml } from "@/lib/email-style";
 import { lintDraft } from "../outreach-qa/lint";
 import { postQrSummary } from "./slack-notifier";
 import { getOrgOperatorPool, getSupplierAssignments, resolveSupplierOperatorId } from "@/lib/operator-assignment";
-import { onlyOrgNames } from "@/lib/org-scope";
+import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 
 // Now runs daily (was weekly), so a quote that's expiring stays "overdue" for
 // days. Debounce: don't re-draft a quote we already drafted within this window,
@@ -21,11 +21,6 @@ const REDRAFT_DEBOUNCE_DAYS = 7;
 // Max materials bundled into one supplier email. Suppliers with more are split
 // into multiple drafts so a 90-material supplier doesn't become one mega-email.
 const MAX_MATERIALS_PER_EMAIL = 15;
-
-// Optional run scope: when set, only these client orgs are processed (others are
-// dropped like "skip"). Used to stage a subset of clients' drafts in isolation
-// (e.g. a Bobber Labs test run) without editing ACTIVE_CLIENTS.
-const ONLY_ORGS = onlyOrgNames();
 
 // Group key: (client_org × supplier).
 function groupKey(r: OverdueRow): string {
@@ -86,13 +81,15 @@ registerAgent({
       data: { rows: overdue.length, orgs: uniqueOrgs },
     });
 
-    // Classify; skip/unknown drop out entirely.
+    // Classify; skip/unknown drop out entirely. Re-quote drafts only for orgs
+    // whose per-org switch is 'active' (see lib/org-status.ts).
+    const orgStatuses = await loadOrgStatuses(createAdminClient());
     const kept: OverdueRow[] = [];
     const droppedRows: OverdueRow[] = [];
     const droppedOrgNames = new Set<string>();
     const classMap = new Map<string, { mode: OutreachMode; ghostBrand?: string }>();
     for (const r of overdue) {
-      if (ONLY_ORGS.length && !ONLY_ORGS.includes(r.client_org_name)) {
+      if (!outreachAllowed(orgStatuses.byName.get(r.client_org_name) ?? "off")) {
         droppedRows.push(r);
         droppedOrgNames.add(r.client_org_name);
         continue;

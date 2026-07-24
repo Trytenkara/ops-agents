@@ -1,5 +1,6 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { loadOrgStatuses, sourcingAllowed } from "@/lib/org-status";
 import type { RawLead } from "./enrich";
 import { enrichAndStageLead } from "./run-enrich";
 
@@ -21,12 +22,24 @@ registerAgent({
   async run(ctx) {
     const admin = createAdminClient();
 
+    // Per-org switch: only enrich leads for orgs whose sourcing_status allows
+    // pool-building (active or sourcing_only). 'off' orgs are skipped entirely.
+    const orgStatuses = await loadOrgStatuses(admin);
+    const sourcingOrgIds = [...orgStatuses.byOaId.entries()].filter(([, s]) => sourcingAllowed(s)).map(([id]) => id);
+    if (sourcingOrgIds.length === 0) {
+      ctx.setItemsProcessed(0);
+      ctx.setStatus("success");
+      ctx.setSummary("No orgs are active/sourcing_only — nothing to enrich.");
+      return;
+    }
+
     // 1. Pull a batch of raw leads, best confidence first.
     const { data: leads, error: pullErr } = await admin
       .from("leads_in_flight")
-      .select("id, supplier_id, supplier_name, material_name, payload")
+      .select("id, org_id, supplier_id, supplier_name, material_name, payload")
       .eq("stage", "raw")
       .eq("status", "active")
+      .in("org_id", sourcingOrgIds)
       .order("confidence_score", { ascending: false, nullsFirst: false })
       .limit(MAX_LEADS_PER_RUN);
 
