@@ -25,8 +25,9 @@ export default async function OrgSavingsPage({
   const session = (await getSession())!;
   if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator", "monitor"])) redirect("/work");
   const view = searchParams?.view === "report" ? "report" : "table";
-  const reportType =
-    searchParams?.type === "freight" ? "freight" : searchParams?.type === "expedited" ? "expedited" : "savings";
+  // "freight" (Quick Report) is the default and replaces the retired "Cost savings"
+  // type — it renders the same savings cards plus freight/supplier detail.
+  const reportType = searchParams?.type === "expedited" ? "expedited" : "freight";
   const canEdit = hasAnyRole(session, ["admin", "ops_lead", "ops_operator"]);
 
   const admin = createAdminClient();
@@ -54,8 +55,8 @@ export default async function OrgSavingsPage({
   const scorecard = await buildSourcingScorecard(admin, org.id, org.tenkara_org_id);
 
   if (view === "report") {
-    // Loaded for both types: the "freight" view shows the detail editor, and the
-    // "savings" view uses freight to optionally compute landed-cost savings.
+    // Quick Report ("freight") shows the freight/supplier detail editor and the
+    // optional landed-cost toggle; both need the material attributes.
     const attributes = await loadMaterialAttributes(org.id);
 
     // The expedited report needs the market quotes attached + the PO-derived
@@ -92,7 +93,7 @@ export default async function OrgSavingsPage({
             report={report}
             clientName={orgName}
             slug={org.slug}
-            variant={reportType === "freight" ? "freight" : "savings"}
+            variant="freight"
             attributes={attributes}
             orgId={org.id}
             canEdit={canEdit}
@@ -169,9 +170,9 @@ function ViewToggle({ slug, view }: { slug: string; view: "table" | "report" }) 
   );
 }
 
-function ReportTypeToggle({ slug, type }: { slug: string; type: "savings" | "freight" | "expedited" }) {
+function ReportTypeToggle({ slug, type }: { slug: string; type: "freight" | "expedited" }) {
   const base = `/work/orgs/${slug}/savings?view=report`;
-  const tab = (key: "savings" | "freight" | "expedited", label: string, href: string) => (
+  const tab = (key: "freight" | "expedited", label: string, href: string) => (
     <Link
       href={href}
       className={cn(
@@ -184,9 +185,8 @@ function ReportTypeToggle({ slug, type }: { slug: string; type: "savings" | "fre
   );
   return (
     <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1 print:hidden">
-      {tab("savings", "Cost savings", base)}
-      {tab("freight", "Freight & suppliers", `${base}&type=freight`)}
-      {tab("expedited", "Expedited report", `${base}&type=expedited`)}
+      {tab("freight", "Quick Report", base)}
+      {tab("expedited", "Detailed Report", `${base}&type=expedited`)}
     </div>
   );
 }
