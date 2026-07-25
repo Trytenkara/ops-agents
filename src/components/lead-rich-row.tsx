@@ -64,6 +64,126 @@ export function LeadMatchBadge({ r, large = false }: { r: any; large?: boolean }
   );
 }
 
+// Why a lead left the pipeline (dropped/terminal) or was suppressed before
+// outreach. Keyed off the reason CODE (the part before any ":" in drop_reason,
+// or payload.outreach_suppressed.reason).
+const REMOVAL_REASON_LABEL: Record<string, string> = {
+  non_material_supplier: "Freight/logistics — not a material supplier",
+  dedup_canonical_name: "Duplicate (same company)",
+  duplicate: "Duplicate lead",
+  duplicate_open_case: "Duplicate of an open case",
+  escalated_to_case: "Escalated to a case",
+  manual_outreach_case: "Manual outreach case",
+  not_a_supplier: "Not actually a supplier",
+  wrong_material: "Wrong material",
+  already_relationship: "Already a supplier relationship",
+  prior_relationship: "Already a supplier relationship",
+  low_quality_signal: "Low-quality signal",
+  out_of_scope_geo: "Out of geographic scope",
+  dnc_company: "Do-not-contact (client list)",
+  excluded_country: "Excluded country (client setting)",
+};
+
+// Resolve a removal/suppression reason for a lead, if any: outreach suppression
+// (lead still active) takes precedence, else the drop_reason on a dropped/terminal
+// lead. Returns a friendly label + whether it was a pre-outreach suppression.
+export function leadRemoval(r: any): { label: string; suppressed: boolean } | null {
+  const sup = r?.payload?.outreach_suppressed?.reason as string | undefined;
+  if (sup) return { label: REMOVAL_REASON_LABEL[sup] ?? sup, suppressed: true };
+  if (r?.status && r.status !== "active") {
+    const raw = (r.drop_reason as string | undefined) ?? "";
+    const code = raw.split(":")[0].trim();
+    return { label: REMOVAL_REASON_LABEL[code] || raw || r.status, suppressed: false };
+  }
+  return null;
+}
+
+// Human-readable explanation of why a lead was held at the raw stage (not
+// promoted to enriched) — surfaced in the enrichment panel.
+const BLOCKED_REASON_LABEL: Record<string, string> = {
+  no_contact_channels: "No website, email, or phone to work from.",
+  all_contact_channels_invalid: "Tried the site + contact pages — no reachable email, phone, or form found.",
+};
+
+const CONTACT_SOURCE_LABEL: Record<string, string> = {
+  scout: "from scout", discovered: "found on site", path: "contact form", tenkara: "Tenkara record",
+};
+
+// Per-lead enrichment breakdown: what the enrichment stage resolved, scored,
+// cleared, and why it was held — read entirely from the stored payload.enrichment
+// (works retroactively; no re-enrichment needed). Renders nothing until a lead
+// has been through enrichment.
+export function EnrichmentDetails({ r }: { r: any }) {
+  const e = r?.payload?.enrichment;
+  if (!e) return null;
+  const contact = e.contact ?? {};
+  const factors = Array.isArray(e.completeness_factors) ? e.completeness_factors : [];
+  const probe = e.website_probe ?? null;
+  const cleared = e.aggregator_contact_email as string | undefined;
+  const blocked = r?.payload?.enrichment_blocked_reason as string | undefined;
+  const srcLabel = contact.source ? (CONTACT_SOURCE_LABEL[contact.source] ?? contact.source) : null;
+
+  return (
+    <details className="text-xs mt-1">
+      <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Enrichment</summary>
+      <div className="mt-1 space-y-1 max-w-[38ch] border-l-2 border-border pl-2">
+        {/* Added / resolved */}
+        {(contact.email || contact.phone || contact.contact_url) && (
+          <div>
+            <span className="text-emerald-700 dark:text-emerald-400 font-medium">Resolved</span>
+            <ul className="ml-2 mt-0.5 space-y-0.5">
+              {contact.email && <li>email: {contact.email}{srcLabel && <span className="text-muted-foreground"> ({srcLabel})</span>}</li>}
+              {contact.phone && <li>phone: {contact.phone}</li>}
+              {contact.contact_url && <li>contact form{contact.pages_tried ? <span className="text-muted-foreground"> · {contact.pages_tried} pages checked</span> : null}</li>}
+            </ul>
+          </div>
+        )}
+        {/* Cleared / removed */}
+        {cleared && (
+          <div>
+            <span className="text-amber-700 dark:text-amber-400 font-medium">Cleared</span>
+            <div className="ml-2">{cleared} — marketplace inbox, not the supplier; not used for outreach.</div>
+          </div>
+        )}
+        {/* Website probe */}
+        {probe && (
+          <div className="text-muted-foreground">
+            Website: {probe.ok ? `resolves${probe.status_code ? ` (${probe.status_code})` : ""}` : `didn't resolve${probe.error ? ` (${probe.error})` : ""}`}
+          </div>
+        )}
+        {/* Scoring */}
+        {factors.length > 0 && (
+          <div>
+            <span className="text-muted-foreground">Completeness</span>
+            <div className="mt-0.5 flex flex-wrap gap-1">
+              {factors.map((f: any, i: number) => (
+                <span key={i} className="inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-[10px]">
+                  {f.label} +{Math.round((Number(f.points) || 0) * 100)}%
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* Held */}
+        {blocked && (
+          <div>
+            <span className="text-red-700 dark:text-red-400 font-medium">Held</span>
+            <div className="ml-2">{BLOCKED_REASON_LABEL[blocked] ?? blocked}</div>
+          </div>
+        )}
+        {e.enriched_at && (
+          <div className="text-muted-foreground">
+            enriched {relativeTime(e.enriched_at)}
+            {e.enrichment_run_id && (
+              <> · <a href={`/agents/runs/${e.enrichment_run_id}`} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">run ↗</a></>
+            )}
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
 export function LeadSourceBadge({ source }: { source: string | null | undefined }) {
   const s = source ? SOURCE_BADGE[source] : undefined;
   if (!s) return <span className="text-muted-foreground">{source ?? "—"}</span>;
@@ -199,8 +319,17 @@ export function LeadRichRow({
             </span>
           )}
         </div>
-        <div className="mt-1">
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
           <LeadMatchBadge r={r} large />
+          {(() => {
+            const removal = leadRemoval(r);
+            if (!removal) return null;
+            return (
+              <Badge variant="danger" title={removal.suppressed ? "Suppressed before outreach" : "Removed from the pipeline"}>
+                {removal.suppressed ? "Suppressed" : "Removed"}: {removal.label}
+              </Badge>
+            );
+          })()}
         </div>
         {(r.payload?.supplier_country || r.payload?.supplier_role) && (
           <div className="text-xs text-muted-foreground">
@@ -265,6 +394,7 @@ export function LeadRichRow({
             </ul>
           </details>
         )}
+        <EnrichmentDetails r={r} />
       </TableCell>
       <TableCell className="align-top">
         <div className="flex items-center gap-2">

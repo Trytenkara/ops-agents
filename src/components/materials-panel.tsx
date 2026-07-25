@@ -11,7 +11,7 @@ import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { Select, type SelectOption } from "@/components/ui/select";
 import type { MaterialProfile, MaterialProfileRow, OrderLineRow } from "@/lib/material-profile";
-import type { MaterialSourcingStatus } from "@/lib/material-sourcing-status";
+import type { MaterialSourcingStatus, SourcingCounts } from "@/lib/material-sourcing-status";
 import { uploadAndParsePO, confirmOrder, deleteOrder, rematchOrders, editOrder } from "@/app/actions/material-profile";
 import { approveStagedQuote, dismissStagedQuote } from "@/app/actions/staged-quotes";
 import { saveSourcingNotes } from "@/app/actions/client-settings";
@@ -307,20 +307,77 @@ export function MaterialsPanel({
   );
 }
 
+// Ordered pipeline stages for the per-material funnel. Counts drop by orders of
+// magnitude across stages, so this is a fixed-cell stepper (not a proportional
+// bar) — each stage always shows its number. Single hue (sky), lightness-stepped
+// by reached/current, so it stays colorblind-safe and doesn't compete with the
+// semantic state chip above it.
+const FUNNEL_STAGES = [
+  { key: "leads", label: "Leads" },
+  { key: "drafted", label: "Drafted" },
+  { key: "sent", label: "Sent" },
+  { key: "quotes", label: "Quotes" },
+] as const;
+
+function SourcingFunnel({ counts, base, tab }: { counts: SourcingCounts; base: string; tab: string | null }) {
+  // Furthest stage that has any activity — the material's real "where it's at".
+  const current = FUNNEL_STAGES.reduce((acc, s, i) => (counts[s.key] > 0 ? i : acc), -1);
+  // Nothing in the pipeline yet → no funnel (the state chip already says so).
+  if (current < 0) return null;
+  const extra = [
+    counts.compiling ? `${counts.compiling} compiling the first email` : null,
+    counts.followup ? `${counts.followup} queued for follow-up` : null,
+  ].filter(Boolean).join(" · ");
+  const bar = (
+    <div className="mt-1 flex items-stretch gap-0.5" title={extra || "Leads → drafted → sent → quotes"}>
+      {FUNNEL_STAGES.map((s, i) => {
+        const v = counts[s.key];
+        const reached = v > 0;
+        const isCurrent = i === current;
+        return (
+          <div
+            key={s.key}
+            className={cn(
+              "flex min-w-[2.3rem] flex-1 flex-col items-center rounded px-1 py-0.5 leading-none",
+              reached ? "bg-sky-500/15 text-sky-700 dark:text-sky-300" : "bg-muted/50 text-muted-foreground",
+              isCurrent && "bg-sky-500/30 ring-1 ring-sky-500/50 font-semibold"
+            )}
+          >
+            <span className="tabular-nums text-[11px]">{v}</span>
+            <span className="text-[8px] uppercase tracking-wide opacity-70">{s.label}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+  return tab ? (
+    <Link href={`${base}${tab}`} onClick={(e) => e.stopPropagation()} className="block hover:opacity-90">
+      {bar}
+    </Link>
+  ) : (
+    bar
+  );
+}
+
 function SourcingChip({ status, base }: { status?: MaterialSourcingStatus; base: string }) {
   if (!status) return <span className="text-muted-foreground">—</span>;
-  const inner = (
+  const chip = (
     <span className={cn("inline-flex flex-col rounded-md px-2 py-1 text-left leading-tight", status.cls)}>
       <span className="text-[11px] font-semibold uppercase tracking-wide">{status.label}</span>
       <span className="text-[10px] opacity-80">{status.reason}</span>
     </span>
   );
-  return status.tab ? (
-    <Link href={`${base}${status.tab}`} onClick={(e) => e.stopPropagation()} className="inline-block hover:opacity-80">
-      {inner}
-    </Link>
-  ) : (
-    inner
+  return (
+    <div className="flex flex-col gap-0.5 min-w-[10.5rem]">
+      {status.tab ? (
+        <Link href={`${base}${status.tab}`} onClick={(e) => e.stopPropagation()} className="inline-block hover:opacity-80 self-start">
+          {chip}
+        </Link>
+      ) : (
+        <span className="self-start">{chip}</span>
+      )}
+      {status.counts && <SourcingFunnel counts={status.counts} base={base} tab={status.tab} />}
+    </div>
   );
 }
 

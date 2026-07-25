@@ -355,6 +355,10 @@ registerAgent({
       byOrg.set(c.lead.org_id!, arr);
     }
     const candidatesNoPrior: Candidate[] = [];
+    // Post-enrichment removals to persist on the lead so the "Removed / filtered
+    // out" view can explain why a lead never got outreach. Cleared markers are
+    // for leads that were suppressed before but are now eligible again.
+    const suppressionUpdates: { id: string; payload: any }[] = [];
     for (const [orgId, group] of byOrg) {
       const org = orgsById.get(orgId);
       const tenkaraOrgId = org?.tenkara_org_id ?? null;
@@ -397,17 +401,36 @@ registerAgent({
       }
 
       for (const c of group) {
+        const p = (c.lead.payload ?? {}) as any;
+        const suppress = (reason: string) =>
+          suppressionUpdates.push({ id: c.lead.id, payload: { ...p, outreach_suppressed: { reason, at: new Date().toISOString(), run_id: ctx.runId } } });
         if (c.lead.supplier_id && priorSet.has(c.lead.supplier_id)) {
           priorRelSkipped++;
+          suppress("prior_relationship");
           continue;
         }
-        const p = (c.lead.payload ?? {}) as any;
-        if (exclusionReason({ name: c.lead.supplier_name, website: p.supplier_website ?? p.source_url, country: p.supplier_country }, exclusions)) {
+        const exReason = exclusionReason({ name: c.lead.supplier_name, website: p.supplier_website ?? p.source_url, country: p.supplier_country }, exclusions);
+        if (exReason) {
           exclusionSkipped++;
+          suppress(exReason);
           continue;
+        }
+        // Eligible now — clear any stale suppression marker from a prior run.
+        if (p.outreach_suppressed) {
+          const { outreach_suppressed, ...rest } = p;
+          suppressionUpdates.push({ id: c.lead.id, payload: rest });
         }
         candidatesNoPrior.push(c);
       }
+    }
+    // Persist suppression/clear markers (metadata only — does not change status
+    // or who gets emailed). Chunked to stay within the function budget.
+    for (let i = 0; i < suppressionUpdates.length; i += 25) {
+      await Promise.all(
+        suppressionUpdates.slice(i, i + 25).map((u) =>
+          admin.from("leads_in_flight").update({ payload: u.payload }).eq("id", u.id)
+        )
+      );
     }
     await ctx.log(
       `Prior-relationship + exclusion filter: ${candidatesNoPrior.length} kept · ${priorRelSkipped} skipped (already-known) · ${exclusionSkipped} skipped (do-not-contact / excluded country)`,

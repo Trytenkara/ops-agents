@@ -150,6 +150,24 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   // these — surface them so ops can add the name in Tenkara before re-running.
   const leadsNeedingName = leads.filter((r) => r.needs_material_name);
 
+  // Removed / filtered-out leads: dropped or terminal (manual drops, dedup,
+  // freight/non-material filter, escalations) PLUS active leads that outreach
+  // suppressed (do-not-contact / excluded country / prior relationship). Loaded
+  // separately since the main list is active-only. Capped at the most recent 500.
+  const { data: removedRaw } = await admin
+    .from("leads_in_flight")
+    .select(
+      "id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)"
+    )
+    .eq("org_id", org.id)
+    .or("status.in.(dropped,terminal),payload->>outreach_suppressed.not.is.null")
+    .order("created_at", { ascending: false })
+    .limit(500);
+  const removedRows = (removedRaw ?? []).map((r) => ({
+    ...r,
+    material_name: correctMaterialSpelling(r.material_name) ?? r.material_name,
+  }));
+
   // Promote/Drop gating: the operator can act if they see all orgs or this org
   // is in their assignment set, and they hold an acting role.
   const session = (await getSession())!;
@@ -216,7 +234,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           </p>
         </div>
       )}
-      <LeadsTabs rows={leads} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} />
+      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} />
 
       <section className="space-y-2 pt-2">
         <h2 className="font-serif text-xl tracking-tight">

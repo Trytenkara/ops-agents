@@ -17,6 +17,15 @@ export type SourcingStatusKey =
   | "current"
   | "not_started";
 
+export interface SourcingCounts {
+  leads: number;
+  drafted: number;
+  sent: number;
+  quotes: number;
+  compiling: number;
+  followup: number;
+}
+
 export interface MaterialSourcingStatus {
   key: SourcingStatusKey;
   label: string;
@@ -25,6 +34,10 @@ export interface MaterialSourcingStatus {
   cls: string;
   // Tab suffix to deep-link into (null = no link).
   tab: string | null;
+  // Per-stage pipeline counts — always populated so the UI can show the funnel
+  // (how many leads / drafts / sent / quotes) even after a material advances
+  // past raw sourcing. The `key`/`label` above is just the furthest-along stage.
+  counts: SourcingCounts;
 }
 
 function expiryInfo(iso: string | null): { days: number | null; label: string } {
@@ -45,7 +58,7 @@ function rankLine(l: SourcingScorecardLine): number {
   return 3;
 }
 
-function compute(m: MaterialProfileRow, score: SourcingScorecardLine | undefined, leads: number, drafted: number, sent: number, compiling: number, followup: number): MaterialSourcingStatus {
+function compute(m: MaterialProfileRow, score: SourcingScorecardLine | undefined, leads: number, drafted: number, sent: number, compiling: number, followup: number): Omit<MaterialSourcingStatus, "counts"> {
   const pct = score?.beats_client_pct != null ? Math.abs(score.beats_client_pct).toFixed(0) : null;
   if (score?.status === "beating") {
     return { key: "sourced", label: "Sourced", reason: pct ? `beats by ${pct}%` : "below current", cls: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400", tab: "/savings" };
@@ -158,8 +171,21 @@ export async function getMaterialSourcingStatus(
 
   const out: Record<string, MaterialSourcingStatus> = {};
   for (const m of profile.materials) {
-    if (!m.tenkaraMaterialId) continue;
-    out[m.tenkaraMaterialId] = compute(m, scoreByMat.get(m.tenkaraMaterialId), leadCount.get(m.tenkaraMaterialId) ?? 0, draftedCount.get(m.tenkaraMaterialId) ?? 0, sentCount.get(m.tenkaraMaterialId) ?? 0, compilingCount.get(m.tenkaraMaterialId) ?? 0, followupCount.get(m.tenkaraMaterialId) ?? 0);
+    const id = m.tenkaraMaterialId;
+    if (!id) continue;
+    const score = scoreByMat.get(id);
+    const counts: SourcingCounts = {
+      leads: leadCount.get(id) ?? 0,
+      drafted: draftedCount.get(id) ?? 0,
+      sent: sentCount.get(id) ?? 0,
+      quotes: score?.n_sourced ?? 0,
+      compiling: compilingCount.get(id) ?? 0,
+      followup: followupCount.get(id) ?? 0,
+    };
+    out[id] = {
+      ...compute(m, score, counts.leads, counts.drafted, counts.sent, counts.compiling, counts.followup),
+      counts,
+    };
   }
   return out;
 }
