@@ -291,7 +291,7 @@ registerAgent({
       log: (m, meta) => ctx.log(m, meta),
     }).catch((e: any) => {
       ctx.log(`Marketplace lead price-pull failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "mp_leads" });
-      return { processed: 0, pulled: 0, flagged: 0, stoppedEarly: false };
+      return { processed: 0, pulled: 0, flagged: 0, pending: 0, stoppedEarly: false };
     });
 
     ctx.setItemsProcessed(written + leadPull.processed);
@@ -302,7 +302,7 @@ registerAgent({
         `${counts.signal_matches_baseline} unchanged · ${counts.signal_diverges} diverged · ` +
         `${counts.no_signal_found} no signal · ${counts.needs_review} needs review · ${counts.link_broken} link broken` +
         (counts.login_required ? ` · ${counts.login_required} need manual login` : "") +
-        (leadPull.processed ? ` · leads: pulled ${leadPull.pulled} price${leadPull.pulled === 1 ? "" : "s"}, flagged ${leadPull.flagged} for manual pull` : "") +
+        (leadPull.processed ? ` · leads: pulled ${leadPull.pulled} price${leadPull.pulled === 1 ? "" : "s"}, ${leadPull.pending} retrying, flagged ${leadPull.flagged} for manual pull` : "") +
         (skippedPending ? ` · ${skippedPending} skipped (already pending)` : "") +
         (stoppedEarly || leadPull.stoppedEarly ? " · stopped at time budget (more next run)" : "")
     );

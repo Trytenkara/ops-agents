@@ -94,7 +94,7 @@ function MarketplaceLeadCard({ row, canAct }: { row: Row; canAct: boolean }) {
 
   const st = siteTypeMeta(row.payload?.site_type);
   const pull = row.payload?.marketplace_pull as
-    | { status: "pulled" | "needs_manual_pull"; reason?: string; pulled_at?: string }
+    | { status: "pulled" | "needs_manual_pull" | "pending"; reason?: string; pulled_at?: string }
     | undefined;
   const pullReasonLabel: Record<string, string> = {
     login_required: "needs login/account",
@@ -150,8 +150,8 @@ function MarketplaceLeadCard({ row, canAct }: { row: Row; canAct: boolean }) {
                 needs manual pull{pull.reason ? ` · ${pullReasonLabel[pull.reason] ?? pull.reason}` : ""}
               </Badge>
             )}
-            {!pull && (
-              <Badge variant="outline" title="Not checked yet — the marketplace price agent will attempt to pull the listed price. You can also enter the price ladder manually now.">
+            {(!pull || pull.status === "pending") && (
+              <Badge variant="outline" title="Not yet resolved — the marketplace price agent will retry pulling the listed price over the next runs. You can also enter the price ladder manually now.">
                 price pull pending
               </Badge>
             )}

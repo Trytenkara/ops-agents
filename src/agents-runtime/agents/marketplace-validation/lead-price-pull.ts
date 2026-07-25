@@ -15,6 +15,7 @@ type Admin = ReturnType<typeof createAdminClient>;
 
 const LEAD_CAP = 30;      // Opus+web_search per lead (~25s), bounded-parallel — sized to clear a fresh discovery batch within a few hourly runs while staying inside the shared deadline.
 const CONCURRENCY = 4;
+const MAX_PULL_ATTEMPTS = 3; // needs_review is retried across hourly runs up to this many times before a case is opened, so one flaky web_search result isn't a permanent escalation.
 
 interface LeadRow {
   id: string;
@@ -39,6 +40,7 @@ export interface LeadPullResult {
   processed: number;
   pulled: number;
   flagged: number;
+  pending: number;
   stoppedEarly: boolean;
 }
 
@@ -49,7 +51,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   log: (msg: string, meta?: any) => Promise<void> | void;
 }): Promise<LeadPullResult> {
   const { admin, runId, deadline, log } = opts;
-  const empty: LeadPullResult = { processed: 0, pulled: 0, flagged: 0, stoppedEarly: false };
+  const empty: LeadPullResult = { processed: 0, pulled: 0, flagged: 0, pending: 0, stoppedEarly: false };
   if (Date.now() > deadline) return empty;
 
   // Active marketplace leads with no pull attempt yet. Marketplace is signalled
@@ -58,7 +60,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     .from("leads_in_flight")
     .select("id, org_id, supplier_id, supplier_name, material_id, material_name, payload")
     .eq("status", "active")
-    .is("payload->marketplace_pull", null)
+    .or("payload->marketplace_pull.is.null,payload->marketplace_pull->>status.eq.pending")
     .or("payload->>site_type.in.(M,MS),payload->>supplier_role.eq.Marketplace")
     .order("created_at", { ascending: true }) // oldest first (FIFO) — drains the backlog in discovery order so no lead is starved by the continuous stream of new discoveries
     .limit(LEAD_CAP * 3);
@@ -93,9 +95,10 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   let processed = 0;
   let pulled = 0;
   let flagged = 0;
+  let pending = 0;
   let stoppedEarly = false;
 
-  const processOne = async (l: LeadRow): Promise<"pulled" | "flagged" | null> => {
+  const processOne = async (l: LeadRow): Promise<"pulled" | "flagged" | "pending" | null> => {
     const url = listingUrl(l.payload)!;
     let result;
     try {
@@ -124,6 +127,17 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     }
 
     const gotPrice = result.classification === "current_price_found" && result.current_price != null;
+    const reason = result.classification; // current_price_found | login_required | link_broken | needs_review
+    // login_required / link_broken are actionable and escalate on the first hit.
+    // needs_review is the transient/ambiguous catch-all (web_search hiccup, JSON
+    // parse failure, multi-SKU / RFQ-only / pack-size mismatch) — retry it across
+    // a few hourly runs before opening a case, so one flaky result isn't a
+    // permanent escalation "without information".
+    const actionable = reason === "login_required" || reason === "link_broken";
+    const priorAttempts = Number(l.payload?.marketplace_pull?.attempts ?? 0);
+    const attempts = gotPrice ? priorAttempts : priorAttempts + 1;
+    const escalate = !gotPrice && (actionable || attempts >= MAX_PULL_ATTEMPTS);
+    const retry = !gotPrice && !escalate;
     const pull = gotPrice
       ? {
           status: "pulled" as const,
@@ -135,9 +149,11 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           pulled_at: new Date().toISOString(),
         }
       : {
-          status: "needs_manual_pull" as const,
-          reason: result.classification, // login_required | link_broken | needs_review
+          status: retry ? ("pending" as const) : ("needs_manual_pull" as const),
+          reason, // login_required | link_broken | needs_review
+          attempts,
           source_url: result.source_url ?? url,
+          last_notes: result.notes ?? null,
           at: new Date().toISOString(),
         };
 
@@ -170,7 +186,18 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       return "pulled";
     }
 
-    // Flag + tag the operator with a case, unless one is already open.
+    if (retry) {
+      // Left in "pending" — no case opened. The query re-picks pending leads on
+      // the next hourly run until a price is found or attempts hit the cap.
+      await log(`Marketplace price inconclusive (${reason}) — retrying (attempt ${attempts}/${MAX_PULL_ATTEMPTS}): ${l.supplier_name} × ${l.material_name}`, {
+        step: "mp_retry",
+        data: { lead_id: l.id, reason, attempts },
+      });
+      return "pending";
+    }
+
+    // Escalate: actionable reason (login/broken link) or a needs_review that
+    // survived MAX_PULL_ATTEMPTS. Flag + tag the operator, unless a case is open.
     const { data: dupe } = await admin
       .from("cases")
       .select("id")
@@ -182,16 +209,17 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       .maybeSingle();
     if (!dupe) {
       const reasonLabel =
-        pull.reason === "login_required" ? "the listing needs a login/account"
-        : pull.reason === "link_broken" ? "the listing link is broken"
-        : "no price was found on the page";
+        reason === "login_required" ? "the listing needs a login/account"
+        : reason === "link_broken" ? "the listing link is broken"
+        : `no price could be auto-pulled after ${attempts} attempts`;
+      const noteSuffix = reason === "needs_review" && result.notes ? ` (${result.notes})` : "";
       await admin.from("cases").insert({
         org_id: l.org_id,
         type: "marketplace_price_pull",
         status: "open",
         supplier_id: l.supplier_id,
         material_id: l.material_id,
-        recommended_action: `Marketplace price for ${l.material_name} from ${l.supplier_name ?? "this supplier"} couldn't be auto-pulled — ${reasonLabel}. Pull the listed/wholesale price manually: ${pull.source_url}`,
+        recommended_action: `Marketplace price for ${l.material_name} from ${l.supplier_name ?? "this supplier"} couldn't be auto-pulled — ${reasonLabel}${noteSuffix}. Pull the listed/wholesale price manually: ${pull.source_url}`,
         assigned_operator: operatorFor(l),
         metadata: {
           source_agent: "agent-05-marketplace-validation",
@@ -199,14 +227,16 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           lead_id: l.id,
           supplier_name: l.supplier_name,
           material_name: l.material_name,
-          reason: pull.reason,
+          reason,
+          attempts,
+          last_notes: result.notes ?? null,
           source_url: pull.source_url,
         },
       });
     }
-    await log(`Marketplace price needs manual pull (${pull.reason}): ${l.supplier_name} × ${l.material_name}`, {
+    await log(`Marketplace price needs manual pull (${reason}, ${attempts} attempts): ${l.supplier_name} × ${l.material_name}`, {
       step: "mp_flag",
-      data: { lead_id: l.id, reason: pull.reason },
+      data: { lead_id: l.id, reason, attempts },
     });
     return "flagged";
   };
@@ -222,9 +252,10 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       if (o == null) continue;
       processed++;
       if (o === "pulled") pulled++;
+      else if (o === "pending") pending++;
       else flagged++;
     }
   }
 
-  return { processed, pulled, flagged, stoppedEarly };
+  return { processed, pulled, flagged, pending, stoppedEarly };
 }
