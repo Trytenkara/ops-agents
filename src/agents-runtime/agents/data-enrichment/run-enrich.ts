@@ -31,7 +31,7 @@ export async function enrichAndStageLead(
     await log(`Enrichment threw for lead ${lead.id}: ${e?.message ?? e}`, { step: "enrich", data: { lead_id: lead.id } });
     // Stamp before bailing: a throw still consumed an attempt, and an unstamped
     // lead sorts first forever.
-    const { data } = await admin
+    const { data, error: stampErr } = await admin
       .from("leads_in_flight")
       .update({ last_enrichment_attempt_at: attemptedAt })
       .eq("id", lead.id)
@@ -40,8 +40,10 @@ export async function enrichAndStageLead(
       .select("id");
     // No row means the lead moved on mid-probe, so the throw is not this lead's
     // failure. Counting it as an error would flip the run to `partial` and fire a
-    // spurious safety alert.
-    if (!data?.length) return { status: "superseded" };
+    // spurious safety alert. A failed stamp is the opposite case and must stay an
+    // error: the lead is still raw and now unstamped, so reporting it as benign
+    // would hide both the write failure and a lead sitting at the queue head.
+    if (!stampErr && !data?.length) return { status: "superseded" };
     return { status: "error", reason: e?.message ?? "threw" };
   }
 
