@@ -33,13 +33,22 @@ registerAgent({
       return;
     }
 
-    // 1. Pull a batch of raw leads, best confidence first.
+    // 1. Pull a batch of raw leads: never-attempted first, then whatever was tried
+    //    longest ago, with confidence breaking ties inside each group.
+    //
+    //    Ordering on confidence alone deadlocked this sweep: a blocked lead stays at
+    //    stage=raw and its score never moves, so once 25 of them collected at the top
+    //    of a tier the same rows were re-selected every run and promotion sat at zero
+    //    for days. The attempt timestamp is mutated by every attempt, so a lead
+    //    physically cannot be re-selected ahead of untried work, and blocked leads
+    //    come back for a retry only after the queue has cycled.
     const { data: leads, error: pullErr } = await admin
       .from("leads_in_flight")
       .select("id, org_id, supplier_id, supplier_name, material_name, payload")
       .eq("stage", "raw")
       .eq("status", "active")
       .in("org_id", sourcingOrgIds)
+      .order("last_enrichment_attempt_at", { ascending: true, nullsFirst: true })
       .order("confidence_score", { ascending: false, nullsFirst: false })
       .limit(MAX_LEADS_PER_RUN);
 
@@ -68,6 +77,9 @@ registerAgent({
     let blocked = 0;
     let errored = 0;
     let skipped = 0;
+    // Lead changed state mid-probe (operator action in the Control Room), so this
+    // run's write was declined rather than clobbering it.
+    let superseded = 0;
     const blockedReasons: Record<string, number> = {};
     const startedAt = Date.now();
 
@@ -91,6 +103,8 @@ registerAgent({
         blocked++;
         const reason = outcome.reason ?? "unknown";
         blockedReasons[reason] = (blockedReasons[reason] ?? 0) + 1;
+      } else if (outcome.status === "superseded") {
+        superseded++;
       } else {
         errored++;
       }
@@ -113,7 +127,7 @@ registerAgent({
       .map(([k, v]) => `${k}=${v}`)
       .join(", ");
     ctx.setSummary(
-      `Enriched ${promoted}/${leads.length} → stage=enriched · ${blocked} left at raw${reasonStr ? ` (${reasonStr})` : ""}${skipped ? ` · ${skipped} deferred (deadline)` : ""}${errored ? ` · ${errored} errors` : ""}`
+      `Enriched ${promoted}/${leads.length} → stage=enriched · ${blocked} left at raw${reasonStr ? ` (${reasonStr})` : ""}${skipped ? ` · ${skipped} deferred (deadline)` : ""}${superseded ? ` · ${superseded} superseded` : ""}${errored ? ` · ${errored} errors` : ""}`
     );
   },
 });
