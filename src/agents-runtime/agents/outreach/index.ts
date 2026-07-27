@@ -320,12 +320,18 @@ registerAgent({
         ghostBrand: cls.ghostBrand,
         clientOrgName: org.name,
         // Manual lead claim wins (Scout leads); then manual supplier assignment;
-        // then sticky-random. Scout leads have no supplier_id — fall back to the
-        // lead id so the sticky default spreads across the pool instead of all
-        // landing on pool[0] (matches the Leads-tab display key). Else org primary.
+        // then sticky-random. Scout leads have no supplier_id — key the sticky
+        // default on the EMAIL consolidation key (matching supplierKeyOf below) so
+        // every material row of one supplier collapses to ONE operator, consistent
+        // with the single consolidated thread we actually send. Fall back to lead
+        // id only when there's no email (manual-contact leads). Else org primary.
         assignedOperator:
           lead.assigned_operator_id ??
-          resolveSupplierOperatorId(assignmentsByOrg.get(lead.org_id) ?? new Map(), poolByOrg.get(lead.org_id) ?? [], lead.supplier_id ?? lead.id) ??
+          resolveSupplierOperatorId(
+            assignmentsByOrg.get(lead.org_id) ?? new Map(),
+            poolByOrg.get(lead.org_id) ?? [],
+            lead.supplier_id ?? (hasEmail && email ? `e:${email.toLowerCase()}` : lead.id)
+          ) ??
           org.primary_user_id,
       });
     }
