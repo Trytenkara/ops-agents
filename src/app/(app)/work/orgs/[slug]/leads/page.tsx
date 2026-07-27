@@ -111,6 +111,30 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   const supplierAssignments = await getSupplierAssignments(admin, org.id).catch(() => new Map<string, string>());
   const operatorOptions = operatorPool.map((op) => ({ id: op.id, name: op.name }));
   const operatorNameById = new Map(operatorPool.map((op) => [op.id, op.name]));
+
+  // Tenkara inbox assignee: who the outreach agent actually assigned the Tenkara
+  // conversation to (from draft_references.assigned_operator). This may differ from
+  // the current supplier_assignment if someone reassigned after the draft was created.
+  // Most-recent draft per supplier wins; keyed by supplier_id.
+  const tenkaraAssigneeBySupplier = new Map<string, string>(); // supplier_id → name
+  if (supplierIds.length) {
+    const { data: draftRefs } = await admin
+      .from("draft_references")
+      .select("supplier_id, assigned_operator")
+      .eq("org_id", org.id)
+      .in("supplier_id", supplierIds)
+      .not("assigned_operator", "is", null)
+      .order("created_at", { ascending: false });
+    for (const ref of draftRefs ?? []) {
+      const sid = (ref as any).supplier_id as string;
+      const opId = (ref as any).assigned_operator as string;
+      if (!tenkaraAssigneeBySupplier.has(sid)) {
+        const name = operatorNameById.get(opId);
+        if (name) tenkaraAssigneeBySupplier.set(sid, name);
+      }
+    }
+  }
+
   leads = leads.map((r) => {
     const flag = r.supplier_id ? leadMarketplace.get(r.supplier_id) : undefined;
     const market_kind =
@@ -134,6 +158,9 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
       (r.material_name && r.material_name.trim()) ||
         (r.material_id ? leadNames.get(r.material_id) ?? null : null)
     );
+    const tenkara_assignee_name = r.supplier_id
+      ? tenkaraAssigneeBySupplier.get(r.supplier_id) ?? null
+      : null;
     return {
       ...r,
       material_name: resolvedName ?? correctMaterialSpelling(r.material_name),
@@ -143,6 +170,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
       operator_name,
       operator_assigned_id,
       operator_auto_name,
+      tenkara_assignee_name,
     };
   });
 

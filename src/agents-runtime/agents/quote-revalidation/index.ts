@@ -6,7 +6,7 @@ import { generateRevalidationEmail, formatUserMessage } from "./drafter";
 import { buildCsv, type GroupResult } from "./csv-builder";
 import { uploadCsvAndSign } from "@/lib/storage";
 import { createMissiveDraft, missiveDraftLink } from "@/lib/missive";
-import { createTenkaraConversation, coldOutboundEmailClient, tenkaraEmailAccountIdFor } from "@/lib/tenkara";
+import { createTenkaraConversation, createTenkaraDraft, coldOutboundEmailClient, tenkaraEmailAccountIdFor } from "@/lib/tenkara";
 import { bodyToHtml } from "@/lib/email-style";
 import { lintDraft } from "../outreach-qa/lint";
 import { postQrSummary } from "./slack-notifier";
@@ -231,22 +231,61 @@ registerAgent({
               data: { client: group.client_org_name, mode: group.mode, ghost_brand: group.ghostBrand ?? null },
             });
           }
-          const c = await createTenkaraConversation({
-            externalId: `agent-02-reval-${group.client_org_id}-${group.supplier_id}-${today}`,
-            to: { name: group.supplier_contact_name ?? "", address: group.supplier_contact_email },
-            subject: draft.subject,
-            bodyHtml: bodyToHtml(draft.body),
-            bodyText: draft.body,
-            emailAccountId,
-            supplierContact: {
-              email: group.supplier_contact_email,
-              name: group.supplier_contact_name ?? null,
-              company: group.supplier_name ?? null,
-            },
-            context: { agent: "02 Quote Revalidation", client_org_id: group.client_org_id, supplier_id: group.supplier_id },
-          });
-          draftIdValue = c.draftId;
-          conversationIdValue = c.conversationId;
+
+          // Reply into the existing Tenkara thread when one exists for this
+          // supplier + client org, rather than opening a new conversation each
+          // revalidation cycle. Best-effort: a lookup failure falls through to
+          // creating a new thread.
+          let existingConversationId: string | null = null;
+          try {
+            const { data: oaOrgRow } = await admin.from("orgs").select("id").eq("tenkara_org_id", group.client_org_id).maybeSingle();
+            if (oaOrgRow?.id) {
+              const { data: existingRef } = await admin
+                .from("draft_references")
+                .select("thread_id")
+                .eq("org_id", oaOrgRow.id)
+                .eq("supplier_id", group.supplier_id)
+                .eq("email_client", "rod_app")
+                .not("thread_id", "is", null)
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+              existingConversationId = (existingRef as any)?.thread_id ?? null;
+            }
+          } catch {
+            // best-effort — fall through to create a new conversation
+          }
+
+          if (existingConversationId) {
+            const d = await createTenkaraDraft({
+              conversationId: existingConversationId,
+              to: { name: group.supplier_contact_name ?? "", address: group.supplier_contact_email },
+              subject: `Re: ${draft.subject.replace(/^Re:\s*/i, "")}`,
+              bodyHtml: bodyToHtml(draft.body),
+              bodyText: draft.body,
+              emailAccountId,
+            });
+            draftIdValue = d.id;
+            conversationIdValue = d.conversationId;
+            await ctx.log(`Replying into existing thread ${existingConversationId} for ${group.supplier_name}`, { step: "stage", data: { existing_thread: true } });
+          } else {
+            const c = await createTenkaraConversation({
+              externalId: `agent-02-reval-${group.client_org_id}-${group.supplier_id}-${today}`,
+              to: { name: group.supplier_contact_name ?? "", address: group.supplier_contact_email },
+              subject: draft.subject,
+              bodyHtml: bodyToHtml(draft.body),
+              bodyText: draft.body,
+              emailAccountId,
+              supplierContact: {
+                email: group.supplier_contact_email,
+                name: group.supplier_contact_name ?? null,
+                company: group.supplier_name ?? null,
+              },
+              context: { agent: "02 Quote Revalidation", client_org_id: group.client_org_id, supplier_id: group.supplier_id },
+            });
+            draftIdValue = c.draftId;
+            conversationIdValue = c.conversationId;
+          }
         } else {
           const m = await createMissiveDraft({
             subject: draft.subject,

@@ -419,10 +419,20 @@ export function LeadRichRow({
                 options={operatorOptions}
               />
             )}
+            {r.tenkara_assignee_name && (
+              <div className="text-[11px] text-muted-foreground mt-0.5" title="Who has this conversation assigned in the Tenkara inbox (set when the outreach draft was created)">
+                Tenkara: <span className="text-foreground">{r.tenkara_assignee_name}</span>
+              </div>
+            )}
           </div>
         ) : (
           <div className="text-[11px] text-muted-foreground" title="Operator who owns this lead for this client (assigned to ops_operator/ops_lead team members)">
             Operator: <span className={r.operator_name ? "text-foreground" : "italic"}>{r.operator_name ?? "Unassigned"}</span>
+            {r.tenkara_assignee_name && (
+              <span className="ml-2" title="Who has this conversation assigned in the Tenkara inbox">
+                · Tenkara: <span className="text-foreground">{r.tenkara_assignee_name}</span>
+              </span>
+            )}
           </div>
         )}
         {sourceUrl && (
