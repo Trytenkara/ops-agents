@@ -80,6 +80,12 @@ export function ClassificationBadge({ value }: { value: string | null }) {
       );
     case "needs_review":
       return <Badge variant="default">review</Badge>;
+    case "price_on_file":
+      return (
+        <Badge variant="success" title="Current price we hold for this supplier — not yet re-checked against the live listing.">
+          price on file
+        </Badge>
+      );
     default:
       return value ? <Badge variant="secondary">{value}</Badge> : <span className="text-muted-foreground">—</span>;
   }

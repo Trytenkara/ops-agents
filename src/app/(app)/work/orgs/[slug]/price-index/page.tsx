@@ -10,6 +10,7 @@ import { correctMaterialSpelling } from "@/lib/material-spelling";
 import { ListPageHeader } from "@/components/list-page-header";
 import { MarketplaceFindingsList } from "@/components/marketplace-findings-list";
 import { RequoteList, type RequoteRow } from "@/components/requote-list";
+import { DirectPricesOnFile, type DirectPriceRow } from "@/components/direct-prices-on-file";
 import { PriceIndexTabs } from "@/components/price-index-tabs";
 import { cn } from "@/lib/utils";
 
@@ -42,7 +43,7 @@ export default async function OrgPriceIndexPage({
   const { data: org } = await admin.from("orgs").select("id, slug, name, display_name").eq("slug", params.slug).maybeSingle();
   if (!org) notFound();
 
-  const [findingsRes, draftsRes, stagedRes] = await Promise.all([
+  const [findingsRes, draftsRes, stagedRes, leadsRes] = await Promise.all([
     admin
       .from("marketplace_check_findings")
       .select(
@@ -63,10 +64,19 @@ export default async function OrgPriceIndexPage({
       .limit(200),
     admin
       .from("staged_quotes")
-      .select("supplier_id, supplier_name, material_id, price, case_size, unit_of_measurement, unit_price, currency, grade, status, created_at")
+      .select("id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, currency, grade, status, created_at")
       .eq("org_id", org.id)
       .not("material_id", "is", null)
       .order("created_at", { ascending: false })
+      .limit(1000),
+    // Marketplace prices we've already pulled (Agent 05 lead-price-pull) live on
+    // the lead payload, not in findings. Surface them so the Live Price Index
+    // shows the *current* price on file, not only re-check deltas.
+    admin
+      .from("leads_in_flight")
+      .select("id, supplier_name, material_name, source, payload, created_at")
+      .eq("org_id", org.id)
+      .not("payload->price_tiers", "is", null)
       .limit(1000),
   ]);
 
@@ -144,6 +154,72 @@ export default async function OrgPriceIndexPage({
     };
   });
 
+  // Marketplace prices already on file (pulled into leads_in_flight.payload by
+  // Agent 05). Show them as "price on file" rows so a fresh client sees current
+  // prices immediately — not just re-check deltas. Skip any supplier×material a
+  // re-check finding already covers (the finding row shows the same price), and
+  // only fold them into the default "pending review" view so the status pills
+  // keep filtering the re-check workflow cleanly.
+  const findingPairKey = (supplier: string | null | undefined, material: string | null | undefined) =>
+    `${normName(supplier)}|${normName(material)}`;
+  const findingPairs = new Set(findings.map((f: any) => findingPairKey(f.supplier_name, f.material_name)));
+  const marketplaceOnFile: any[] =
+    status !== "pending_review"
+      ? []
+      : ((leadsRes.data ?? []) as any[]).flatMap((l: any) => {
+          const tiers = Array.isArray(l.payload?.price_tiers) ? l.payload.price_tiers : [];
+          if (!tiers.length) return [];
+          if (findingPairs.has(findingPairKey(l.supplier_name, l.material_name))) return [];
+          const src = (l.payload?.source_url ?? l.payload?.supplier_website ?? null) as string | null;
+          return tiers.map((t: any, i: number) => ({
+            id: `lead-${l.id}-${i}`,
+            supplier_name: l.supplier_name ?? null,
+            material_name: correctMaterialSpelling(l.material_name),
+            pack_size: t.pack_size ?? null,
+            unit_price: t.unit_price ?? null,
+            baseline_price: t.price ?? null,
+            current_price: null,
+            pct_change: null,
+            classification: "price_on_file",
+            status: "on_file",
+            currency: "USD",
+            source_url: src,
+            notes: null,
+            created_at: (l.payload?.price_tiers_updated_at ?? l.created_at ?? null) as string | null,
+            kind: "on_file" as const,
+          }));
+        });
+  const marketplaceRows = [...findings, ...marketplaceOnFile];
+
+  // Direct-supplier prices on file (staged_quotes) that aren't tied to an open
+  // re-quote draft — these are the current non-marketplace prices we hold.
+  const consumedDirectKeys = new Set<string>();
+  for (const d of draftRows) {
+    if (!d.material_id) continue;
+    const supplierName = d.supplier_id ? supplierNames.get(d.supplier_id) ?? null : null;
+    if (d.supplier_id) consumedDirectKeys.add(`${d.supplier_id}|${d.material_id}`);
+    if (supplierName) consumedDirectKeys.add(`${normName(supplierName)}|${d.material_id}`);
+  }
+  const directOnFileMap = new Map<string, any>();
+  for (const s of (stagedRes.data ?? []) as any[]) {
+    if (s.status === "dismissed" || !s.material_id) continue;
+    const k = `${s.supplier_id ?? normName(s.supplier_name)}|${s.material_id}`;
+    if (consumedDirectKeys.has(k)) continue;
+    if (!directOnFileMap.has(k)) directOnFileMap.set(k, s); // newest-first, first wins
+  }
+  const directOnFile: DirectPriceRow[] = Array.from(directOnFileMap.values()).map((s: any) => ({
+    id: s.id,
+    supplierName: s.supplier_name ?? null,
+    materialName: s.material_name ? correctMaterialSpelling(s.material_name) : null,
+    price: s.price != null ? Number(s.price) : null,
+    unitPrice: s.unit_price != null ? Number(s.unit_price) : null,
+    unitOfMeasurement: s.unit_of_measurement ?? null,
+    currency: s.currency ?? null,
+    grade: s.grade ?? null,
+    status: s.status ?? null,
+    createdAt: s.created_at ?? null,
+  }));
+
   const base = `/work/orgs/${org.slug}/price-index`;
 
   return (
@@ -170,11 +246,14 @@ export default async function OrgPriceIndexPage({
       />
 
       <PriceIndexTabs
-        marketplaceCount={findings.length}
-        directCount={requotes.length}
+        marketplaceCount={marketplaceRows.length}
+        directCount={requotes.length + directOnFile.length}
         marketplace={
           <section className="space-y-3">
-            <p className="text-sm text-muted-foreground">Current public price vs. what&apos;s on file. Approve the ones worth applying.</p>
+            <p className="text-sm text-muted-foreground">
+              Current marketplace prices on file. Rows tagged <span className="font-medium text-foreground">price on file</span> are the
+              latest pulled price; re-checks also show the current public price vs. what&apos;s on file — approve the ones worth applying.
+            </p>
             <div className="flex flex-wrap gap-2">
               {STATUSES.map((s) => (
                 <Link
@@ -189,27 +268,45 @@ export default async function OrgPriceIndexPage({
                 </Link>
               ))}
             </div>
-            {findings.length === 0 ? (
+            {marketplaceRows.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4">
-                No {STATUSES.find((s) => s.value === status)?.label.toLowerCase()} marketplace re-checks.
+                No {STATUSES.find((s) => s.value === status)?.label.toLowerCase()} marketplace prices yet.
               </p>
             ) : (
-              <MarketplaceFindingsList rows={findings} canAct={canAct} slug={org.slug} />
+              <MarketplaceFindingsList rows={marketplaceRows} canAct={canAct} slug={org.slug} />
             )}
           </section>
         }
         direct={
-          <section className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Expiring quotes from non-marketplace suppliers, drafted for a fresh quote. Review and send — the full
-              back-and-forth is logged in{" "}
-              <Link href={`/work/orgs/${org.slug}/threads`} className="text-primary hover:underline">Threads</Link>.
-            </p>
-            {requotes.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4">No re-quote drafts right now.</p>
-            ) : (
-              <RequoteList rows={requotes} slug={org.slug} />
-            )}
+          <section className="space-y-6">
+            <div className="space-y-3">
+              <div>
+                <h3 className="text-sm font-semibold text-foreground">Prices on file</h3>
+                <p className="text-sm text-muted-foreground">
+                  Current direct-supplier prices we hold (from captured quotes) that aren&apos;t being re-quoted right now.
+                </p>
+              </div>
+              {directOnFile.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4">No direct prices on file yet.</p>
+              ) : (
+                <DirectPricesOnFile rows={directOnFile} slug={org.slug} />
+              )}
+            </div>
+            <div className="space-y-3">
+              <div>
+                <h3 className="text-sm font-semibold text-foreground">Re-quotes in flight</h3>
+                <p className="text-sm text-muted-foreground">
+                  Expiring quotes from non-marketplace suppliers, drafted for a fresh quote. Review and send — the full
+                  back-and-forth is logged in{" "}
+                  <Link href={`/work/orgs/${org.slug}/threads`} className="text-primary hover:underline">Threads</Link>.
+                </p>
+              </div>
+              {requotes.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-4">No re-quote drafts right now.</p>
+              ) : (
+                <RequoteList rows={requotes} slug={org.slug} />
+              )}
+            </div>
           </section>
         }
       />

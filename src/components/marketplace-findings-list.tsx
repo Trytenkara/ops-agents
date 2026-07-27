@@ -154,7 +154,11 @@ export function MarketplaceFindingsList({ rows, canAct, slug = "all" }: { rows: 
                       </TableCell>
                       <TableCell className="align-top"><ClassificationBadge value={r.classification ?? null} /></TableCell>
                       <TableCell className="text-right align-top">
-                        <MarketplaceFindingActions findingId={r.id} status={r.status} disabled={!canAct} />
+                        {r.kind === "on_file" ? (
+                          <span className="text-muted-foreground text-xs">—</span>
+                        ) : (
+                          <MarketplaceFindingActions findingId={r.id} status={r.status} disabled={!canAct} />
+                        )}
                       </TableCell>
                     </TableRow>
                   );
@@ -165,7 +169,7 @@ export function MarketplaceFindingsList({ rows, canAct, slug = "all" }: { rows: 
           {filtered.length === 0 && (
             <TableRow>
               <TableCell colSpan={COLS} className="text-center py-8 text-muted-foreground">
-                No price changes match.
+                No prices match.
               </TableCell>
             </TableRow>
           )}

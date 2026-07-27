@@ -54,12 +54,28 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   const empty: LeadPullResult = { processed: 0, pulled: 0, flagged: 0, pending: 0, stoppedEarly: false };
   if (Date.now() > deadline) return empty;
 
+  // Only pull for orgs that are actively sourcing. Paused ('off') orgs otherwise
+  // monopolize this single global FIFO with their stale discovery backlog and
+  // starve live clients (they never reach the fetch window). This mirrors the
+  // sourcing_status gate the quote-recheck path already applies.
+  const { data: activeOrgs, error: orgErr } = await admin
+    .from("orgs")
+    .select("id")
+    .in("sourcing_status", ["active", "sourcing_only"]);
+  if (orgErr) {
+    await log(`Active-org lookup failed (non-fatal): ${orgErr.message}`, { level: "warn", step: "mp_leads" });
+    return empty;
+  }
+  const activeOrgIds = (activeOrgs ?? []).map((o: any) => o.id).filter(Boolean);
+  if (activeOrgIds.length === 0) return empty;
+
   // Active marketplace leads with no pull attempt yet. Marketplace is signalled
   // by the scanner's site_type (M/MS) or an explicit Marketplace role.
   const { data: rows, error } = await admin
     .from("leads_in_flight")
     .select("id, org_id, supplier_id, supplier_name, material_id, material_name, payload")
     .eq("status", "active")
+    .in("org_id", activeOrgIds)
     .or("payload->marketplace_pull.is.null,payload->marketplace_pull->>status.eq.pending")
     .or("payload->>site_type.in.(M,MS),payload->>supplier_role.eq.Marketplace")
     .order("created_at", { ascending: true }) // oldest first (FIFO) — drains the backlog in discovery order so no lead is starved by the continuous stream of new discoveries

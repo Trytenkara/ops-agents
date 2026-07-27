@@ -37,8 +37,8 @@ export function PriceIndexTabs({
   return (
     <div className="space-y-4">
       <div className="flex gap-4 border-b border-border">
-        <Tab id="marketplace" label="Marketplace re-checks" count={marketplaceCount} />
-        <Tab id="direct" label="Direct re-quotes" count={directCount} />
+        <Tab id="marketplace" label="Marketplace prices" count={marketplaceCount} />
+        <Tab id="direct" label="Direct prices" count={directCount} />
       </div>
       <div className={tab === "marketplace" ? "" : "hidden"}>{marketplace}</div>
       <div className={tab === "direct" ? "" : "hidden"}>{direct}</div>
