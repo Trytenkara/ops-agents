@@ -10,7 +10,7 @@ import { LeadsTabs } from "@/components/leads-tabs";
 import { SuppliersCsvUpload } from "@/components/suppliers-csv-upload";
 import { resolveMaterialGrades, resolveSupplierMarketplace, resolveMaterialNames } from "@/lib/tenkara-names";
 import { correctMaterialSpelling } from "@/lib/material-spelling";
-import { leadMarketKind } from "@/components/lead-rich-row";
+import { leadMarketKind } from "@/lib/lead-market";
 import { getOrgOperatorPool, pickSupplierOperator, operatorBySupplier, getSupplierAssignments } from "@/lib/operator-assignment";
 import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
 import { orgDisplayName } from "@/lib/org-display";

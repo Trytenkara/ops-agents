@@ -7,7 +7,10 @@ import { LeadRowActions } from "@/components/lead-row-actions";
 import { SupplierOperatorAssign } from "@/components/supplier-operator-assign";
 import { LeadOperatorAssign } from "@/components/lead-operator-assign";
 import { deriveMatchTier } from "@/lib/lead-match-tier";
+import { leadMarketKind, leadRichColSpan } from "@/lib/lead-market";
 import { updateLeadEmail } from "@/app/actions/leads";
+
+export { leadMarketKind, leadRichColSpan };
 
 // Shared rich-lead rendering used by both the cross-org Review queue
 // (/work/review/leads) and the per-client Leads tab. Keeping a single
@@ -310,11 +313,6 @@ export function LeadRichHeaders({
   );
 }
 
-// Column count for empty-state colSpan. Matches LeadRichHeaders.
-export function leadRichColSpan(showOrg = true, selectable = false): number {
-  return (showOrg ? 10 : 9) + (selectable ? 1 : 0);
-}
-
 // Marketplace vs direct (non-marketplace), derived from the scanner's site_type.
 // M = marketplace (no signup), MS = marketplace (after registration), N = direct
 // quote/RFQ only. Returns null when the lead isn't classified.
@@ -328,12 +326,6 @@ const SIGNAL_LABELS: Record<string, string> = {
 };
 export function humanizeSignal(signal: string): string {
   return SIGNAL_LABELS[signal] ?? signal.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-export function leadMarketKind(siteType: string | null | undefined): "marketplace" | "direct" | null {
-  if (siteType === "M" || siteType === "MS") return "marketplace";
-  if (siteType === "N") return "direct";
-  return null;
 }
 
 export function LeadRichRow({
