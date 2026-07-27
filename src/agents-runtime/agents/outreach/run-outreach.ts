@@ -43,6 +43,8 @@ export interface RunOutreachSupplierInput {
   mode: "active" | "ghost";
   ghostBrand?: string;
   clientOrgName: string;
+  // Inbox UUID configured on the org row (Control Room). Overrides the brand map.
+  emailAccountId?: string | null;
   assignedOperator: string | null;
   isMarketplace: boolean;
   // Every material we're sourcing from this supplier, one line item each.
@@ -58,7 +60,7 @@ export interface RunOutreachResult {
 }
 
 export async function runOutreachForSupplier(input: RunOutreachSupplierInput): Promise<RunOutreachResult> {
-  const { admin, agentId, runId, orgId, supplierId, supplierName, email, contactName, mode, ghostBrand, clientOrgName, assignedOperator, isMarketplace, leads } = input;
+  const { admin, agentId, runId, orgId, supplierId, supplierName, email, contactName, mode, ghostBrand, clientOrgName, emailAccountId: configuredEmailAccountId, assignedOperator, isMarketplace, leads } = input;
   const log = input.log ?? (async () => {});
 
   // Sort for determinism so the same material set always renders (and hashes)
@@ -102,7 +104,7 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
   });
 
   const emailClient = coldOutboundEmailClient("04");
-  const emailAccountId = emailClient === "rod_app" ? tenkaraEmailAccountIdFor({ mode, clientOrgName, ghostBrand }) : undefined;
+  const emailAccountId = emailClient === "rod_app" ? tenkaraEmailAccountIdFor({ mode, clientOrgName, ghostBrand, explicit: configuredEmailAccountId }) : undefined;
   if (emailClient === "rod_app" && !emailAccountId) {
     await log(`No Tenkara inbox mapped for brand "${mode === "ghost" ? ghostBrand : clientOrgName}" — staging without a sender; operator must pick`, {
       step: "outreach",

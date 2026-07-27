@@ -107,11 +107,11 @@ registerAgent({
     // 2. Resolve org info + classify in one pass. We only contact suppliers on
     //    behalf of orgs that map cleanly to a known active/ghost label.
     const orgIds = Array.from(new Set(leads.map((l) => l.org_id).filter(Boolean) as string[]));
-    let orgsById = new Map<string, { id: string; name: string; tenkara_org_id: string | null; primary_user_id: string | null; backup_user_id: string | null }>();
+    let orgsById = new Map<string, { id: string; name: string; tenkara_org_id: string | null; tenkara_email_account_id: string | null; primary_user_id: string | null; backup_user_id: string | null }>();
     if (orgIds.length) {
       const { data: orgRows } = await admin
         .from("orgs")
-        .select("id, name, tenkara_org_id, org_default_operators(primary_user_id, backup_user_id, primary_user:users!org_default_operators_primary_user_id_fkey(status))")
+        .select("id, name, tenkara_org_id, tenkara_email_account_id, org_default_operators(primary_user_id, backup_user_id, primary_user:users!org_default_operators_primary_user_id_fkey(status))")
         .in("id", orgIds);
       for (const r of (orgRows ?? []) as any[]) {
         const ops = r.org_default_operators?.[0] ?? r.org_default_operators ?? null;
@@ -120,6 +120,7 @@ registerAgent({
           id: r.id,
           name: r.name,
           tenkara_org_id: r.tenkara_org_id ?? null,
+          tenkara_email_account_id: r.tenkara_email_account_id ?? null,
           primary_user_id: ops ? (ooo ? (ops.backup_user_id ?? ops.primary_user_id) : ops.primary_user_id) : null,
           backup_user_id: ops?.backup_user_id ?? null,
         });
@@ -146,6 +147,7 @@ registerAgent({
       mode: "active" | "ghost";
       ghostBrand?: string;
       clientOrgName: string;
+      emailAccountId?: string | null;
       assignedOperator: string | null;
     };
 
@@ -305,7 +307,10 @@ registerAgent({
         blockedSupplierKeys.add(supplierKeyForLead(lead));
         continue;
       }
-      const cls = classifyClient(org.name);
+      // A Control-Room-configured inbox id makes this a self-serve active client:
+      // send from that inbox, bypassing the hardcoded ACTIVE/SKIP brand lists.
+      const configuredInboxId = org.tenkara_email_account_id ?? null;
+      const cls = configuredInboxId ? { mode: "active" as const, ghostBrand: undefined } : classifyClient(org.name);
       if (cls.mode === "skip") {
         droppedSkipClient++;
         continue;
@@ -319,6 +324,7 @@ registerAgent({
         mode: cls.mode,
         ghostBrand: cls.ghostBrand,
         clientOrgName: org.name,
+        emailAccountId: configuredInboxId,
         // Manual lead claim wins (Scout leads); then manual supplier assignment;
         // then sticky-random. Scout leads have no supplier_id — fall back to the
         // lead id so the sticky default spreads across the pool instead of all
@@ -685,6 +691,7 @@ registerAgent({
         mode: primary.mode,
         ghostBrand: primary.ghostBrand,
         clientOrgName: primary.clientOrgName,
+        emailAccountId: primary.emailAccountId,
         assignedOperator: primary.assignedOperator,
         isMarketplace,
         leads: pool.map((c) => c.lead as OutreachLead),

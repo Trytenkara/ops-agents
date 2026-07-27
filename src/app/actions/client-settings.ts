@@ -44,6 +44,41 @@ export async function setOrgSourcingStatus(orgId: string, status: SourcingStatus
   return { ok: true };
 }
 
+// Self-serve client email setup: store the Tenkara Inbox account UUID (and a
+// display-only sending address) this org's outreach sends from. When set, the
+// fleet treats the org as an active outreach client and sends from this inbox —
+// no code deploy. Sending is still gated by sourcing_status='active'. Restricted
+// to admin/ops_lead since it decides where real client email goes out from.
+const TENKARA_ACCOUNT_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export async function setOrgTenkaraInbox(
+  orgId: string,
+  accountId: string | null,
+  email: string | null,
+): Promise<Result> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" };
+  if (!hasAnyRole(session, ["admin", "ops_lead"])) return { ok: false, error: "forbidden" };
+  const id = clean(accountId);
+  if (id && !TENKARA_ACCOUNT_UUID_RE.test(id)) {
+    return { ok: false, error: "Inbox ID must be the account UUID from the Tenkara Inbox app" };
+  }
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("orgs")
+    .update({
+      tenkara_email_account_id: id,
+      tenkara_email_address: clean(email),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", orgId);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath(`/work/orgs`);
+  revalidatePath(`/work/orgs/${orgId}`);
+  return { ok: true };
+}
+
 // Clear the bounce alert so outreach resumes for this client.
 export async function clearBounceAlert(orgId: string): Promise<Result> {
   const session = await getSession();
