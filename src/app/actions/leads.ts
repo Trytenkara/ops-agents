@@ -414,3 +414,106 @@ export async function dropLead(leadId: string, reason: DropReason, note?: string
   revalidatePath("/work/orgs/[slug]/leads", "page");
   return { ok: true };
 }
+
+// Manually update the contact email for a single lead. Updates both the
+// top-level supplier_contact_email (read by outreach) and enrichment.contact.email
+// (read by the UI).
+export async function updateLeadEmail(leadId: string, email: string): Promise<ActionResult> {
+  const guard = await assertCanActOnLead(leadId);
+  if ("error" in guard) return { ok: false, error: guard.error };
+  const { admin, lead } = guard;
+
+  const trimmed = email.trim().toLowerCase();
+  if (trimmed && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    return { ok: false, error: "invalid_email" };
+  }
+
+  const payload = (lead.payload as any) ?? {};
+  const enrichment = payload.enrichment ? { ...payload.enrichment } : {};
+  if (enrichment.contact) enrichment.contact = { ...enrichment.contact, email: trimmed || null };
+
+  const { error } = await admin
+    .from("leads_in_flight")
+    .update({ payload: { ...payload, supplier_contact_email: trimmed || null, enrichment } })
+    .eq("id", leadId);
+
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/work/review/leads");
+  revalidatePath("/work/orgs/[slug]/leads", "page");
+  return { ok: true };
+}
+
+export interface EmailImportResult {
+  ok: boolean;
+  error?: string;
+  matched?: number;
+  unmatched?: number;
+  unmatchedSample?: string[];
+}
+
+// Bulk-import supplier emails from a CSV. Matches rows by supplier_name
+// (case-insensitive) against all active leads_in_flight for the org and patches
+// supplier_contact_email on each match.
+export async function importEmailsFromCsv(orgId: string, form: FormData): Promise<EmailImportResult> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" };
+  if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator"])) return { ok: false, error: "forbidden" };
+  if (!seesAllOrgs(session)) {
+    const assigned = await getAssignedOrgIds(session);
+    if (assigned !== null && !assigned.includes(orgId)) return { ok: false, error: "forbidden" };
+  }
+
+  const file = form.get("file");
+  if (!(file instanceof File) || file.size === 0) return { ok: false, error: "no file" };
+  if (file.size > 5 * 1024 * 1024) return { ok: false, error: "file too large (max 5MB)" };
+
+  const rows = parseCsv(await file.text());
+  if (rows.length < 2) return { ok: false, error: "CSV has no data rows" };
+  const header = rows[0];
+  const iSupplier = colIndex(header, ["supplier_name", "supplier", "name", "company", "vendor", "supplier name"]);
+  const iEmail = colIndex(header, ["email", "supplier_email", "contact_email", "email_address", "e-mail"]);
+  if (iSupplier < 0 || iEmail < 0) {
+    return { ok: false, error: "CSV needs a supplier name column and an email column" };
+  }
+
+  const admin = createAdminClient();
+  const { data: leads } = await admin
+    .from("leads_in_flight")
+    .select("id, supplier_name, payload")
+    .eq("org_id", orgId)
+    .eq("status", "active");
+
+  const byName = new Map<string, { id: string; payload: any }[]>();
+  for (const l of leads ?? []) {
+    const key = normalizeCompanyName(l.supplier_name ?? "");
+    if (!key) continue;
+    const arr = byName.get(key) ?? [];
+    arr.push({ id: l.id, payload: l.payload });
+    byName.set(key, arr);
+  }
+
+  let matched = 0;
+  const unmatched: string[] = [];
+
+  for (const row of rows.slice(1)) {
+    const supplierName = (row[iSupplier] ?? "").trim();
+    const email = (row[iEmail] ?? "").trim().toLowerCase();
+    if (!supplierName || !email) continue;
+    const key = normalizeCompanyName(supplierName);
+    const hits = byName.get(key);
+    if (!hits?.length) { unmatched.push(supplierName); continue; }
+    for (const hit of hits) {
+      const payload = (hit.payload as any) ?? {};
+      const enrichment = payload.enrichment ? { ...payload.enrichment } : {};
+      if (enrichment.contact) enrichment.contact = { ...enrichment.contact, email };
+      await admin
+        .from("leads_in_flight")
+        .update({ payload: { ...payload, supplier_contact_email: email, enrichment } })
+        .eq("id", hit.id);
+      matched++;
+    }
+  }
+
+  revalidatePath("/work/orgs/[slug]/leads", "page");
+  return { ok: true, matched, unmatched: unmatched.length, unmatchedSample: unmatched.slice(0, 5) };
+}

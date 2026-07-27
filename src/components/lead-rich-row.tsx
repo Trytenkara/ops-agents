@@ -1,3 +1,5 @@
+"use client";
+import { useState, useTransition } from "react";
 import { TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/lib/utils";
@@ -5,6 +7,7 @@ import { LeadRowActions } from "@/components/lead-row-actions";
 import { SupplierOperatorAssign } from "@/components/supplier-operator-assign";
 import { LeadOperatorAssign } from "@/components/lead-operator-assign";
 import { deriveMatchTier } from "@/lib/lead-match-tier";
+import { updateLeadEmail } from "@/app/actions/leads";
 
 // Shared rich-lead rendering used by both the cross-org Review queue
 // (/work/review/leads) and the per-client Leads tab. Keeping a single
@@ -109,6 +112,59 @@ const CONTACT_SOURCE_LABEL: Record<string, string> = {
   scout: "from scout", discovered: "found on site", path: "contact form", tenkara: "Tenkara record",
 };
 
+// Inline email editor — pencil icon next to the resolved email, opens an input
+// on click. Saves via the updateLeadEmail server action.
+function EmailEditInline({ leadId, currentEmail }: { leadId: string; currentEmail: string | null }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(currentEmail ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  if (!editing) {
+    return (
+      <span className="inline-flex items-center gap-1">
+        {currentEmail ?? <span className="text-muted-foreground italic">no email</span>}
+        <button
+          onClick={() => { setValue(currentEmail ?? ""); setError(null); setEditing(true); }}
+          className="text-muted-foreground hover:text-foreground ml-1"
+          title="Edit email"
+          type="button"
+        >✎</button>
+      </span>
+    );
+  }
+
+  const save = () => {
+    setError(null);
+    startTransition(async () => {
+      const result = await updateLeadEmail(leadId, value);
+      if (result.ok) { setEditing(false); }
+      else { setError(result.error ?? "failed"); }
+    });
+  };
+
+  return (
+    <span className="inline-flex flex-col gap-0.5">
+      <span className="inline-flex items-center gap-1">
+        <input
+          autoFocus
+          type="email"
+          value={value}
+          onChange={(e: { target: { value: string } }) => setValue(e.target.value)}
+          onKeyDown={(e: { key: string }) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
+          className="text-xs border border-border rounded px-1 py-0.5 bg-background min-w-[18ch]"
+          disabled={pending}
+        />
+        <button onClick={save} disabled={pending} className="text-xs text-emerald-700 dark:text-emerald-400 font-medium disabled:opacity-50" type="button">
+          {pending ? "…" : "Save"}
+        </button>
+        <button onClick={() => setEditing(false)} disabled={pending} className="text-xs text-muted-foreground" type="button">Cancel</button>
+      </span>
+      {error && <span className="text-xs text-red-500">{error}</span>}
+    </span>
+  );
+}
+
 // Per-lead enrichment breakdown: what the enrichment stage resolved, scored,
 // cleared, and why it was held — read entirely from the stored payload.enrichment
 // (works retroactively; no re-enrichment needed). Renders nothing until a lead
@@ -132,7 +188,7 @@ export function EnrichmentDetails({ r }: { r: any }) {
           <div>
             <span className="text-emerald-700 dark:text-emerald-400 font-medium">Resolved</span>
             <ul className="ml-2 mt-0.5 space-y-0.5">
-              {contact.email && <li>email: {contact.email}{srcLabel && <span className="text-muted-foreground"> ({srcLabel})</span>}</li>}
+              {contact.email && <li>email: <EmailEditInline leadId={r.id} currentEmail={contact.email} />{srcLabel && <span className="text-muted-foreground"> ({srcLabel})</span>}</li>}
               {contact.phone && <li>phone: {contact.phone}</li>}
               {contact.contact_url && <li>contact form{contact.pages_tried ? <span className="text-muted-foreground"> · {contact.pages_tried} pages checked</span> : null}</li>}
             </ul>

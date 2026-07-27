@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition, useRef } from "react";
 import { Table, TableHeader, TableBody, TableRow, TableCell } from "@/components/ui/table";
 import { LeadRichRow, LeadRichHeaders, leadRichColSpan, leadMarketKind, humanizeSignal } from "@/components/lead-rich-row";
 import { deriveMatchTier, matchTierRank } from "@/lib/lead-match-tier";
 import { useListFilter, byString, byDateDesc, usePersistedState } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { BulkRemoveBar } from "@/components/bulk-remove-bar";
-import { removeLeads } from "@/app/actions/leads";
+import { removeLeads, importEmailsFromCsv, type EmailImportResult } from "@/app/actions/leads";
 import { Select } from "@/components/ui/select";
 import { filenameFor } from "@/lib/csv";
 
@@ -61,6 +61,22 @@ export function LeadsList({
   // and hide the Stage dropdown — the tab already scopes the list.
   forceStage?: string;
 }) {
+  const [importResult, setImportResult] = useState<EmailImportResult | null>(null);
+  const [importing, startImport] = useTransition();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function handleEmailImportFile(e: { target: HTMLInputElement }) {
+    const file = e.target.files?.[0];
+    if (!file || !orgId) return;
+    const form = new FormData();
+    form.append("file", file);
+    startImport(async () => {
+      const result = await importEmailsFromCsv(orgId, form);
+      setImportResult(result);
+      if (e.target) e.target.value = "";
+    });
+  }
+
   const [type, setType] = usePersistedState("leads-type", "all");
   const [recency, setRecency] = usePersistedState("leads-recency", "all");
   const [match, setMatch] = usePersistedState("leads-match", "all");
@@ -222,6 +238,33 @@ export function LeadsList({
           headers={csvHeaders}
           rows={csvRows}
         />
+        {canAct && orgId && (
+          <div className="flex flex-col items-end gap-1">
+            <button
+              type="button"
+              disabled={importing}
+              onClick={() => { setImportResult(null); fileInputRef.current?.click(); }}
+              className="text-xs text-muted-foreground hover:text-foreground border border-border rounded px-2 py-1 disabled:opacity-50"
+            >
+              {importing ? "Importing…" : "Import emails"}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".csv,.tsv,.txt"
+              className="hidden"
+              onChange={handleEmailImportFile}
+            />
+            {importResult && (
+              <span className={`text-xs ${importResult.ok ? "text-emerald-700 dark:text-emerald-400" : "text-red-500"}`}>
+                {importResult.ok
+                  ? `${importResult.matched} updated${importResult.unmatched ? `, ${importResult.unmatched} not found` : ""}`
+                  : importResult.error}
+                {importResult.unmatchedSample?.length ? ` (e.g. ${importResult.unmatchedSample.join(", ")})` : ""}
+              </span>
+            )}
+          </div>
+        )}
       </div>
       {selectable && (
         <BulkRemoveBar
