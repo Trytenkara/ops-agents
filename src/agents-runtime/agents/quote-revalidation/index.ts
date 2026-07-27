@@ -84,6 +84,19 @@ registerAgent({
     // Classify; skip/unknown drop out entirely. Re-quote drafts only for orgs
     // whose per-org switch is 'active' (see lib/org-status.ts).
     const orgStatuses = await loadOrgStatuses(createAdminClient());
+    // Control-Room-configured Tenkara inboxes, keyed by tenkara_org_id. A set inbox
+    // makes the org a self-serve active outreach client (overrides the ACTIVE/SKIP
+    // brand lists) and is the sender for its re-quote drafts.
+    const inboxByTenkaraOrg = new Map<string, string>();
+    {
+      const { data: inboxRows } = await createAdminClient()
+        .from("orgs")
+        .select("tenkara_org_id, tenkara_email_account_id")
+        .not("tenkara_email_account_id", "is", null);
+      for (const row of (inboxRows ?? []) as { tenkara_org_id: string | null; tenkara_email_account_id: string | null }[]) {
+        if (row.tenkara_org_id && row.tenkara_email_account_id) inboxByTenkaraOrg.set(row.tenkara_org_id, row.tenkara_email_account_id);
+      }
+    }
     const kept: OverdueRow[] = [];
     const droppedRows: OverdueRow[] = [];
     const droppedOrgNames = new Set<string>();
@@ -94,7 +107,9 @@ registerAgent({
         droppedOrgNames.add(r.client_org_name);
         continue;
       }
-      const c = classifyClient(r.client_org_name);
+      const c = inboxByTenkaraOrg.has(r.client_org_id)
+        ? { mode: "active" as OutreachMode }
+        : classifyClient(r.client_org_name);
       if (c.mode === "skip") {
         droppedRows.push(r);
         droppedOrgNames.add(r.client_org_name);
@@ -223,6 +238,7 @@ registerAgent({
             mode: group.mode as "active" | "ghost",
             clientOrgName: group.client_org_name,
             ghostBrand: group.ghostBrand,
+            explicit: inboxByTenkaraOrg.get(group.client_org_id) ?? null,
           });
           if (!emailAccountId) {
             await ctx.log(`No Tenkara inbox mapped for brand "${group.mode === "ghost" ? group.ghostBrand : group.client_org_name}" — staging without a sender; operator must pick`, {

@@ -277,7 +277,12 @@ export function tenkaraEmailAccountIdFor(input: {
   mode: "active" | "ghost";
   clientOrgName?: string | null;
   ghostBrand?: string | null;
+  // Inbox UUID configured on the org row (Control Room self-serve). When present
+  // it wins over the hardcoded brand map, so onboarding a real client is a paste
+  // in the Control Room rather than a code deploy.
+  explicit?: string | null;
 }): string | undefined {
+  if (input.explicit) return input.explicit;
   const brand = input.mode === "ghost" ? input.ghostBrand : input.clientOrgName;
   return resolveTenkaraEmailAccountId(brand);
 }
