@@ -72,7 +72,7 @@ function ensurePricingAsk(body: string, materials: string[]): string {
       : materials.length === 1
         ? materials[0]
         : `${materials.slice(0, -1).join(", ")} and ${materials[materials.length - 1]}`;
-  const ask = `Could you share your tiered pricing (volume price breaks), lead time, and MOQ for ${list}? We can confirm exact volumes as we go.`;
+  const ask = `Could you share your tiered pricing (volume price breaks), lead time, and MOQ for ${list}? If available, please also include packaging details (case type, weight, and dimensions) and any special handling requirements (e.g. refrigeration, hazmat classification). We can confirm exact volumes as we go.`;
   const idx = body.search(/\n\s*Thanks,/i);
   if (idx >= 0) return `${body.slice(0, idx).trimEnd()}\n\n${ask}\n\n${body.slice(idx).replace(/^\n+/, "")}`;
   return `${body.trimEnd()}\n\n${ask}`;
@@ -122,7 +122,7 @@ needs_info: leave FALSE in almost all cases. We can always ask a supplier for th
 DRAFTING RULES when needs_response is true and needs_info is false:
 - Greet the contact by FIRST name when we have one ("Hi Andre,"); otherwise "Hi {Company} Team,".
 - Respond to what they ACTUALLY said (e.g. drop a material they don't carry), not a template.
-- The draft is INVALID unless its closing paragraph is an explicit pricing ask that NAMES the materials they can supply. Required form: "Could you share your tiered pricing (volume price breaks), lead time, and MOQ for <Material A> and <Material B>?" Always ask for TIERED / volume pricing, not a single number. Vague closers ("we can nail down details", "happy to work from your terms", "once we see what works") are forbidden.
+- The draft is INVALID unless its closing paragraph is an explicit pricing ask that NAMES the materials they can supply. Required form: "Could you share your tiered pricing (volume price breaks), lead time, and MOQ for <Material A> and <Material B>? If available, please also include packaging details (case type, weight, and dimensions) and any special handling requirements (e.g. refrigeration, hazmat classification)." Always ask for TIERED / volume pricing, not a single number. Vague closers ("we can nail down details", "happy to work from your terms", "once we see what works") are forbidden.
 - Use the CLIENT PROFILE below for real facts (ship-to, typical pack sizes, pricing preference). You may mention our typical pack size for a material if it's in the profile, but never invent one.
 - Do NOT state a material GRADE (e.g. "Industrial", "Food grade", "USP") unless that exact grade is written in the CLIENT PROFILE or OUR ORIGINAL OUTREACH. If grade isn't given, omit it entirely — do not guess a "typical" grade.
 
@@ -133,7 +133,7 @@ Thanks for the quick reply, and no problem on the records.
 
 Good to know you don't carry Cetearyl Alcohol, we will take that one off our list.
 
-Could you share your tiered pricing (volume price breaks), lead time, and MOQ for Acetone and Citric Acid? For reference we typically order Acetone in 55 lb and Citric Acid in 50 lb, shipping to Melbourne, FL 32901.
+Could you share your tiered pricing (volume price breaks), lead time, and MOQ for Acetone and Citric Acid? If available, please also include packaging details (case type, weight, and dimensions) and any special handling requirements. For reference we typically order Acetone in 55 lb and Citric Acid in 50 lb, shipping to Melbourne, FL 32901.
 
 Thanks,
 

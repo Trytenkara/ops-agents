@@ -25,13 +25,25 @@ export const QUOTE_TEMPLATE_HEADERS = [
   "material_sku",
   "type_of_package",
   "case_type",
+  "case_weight",
+  "case_width",
+  "case_height",
+  "case_length",
   "is_international",
   "is_hazardous",
   "is_refrigerated",
+  "protect_from_freezing",
   "min_order_amount",
   "min_order_unit",
   "max_order_amount",
   "max_order_unit",
+  "min_inventory",
+  "max_inventory",
+  "purchasing_notes",
+  "un_number",
+  "hazard_class",
+  "hazmat_contact_name",
+  "hazmat_contact_phone",
 ] as const;
 
 // Recommended template for suppliers.
@@ -56,6 +68,7 @@ export const SUPPLIER_TEMPLATE_HEADERS = [
   "minimum_order_unit",
   "supplier_type",
   "purchasing_notes",
+  "purchasing_thresholds",
   "ddp_minimum_limit",
   "ddp_maximum_limit",
 ] as const;
