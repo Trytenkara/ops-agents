@@ -17,6 +17,10 @@ export interface RecheckInput {
   baseline_price: number | null;
   case_size: number | null;
   unit: string | null;
+  // Optional per-call model override. Defaults to MODEL (Sonnet). The marketplace
+  // lead re-check path passes a cheaper model here since re-checks only compare
+  // against a known baseline (lower stakes than a first-time extraction).
+  model?: string;
 }
 
 export interface PriceTier {
@@ -111,7 +115,7 @@ function buildUserMessage(input: RecheckInput): string {
 
 export async function recheckMarketplaceQuote(input: RecheckInput): Promise<RecheckResult> {
   const res = await anthropic().messages.create({
-    model: MODEL,
+    model: input.model ?? MODEL,
     max_tokens: MAX_OUTPUT_TOKENS,
     system: SYSTEM_PROMPT,
     tools: [{
