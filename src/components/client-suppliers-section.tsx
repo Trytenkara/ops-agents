@@ -7,6 +7,8 @@ import { useListFilter, byString } from "@/components/use-list-filter";
 import { useState } from "react";
 import type { ClientSuppliers, ClientSupplier, SupplierApproval } from "@/lib/client-suppliers";
 import { SupplierOperatorAssign } from "@/components/supplier-operator-assign";
+import { TemplateDownloadButton } from "@/components/template-download-button";
+import { SUPPLIER_TEMPLATE_HEADERS } from "@/lib/tenkara-templates";
 
 const STATUS_META: Record<SupplierApproval, { label: string; variant: "success" | "warn" | "secondary" }> = {
   approved: { label: "Approved", variant: "success" },
@@ -69,10 +71,17 @@ export function ClientSuppliersSection({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Client suppliers</h3>
-        <span className="text-xs text-muted-foreground">
-          {suppliers.total} total · {suppliers.approved.length} approved · {suppliers.pending_review.length} pending ·{" "}
-          {suppliers.denied.length} denied
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-muted-foreground">
+            {suppliers.total} total · {suppliers.approved.length} approved · {suppliers.pending_review.length} pending ·{" "}
+            {suppliers.denied.length} denied
+          </span>
+          <TemplateDownloadButton
+            headers={SUPPLIER_TEMPLATE_HEADERS}
+            filename="tenkara-suppliers-template.csv"
+            label="Supplier template"
+          />
+        </div>
       </div>
       <div className="space-y-3">
         {suppliers.total === 0 ? (
