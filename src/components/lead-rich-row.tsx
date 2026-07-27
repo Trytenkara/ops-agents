@@ -220,6 +220,32 @@ export function EnrichmentDetails({ r }: { r: any }) {
             </div>
           </div>
         )}
+        {/* Legitimacy */}
+        {e.legitimacy_check && (
+          <div>
+            <span className="text-muted-foreground">
+              Legitimacy{" "}
+              <span className={
+                e.legitimacy_check.score >= 0.6
+                  ? "text-emerald-700 dark:text-emerald-400"
+                  : e.legitimacy_check.score >= 0.3
+                  ? "text-amber-700 dark:text-amber-400"
+                  : "text-red-700 dark:text-red-400"
+              }>
+                {Math.round(e.legitimacy_check.score * 100)}%
+              </span>
+            </span>
+            {e.legitimacy_check.signals?.length > 0 && (
+              <div className="mt-0.5 flex flex-wrap gap-1">
+                {e.legitimacy_check.signals.map((s: string, i: number) => (
+                  <span key={i} className="inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-[10px]">
+                    {s}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         {/* Held */}
         {blocked && (
           <div>

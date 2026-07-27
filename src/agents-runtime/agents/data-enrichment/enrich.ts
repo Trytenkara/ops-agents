@@ -109,11 +109,26 @@ export interface CompletenessFactor {
   points: number;  // signed contribution to the 0..1 score
 }
 
+// Supplier legitimacy signals extracted from the website HTML — no extra
+// network calls needed, all parsed from pages already fetched during contact
+// discovery. Score is 0..1; signals list the supporting evidence for the UI.
+export interface LegitimacyCheck {
+  is_https: boolean;
+  certifications: string[];         // e.g. ["ISO 9001", "GMP", "FDA registered"]
+  is_established_entity: boolean;   // mentions Inc / LLC / Corp / Ltd on site
+  established_year: number | null;  // "Since 1985" → 1985, else null
+  has_bbb_accreditation: boolean;   // BBB badge or bbb.org link on site
+  has_linkedin_link: boolean;       // linkedin.com/company/ link in HTML
+  score: number;                    // 0..1 composite
+  signals: string[];                // human-readable for UI / CSV
+}
+
 export interface EnrichmentResult {
   website_probe: WebsiteProbe | null;
   email_check: EmailCheck | null;
   contact: ContactDiscovery;
   tenkara_supplier: SupplierEnrichment | null;
+  legitimacy_check: LegitimacyCheck | null;
   completeness_score: number; // 0..1
   // The factors that produced completeness_score, in scoring order.
   completeness_factors: CompletenessFactor[];
@@ -290,12 +305,16 @@ function hasQuoteForm(html: string): boolean {
 // Walks the supplier site to find a usable contact channel. Always attempts the
 // homepage plus several common contact paths, so even when the homepage blocks
 // bots we still try ≥3 pages before declaring the channels invalid.
+// Also returns the homepage HTML + finalUrl so the caller can run legitimacy
+// analysis without an extra network round-trip.
 export async function discoverContacts(website: string): Promise<{
   emails: string[];
   phones: string[];
   contact_url: string | null;
   pages_tried: number;
   any_ok: boolean;
+  homepage_html: string;
+  homepage_final_url: string | null;
 }> {
   const base = normalizeBase(website);
   const emails = new Set<string>();
@@ -303,6 +322,8 @@ export async function discoverContacts(website: string): Promise<{
   let contactUrl: string | null = null;
   let pagesTried = 0;
   let anyOk = false;
+  let homepageHtml = "";
+  let homepageFinalUrl: string | null = null;
 
   const seen = new Set<string>();
   const keyOf = (u: string) => {
@@ -327,6 +348,12 @@ export async function discoverContacts(website: string): Promise<{
     pagesTried++;
     if (!page) continue;
     if (page.ok) anyOk = true;
+
+    // Capture homepage HTML for legitimacy analysis (first page = homepage).
+    if (pagesTried === 1) {
+      homepageHtml = page.html;
+      homepageFinalUrl = page.finalUrl;
+    }
 
     for (const e of extractEmails(page.html)) emails.add(e);
     for (const p of extractPhones(page.html)) phones.add(p);
@@ -354,7 +381,15 @@ export async function discoverContacts(website: string): Promise<{
     contactUrl = anyOk ? base : null;
   }
 
-  return { emails: Array.from(emails), phones: Array.from(phones), contact_url: contactUrl, pages_tried: pagesTried, any_ok: anyOk };
+  return {
+    emails: Array.from(emails),
+    phones: Array.from(phones),
+    contact_url: contactUrl,
+    pages_tried: pagesTried,
+    any_ok: anyOk,
+    homepage_html: homepageHtml,
+    homepage_final_url: homepageFinalUrl,
+  };
 }
 
 export async function fetchTenkaraSupplier(supplierId: string): Promise<SupplierEnrichment | null> {
@@ -379,6 +414,82 @@ export async function fetchTenkaraSupplier(supplierId: string): Promise<Supplier
     responsiveness_score: r.responsiveness_score ?? null,
     payment_terms: r.payment_terms ?? null,
     supplier_type: r.supplier_type ?? null,
+  };
+}
+
+// ---------- Legitimacy analysis (no extra network calls) --------------------
+//
+// All signals are extracted from the HTML already fetched during contact
+// discovery. Cost: zero extra round-trips.
+
+const CERT_PATTERNS: [RegExp, string][] = [
+  [/\biso\s*9001\b/i, "ISO 9001"],
+  [/\biso\s*14001\b/i, "ISO 14001"],
+  [/\biso\s*22000\b/i, "ISO 22000"],
+  [/\biso\s*45001\b/i, "ISO 45001"],
+  [/\bgmp\b/i, "GMP"],
+  [/\bfda[\s-]?registered\b/i, "FDA registered"],
+  [/\bfda[\s-]?approved\b/i, "FDA approved"],
+  [/\bnsf\s+(?:certified|international)\b/i, "NSF certified"],
+  [/\busda\s+organic\b/i, "USDA Organic"],
+  [/\bhaccp\b/i, "HACCP"],
+  [/\bkosher\s+certified\b/i, "Kosher certified"],
+  [/\bhalal\s+certified\b/i, "Halal certified"],
+  [/\borganic\s+certified\b/i, "Organic certified"],
+  [/\bcGMP\b/, "cGMP"],
+];
+
+function extractCertifications(html: string): string[] {
+  const found = new Set<string>();
+  for (const [re, label] of CERT_PATTERNS) {
+    if (re.test(html)) found.add(label);
+  }
+  return Array.from(found);
+}
+
+function extractEstablishedYear(html: string): number | null {
+  const m = html.match(/(?:since|founded(?:\s+in)?|est\.?\s*|established\s*)(\d{4})/i);
+  if (!m) return null;
+  const yr = parseInt(m[1]);
+  const now = new Date().getFullYear();
+  return yr >= 1850 && yr <= now ? yr : null;
+}
+
+function analyzeLegitimacy(html: string, websiteUrl: string, finalUrl: string | null): LegitimacyCheck {
+  const is_https =
+    websiteUrl.startsWith("https://") || (finalUrl ?? "").startsWith("https://");
+  const certifications = extractCertifications(html);
+  const is_established_entity = /\b(?:inc\.|inc\b|llc\b|corp\.|corp\b|ltd\.|ltd\b|limited\b|incorporated\b|co\.\s*ltd|pty\s+ltd)\b/i.test(html);
+  const established_year = extractEstablishedYear(html);
+  const has_bbb_accreditation = /bbb\.org|better\s+business\s+bureau|bbb\s+accredited/i.test(html);
+  const has_linkedin_link = /linkedin\.com\/company\//i.test(html);
+
+  const signals: string[] = [];
+  let score = 0;
+
+  if (is_https) { score += 0.15; signals.push("HTTPS"); }
+  if (is_established_entity) { score += 0.2; signals.push("legal entity (Inc/LLC/Corp/Ltd)"); }
+  if (certifications.length > 0) {
+    score += Math.min(0.35, 0.1 + certifications.length * 0.05);
+    signals.push(...certifications);
+  }
+  if (established_year != null) {
+    const age = new Date().getFullYear() - established_year;
+    score += age >= 10 ? 0.15 : age >= 3 ? 0.08 : 0.03;
+    signals.push(`Est. ${established_year} (${age}yr)`);
+  }
+  if (has_bbb_accreditation) { score += 0.1; signals.push("BBB accredited"); }
+  if (has_linkedin_link) { score += 0.05; signals.push("LinkedIn company link"); }
+
+  return {
+    is_https,
+    certifications,
+    is_established_entity,
+    established_year,
+    has_bbb_accreditation,
+    has_linkedin_link,
+    score: Math.min(1, Math.round(score * 100) / 100),
+    signals,
   };
 }
 
@@ -439,10 +550,15 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
 
   // If we're missing a direct email or a phone, go fetch — persistently. This is
   // also the auto-resolve path when the only email we had was a marketplace one.
+  let legitimacy_check: LegitimacyCheck | null = null;
   if (website && (!email || !phone)) {
     const d = await discoverContacts(website).catch(() => null);
     if (d) {
       pagesTried = d.pages_tried;
+      // Run legitimacy analysis on the homepage HTML we already fetched.
+      if (d.homepage_html) {
+        legitimacy_check = analyzeLegitimacy(d.homepage_html, website, d.homepage_final_url);
+      }
       if (!email && d.emails.length) {
         // Only accept the supplier's own inbox — skip any aggregator addresses
         // the site might list. Prefer an email whose domain matches the site.
@@ -519,6 +635,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     email_check,
     contact,
     tenkara_supplier,
+    legitimacy_check,
     completeness_score,
     completeness_factors,
     outreach_ready,

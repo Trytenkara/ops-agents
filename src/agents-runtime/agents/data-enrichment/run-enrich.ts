@@ -64,6 +64,7 @@ export async function enrichAndStageLead(
       email_check: result.email_check,
       contact: result.contact,
       tenkara_supplier: result.tenkara_supplier,
+      legitimacy_check: result.legitimacy_check,
       aggregator_contact_email: result.aggregator_contact_email,
       completeness_score: result.completeness_score,
       completeness_factors: result.completeness_factors,
