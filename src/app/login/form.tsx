@@ -15,14 +15,22 @@ export default function LoginForm() {
   const [msg, setMsg] = useState<string | null>(params.get("error"));
   const [loading, setLoading] = useState(false);
 
-  // Implicit-flow sign-in links (invite/recovery/magic) deliver the session in
-  // the URL hash (#access_token=...), which the server never sees. The browser
-  // client consumes it on init (detectSessionInUrl); if a session lands, forward
-  // to the intended destination instead of stranding the user on this form.
+  // Implicit-flow sign-in links (invite/recovery/magic, and admin-generated
+  // links) deliver the session in the URL hash (#access_token=&refresh_token=),
+  // which the server never sees. Our @supabase/ssr client runs in PKCE mode and
+  // won't auto-consume an implicit hash, so parse it and set the session
+  // explicitly, then forward — otherwise the user is stranded on this form with
+  // valid tokens sitting unused in the address bar.
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const access_token = hash.get("access_token");
+    const refresh_token = hash.get("refresh_token");
+    if (!access_token || !refresh_token) return;
     const supabase = createClient();
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) window.location.assign(next);
+    supabase.auth.setSession({ access_token, refresh_token }).then(({ error }) => {
+      if (error) setMsg(error.message);
+      else window.location.assign(next);
     });
   }, [next]);
 
