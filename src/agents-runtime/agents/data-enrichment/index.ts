@@ -1,6 +1,7 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { loadOrgStatuses, sourcingAllowed } from "@/lib/org-status";
+import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 import type { RawLead } from "./enrich";
 import { enrichAndStageLead } from "./run-enrich";
 
@@ -25,11 +26,13 @@ registerAgent({
     // Per-org switch: only enrich leads for orgs whose sourcing_status allows
     // pool-building (active or sourcing_only). 'off' orgs are skipped entirely.
     const orgStatuses = await loadOrgStatuses(admin);
-    const sourcingOrgIds = [...orgStatuses.byOaId.entries()].filter(([, s]) => sourcingAllowed(s)).map(([id]) => id);
+    const allSourcingOrgIds = [...orgStatuses.byOaId.entries()].filter(([, s]) => sourcingAllowed(s)).map(([id]) => id);
+    const timingMap06 = await loadOrgTimingMap(admin, "agent-06-enrichment", allSourcingOrgIds);
+    const sourcingOrgIds = filterDueOrgIds(allSourcingOrgIds, timingMap06, "agent-06-enrichment");
     if (sourcingOrgIds.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary("No orgs are active/sourcing_only — nothing to enrich.");
+      ctx.setSummary(allSourcingOrgIds.length ? "All orgs throttled by tier — not due yet." : "No orgs are active/sourcing_only — nothing to enrich.");
       return;
     }
 
@@ -121,6 +124,7 @@ registerAgent({
       await Promise.all(leads.slice(i, i + CONCURRENCY).map(processLead));
     }
 
+    await recordOrgRuns(admin, "agent-06-enrichment", sourcingOrgIds);
     ctx.setItemsProcessed(promoted + blocked);
     ctx.setStatus(errored > 0 && promoted + blocked === 0 ? "failure" : errored > 0 ? "partial" : "success");
     const reasonStr = Object.entries(blockedReasons)

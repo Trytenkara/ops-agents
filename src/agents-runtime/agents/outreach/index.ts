@@ -4,6 +4,7 @@ import { getOrgOperatorPool, resolveSupplierOperatorId, getSupplierAssignments, 
 import { classifyClient } from "../quote-revalidation/config";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import { compileWaitMs } from "@/lib/agent-timing";
+import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 import { runOutreachForSupplier, type OutreachLead } from "./run-outreach";
 import { composeOutreachDraft } from "./drafter";
 import { isAggregatorEmail } from "../data-enrichment/enrich";
@@ -354,12 +355,21 @@ registerAgent({
       arr.push(c);
       byOrg.set(c.lead.org_id!, arr);
     }
+    // Pre-load tier timing for all orgs in this batch.
+    const outreachOrgIds04 = [...byOrg.keys()];
+    const timingMap04 = await loadOrgTimingMap(admin, "agent-04-outreach", outreachOrgIds04);
+    const dueOrgIds04 = new Set(filterDueOrgIds(outreachOrgIds04, timingMap04, "agent-04-outreach"));
+
     const candidatesNoPrior: Candidate[] = [];
     // Post-enrichment removals to persist on the lead so the "Removed / filtered
     // out" view can explain why a lead never got outreach. Cleared markers are
     // for leads that were suppressed before but are now eligible again.
     const suppressionUpdates: { id: string; payload: any }[] = [];
     for (const [orgId, group] of byOrg) {
+      if (!dueOrgIds04.has(orgId)) {
+        await ctx.log(`Org ${orgsById.get(orgId)?.name ?? orgId} throttled by tier — skipping ${group.length} candidate(s)`, { step: "tier_throttle" });
+        continue;
+      }
       const org = orgsById.get(orgId);
       const tenkaraOrgId = org?.tenkara_org_id ?? null;
       if (!tenkaraOrgId) {
@@ -672,6 +682,7 @@ registerAgent({
       }
     }
 
+    await recordOrgRuns(admin, "agent-04-outreach", [...dueOrgIds04]);
     ctx.setItemsProcessed(staged + manualCased);
     ctx.setStatus(missiveErrors > 0 && staged + manualCased === 0 ? "failure" : missiveErrors > 0 ? "partial" : "success");
     ctx.setSummary(

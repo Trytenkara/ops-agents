@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
 import { recheckMarketplaceQuote, type RecheckResult } from "./price-recheck";
 import { convertToUsd } from "@/lib/fx";
+import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 import { pullPricesForNewMarketplaceLeads } from "./lead-price-pull";
 
 // Agent 05 - Marketplace Price Re-check.
@@ -153,7 +154,16 @@ registerAgent({
       login_required: 0,
     };
 
-    const toProcess = quotes.filter((q) => !pendingFor.has(q.id));
+    // Apply per-org tier throttle — skip quotes for orgs whose interval hasn't elapsed.
+    const allOaIds05 = [...new Set([...tenkaraOrgToOaOrg.values()])];
+    const timingMap05 = await loadOrgTimingMap(admin, "agent-05-marketplace-validation", allOaIds05);
+    const dueOaIds05 = new Set(filterDueOrgIds(allOaIds05, timingMap05, "agent-05-marketplace-validation"));
+
+    const toProcess = quotes.filter((q) => {
+      if (pendingFor.has(q.id)) return false;
+      const oaId = q.tenkara_org_id ? tenkaraOrgToOaOrg.get(q.tenkara_org_id) : undefined;
+      return !oaId || dueOaIds05.has(oaId);
+    });
     const skippedPending = quotes.length - toProcess.length;
 
     // Re-check one quote (web_search → classify → insert finding). Returns the
@@ -294,6 +304,7 @@ registerAgent({
       return { processed: 0, pulled: 0, flagged: 0, pending: 0, stoppedEarly: false };
     });
 
+    await recordOrgRuns(admin, "agent-05-marketplace-validation", [...dueOaIds05]);
     ctx.setItemsProcessed(written + leadPull.processed);
     ctx.setStatus("success");
     const interesting = counts.signal_diverges + counts.link_broken + counts.needs_review + counts.login_required;

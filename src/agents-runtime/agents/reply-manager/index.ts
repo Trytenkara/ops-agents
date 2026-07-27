@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getConversationMessages, getMessage, htmlToText, type MissiveAttachment } from "@/lib/missive";
 import { missivePollingEnabled } from "@/lib/tenkara";
 import { stageDraft } from "@/lib/draft-staging";
+import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 import { runNoReplyFollowups } from "./no-reply-followup";
 import { handleSupplierForm } from "./form-handler";
 import { postAgentAlert } from "@/lib/slack-alert";
@@ -249,6 +250,15 @@ registerAgent({
       return;
     }
 
+    // Apply per-org tier throttle — skip threads for orgs whose interval hasn't elapsed.
+    const allOrgIds15 = [...new Set((refs ?? []).map((r: any) => r.org_id).filter(Boolean))];
+    const timingMap15 = await loadOrgTimingMap(admin, "agent-15-reply-manager", allOrgIds15);
+    const dueOrgIds15 = new Set(filterDueOrgIds(allOrgIds15, timingMap15, "agent-15-reply-manager"));
+    const filteredRefs = (refs ?? []).filter((r: any) => !r.org_id || dueOrgIds15.has(r.org_id));
+    if (filteredRefs.length < (refs ?? []).length) {
+      await ctx.log(`Tier throttle: ${(refs ?? []).length - filteredRefs.length} thread(s) skipped (org not due)`, { step: "tier_throttle" });
+    }
+
     // Cache client sourcing notes per org (ship-to, pack sizes, pricing prefs).
     const clientNotesByOrg = new Map<string, string | null>();
     async function getClientNotes(orgId: string | null): Promise<string | null> {
@@ -280,7 +290,7 @@ registerAgent({
     }
 
     const byThread = new Map<string, any[]>();
-    for (const r of refs ?? []) {
+    for (const r of filteredRefs) {
       const key = (r as any).thread_id ?? (r as any).id;
       const arr = byThread.get(key) ?? [];
       arr.push(r);
@@ -512,6 +522,7 @@ registerAgent({
       await ctx.log(`No-reply follow-up sweep failed: ${e?.message ?? e}`, { level: "warn", step: "followup" });
     }
 
+    await recordOrgRuns(admin, "agent-15-reply-manager", [...dueOrgIds15]);
     ctx.setItemsProcessed(responded + priced + stale + closed + bounced + awaitingHuman + formEscalated + followups.drafted + followups.escalated);
     ctx.setStatus("success");
     ctx.setSummary(`Threads: ${byThread.size} · ${responded} responded · ${priced} priced · ${awaitingHuman} awaiting-human · ${bounced} bounced · ${stale} stale · ${closed} closed · ${formEscalated} forms · ${followups.drafted} follow-ups · ${followups.escalated} calling-escalations · ${skipped} skipped`);

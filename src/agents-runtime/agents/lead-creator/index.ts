@@ -12,6 +12,7 @@ import { flagMaterialNames, correctName } from "@/lib/material-name-flags";
 import { materialLabel } from "@/lib/material-label";
 import { sourceReadyEnabled, fireSourceReadyDiscovery } from "./sourceready";
 import { importYetiEnabled, fireImportYetiDiscovery } from "./importyeti";
+import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 
 const EMPTY_OVERRIDES = new Map<string, string>();
 
@@ -233,7 +234,20 @@ registerAgent({
         sourcingNames.push(r.name);
       }
     }
-    await ctx.log(`Loaded ${tenkaraOrgToOaOrg.size} tenkara→OA org mappings · sourcing ${sourcingTenkaraOrgIds.size} org(s): ${sourcingNames.join(", ") || "none"}`, { step: "org_map" });
+    // Apply per-org tier throttle — only process orgs whose interval has elapsed.
+    const eligibleOaIds03 = [...sourcingTenkaraOrgIds].map((tid) => tenkaraOrgToOaOrg.get(tid)!).filter(Boolean);
+    const timingMap03 = await loadOrgTimingMap(admin, "agent-03-lead-creator", eligibleOaIds03);
+    const dueOaIds03 = new Set(filterDueOrgIds(eligibleOaIds03, timingMap03, "agent-03-lead-creator"));
+    for (const tenkaraId of [...sourcingTenkaraOrgIds]) {
+      const oaId = tenkaraOrgToOaOrg.get(tenkaraId);
+      if (oaId && !dueOaIds03.has(oaId)) sourcingTenkaraOrgIds.delete(tenkaraId);
+    }
+    const throttled03 = eligibleOaIds03.length - dueOaIds03.size;
+    await ctx.log(
+      `Loaded ${tenkaraOrgToOaOrg.size} tenkara→OA org mappings · sourcing ${sourcingTenkaraOrgIds.size} org(s): ${sourcingNames.join(", ") || "none"}` +
+        (throttled03 ? ` · ${throttled03} throttled (tier interval not elapsed)` : ""),
+      { step: "org_map" }
+    );
 
     // 3b-iii. Backlog queue — the durable guarantee that every material gets rich
     //         leads. Beyond the recency window, pull materials for our orgs that
@@ -975,6 +989,7 @@ registerAgent({
       await ctx.log(`CSV build/upload failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "csv" });
     }
 
+    await recordOrgRuns(admin, "agent-03-lead-creator", [...dueOaIds03]);
     ctx.setItemsProcessed(leadsCreated);
     ctx.setStatus("success");
     const graphLeads = leadsCreated - scoutLeadsCreated;
