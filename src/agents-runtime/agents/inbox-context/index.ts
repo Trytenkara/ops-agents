@@ -30,7 +30,9 @@ const MAX_LLM_SUMMARIES = 40;
 const ONLY_ORGS = onlyOrgNames();
 const ONLY_ORG_LABEL = onlyOrgLabel();
 
-const SUMMARY_MODEL = "claude-opus-4-5";
+// Short (~300-token) inbox summaries — squarely a Haiku-tier task. Bump to
+// claude-sonnet-5 only if summary quality feeding downstream agents regresses.
+const SUMMARY_MODEL = "claude-haiku-4-5";
 
 interface SupplierRef {
   supplier_id: string;

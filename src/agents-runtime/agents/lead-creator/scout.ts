@@ -16,7 +16,7 @@ import { materialLabel } from "@/lib/material-label";
 // The model performs the searches itself (web_search is a server-side tool);
 // we just instruct it on what to look for and ask for a structured response.
 
-const MODEL = "claude-opus-4-5";
+const MODEL = "claude-sonnet-5";
 const MAX_WEB_USES = 96;       // breadth budget — covers majors pass + marketplace seller drill-in + regional manufacturers + retail/EU shops
 const MAX_OUTPUT_TOKENS = 40000;  // room for up to ~100 supplier rows with the full detail schema
 const MAX_SUPPLIERS = 100;
@@ -222,7 +222,7 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
       max_tokens: MAX_OUTPUT_TOKENS,
       system: SYSTEM_PROMPT,
       tools: [{
-        type: "web_search_20250305",
+        type: "web_search_20260209",
         name: "web_search",
         max_uses: MAX_WEB_USES,
       } as any],

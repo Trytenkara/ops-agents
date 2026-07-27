@@ -13,7 +13,7 @@ import { tenkaraQuery } from "@/lib/tenkara-readonly";
 // OA writes only; Tenkara is read-only and best-effort (a Tenkara outage just
 // means we generate from the rest).
 
-const MODEL = "claude-sonnet-4-5";
+const MODEL = "claude-sonnet-5";
 const MAX_OUTPUT_TOKENS = 4000;
 const MAX_WEB_USES = 5;
 const STALE_DAYS = 7;
@@ -290,7 +290,7 @@ export async function generateClientProfile(
         model: MODEL,
         max_tokens: MAX_OUTPUT_TOKENS,
         system: SYSTEM_PROMPT,
-        tools: [{ type: "web_search_20250305", name: "web_search", max_uses: MAX_WEB_USES } as any],
+        tools: [{ type: "web_search_20260209", name: "web_search", max_uses: MAX_WEB_USES } as any],
         messages: [{ role: "user", content: buildUserMessage({ orgName: org.name, tenkara, settings, uploads: uploads ?? [], oaActivity }) }],
       });
       const res = await stream.finalMessage();

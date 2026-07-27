@@ -6,7 +6,7 @@ import Anthropic from "@anthropic-ai/sdk";
 // No browser, no logins, no scraping in our code - the model drives the
 // search and we parse its JSON response.
 
-const MODEL = "claude-opus-4-5";
+const MODEL = "claude-sonnet-5";
 const MAX_WEB_USES = 6;
 const MAX_OUTPUT_TOKENS = 1024;
 
@@ -115,7 +115,7 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
     max_tokens: MAX_OUTPUT_TOKENS,
     system: SYSTEM_PROMPT,
     tools: [{
-      type: "web_search_20250305",
+      type: "web_search_20260209",
       name: "web_search",
       max_uses: MAX_WEB_USES,
     } as any],

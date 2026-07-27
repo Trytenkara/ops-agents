@@ -6,7 +6,7 @@ import { correctMaterialSpelling } from "@/lib/material-spelling";
 // (e.g. "Butylene G;ycol"), Agent 03 flags a suggested correction and pings the
 // ops channel; an operator applies it, writing an OA-side canonical override.
 
-const MODEL = "claude-sonnet-4-5";
+const MODEL = "claude-haiku-4-5";
 const FEEDBACK_CHANNEL = "C0BATUWBHC7"; // #control-room-feedback
 
 // Characters that shouldn't appear inside a material name — these are the

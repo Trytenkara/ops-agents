@@ -29,7 +29,7 @@ const ALERT_USER_ID = process.env.OPS_ALERT_SLACK_USER_ID || "U09PNM3K0QH";
 // It also maintains flow_status on each draft_references row so the pipeline
 // board can show where every thread is, all the way to a finalized price.
 
-const MODEL = "claude-opus-4-5";
+const MODEL = "claude-sonnet-5";
 
 // flow_status lifecycle (stored on draft_references.metadata.flow_status):
 //   outreach_sent -> reply_received -> responded -> price_captured -> finalized

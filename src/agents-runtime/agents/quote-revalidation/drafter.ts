@@ -125,7 +125,7 @@ function anthropic(): Anthropic {
   return client;
 }
 
-const MODEL = "claude-opus-4-5";  // Opus 4.5 — closest currently-supported family member to Opus 4.7 named in the original spec
+const MODEL = "claude-sonnet-5";  // Revalidation drafting is well within Sonnet's range; downgraded from Opus 4.5 for cost
 
 export async function generateRevalidationEmail(opts: {
   mode: "active" | "ghost";
