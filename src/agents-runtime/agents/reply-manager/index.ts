@@ -64,7 +64,7 @@ interface Classification {
 // response doesn't contain an explicit pricing question, we append one built
 // from the materials they can supply, before the sign-off.
 function ensurePricingAsk(body: string, materials: string[]): string {
-  const hasAsk = /\?/.test(body) && /(pricing|price|lead time|moq|quote)/i.test(body);
+  const hasAsk = /\?/.test(body) && /(pricing|price|lead time|moq|quote|exw)/i.test(body);
   if (hasAsk) return body;
   const list =
     materials.length === 0
@@ -72,7 +72,7 @@ function ensurePricingAsk(body: string, materials: string[]): string {
       : materials.length === 1
         ? materials[0]
         : `${materials.slice(0, -1).join(", ")} and ${materials[materials.length - 1]}`;
-  const ask = `Could you share your tiered pricing (volume price breaks), lead time, and MOQ for ${list}? If available, please also include packaging details (case type, weight, and dimensions) and any special handling requirements (e.g. refrigeration, hazmat classification). We can confirm exact volumes as we go.`;
+  const ask = `Could you share your EXW pricing (tiered/volume price breaks), lead time, and MOQ for ${list}? If available, please also include packaging details (case type, weight, and dimensions) and any special handling requirements (e.g. refrigeration, hazmat classification). We can confirm exact volumes as we go.`;
   const idx = body.search(/\n\s*Thanks,/i);
   if (idx >= 0) return `${body.slice(0, idx).trimEnd()}\n\n${ask}\n\n${body.slice(idx).replace(/^\n+/, "")}`;
   return `${body.trimEnd()}\n\n${ask}`;
@@ -122,9 +122,10 @@ needs_info: leave FALSE in almost all cases. We can always ask a supplier for th
 DRAFTING RULES when needs_response is true and needs_info is false:
 - Greet the contact by FIRST name when we have one ("Hi Andre,"); otherwise "Hi {Company} Team,".
 - Respond to what they ACTUALLY said (e.g. drop a material they don't carry), not a template.
-- The draft is INVALID unless its closing paragraph is an explicit pricing ask that NAMES the materials they can supply. Required form: "Could you share your tiered pricing (volume price breaks), lead time, and MOQ for <Material A> and <Material B>? If available, please also include packaging details (case type, weight, and dimensions) and any special handling requirements (e.g. refrigeration, hazmat classification)." Always ask for TIERED / volume pricing, not a single number. Vague closers ("we can nail down details", "happy to work from your terms", "once we see what works") are forbidden.
+- The draft is INVALID unless its closing paragraph is an explicit pricing ask that NAMES the materials they can supply. Required form: "Could you share your EXW pricing (tiered/volume price breaks), lead time, and MOQ for <Material A> and <Material B>? If available, please also include packaging details (case type, weight, and dimensions) and any special handling requirements (e.g. refrigeration, hazmat classification)." Always ask for EXW (Ex Works / ex-factory) and TIERED pricing, not FOB and not a single number. Vague closers ("we can nail down details", "happy to work from your terms", "once we see what works") are forbidden.
+- INCOTERMS: We prefer EXW pricing because it lets us compare suppliers on the same basis. If the supplier quoted FOB or another incoterm, acknowledge their pricing briefly and add: "Could you also share the EXW price (ex-factory, before freight)? That helps us compare on the same basis."
 - Use the CLIENT PROFILE below for real facts (ship-to, typical pack sizes, pricing preference). You may mention our typical pack size for a material if it's in the profile, but never invent one.
-- Do NOT state a material GRADE (e.g. "Industrial", "Food grade", "USP") unless that exact grade is written in the CLIENT PROFILE or OUR ORIGINAL OUTREACH. If grade isn't given, omit it entirely — do not guess a "typical" grade.
+- Do NOT state a material GRADE (e.g. "Industrial", "Food grade", "USP") unless that exact grade is written in the CLIENT PROFILE or OUR ORIGINAL OUTREACH. If grade isn't given, omit it entirely — do NOT guess a "typical" grade, and do NOT ask the supplier to suggest a grade or ask which grades they carry. We know what we need; we will specify it when ready.
 
 GOOD EXAMPLE (supplier says no record + doesn't carry Cetearyl):
 Hi Andre,
@@ -133,7 +134,7 @@ Thanks for the quick reply, and no problem on the records.
 
 Good to know you don't carry Cetearyl Alcohol, we will take that one off our list.
 
-Could you share your tiered pricing (volume price breaks), lead time, and MOQ for Acetone and Citric Acid? If available, please also include packaging details (case type, weight, and dimensions) and any special handling requirements. For reference we typically order Acetone in 55 lb and Citric Acid in 50 lb, shipping to Melbourne, FL 32901.
+Could you share your EXW pricing (tiered/volume price breaks), lead time, and MOQ for Acetone and Citric Acid? If available, please also include packaging details (case type, weight, and dimensions) and any special handling requirements. For reference we typically order Acetone in 55 lb and Citric Acid in 50 lb, shipping to Melbourne, FL 32901.
 
 Thanks,
 
@@ -360,6 +361,17 @@ registerAgent({
         await ctx.log(`Missive fetch failed for ${replyMsgId ?? threadId}: ${e.message}`, { level: "warn", step: "fetch" });
       }
 
+      // Deterministic auto-reply guard: catch "please do not reply" and similar
+      // no-reply signals before the LLM call. The model sometimes classifies these
+      // as needing a response; catching them here is cheaper and more reliable.
+      const DO_NOT_REPLY_RE =
+        /\bplease\s+do\s+not\s+(?:reply|respond)\b|\bdo\s+not\s+reply\s+to\s+this\b|\bthis\s+(?:is\s+an?\s+)?(?:auto(?:matic(?:ally)?|mated)|system)[- ]?(?:generated\s+)?(?:message|email|response|reply|notification)\b|\bthis\s+message\s+was\s+sent\s+automatically\b|\bnoreply@\b/i;
+      if (theirBody && DO_NOT_REPLY_RE.test(theirBody)) {
+        await ctx.log(`Auto-reply body detected for ${meta.supplier_name ?? threadId} — skipping without LLM`, { step: "auto_reply_guard" });
+        skipped++;
+        continue;
+      }
+
       // Bounce / delivery failure -> never thank anyone; alert ops to find another address.
       if (isBounce(senderAddr, theirSubject)) {
         await postAgentAlert(
@@ -445,7 +457,7 @@ registerAgent({
               subject: `Re: ${head.subject ?? "your quote"}`, body,
               assignedOperator: head.assigned_operator ?? null,
               emailClient: "missive",
-              metadata: { outreach_mode: "ghost", ghost_brand: "Bobber Labs", supplier_contact_email: addr, draft_kind: "reply_manager_docs_request", staged_via: "agent-15", agent_version: "rm-v27" },
+              metadata: { outreach_mode: "ghost", ghost_brand: "Bobber Labs", supplier_contact_email: addr, draft_kind: "reply_manager_docs_request", staged_via: "agent-15", agent_version: "rm-v28" },
             });
           }
           await setStatus(admin, rows, "price_captured", {
@@ -490,7 +502,7 @@ registerAgent({
         to, subject: cls.subject || `Re: ${head.subject ?? "your quote"}`, body: finalBody,
         assignedOperator: head.assigned_operator ?? null,
         emailClient: "missive",
-        metadata: { outreach_mode: "ghost", ghost_brand: "Bobber Labs", supplier_contact_email: replyAddr, draft_kind: "reply_manager_response", reply_category: cls.category, staged_via: "agent-15", agent_version: "rm-v27", ask_present: /\?/.test(finalBody) },
+        metadata: { outreach_mode: "ghost", ghost_brand: "Bobber Labs", supplier_contact_email: replyAddr, draft_kind: "reply_manager_response", reply_category: cls.category, staged_via: "agent-15", agent_version: "rm-v28", ask_present: /\?/.test(finalBody) },
       });
       if (staged.ok) {
         await setStatus(admin, rows, cls.category === "declined" ? "closed_declined" : "responded", {

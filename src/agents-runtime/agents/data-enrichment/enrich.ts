@@ -78,6 +78,41 @@ export function isAggregatorEmail(email: string | null | undefined): boolean {
   return isAggregatorDomain(email.split("@")[1] ?? null);
 }
 
+// Placeholder / no-reply / script-artifact emails that are clearly not a real
+// supplier contact. Occurs when scrapers pick up JS library references
+// (swiper@7.0.5-bundle.min), social tracking IDs (7b04453cdd26@apps.messenger.live.com),
+// marketing automation senders (back-in-stock@notifyboost.net), no-reply
+// addresses (noreply@envato.com), or explicit placeholder text (test@test.com,
+// eg.sample@xyz.com). Applied before accepting any email, regardless of source.
+const PLACEHOLDER_EMAIL_DOMAINS = new Set([
+  "test.com", "example.com", "xyz.com", "email.com", "sample.com", "email.tst",
+  "foo.com", "bar.com", "abc.com", "placeholder.com", "demo.com",
+]);
+
+// Email prefixes that are never a supplier's real inbox.
+const PLACEHOLDER_PREFIX_RE =
+  /^(?:noreply|no[_-]reply|do[_-]not[_-]reply|donotreply|unsubscribe|bounce|back-in-stock|backinstock|notification|no\.reply|auto(?:reply|mated)|postmaster|mailer-daemon|reply-noreply|swiper|eg\.sample|eg-sample)\@/i;
+
+// Non-real TLD extensions from minified JS bundles (e.g. swiper@7.0.5-bundle.min).
+const SCRIPT_TLD_RE = /\.(min|js|ts|css|jsx|tsx|mjs|cjs|map)$/i;
+
+// Hex string local part (16+ hex chars) — messenger/social tracking IDs
+// injected into page markup (e.g. 7b04453cdd26b12c@apps.messenger.live.com).
+const HEX_LOCAL_RE = /^[0-9a-f]{16,}\@/i;
+
+export function isPlaceholderEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  const e = email.toLowerCase().trim();
+  const atIdx = e.indexOf("@");
+  if (atIdx < 0) return false;
+  const domain = e.slice(atIdx + 1);
+  if (PLACEHOLDER_EMAIL_DOMAINS.has(domain)) return true;
+  if (PLACEHOLDER_PREFIX_RE.test(e)) return true;
+  if (SCRIPT_TLD_RE.test(e)) return true;
+  if (HEX_LOCAL_RE.test(e)) return true;
+  return false;
+}
+
 export interface ContactDiscovery {
   email: string | null;        // best discovered/known direct email
   phone: string | null;        // best discovered/known phone
@@ -249,11 +284,11 @@ export function extractEmails(html: string): string[] {
   const found = new Set<string>();
   for (const m of html.matchAll(/mailto:([^"'?>\s]+)/gi)) {
     const e = decodeURIComponent(m[1]).trim().toLowerCase();
-    if (EMAIL_RE.test(e) && !JUNK_EMAIL_RE.test(e) && !ASSET_EXT_RE.test(e)) found.add(e);
+    if (EMAIL_RE.test(e) && !JUNK_EMAIL_RE.test(e) && !ASSET_EXT_RE.test(e) && !isPlaceholderEmail(e)) found.add(e);
   }
   for (const m of html.matchAll(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi)) {
     const e = m[0].trim().toLowerCase();
-    if (EMAIL_RE.test(e) && !JUNK_EMAIL_RE.test(e) && !ASSET_EXT_RE.test(e)) found.add(e);
+    if (EMAIL_RE.test(e) && !JUNK_EMAIL_RE.test(e) && !ASSET_EXT_RE.test(e) && !isPlaceholderEmail(e)) found.add(e);
   }
   return Array.from(found).slice(0, 8);
 }
@@ -533,15 +568,17 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     lead.supplier_id ? fetchTenkaraSupplier(lead.supplier_id).catch(() => null) : Promise.resolve(null),
   ]);
 
-  // A marketplace/aggregator email (concierge@knowde.com) is NOT the supplier's
-  // inbox — never seed outreach from it. Remember it for the operator, then try
-  // to resolve the supplier's real email below (site discovery / Tenkara record).
-  const scoutIsAggregator = isAggregatorEmail(scoutEmail);
+  // A placeholder/no-reply email is not a real inbox at all — discard entirely.
+  // A marketplace/aggregator email (concierge@knowde.com) is not the supplier's
+  // inbox — remember it for the operator, then resolve the real email below.
+  const scoutIsPlaceholder = isPlaceholderEmail(scoutEmail);
+  const scoutIsAggregator = !scoutIsPlaceholder && isAggregatorEmail(scoutEmail);
   let aggregatorEmail: string | null = scoutIsAggregator ? (scoutEmail as string).toLowerCase() : null;
 
   // Seed channels from what we already have.
   let email: string | null =
-    scoutEmail && EMAIL_RE.test(scoutEmail) && !scoutIsAggregator ? scoutEmail.toLowerCase() : null;
+    scoutEmail && EMAIL_RE.test(scoutEmail) && !scoutIsAggregator && !scoutIsPlaceholder
+      ? scoutEmail.toLowerCase() : null;
   let phone: string | null =
     (scoutPhone && !isContactPath(scoutPhone) ? scoutPhone : null) ?? tenkara_supplier?.poc_phone ?? null;
   let contactUrl: string | null = isContactPath(scoutEmail) ? null : null;

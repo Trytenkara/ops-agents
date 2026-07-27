@@ -349,6 +349,14 @@ registerAgent({
     //     would be wrong — these need a re-engagement template, not a cold ask.
     let priorRelSkipped = 0;
     let exclusionSkipped = 0;
+    let equipmentSkipped = 0;
+
+    // Supplier names that signal an equipment / machinery / packaging-hardware
+    // company. These companies deal with chemicals or food ingredients as input
+    // to their process but do NOT sell the material itself. Suppress outreach so
+    // ops can verify before contacting; a human can clear the suppression flag.
+    const EQUIPMENT_SUPPLIER_NAME_RE =
+      /\b(?:pump(?:s|ing)?|valve(?:s)?|filtration?|filter(?:ing)?|machinery|heat[- ]?transfer|heat[- ]?exchanger|centrifug(?:al|e|er)?|separator(?:s)?|granulat(?:or|ion)?|dryer(?:s)?|drying[- ]equip|evaporat(?:or|ion)?|conveyor(?:s)?|blower(?:s)?|agitat(?:or|ion)?|packaging[- ](?:machine|machinery|integration)|can[- ]manufactur|bottle[- ]manufactur|electric[- ]light(?:ing)?|luminaire(?:s)?|solvent[- ]extract(?:ion)?|extraction[- ]equip|spray[- ](?:dry|machine))\b/i;
     const byOrg = new Map<string, Candidate[]>();
     for (const c of candidates) {
       const arr = byOrg.get(c.lead.org_id!) ?? [];
@@ -425,6 +433,15 @@ registerAgent({
           suppress(exReason);
           continue;
         }
+        // Equipment / machinery / packaging-hardware suppliers: companies that use
+        // the material as input to their manufacturing process but don't sell it.
+        // Suppress and let ops verify rather than cold-emailing a pump manufacturer
+        // for chemical supply.
+        if (c.lead.supplier_name && EQUIPMENT_SUPPLIER_NAME_RE.test(c.lead.supplier_name)) {
+          equipmentSkipped++;
+          suppress("equipment_supplier");
+          continue;
+        }
         // Eligible now — clear any stale suppression marker from a prior run.
         if (p.outreach_suppressed) {
           const { outreach_suppressed, ...rest } = p;
@@ -443,7 +460,7 @@ registerAgent({
       );
     }
     await ctx.log(
-      `Prior-relationship + exclusion filter: ${candidatesNoPrior.length} kept · ${priorRelSkipped} skipped (already-known) · ${exclusionSkipped} skipped (do-not-contact / excluded country)`,
+      `Prior-relationship + exclusion filter: ${candidatesNoPrior.length} kept · ${priorRelSkipped} skipped (already-known) · ${exclusionSkipped} skipped (do-not-contact / excluded country)${equipmentSkipped ? ` · ${equipmentSkipped} skipped (equipment/machinery supplier)` : ""}`,
       { step: "prior_relationship" }
     );
 
@@ -691,6 +708,7 @@ registerAgent({
         (heldCompiling ? ` · held ${heldCompiling} supplier${heldCompiling === 1 ? "" : "s"} (compiling full list)` : "") +
         (missiveErrors ? ` · ${missiveErrors} errors` : "") +
         (priorRelSkipped ? ` · skipped ${priorRelSkipped} existing-relationship` : "") +
+        (equipmentSkipped ? ` · skipped ${equipmentSkipped} equipment-supplier` : "") +
         (dedupSkipped ? ` · skipped ${dedupSkipped} already-staged/cased` : "") +
         (droppedNoContact || droppedNoOrg || droppedSkipClient
           ? ` · dropped ${droppedNoContact + droppedNoOrg + droppedSkipClient} pre-filter`
