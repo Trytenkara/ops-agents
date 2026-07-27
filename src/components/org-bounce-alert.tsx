@@ -50,7 +50,7 @@ export function OrgBounceAlert({
         <AlertCircle className="w-4 h-4 text-destructive mt-0.5 flex-shrink-0" />
         <div className="flex-1">
           <div className="flex items-center gap-2 mb-1">
-            <Badge variant="destructive">{isTriggered ? "Bounce alert active" : "Paused by ops"}</Badge>
+            <Badge variant="danger">{isTriggered ? "Bounce alert active" : "Paused by ops"}</Badge>
           </div>
           <p className="text-xs text-foreground mb-2">
             {isTriggered
