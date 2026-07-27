@@ -13,9 +13,22 @@ type Admin = ReturnType<typeof createAdminClient>;
 // lead's operator to pull it by hand. Read-only on Tenkara — writes only to OA
 // leads_in_flight.payload + cases.
 
-const LEAD_CAP = 30;      // Opus+web_search per lead (~25s), bounded-parallel — sized to clear a fresh discovery batch within a few hourly runs while staying inside the shared deadline.
+// Per-run throughput is split so a re-check backlog can never starve first pulls
+// of freshly-discovered leads (and vice-versa). Both share the same run deadline.
+const FIRST_PULL_CAP = 20; // brand-new marketplace leads with no price yet (Sonnet+web_search, ~25s each).
+const RECHECK_CAP = 10;    // already-pulled leads that are due for a re-validation (Haiku — see RECHECK_MODEL).
 const CONCURRENCY = 4;
 const MAX_PULL_ATTEMPTS = 3; // needs_review is retried across hourly runs up to this many times before a case is opened, so one flaky web_search result isn't a permanent escalation.
+
+// Adaptive re-validation. Marketplace prices drift, so a pulled lead isn't frozen
+// forever — it's re-checked on a cadence that widens while the price holds steady
+// and snaps back to daily the moment it moves (AIMD backoff).
+const CHANGE_THRESHOLD_PCT = 1.0;                 // <1% move treated as unchanged (matches Agent 05's quote-recheck threshold).
+const INTERVAL_LADDER_DAYS = [1, 2, 4, 7, 14, 30]; // stable_streak → days until next check (capped at 30).
+const HISTORY_DEPTH = 10;                          // capped per-lead price-check history kept in payload.
+// Re-checks are lower-stakes than a first extraction (comparing to a known
+// baseline), so run them on a cheaper model. Override via env to A/B vs Sonnet.
+const RECHECK_MODEL = process.env.MARKETPLACE_RECHECK_MODEL || "claude-haiku-4-5";
 
 interface LeadRow {
   id: string;
@@ -34,6 +47,56 @@ function listingUrl(payload: any): string | null {
     (payload?.source_url as string | undefined) ??
     null
   );
+}
+
+function hostOf(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+// Map an observed change-rate for a marketplace host to a starting cadence (days).
+// Seeds a brand-new lead's first interval so a volatile marketplace keeps all its
+// listings tight without each SKU having to independently prove it. Little/no
+// history → conservative daily.
+function priorDaysFor(checks: number, changes: number): number {
+  if (checks < 2) return 1;
+  const rate = changes / checks;
+  if (rate >= 0.3) return 1;
+  if (rate >= 0.1) return 2;
+  if (changes > 0) return 7;
+  return 14; // stable across ≥2 checks, never moved.
+}
+
+// Aggregate per-host price-change history across already-pulled leads into a
+// starting-interval prior. One lightweight read per run; empty on first rollout
+// (no history yet) so everything correctly starts at daily and warms up.
+async function computeHostPriors(admin: Admin, activeOrgIds: string[]): Promise<Map<string, number>> {
+  const priors = new Map<string, number>();
+  const { data, error } = await admin
+    .from("leads_in_flight")
+    .select("payload")
+    .eq("status", "active")
+    .in("org_id", activeOrgIds)
+    .eq("payload->marketplace_pull->>status", "pulled")
+    .limit(1000);
+  if (error || !data) return priors;
+  const agg = new Map<string, { checks: number; changes: number }>();
+  for (const r of data as { payload: any }[]) {
+    const mp = r.payload?.marketplace_pull;
+    const host = hostOf(mp?.source_url ?? listingUrl(r.payload));
+    if (!host) continue;
+    const hist = Array.isArray(mp?.history) ? mp.history : [];
+    const a = agg.get(host) ?? { checks: 0, changes: 0 };
+    a.checks += hist.length;
+    a.changes += hist.filter((h: any) => h?.changed).length;
+    agg.set(host, a);
+  }
+  for (const [host, a] of agg) priors.set(host, priorDaysFor(a.checks, a.changes));
+  return priors;
 }
 
 export interface LeadPullResult {
@@ -69,24 +132,51 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   const activeOrgIds = (activeOrgs ?? []).map((o: any) => o.id).filter(Boolean);
   if (activeOrgIds.length === 0) return empty;
 
-  // Active marketplace leads with no pull attempt yet. Marketplace is signalled
-  // by the scanner's site_type (M/MS) or an explicit Marketplace role.
-  const { data: rows, error } = await admin
+  const cols = "id, org_id, supplier_id, supplier_name, material_id, material_name, payload";
+  const marketplaceFilter = "payload->>site_type.in.(M,MS),payload->>supplier_role.eq.Marketplace";
+
+  // Cohort A — first pull: active marketplace leads with no pull attempt yet
+  // (or still mid-retry). Marketplace is signalled by the scanner's site_type
+  // (M/MS) or an explicit Marketplace role.
+  const { data: firstRows, error: firstErr } = await admin
     .from("leads_in_flight")
-    .select("id, org_id, supplier_id, supplier_name, material_id, material_name, payload")
+    .select(cols)
     .eq("status", "active")
     .in("org_id", activeOrgIds)
     .or("payload->marketplace_pull.is.null,payload->marketplace_pull->>status.eq.pending")
-    .or("payload->>site_type.in.(M,MS),payload->>supplier_role.eq.Marketplace")
+    .or(marketplaceFilter)
     .order("created_at", { ascending: true }) // oldest first (FIFO) — drains the backlog in discovery order so no lead is starved by the continuous stream of new discoveries
-    .limit(LEAD_CAP * 3);
-  if (error) {
-    await log(`Marketplace lead query failed (non-fatal): ${error.message}`, { level: "warn", step: "mp_leads" });
+    .limit(FIRST_PULL_CAP * 3);
+  if (firstErr) {
+    await log(`Marketplace lead query failed (non-fatal): ${firstErr.message}`, { level: "warn", step: "mp_leads" });
     return empty;
   }
 
-  const leads = ((rows ?? []) as LeadRow[]).filter((l) => l.material_name && listingUrl(l.payload)).slice(0, LEAD_CAP);
+  // Cohort B — re-check: already-pulled leads whose next_check_at is due (or
+  // legacy pulled leads with no cadence yet → next_check_at null, treated as due).
+  const nowIso = new Date().toISOString();
+  const { data: recheckRows, error: recheckErr } = await admin
+    .from("leads_in_flight")
+    .select(cols)
+    .eq("status", "active")
+    .in("org_id", activeOrgIds)
+    .eq("payload->marketplace_pull->>status", "pulled")
+    .or(`payload->marketplace_pull->>next_check_at.is.null,payload->marketplace_pull->>next_check_at.lte.${nowIso}`)
+    .or(marketplaceFilter)
+    .order("payload->marketplace_pull->>next_check_at", { ascending: true, nullsFirst: true }) // most-overdue first
+    .limit(RECHECK_CAP * 3);
+  if (recheckErr) {
+    await log(`Marketplace re-check query failed (non-fatal): ${recheckErr.message}`, { level: "warn", step: "mp_leads" });
+  }
+
+  const eligible = (l: LeadRow) => Boolean(l.material_name && listingUrl(l.payload));
+  const firstLeads = ((firstRows ?? []) as LeadRow[]).filter(eligible).slice(0, FIRST_PULL_CAP);
+  const recheckLeads = ((recheckRows ?? []) as LeadRow[]).filter(eligible).slice(0, RECHECK_CAP);
+  const leads = [...firstLeads, ...recheckLeads];
   if (leads.length === 0) return empty;
+
+  // Per-host starting-cadence priors, for seeding brand-new leads' first interval.
+  const hostPriors = await computeHostPriors(admin, activeOrgIds);
 
   // Operator pool + assignments per org, for tagging the flag case.
   const orgIds = Array.from(new Set(leads.map((l) => l.org_id).filter(Boolean) as string[]));
@@ -116,15 +206,21 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
 
   const processOne = async (l: LeadRow): Promise<"pulled" | "flagged" | "pending" | null> => {
     const url = listingUrl(l.payload)!;
+    const priorPull = l.payload?.marketplace_pull ?? null;
+    // A re-check is a lead we've already priced (status 'pulled'); a first pull
+    // is anything else. Re-checks compare to a known baseline on a cheaper model.
+    const isRecheck = priorPull?.status === "pulled";
+    const priorPrice = isRecheck ? (typeof priorPull?.price === "number" ? priorPull.price : null) : null;
     let result;
     try {
       result = await recheckMarketplaceQuote({
         supplier_name: l.supplier_name ?? "",
         material_name: l.material_name ?? "",
         product_url: url,
-        baseline_price: null,
+        baseline_price: priorPrice,
         case_size: null,
         unit: null,
+        model: isRecheck ? RECHECK_MODEL : undefined,
       });
     } catch (e: any) {
       result = { classification: "needs_review" as const, current_price: null, currency: null, pack_size: null, unit_price: null, tiers: [], source_url: url, source_citations: [], notes: `pull failed: ${e?.message ?? e}` };
@@ -154,6 +250,75 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     const attempts = gotPrice ? priorAttempts : priorAttempts + 1;
     const escalate = !gotPrice && (actionable || attempts >= MAX_PULL_ATTEMPTS);
     const retry = !gotPrice && !escalate;
+
+    // Adaptive cadence (only meaningful on a successful pull). On a re-check, a
+    // ≥1% move resets to daily and widens the ladder while it holds; a first pull
+    // seeds its starting interval from the per-host volatility prior.
+    const nowIso = new Date().toISOString();
+    let cadence: {
+      check_interval_days: number;
+      next_check_at: string;
+      stable_streak: number;
+      last_change_at: string | null;
+      history: any[];
+    } | null = null;
+    if (gotPrice) {
+      const changed =
+        priorPrice != null &&
+        result.current_price != null &&
+        Math.abs(result.current_price - priorPrice) / priorPrice >= CHANGE_THRESHOLD_PCT / 100;
+      let intervalDays: number;
+      let streak: number;
+      if (!isRecheck) {
+        // First pull → seed from host prior (defaults to daily).
+        streak = 0;
+        intervalDays = hostPriors.get(hostOf(result.source_url ?? url) ?? "") ?? 1;
+      } else if (changed) {
+        streak = 0;
+        intervalDays = 1;
+      } else {
+        streak = Number(priorPull?.stable_streak ?? 0) + 1;
+        intervalDays = INTERVAL_LADDER_DAYS[Math.min(streak, INTERVAL_LADDER_DAYS.length - 1)];
+      }
+      const priorHistory = Array.isArray(priorPull?.history) ? priorPull.history : [];
+      const history = [...priorHistory, { at: nowIso, price: result.current_price, changed }].slice(-HISTORY_DEPTH);
+      cadence = {
+        check_interval_days: intervalDays,
+        next_check_at: new Date(Date.now() + intervalDays * 86400000).toISOString(),
+        stable_streak: streak,
+        last_change_at: changed ? nowIso : (priorPull?.last_change_at ?? null),
+        history,
+      };
+    }
+
+    // A re-check that failed to read a price must NOT destroy the good price we
+    // already have on file. Keep the last pull, defer the next check by a day,
+    // and record the miss — a single flaky read (search hiccup, temporary wall)
+    // shouldn't nuke a live price or re-flag an already-priced lead.
+    if (!gotPrice && isRecheck) {
+      const recheckMisses = Number(priorPull?.recheck_misses ?? 0) + 1;
+      const deferPull = {
+        ...priorPull,
+        next_check_at: new Date(Date.now() + 86400000).toISOString(),
+        recheck_misses: recheckMisses,
+        last_recheck_reason: reason,
+        last_recheck_at: nowIso,
+      };
+      const { error: upErr } = await admin
+        .from("leads_in_flight")
+        .update({ payload: { ...(l.payload ?? {}), marketplace_pull: deferPull } })
+        .eq("id", l.id);
+      if (upErr) {
+        await log(`Lead payload update failed for ${l.id}: ${upErr.message}`, { level: "error", step: "mp_leads", data: { lead_id: l.id } });
+        return null;
+      }
+      await log(`Marketplace re-check inconclusive (${reason}) — keeping last price, retrying tomorrow: ${l.supplier_name} × ${l.material_name}`, {
+        step: "mp_recheck_miss",
+        data: { lead_id: l.id, reason, recheck_misses: recheckMisses },
+      });
+      return "pending";
+    }
+
     const pull = gotPrice
       ? {
           status: "pulled" as const,
@@ -162,7 +327,8 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           pack_size: result.pack_size,
           currency: "USD",
           source_url: result.source_url ?? url,
-          pulled_at: new Date().toISOString(),
+          pulled_at: nowIso,
+          ...cadence!,
         }
       : {
           status: retry ? ("pending" as const) : ("needs_manual_pull" as const),
@@ -174,10 +340,12 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         };
 
     // Populate the same price_tiers the Marketplace-pricing tab renders — but
-    // never clobber tiers an operator already entered.
+    // never clobber tiers an operator already entered. A re-check (prior status
+    // 'pulled') owns the ladder it wrote earlier, so it may refresh it; a lead
+    // whose tiers came from an operator is left alone.
     const nextPayload: any = { ...(l.payload ?? {}), marketplace_pull: pull };
     const existingTiers = Array.isArray(l.payload?.price_tiers) ? l.payload.price_tiers : [];
-    if (gotPrice && existingTiers.length === 0) {
+    if (gotPrice && (existingTiers.length === 0 || isRecheck)) {
       const tiers = result.tiers.length
         ? result.tiers.map((t) => ({ pack_size: t.pack_size ?? "", price: t.price ?? null, unit_price: t.unit_price ?? null }))
         : [{ pack_size: result.pack_size ?? "", price: result.current_price, unit_price: result.unit_price }];
@@ -195,10 +363,15 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     }
 
     if (gotPrice) {
-      await log(`Pulled marketplace price: ${l.supplier_name} × ${l.material_name} → $${result.current_price}${result.pack_size ? ` / ${result.pack_size}` : ""}`, {
-        step: "mp_pull",
-        data: { lead_id: l.id },
-      });
+      const moved = isRecheck && cadence?.stable_streak === 0 && priorPrice != null;
+      const verb = isRecheck ? (moved ? `re-checked (moved from $${priorPrice})` : "re-checked (unchanged)") : "pulled";
+      await log(
+        `Marketplace price ${verb}: ${l.supplier_name} × ${l.material_name} → $${result.current_price}${result.pack_size ? ` / ${result.pack_size}` : ""} — next check in ${cadence?.check_interval_days}d`,
+        {
+          step: isRecheck ? "mp_recheck" : "mp_pull",
+          data: { lead_id: l.id, interval_days: cadence?.check_interval_days, moved: !!moved },
+        },
+      );
       return "pulled";
     }
 
