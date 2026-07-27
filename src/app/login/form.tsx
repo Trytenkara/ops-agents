@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,8 +12,19 @@ export default function LoginForm() {
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [mode, setMode] = useState<"signin" | "magic">("signin");
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(params.get("error"));
   const [loading, setLoading] = useState(false);
+
+  // Implicit-flow sign-in links (invite/recovery/magic) deliver the session in
+  // the URL hash (#access_token=...), which the server never sees. The browser
+  // client consumes it on init (detectSessionInUrl); if a session lands, forward
+  // to the intended destination instead of stranding the user on this form.
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) window.location.assign(next);
+    });
+  }, [next]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
