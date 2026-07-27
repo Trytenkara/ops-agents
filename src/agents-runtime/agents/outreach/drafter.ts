@@ -152,6 +152,8 @@ function composeTemplateDraft(input: DraftInput): ComposedDraft {
           ...bulletBlock,
           `Beyond your published pricing, could you share your bulk and wholesale rates${multi ? " for these" : ""}? We're after volume price breaks (e.g. at larger pack sizes or full pallet/ton quantities), along with lead times and MOQs.`,
           "",
+          "We can arrange our own freight, so please quote EXW (Ex Works) if you can.",
+          "",
           ...gradeBlock,
           "If you have a wholesale price list or catalog, please send it over. We evaluate suppliers across multiple raw materials and will share what you carry with the rest of our procurement team.",
           "",
@@ -168,6 +170,8 @@ function composeTemplateDraft(input: DraftInput): ComposedDraft {
             : `We are expanding our supplier network at ${senderOrg} and are looking for ${labelFor(mats[0])}.`,
           ...bulletBlock,
           `Do you supply ${multi ? "any of these" : "this"}? If so, could you kindly share current pricing, estimated lead times, and MOQs${multi ? " for each" : ""}?`,
+          "",
+          "We can arrange our own freight, so please quote EXW (Ex Works) if you can.",
           "",
           ...gradeBlock,
           "Additionally, if you have a product catalog, please share it. We're evaluating suppliers across multiple raw materials and will share what you carry with the rest of our procurement team.",
@@ -216,6 +220,7 @@ STYLE RULES (non-negotiable):
 WHAT THE EMAIL MUST DO:
 - Say we're sourcing the listed material(s) at {sender org}.
 - Ask whether they supply it/them and request current pricing, estimated lead times, and MOQs.
+- SHIPPING TERMS: note that we can arrange our own freight and prefer EXW (Ex Works) terms, and ask for their EXW price. Keep this to one short, natural sentence folded into the pricing ask — do not turn it into a demand or a separate paragraph.
 - GRADE: always ask which grade(s) the supplier can supply. When a "target grade" is given for a material, name it as what we're looking for, but keep it soft (we still want to hear what they carry), never a rigid hard requirement. When no target grade is given, just ask which grades they supply. NEVER invent, assume, or expand a grade that wasn't provided.
 - Ask for a product catalog or line card, noting we evaluate suppliers across multiple raw materials.
 - One material: write it inline as a sentence. Two or more: a short intro line, then a clean bullet list (one material per line), then the ask.
