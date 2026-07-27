@@ -6,6 +6,7 @@ import { getSession, hasAnyRole, type AppRole } from "@/lib/auth";
 import { operatorRoles, primaryRole } from "@/lib/operator";
 import { OrgOperatorsEditor } from "@/components/org-operators-editor";
 import { OrgSourcingToggle } from "@/components/org-sourcing-toggle";
+import { OrgBounceAlert } from "@/components/org-bounce-alert";
 import { getOrgNudgeCounts } from "@/lib/org-nudges";
 import { orgDisplayName } from "@/lib/org-display";
 
@@ -16,7 +17,7 @@ export default async function OrgOverview({ params }: { params: { slug: string }
   const admin = createAdminClient();
   const { data: org } = await admin
     .from("orgs")
-    .select("id, slug, name, display_name, tenkara_org_id, is_internal, sourcing_status")
+    .select("id, slug, name, display_name, tenkara_org_id, is_internal, sourcing_status, bounce_alert_status")
     .eq("slug", params.slug)
     .maybeSingle();
   if (!org) notFound();
@@ -102,13 +103,21 @@ export default async function OrgOverview({ params }: { params: { slug: string }
         <CardHeader>
           <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Sourcing</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           <OrgSourcingToggle
             orgId={org.id}
             orgName={orgDisplayName(org)}
             initial={(org.sourcing_status ?? "off") as any}
             canEdit={canEditAssignment}
           />
+          {(org.bounce_alert_status ?? "none") !== "none" && (
+            <OrgBounceAlert
+              orgId={org.id}
+              orgName={orgDisplayName(org)}
+              status={(org.bounce_alert_status ?? "none") as any}
+              canEdit={canEditAssignment}
+            />
+          )}
         </CardContent>
       </Card>
 

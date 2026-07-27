@@ -372,12 +372,63 @@ registerAgent({
         continue;
       }
 
-      // Bounce / delivery failure -> never thank anyone; alert ops to find another address.
+      // Bounce / delivery failure -> never thank anyone; track and alert ops if threshold hit.
       if (isBounce(senderAddr, theirSubject)) {
-        await postAgentAlert(
-          `:warning: *Bounce* on outreach to *${meta.supplier_name ?? meta.supplier_contact_email ?? "a supplier"}* (${meta.supplier_contact_email ?? "?"}). The email did not deliver. Please find another email source for this supplier.`,
-          { mentionUserId: ALERT_USER_ID }
-        );
+        // Log the bounce event for this org.
+        const bounceType = determineBounceType(senderAddr, theirSubject);
+        try {
+          await admin.from("bounce_events").insert({
+            org_id: head.org_id,
+            supplier_id: head.supplier_id,
+            bounce_type: bounceType,
+            message: `From: ${senderAddr}; Subject: ${theirSubject}`,
+          });
+          // Check if we have 2+ bounces in the last 24h for this org.
+          const { count: recentBounces } = await admin
+            .from("bounce_events")
+            .select("id", { count: "exact", head: true })
+            .eq("org_id", head.org_id)
+            .gte("detected_at", new Date(Date.now() - 24 * 3600 * 1000).toISOString());
+          if ((recentBounces ?? 0) >= 2) {
+            // 2+ bounces in 24h: potential blacklist risk. Alert ops and create case.
+            const { data: orgData } = await admin
+              .from("orgs")
+              .select("name, bounce_alert_status")
+              .eq("id", head.org_id)
+              .maybeSingle();
+            const orgName = (orgData as any)?.name ?? "Unknown";
+            const currentStatus = (orgData as any)?.bounce_alert_status ?? "none";
+            if (currentStatus === "none") {
+              // Trigger alert and set status.
+              await admin
+                .from("orgs")
+                .update({ bounce_alert_status: "triggered" })
+                .eq("id", head.org_id);
+              // Post Slack alert.
+              await postAgentAlert(
+                `:red_circle: *BOUNCE ALERT* — ${recentBounces} bounces detected for *${orgName}* in the last 24h. Potential DNS/blacklist risk. Review sending domain reputation and pause outreach until resolved.`,
+                { mentionUserId: ALERT_USER_ID }
+              );
+              // Create a case for ops to track.
+              try {
+                await admin.from("cases").insert({
+                  org_id: head.org_id,
+                  case_type: "bounce_alert",
+                  status: "open",
+                  title: `Bounce alert: ${recentBounces} bounces in 24h`,
+                  description: `Multiple delivery failures detected. Check sending domain reputation (DKIM/SPF/DMARC, spam score, blacklists). Clear bounce alert when resolved.`,
+                  assigned_to: ALERT_USER_ID,
+                  priority: "high",
+                  metadata: { bounce_count: recentBounces, detected_at: new Date().toISOString() },
+                });
+              } catch (e: any) {
+                await ctx.log(`Case creation failed: ${e?.message ?? e}`, { level: "warn", step: "case_create" });
+              }
+            }
+          }
+        } catch (e: any) {
+          await ctx.log(`Bounce logging failed: ${e?.message ?? e}`, { level: "warn", step: "bounce_log" });
+        }
         await setStatus(admin, rows, "bounced", { note: `bounce from ${senderAddr ?? "?"}` });
         bounced++;
         await ctx.log(`Bounce on ${meta.supplier_name ?? threadId}`, { step: "bounce" });
@@ -548,6 +599,18 @@ function isBounce(senderAddr: string | null, subject: string | null): boolean {
   if (/mailer-daemon|postmaster@|maildelivery|mail-daemon/.test(a)) return true;
   if (/undeliverable|delivery status notification|delivery (has )?failed|failure notice|returned mail|address not found|recipient.*(reject|not found)|message could not be delivered|mail delivery failed/.test(s)) return true;
   return false;
+}
+
+// Classify bounce by type (used for analytics and alert severity).
+function determineBounceType(senderAddr: string | null, subject: string | null): string {
+  const a = (senderAddr ?? "").toLowerCase();
+  const s = (subject ?? "").toLowerCase();
+  if (/mailer-daemon|postmaster@|maildelivery|mail-daemon/.test(a)) return "mailer_daemon";
+  if (/delivery.*fail|delivery status notification|failure notice/.test(s)) return "delivery_failure";
+  if (/address not found|recipient.*(reject|not found)/.test(s)) return "address_not_found";
+  if (/rate.?limit|too.?many|try again|back.?off/.test(s)) return "rate_limit";
+  if (/dns|domain|mx|name server/.test(s)) return "dns_block";
+  return "other";
 }
 
 async function setStatus(

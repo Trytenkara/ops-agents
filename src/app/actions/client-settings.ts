@@ -44,6 +44,22 @@ export async function setOrgSourcingStatus(orgId: string, status: SourcingStatus
   return { ok: true };
 }
 
+// Clear the bounce alert so outreach resumes for this client.
+export async function clearBounceAlert(orgId: string): Promise<Result> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" };
+  if (!hasAnyRole(session, ["admin", "ops_lead"])) return { ok: false, error: "forbidden" };
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("orgs")
+    .update({ bounce_alert_status: "none", updated_at: new Date().toISOString() })
+    .eq("id", orgId);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath(`/work/orgs`);
+  revalidatePath(`/work/orgs/${orgId}`);
+  return { ok: true };
+}
+
 export interface ClientSettingsInput {
   outreach_mode: "active" | "ghost" | "skip";
   ghost_brand: string | null;
