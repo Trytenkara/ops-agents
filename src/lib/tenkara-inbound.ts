@@ -54,6 +54,15 @@ function parseFrom(from: string): { name: string | null; address: string } {
   return { name: null, address: from.trim() };
 }
 
+// Generic free-email domains — too common across unrelated suppliers to use for
+// domain-based thread matching. Companies that use these are identified by their
+// exact address (which is already in draft_id / thread_id lookups), not by domain.
+const GENERIC_EMAIL_DOMAINS = new Set([
+  "gmail.com", "outlook.com", "hotmail.com", "yahoo.com", "yahoo.co.in",
+  "ymail.com", "icloud.com", "me.com", "aol.com", "live.com", "msn.com",
+  "protonmail.com", "proton.me", "qq.com", "163.com", "126.com", "sina.com",
+]);
+
 export async function handleInboundReply(admin: Admin, msg: InboundMessage): Promise<InboundResult> {
   // 1. Find the originating draft (the one our agent posted that this replies to).
   let ref: any = null;
@@ -77,6 +86,40 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       .maybeSingle();
     ref = data;
   }
+
+  // Fallback: sender-domain matching for new-contact / thread-split scenarios.
+  // A supplier sometimes redirects us to a colleague who opens a FRESH email with
+  // a new subject — a brand-new Tenkara thread. Neither draft_id nor thread_id
+  // match our records, but the sender's corporate domain still ties back to the
+  // same supplier. We only attempt this for non-generic company domains (gmail,
+  // outlook, etc. are excluded) and only when every candidate belongs to exactly
+  // one supplier (safe, unambiguous match).
+  //
+  // Side-effect: stageDraft below places the reply into the new conversation, so
+  // subsequent messages in this new thread WILL match by thread_id automatically —
+  // this fix is self-propagating.
+  let domainMatchFallback = false;
+  if (!ref) {
+    const fromAddr = parseFrom(msg.from).address.toLowerCase();
+    const senderDomain = fromAddr.split("@")[1] ?? null;
+    if (senderDomain && !GENERIC_EMAIL_DOMAINS.has(senderDomain)) {
+      const { data: domainRefs } = await admin
+        .from("draft_references")
+        .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata")
+        .eq("email_client", "rod_app")
+        .filter("metadata->>supplier_contact_email", "ilike", `%@${senderDomain}`)
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (domainRefs && domainRefs.length > 0) {
+        const uniqueSuppliers = new Set(domainRefs.map((r: any) => r.supplier_id).filter(Boolean));
+        if (uniqueSuppliers.size === 1) {
+          ref = domainRefs[0];
+          domainMatchFallback = true;
+        }
+      }
+    }
+  }
+
   // Rod pre-filters to conversations our agents touched, so a miss is benign —
   // ack with 200 so it isn't retried.
   if (!ref) return { status: 200, body: { ignored: true, reason: "no_matching_draft" } };
@@ -159,6 +202,9 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     reply_sender_email: from.address,
     reply_sender_name: from.name,
     reply_subject: msg.subject ?? null,
+    // Set when a new contact started a fresh thread and we matched via sender domain.
+    // The actual reply draft is staged into the new conversation; this flag is for audit.
+    domain_match_fallback: domainMatchFallback || undefined,
   };
   await admin
     .from("draft_references")
@@ -507,5 +553,5 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     })
     .eq("id", ref.id);
 
-  return { status: 200, body: { drafted: true, draft_ref_id: staged.draftRefId, draft_id: staged.draftId, quotes_staged: quotesStaged, introduced_materials: introducedMaterialIds.length } };
+  return { status: 200, body: { drafted: true, draft_ref_id: staged.draftRefId, draft_id: staged.draftId, quotes_staged: quotesStaged, introduced_materials: introducedMaterialIds.length, domain_match_fallback: domainMatchFallback || undefined } };
 }
