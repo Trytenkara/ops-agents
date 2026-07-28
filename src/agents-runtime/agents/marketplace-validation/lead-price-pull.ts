@@ -212,19 +212,19 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   const orgIds = Array.from(new Set(leads.map((l) => l.org_id).filter(Boolean) as string[]));
   const poolByOrg = new Map<string, any[]>();
   const assignByOrg = new Map<string, Map<string, string>>();
-  const primaryByOrg = new Map<string, string | null>();
   for (const oid of orgIds) {
     poolByOrg.set(oid, await getOrgOperatorPool(admin, oid).catch(() => []));
     assignByOrg.set(oid, await getSupplierAssignments(admin, oid).catch(() => new Map()));
-    const { data: org } = await admin.from("orgs").select("primary_user_id").eq("id", oid).maybeSingle();
-    primaryByOrg.set(oid, org?.primary_user_id ?? null);
   }
   const operatorFor = (l: LeadRow): string | null => {
     if (!l.org_id) return null;
-    return (
-      resolveSupplierOperatorId(assignByOrg.get(l.org_id) ?? new Map(), poolByOrg.get(l.org_id) ?? [], l.supplier_id) ??
-      primaryByOrg.get(l.org_id) ??
-      null
+    // Marketplace leads usually have no supplier_id — fall back to the lead id so
+    // the sticky-random default spreads across the org's pool instead of every
+    // case piling onto pool[0] (mirrors the outreach agent + Leads-tab key).
+    return resolveSupplierOperatorId(
+      assignByOrg.get(l.org_id) ?? new Map(),
+      poolByOrg.get(l.org_id) ?? [],
+      l.supplier_id ?? l.id,
     );
   };
 
