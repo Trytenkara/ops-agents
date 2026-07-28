@@ -1,13 +1,22 @@
 // Defensive style sanitizer for outbound draft email subjects/bodies.
 // Goals:
 //   1. Strip em dashes (—) and en dashes (–) the workflow guide forbids.
-//   2. Remove a small set of canned AI phrases that slip past the system prompt.
-//   3. Collapse 3+ blank lines to a maximum of one blank line between paragraphs.
+//   2. Replace the term "RFQ" with "sourcing inquiry" (client-facing language rule).
+//   3. Remove a small set of canned AI phrases that slip past the system prompt.
+//   4. Collapse 3+ blank lines to a maximum of one blank line between paragraphs.
 // Conservative — never rewrites meaning, only formatting.
 
 const DASH_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\s*—\s*/g, ", "],          // em dash with surrounding spaces → comma
   [/\s*–\s*/g, ", "],          // en dash with surrounding spaces → comma
+];
+
+// "RFQ" is internal jargon; outbound copy says "sourcing inquiry". Handle the
+// article ("an RFQ" → "a sourcing inquiry") and plural before the bare term.
+const RFQ_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/\ban RFQs?\b/g, "a sourcing inquiry"],
+  [/\bRFQs\b/g, "sourcing inquiries"],
+  [/\bRFQ\b/g, "sourcing inquiry"],
 ];
 
 const AI_PHRASE_STRIPS: RegExp[] = [
@@ -20,6 +29,7 @@ const AI_PHRASE_STRIPS: RegExp[] = [
 function clean(text: string): string {
   let out = text;
   for (const [re, rep] of DASH_REPLACEMENTS) out = out.replace(re, rep);
+  for (const [re, rep] of RFQ_REPLACEMENTS) out = out.replace(re, rep);
   for (const re of AI_PHRASE_STRIPS) out = out.replace(re, "");
   // Collapse 3+ consecutive newlines to exactly two (one blank line).
   out = out.replace(/\n{3,}/g, "\n\n");

@@ -63,7 +63,7 @@ const SUBJECT_TEMPLATES: ((m: string) => string)[] = [
   (m) => `Quote request: ${m}`,
   (m) => `Looking for a ${m} supplier`,
   (m) => `${m}: current pricing and MOQ?`,
-  (m) => `RFQ — ${m}`,
+  (m) => `Sourcing inquiry, ${m}`,
 ];
 
 // Consolidated emails cover several materials, so the subject can't name one.
@@ -73,7 +73,7 @@ const MULTI_SUBJECT_TEMPLATES: string[] = [
   "Wholesale pricing request",
   "Supplier inquiry: pricing and availability",
   "Quote request for several materials",
-  "RFQ — multiple raw materials",
+  "Sourcing inquiry: multiple raw materials",
 ];
 
 function stableHash(s: string): number {
@@ -197,7 +197,7 @@ function anthropic(): Anthropic {
   return anthropicClient;
 }
 
-const SYSTEM = `You write the FIRST cold outreach email (an RFQ) from a procurement team to a raw-material supplier. An operator reviews it before it sends.
+const SYSTEM = `You write the FIRST cold outreach email (a sourcing inquiry) from a procurement team to a raw-material supplier. An operator reviews it before it sends.
 
 Write it like a human sourcing coordinator wrote it from scratch. Warm, businesslike, concise. Every email must read uniquely — vary the wording, sentence shapes, and structure between emails. Never reuse a fixed template.
 
@@ -205,6 +205,7 @@ STYLE RULES (non-negotiable):
 - Greeting: first name if we know the contact's name ("Hi Dana,"), else "Hi {Company} Team,", else "Hi there,".
 - Short paragraphs. Each thought is its own paragraph with a blank line above and below. Whole body under 130 words.
 - NEVER use em dashes or en dashes. Use commas, periods, or "and".
+- NEVER use the term "RFQ" in the copy. Call it a "sourcing inquiry".
 - Avoid clichés: "I hope this email finds you well", "I am reaching out", "Per our records", "circle back", "touch base", "hop on a call".
 - NEVER invent prices, quantities, terms, prior conversations, or relationships. This is a cold first contact.
 - Sign-off ALWAYS exactly, blank lines included:
