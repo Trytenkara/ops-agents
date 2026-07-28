@@ -4,8 +4,6 @@ import { Shell, type OrgItem } from "@/components/nav";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { orgDisplayName } from "@/lib/org-display";
 
-export const dynamic = "force-dynamic";
-
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect("/login");
@@ -21,7 +19,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     const { data } = await admin
       .from("orgs")
       .select("slug, name, display_name, is_internal")
-      .neq("sourcing_status", "off")
+      .neq("hidden", true)
       .order("is_internal", { ascending: true })
       .order("name");
     orgRows = (data ?? []) as any;

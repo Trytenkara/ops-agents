@@ -16,7 +16,7 @@ export default async function ClientsPage() {
     const { data } = await admin
       .from("orgs")
       .select("slug, name, display_name, is_internal")
-      .neq("sourcing_status", "off")
+      .neq("hidden", true)
       .order("is_internal", { ascending: true })
       .order("name");
     orgRows = (data ?? []) as any;

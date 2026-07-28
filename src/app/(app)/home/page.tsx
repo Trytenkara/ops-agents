@@ -24,7 +24,7 @@ export default async function HomePage() {
     scope(admin.from("marketplace_check_findings").select("org_id, created_at").eq("status", "pending_review")),
     scope(admin.from("cases").select("org_id, created_at").in("status", ["open", "in_progress"])),
     scope(admin.from("leads_in_flight").select("org_id, created_at").eq("stage", "ready_for_approval").eq("status", "active")),
-    orgIds ? admin.from("orgs").select("id, slug, name, display_name").in("id", orgIds).neq("sourcing_status", "off") : admin.from("orgs").select("id, slug, name, display_name").neq("sourcing_status", "off"),
+    orgIds ? admin.from("orgs").select("id, slug, name, display_name").in("id", orgIds).neq("hidden", true) : admin.from("orgs").select("id, slug, name, display_name").neq("hidden", true),
   ]);
 
   const now = Date.now();
