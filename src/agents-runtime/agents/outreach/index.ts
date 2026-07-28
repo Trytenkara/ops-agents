@@ -524,9 +524,19 @@ registerAgent({
     const emailCandidates = candidatesNoPrior.filter((c) => c.channel === "email");
     const manualCandidates = candidatesNoPrior.filter((c) => c.channel === "manual");
 
+    // Email drafts are the primary outreach; manual-contact cases (no-email
+    // suppliers → web-form todo) are a fallback. Reserve the per-run cap for
+    // emails FIRST so a batch dominated by no-email suppliers can't starve real
+    // email outreach (previously the manual loop ran first and ate the whole cap,
+    // e.g. California drafted 0 emails while creating manual cases every run).
+    const emailSupplierCount = new Set(
+      emailCandidates.map((c) => (c.lead.supplier_id ? `s:${c.lead.supplier_id}` : `e:${(c.email ?? "").toLowerCase()}`))
+    ).size;
+    const manualBudget = Math.max(0, maxDrafts - Math.min(emailSupplierCount, maxDrafts));
+
     // ---- Manual-contact cases (per material) --------------------------------
     for (const c of manualCandidates) {
-      if (staged + manualCased >= maxDrafts) break;
+      if (manualCased >= manualBudget) break;
       const { data: existing } = await admin
         .from("cases")
         .select("id")
