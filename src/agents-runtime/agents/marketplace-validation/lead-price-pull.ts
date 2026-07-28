@@ -123,55 +123,85 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   // sourcing_status gate the quote-recheck path already applies.
   const { data: activeOrgs, error: orgErr } = await admin
     .from("orgs")
-    .select("id")
+    .select("id, is_internal")
     .in("sourcing_status", ["active", "sourcing_only"]);
   if (orgErr) {
     await log(`Active-org lookup failed (non-fatal): ${orgErr.message}`, { level: "warn", step: "mp_leads" });
     return empty;
   }
-  const activeOrgIds = (activeOrgs ?? []).map((o: any) => o.id).filter(Boolean);
+  const activeOrgRows = (activeOrgs ?? []).filter((o: any) => o.id);
+  const activeOrgIds = activeOrgRows.map((o: any) => o.id);
   if (activeOrgIds.length === 0) return empty;
+
+  // Real (paying) clients always drain their marketplace backlog before internal
+  // test orgs (is_internal = true, e.g. Tenkara Internal Sourcing / Arlon Preview).
+  // Otherwise a large internal test discovery flood sits ahead of a live client in
+  // the FIFO and starves it. Internal orgs still get served — but only with whatever
+  // cap is left after real clients are satisfied this run.
+  const realOrgIds = activeOrgRows.filter((o: any) => !o.is_internal).map((o: any) => o.id);
+  const internalOrgIds = activeOrgRows.filter((o: any) => o.is_internal).map((o: any) => o.id);
 
   const cols = "id, org_id, supplier_id, supplier_name, material_id, material_name, payload";
   const marketplaceFilter = "payload->>site_type.in.(M,MS),payload->>supplier_role.eq.Marketplace";
+  const eligible = (l: LeadRow) => Boolean(l.material_name && listingUrl(l.payload));
+  const nowIso = new Date().toISOString();
 
   // Cohort A — first pull: active marketplace leads with no pull attempt yet
   // (or still mid-retry). Marketplace is signalled by the scanner's site_type
-  // (M/MS) or an explicit Marketplace role.
-  const { data: firstRows, error: firstErr } = await admin
-    .from("leads_in_flight")
-    .select(cols)
-    .eq("status", "active")
-    .in("org_id", activeOrgIds)
-    .or("payload->marketplace_pull.is.null,payload->marketplace_pull->>status.eq.pending")
-    .or(marketplaceFilter)
-    .order("created_at", { ascending: true }) // oldest first (FIFO) — drains the backlog in discovery order so no lead is starved by the continuous stream of new discoveries
-    .limit(FIRST_PULL_CAP * 3);
-  if (firstErr) {
-    await log(`Marketplace lead query failed (non-fatal): ${firstErr.message}`, { level: "warn", step: "mp_leads" });
-    return empty;
-  }
+  // (M/MS) or an explicit Marketplace role. Oldest-first (FIFO) within a tier.
+  const queryFirst = async (orgIds: string[], limit: number): Promise<LeadRow[]> => {
+    if (orgIds.length === 0 || limit <= 0) return [];
+    const { data, error } = await admin
+      .from("leads_in_flight")
+      .select(cols)
+      .eq("status", "active")
+      .in("org_id", orgIds)
+      .or("payload->marketplace_pull.is.null,payload->marketplace_pull->>status.eq.pending")
+      .or(marketplaceFilter)
+      .order("created_at", { ascending: true })
+      .limit(limit);
+    if (error) {
+      await log(`Marketplace lead query failed (non-fatal): ${error.message}`, { level: "warn", step: "mp_leads" });
+      return [];
+    }
+    return ((data ?? []) as LeadRow[]).filter(eligible);
+  };
 
   // Cohort B — re-check: already-pulled leads whose next_check_at is due (or
   // legacy pulled leads with no cadence yet → next_check_at null, treated as due).
-  const nowIso = new Date().toISOString();
-  const { data: recheckRows, error: recheckErr } = await admin
-    .from("leads_in_flight")
-    .select(cols)
-    .eq("status", "active")
-    .in("org_id", activeOrgIds)
-    .eq("payload->marketplace_pull->>status", "pulled")
-    .or(`payload->marketplace_pull->>next_check_at.is.null,payload->marketplace_pull->>next_check_at.lte.${nowIso}`)
-    .or(marketplaceFilter)
-    .order("payload->marketplace_pull->>next_check_at", { ascending: true, nullsFirst: true }) // most-overdue first
-    .limit(RECHECK_CAP * 3);
-  if (recheckErr) {
-    await log(`Marketplace re-check query failed (non-fatal): ${recheckErr.message}`, { level: "warn", step: "mp_leads" });
-  }
+  const queryRecheck = async (orgIds: string[], limit: number): Promise<LeadRow[]> => {
+    if (orgIds.length === 0 || limit <= 0) return [];
+    const { data, error } = await admin
+      .from("leads_in_flight")
+      .select(cols)
+      .eq("status", "active")
+      .in("org_id", orgIds)
+      .eq("payload->marketplace_pull->>status", "pulled")
+      .or(`payload->marketplace_pull->>next_check_at.is.null,payload->marketplace_pull->>next_check_at.lte.${nowIso}`)
+      .or(marketplaceFilter)
+      .order("payload->marketplace_pull->>next_check_at", { ascending: true, nullsFirst: true }) // most-overdue first
+      .limit(limit);
+    if (error) {
+      await log(`Marketplace re-check query failed (non-fatal): ${error.message}`, { level: "warn", step: "mp_leads" });
+      return [];
+    }
+    return ((data ?? []) as LeadRow[]).filter(eligible);
+  };
 
-  const eligible = (l: LeadRow) => Boolean(l.material_name && listingUrl(l.payload));
-  const firstLeads = ((firstRows ?? []) as LeadRow[]).filter(eligible).slice(0, FIRST_PULL_CAP);
-  const recheckLeads = ((recheckRows ?? []) as LeadRow[]).filter(eligible).slice(0, RECHECK_CAP);
+  // Real clients first; top up any remaining cap from internal test orgs.
+  const withPriority = async (
+    q: (orgIds: string[], limit: number) => Promise<LeadRow[]>,
+    cap: number,
+  ): Promise<LeadRow[]> => {
+    const real = (await q(realOrgIds, cap * 3)).slice(0, cap);
+    if (real.length >= cap || internalOrgIds.length === 0) return real;
+    const remaining = cap - real.length;
+    const internal = (await q(internalOrgIds, remaining * 3)).slice(0, remaining);
+    return [...real, ...internal];
+  };
+
+  const firstLeads = await withPriority(queryFirst, FIRST_PULL_CAP);
+  const recheckLeads = await withPriority(queryRecheck, RECHECK_CAP);
   const leads = [...firstLeads, ...recheckLeads];
   if (leads.length === 0) return empty;
 
