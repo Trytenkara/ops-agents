@@ -40,6 +40,8 @@ export function LeadsTabs({
   operatorOptions,
   tracker,
   runs = [],
+  orgClients = [],
+  tagsByMaterialId = {},
 }: {
   rows: any[];
   removedRows?: any[];
@@ -49,19 +51,28 @@ export function LeadsTabs({
   operatorOptions?: { id: string; name: string }[];
   tracker: OutreachTracker;
   runs?: RunStat[];
+  orgClients?: { id: string; name: string }[];
+  tagsByMaterialId?: Record<string, string>; // tenkara_material_id → org_client_id
 }) {
-  const marketCount = rows.filter(
+  const [clientFilter, setClientFilter] = useState("all");
+
+  // Apply client filter before everything else — counts, stage cards, and the list
+  // all reflect the selected client's materials only.
+  const visibleRows = clientFilter === "all"
+    ? rows
+    : rows.filter((r: any) => r.material_id && tagsByMaterialId[r.material_id] === clientFilter);
+
+  const marketCount = visibleRows.filter(
     (r) => (r.market_kind ?? leadMarketKind(r.payload?.site_type)) === "marketplace"
   ).length;
   const trackerCount = tracker.materials.length;
   const runByLabel = new Map(runs.map((r) => [r.label, r]));
 
-  // Live per-stage counts off the full lead set (the page now loads every lead,
-  // not just the newest 200, so these are the real totals).
+  // Live per-stage counts off the filtered lead set.
   const stageCount = (key: Tab): number => {
-    if (key === "held") return rows.filter((r) => r.needs_material_name).length;
+    if (key === "held") return visibleRows.filter((r) => r.needs_material_name).length;
     const stage = PIPELINE.find((p) => p.key === key)?.stage;
-    return rows.filter((r) => r.stage === stage).length;
+    return visibleRows.filter((r) => r.stage === stage).length;
   };
 
   const [tab, setTab] = useState<Tab>(rows.length === 0 && trackerCount > 0 ? "outreach" : "all");
@@ -85,6 +96,25 @@ export function LeadsTabs({
 
   return (
     <div className="space-y-4">
+      {orgClients.length > 0 && (
+        <div className="flex items-center gap-2">
+          <select
+            value={clientFilter}
+            onChange={(e) => setClientFilter(e.target.value)}
+            className="h-7 rounded-md border border-input bg-transparent px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <option value="all">All clients</option>
+            {orgClients.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+          {clientFilter !== "all" && (
+            <span className="text-xs text-muted-foreground">
+              {visibleRows.length} of {rows.length} leads
+            </span>
+          )}
+        </div>
+      )}
       {/* Live sourcing pipeline — stage cards double as tabs. */}
       <div className="rounded-xl border border-border bg-gradient-to-br from-secondary/40 to-secondary/10 p-3">
         <div className="mb-2.5 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -142,18 +172,18 @@ export function LeadsTabs({
 
       {/* Lenses over the same client. Export lives with the filters below. */}
       <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1">
-        {tabBtn("all", "All leads", rows.length)}
+        {tabBtn("all", "All leads", visibleRows.length)}
         {tabBtn("marketplace", "Marketplace pricing", marketCount)}
         {tabBtn("outreach", "Outreach", trackerCount)}
         {tabBtn("removed", "Removed / filtered out", removedRows.length)}
       </div>
 
       {tab === "all" && (
-        <LeadsList rows={rows} canAct={canAct} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
+        <LeadsList rows={visibleRows} canAct={canAct} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
       )}
       {(tab === "raw" || tab === "enriched" || tab === "ready" || tab === "held") && (
         <LeadsList
-          rows={rows}
+          rows={visibleRows}
           canAct={canAct}
           slug={slug}
           orgId={orgId}
@@ -172,7 +202,7 @@ export function LeadsTabs({
         ) : (
           <p className="text-sm text-muted-foreground py-4">Nothing has been removed or filtered out for this client yet.</p>
         ))}
-      {tab === "marketplace" && <MarketplacePricing rows={rows} canAct={canAct} slug={slug} />}
+      {tab === "marketplace" && <MarketplacePricing rows={visibleRows} canAct={canAct} slug={slug} />}
       {tab === "outreach" &&
         (trackerCount > 0 ? (
           <OutreachTrackerPanel tracker={tracker} slug={slug} />

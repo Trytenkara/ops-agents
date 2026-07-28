@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { SavingsExportCsvButton } from "@/components/savings-export-csv-button";
 import { DensityToggle } from "@/components/density-toggle";
@@ -17,15 +18,28 @@ export function SavingsWorksheet({
   scorecard,
   slug,
   clientName,
+  orgClients = [],
+  tagsByMaterialName = {},
 }: {
   report: SavingsReport;
   scorecard: SourcingScorecard;
   slug: string;
   clientName: string;
+  orgClients?: { id: string; name: string }[];
+  tagsByMaterialName?: Record<string, string>;
 }) {
-  const withSavings = report.lines.filter((l) => l.savings_per_unit > 0);
+  const [clientFilter, setClientFilter] = useState("all");
 
-  const sourcing = useListFilter(scorecard.lines, {
+  const visibleScorecardLines = clientFilter === "all"
+    ? scorecard.lines
+    : scorecard.lines.filter((l) => l.material_name && tagsByMaterialName[l.material_name.toLowerCase()] === clientFilter);
+  const visibleReportLines = clientFilter === "all"
+    ? report.lines
+    : report.lines.filter((l) => l.material_name && tagsByMaterialName[l.material_name.toLowerCase()] === clientFilter);
+
+  const withSavings = visibleReportLines.filter((l) => l.savings_per_unit > 0);
+
+  const sourcing = useListFilter(visibleScorecardLines, {
     searchText: (l) => `${l.material_name ?? ""} ${l.best_sourced_supplier ?? ""}`,
     searchPlaceholder: "material or supplier…",
     sorts: [
@@ -37,7 +51,7 @@ export function SavingsWorksheet({
     persistKey: "savings-sourcing",
   });
 
-  const bench = useListFilter(report.lines, {
+  const bench = useListFilter(visibleReportLines, {
     searchText: (l) => `${l.material_name ?? ""} ${l.grade ?? ""} ${l.recommended_supplier_name ?? ""}`,
     searchPlaceholder: "material, grade, supplier…",
     sorts: [
@@ -53,7 +67,26 @@ export function SavingsWorksheet({
 
   return (
     <div className="space-y-8">
-      {scorecard.materials_sourcing > 0 && (
+      {orgClients.length > 0 && (
+        <div className="flex items-center gap-2">
+          <select
+            value={clientFilter}
+            onChange={(e) => setClientFilter(e.target.value)}
+            className="h-7 rounded-md border border-input bg-transparent px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <option value="all">All clients</option>
+            {orgClients.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+          {clientFilter !== "all" && (
+            <span className="text-xs text-muted-foreground">
+              {visibleReportLines.length} of {report.lines.length} materials
+            </span>
+          )}
+        </div>
+      )}
+      {visibleScorecardLines.length > 0 && (
         <section className="space-y-3">
           <div>
             <h2 className="font-serif text-xl tracking-tight">Live sourcing</h2>
@@ -67,12 +100,12 @@ export function SavingsWorksheet({
           <div className="flex gap-6 text-sm">
             <div>
               <div className="text-2xl font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
-                {scorecard.materials_beating_client}
+                {visibleScorecardLines.filter((l) => l.status === "beating").length}
               </div>
               <div className="text-muted-foreground">materials beating client price</div>
             </div>
             <div>
-              <div className="text-2xl font-semibold tabular-nums">{scorecard.materials_sourcing}</div>
+              <div className="text-2xl font-semibold tabular-nums">{visibleScorecardLines.length}</div>
               <div className="text-muted-foreground">materials being sourced</div>
             </div>
           </div>
@@ -145,11 +178,11 @@ export function SavingsWorksheet({
 
         <div className="flex gap-6 text-sm">
           <div>
-            <div className="text-2xl font-semibold tabular-nums">{report.materials_with_savings}</div>
+            <div className="text-2xl font-semibold tabular-nums">{withSavings.length}</div>
             <div className="text-muted-foreground">materials with a cheaper supplier</div>
           </div>
           <div>
-            <div className="text-2xl font-semibold tabular-nums">{report.total_materials}</div>
+            <div className="text-2xl font-semibold tabular-nums">{visibleReportLines.length}</div>
             <div className="text-muted-foreground">materials benchmarked</div>
           </div>
         </div>

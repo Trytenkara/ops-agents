@@ -6,7 +6,8 @@ import { getSession, hasAnyRole } from "@/lib/auth";
 export async function saveClientTag(
   orgId: string,
   tenkaraMaterialId: string,
-  clientName: string,
+  materialName: string,
+  orgClientId: string | null,
   isPriority: boolean
 ): Promise<{ ok: boolean; error?: string }> {
   const session = await getSession();
@@ -18,7 +19,8 @@ export async function saveClientTag(
     {
       org_id: orgId,
       tenkara_material_id: tenkaraMaterialId,
-      client_name: clientName.trim(),
+      material_name: materialName,
+      org_client_id: orgClientId,
       is_priority: isPriority,
       updated_at: new Date().toISOString(),
     },

@@ -51,8 +51,17 @@ export default async function OrgSavingsPage({
   // Client current cost from uploaded POs fills the baseline when Tenkara has no
   // current_quote, so savings show against a real client cost where we have one.
   const clientCostFallback = await clientCostFromOrders(admin, org.id).catch(() => new Map<string, number>());
-  const report = await buildSavingsReport(org.tenkara_org_id, { clientCostFallback });
-  const scorecard = await buildSourcingScorecard(admin, org.id, org.tenkara_org_id);
+  const [report, scorecard, clientTagsRes, orgClientsRes] = await Promise.all([
+    buildSavingsReport(org.tenkara_org_id, { clientCostFallback }),
+    buildSourcingScorecard(admin, org.id, org.tenkara_org_id),
+    admin.from("material_client_tags").select("material_name, org_client_id").eq("org_id", org.id).not("org_client_id", "is", null),
+    admin.from("org_clients").select("id, name").eq("org_id", org.id).order("name"),
+  ]);
+  const tagsByMaterialName: Record<string, string> = {};
+  for (const t of (clientTagsRes.data ?? []) as any[]) {
+    if (t.material_name && t.org_client_id) tagsByMaterialName[t.material_name.toLowerCase()] = t.org_client_id;
+  }
+  const orgClients = ((orgClientsRes.data ?? []) as any[]).map((r: any) => ({ id: r.id as string, name: r.name as string }));
 
   if (view === "report") {
     // Quick Report ("freight") shows the freight/supplier detail editor and the
@@ -106,7 +115,7 @@ export default async function OrgSavingsPage({
   return (
     <div className="space-y-6">
       <ViewToggle slug={org.slug} view={view} />
-      <SavingsWorksheet report={report} scorecard={scorecard} slug={org.slug} clientName={orgName} />
+      <SavingsWorksheet report={report} scorecard={scorecard} slug={org.slug} clientName={orgName} orgClients={orgClients} tagsByMaterialName={tagsByMaterialName} />
     </div>
   );
 }

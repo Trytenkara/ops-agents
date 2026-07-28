@@ -43,7 +43,7 @@ export default async function OrgPriceIndexPage({
   const { data: org } = await admin.from("orgs").select("id, slug, name, display_name").eq("slug", params.slug).maybeSingle();
   if (!org) notFound();
 
-  const [findingsRes, draftsRes, stagedRes, leadsRes] = await Promise.all([
+  const [findingsRes, draftsRes, stagedRes, leadsRes, clientTagsRes, orgClientsRes] = await Promise.all([
     admin
       .from("marketplace_check_findings")
       .select(
@@ -78,9 +78,16 @@ export default async function OrgPriceIndexPage({
       .eq("org_id", org.id)
       .not("payload->price_tiers", "is", null)
       .limit(1000),
+    admin.from("material_client_tags").select("material_name, org_client_id").eq("org_id", org.id).not("org_client_id", "is", null),
+    admin.from("org_clients").select("id, name").eq("org_id", org.id).order("name"),
   ]);
 
   const findings = (findingsRes.data ?? []).map((f: any) => ({ ...f, material_name: correctMaterialSpelling(f.material_name) }));
+  const tagsByMaterialName: Record<string, string> = {};
+  for (const t of (clientTagsRes.data ?? []) as any[]) {
+    if (t.material_name && t.org_client_id) tagsByMaterialName[t.material_name.toLowerCase()] = t.org_client_id;
+  }
+  const orgClients = ((orgClientsRes.data ?? []) as any[]).map((r) => ({ id: r.id as string, name: r.name as string }));
   const draftRows = (draftsRes.data ?? []).filter((d: any) => d.agents?.slug === "agent-02-revalidation");
 
   // Latest captured supplier-reply quote — the price that came BACK for a direct
@@ -273,7 +280,7 @@ export default async function OrgPriceIndexPage({
                 No {STATUSES.find((s) => s.value === status)?.label.toLowerCase()} marketplace prices yet.
               </p>
             ) : (
-              <MarketplaceFindingsList rows={marketplaceRows} canAct={canAct} slug={org.slug} />
+              <MarketplaceFindingsList rows={marketplaceRows} canAct={canAct} slug={org.slug} orgClients={orgClients} tagsByMaterialName={tagsByMaterialName} />
             )}
           </section>
         }

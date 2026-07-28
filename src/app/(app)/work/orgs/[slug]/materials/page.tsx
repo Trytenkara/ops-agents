@@ -40,14 +40,15 @@ export default async function OrgMaterialsPage({ params }: { params: { slug: str
     (quotesByMaterial[q.material_id] ??= []).push(q);
   }
 
-  const { data: tagRows } = await admin
-    .from("material_client_tags")
-    .select("tenkara_material_id, client_name, is_priority")
-    .eq("org_id", org.id);
-  const clientTags: Record<string, { clientName: string; isPriority: boolean }> = {};
+  const [{ data: tagRows }, { data: orgClientRows }] = await Promise.all([
+    admin.from("material_client_tags").select("tenkara_material_id, org_client_id, is_priority").eq("org_id", org.id),
+    admin.from("org_clients").select("id, name").eq("org_id", org.id).order("name"),
+  ]);
+  const clientTags: Record<string, { orgClientId: string | null; isPriority: boolean }> = {};
   for (const t of tagRows ?? []) {
-    clientTags[t.tenkara_material_id] = { clientName: t.client_name, isPriority: t.is_priority };
+    clientTags[t.tenkara_material_id] = { orgClientId: t.org_client_id ?? null, isPriority: t.is_priority };
   }
+  const orgClients = (orgClientRows ?? []).map((r: any) => ({ id: r.id as string, name: r.name as string }));
 
   return (
     <div className="space-y-6">
@@ -82,6 +83,7 @@ export default async function OrgMaterialsPage({ params }: { params: { slug: str
         quotesByMaterial={quotesByMaterial}
         sourcingNotes={settingsRow?.sourcing_notes ?? null}
         clientTags={clientTags}
+        orgClients={orgClients}
       />
     </div>
   );

@@ -219,6 +219,17 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     marketplace: { total: 0, emailed: 0, manual: 0, needsPull: 0, pending: 0 },
   }));
 
+  // Client folders — for the client filter on the leads list.
+  const [{ data: tagRows }, { data: orgClientRows }] = await Promise.all([
+    admin.from("material_client_tags").select("tenkara_material_id, org_client_id").eq("org_id", org.id),
+    admin.from("org_clients").select("id, name").eq("org_id", org.id).order("name"),
+  ]);
+  const tagsByMaterialId: Record<string, string> = {};
+  for (const t of tagRows ?? []) {
+    if (t.org_client_id) tagsByMaterialId[t.tenkara_material_id] = t.org_client_id;
+  }
+  const orgClients = (orgClientRows ?? []).map((r: any) => ({ id: r.id as string, name: r.name as string }));
+
   return (
     <div className="space-y-6">
       <ListPageHeader
@@ -262,7 +273,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           </p>
         </div>
       )}
-      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} />
+      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} />
 
       <section className="space-y-2 pt-2">
         <h2 className="font-serif text-xl tracking-tight">

@@ -16,6 +16,7 @@ import { uploadAndParsePO, confirmOrder, deleteOrder, rematchOrders, editOrder }
 import { approveStagedQuote, dismissStagedQuote } from "@/app/actions/staged-quotes";
 import { saveSourcingNotes } from "@/app/actions/client-settings";
 import { saveClientTag } from "@/app/actions/material-client-tags";
+import { createOrgClient, deleteOrgClient } from "@/app/actions/org-clients";
 
 function fmtQty(qty: number | null, unit: string | null): string {
   if (qty == null) return "—";
@@ -81,6 +82,8 @@ export interface MaterialQuote {
   created_at: string;
 }
 
+export type OrgClient = { id: string; name: string };
+
 export function MaterialsPanel({
   orgId,
   slug,
@@ -90,6 +93,7 @@ export function MaterialsPanel({
   quotesByMaterial,
   sourcingNotes,
   clientTags,
+  orgClients: initialOrgClients = [],
 }: {
   orgId: string;
   slug: string;
@@ -98,22 +102,51 @@ export function MaterialsPanel({
   statuses?: Record<string, MaterialSourcingStatus>;
   quotesByMaterial?: Record<string, MaterialQuote[]>;
   sourcingNotes?: string | null;
-  clientTags?: Record<string, { clientName: string; isPriority: boolean }>;
+  clientTags?: Record<string, { orgClientId: string | null; isPriority: boolean }>;
+  orgClients?: OrgClient[];
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [notes, setNotes] = useState(sourcingNotes ?? "");
   const fileRef = useRef<HTMLInputElement>(null);
-  const [clientFilter, setClientFilter] = useState("");
+  const [clientFilter, setClientFilter] = useState("all");
   const [priorityOnly, setPriorityOnly] = useState(false);
+  // Optimistic org_clients list — updated immediately on add/delete
+  const [orgClients, setOrgClients] = useState<OrgClient[]>(initialOrgClients);
+  const [showManageClients, setShowManageClients] = useState(false);
+  const [newClientName, setNewClientName] = useState("");
+  const [clientMgmtPending, startClientMgmt] = useTransition();
 
   const filteredMaterials = profile.materials.filter((m) => {
     const tag = m.tenkaraMaterialId ? clientTags?.[m.tenkaraMaterialId] : undefined;
     if (priorityOnly && !tag?.isPriority) return false;
-    if (clientFilter) return (tag?.clientName ?? "").toLowerCase().includes(clientFilter.toLowerCase());
+    if (clientFilter !== "all") return tag?.orgClientId === clientFilter;
     return true;
   });
+
+  const handleAddClient = () => {
+    const trimmed = newClientName.trim();
+    if (!trimmed) return;
+    startClientMgmt(async () => {
+      const result = await createOrgClient(orgId, trimmed);
+      if (result.ok && result.id) {
+        setOrgClients((prev) => [...prev, { id: result.id!, name: trimmed }].sort((a, b) => a.name.localeCompare(b.name)));
+        setNewClientName("");
+      }
+    });
+  };
+
+  const handleDeleteClient = (clientId: string) => {
+    startClientMgmt(async () => {
+      const result = await deleteOrgClient(clientId);
+      if (result.ok) {
+        setOrgClients((prev) => prev.filter((c) => c.id !== clientId));
+        if (clientFilter === clientId) setClientFilter("all");
+        router.refresh(); // refresh so tagged materials clear
+      }
+    });
+  };
 
   function run(fn: () => Promise<{ ok: boolean; error?: string; parsed?: number }>, okText: string) {
     setMsg(null);
@@ -252,13 +285,18 @@ export function MaterialsPanel({
         <div className="space-y-3">
           <h3 className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Materials</h3>
           <div className="flex flex-wrap items-center gap-2">
-            <input
-              type="text"
-              value={clientFilter}
-              onChange={(e) => setClientFilter(e.target.value)}
-              placeholder="Filter by client…"
-              className="h-7 rounded-md border border-input bg-transparent px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring w-44"
-            />
+            {orgClients.length > 0 && (
+              <select
+                value={clientFilter}
+                onChange={(e) => setClientFilter(e.target.value)}
+                className="h-7 rounded-md border border-input bg-transparent px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <option value="all">All clients</option>
+                {orgClients.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            )}
             <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -268,20 +306,69 @@ export function MaterialsPanel({
               />
               Priority only
             </label>
-            {(clientFilter || priorityOnly) && (
+            {(clientFilter !== "all" || priorityOnly) && (
               <button
-                onClick={() => { setClientFilter(""); setPriorityOnly(false); }}
+                onClick={() => { setClientFilter("all"); setPriorityOnly(false); }}
                 className="text-xs text-muted-foreground hover:text-foreground"
               >
                 Clear
               </button>
             )}
-            {(clientFilter || priorityOnly) && (
+            {(clientFilter !== "all" || priorityOnly) && (
               <span className="text-xs text-muted-foreground ml-auto">
                 {filteredMaterials.length} of {profile.materials.length}
               </span>
             )}
+            {canEdit && (
+              <button
+                onClick={() => setShowManageClients((v) => !v)}
+                className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+              >
+                {showManageClients ? "Hide clients ▾" : "Manage clients ▸"}
+              </button>
+            )}
           </div>
+          {canEdit && showManageClients && (
+            <div className="rounded-lg border border-border bg-secondary/30 px-3 py-2.5 space-y-2">
+              <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Client folders</div>
+              {orgClients.length === 0 && (
+                <p className="text-xs text-muted-foreground">No clients yet. Add one below.</p>
+              )}
+              <div className="flex flex-wrap gap-1.5">
+                {orgClients.map((c) => (
+                  <span key={c.id} className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2.5 py-0.5 text-xs">
+                    {c.name}
+                    <button
+                      onClick={() => handleDeleteClient(c.id)}
+                      disabled={clientMgmtPending}
+                      title={`Remove "${c.name}"`}
+                      className="text-muted-foreground hover:text-destructive ml-0.5"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={newClientName}
+                  onChange={(e) => setNewClientName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleAddClient()}
+                  placeholder="New client name…"
+                  disabled={clientMgmtPending}
+                  className="h-7 flex-1 rounded-md border border-input bg-transparent px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                />
+                <button
+                  onClick={handleAddClient}
+                  disabled={clientMgmtPending || !newClientName.trim()}
+                  className="h-7 rounded-md border border-input bg-background px-2.5 text-xs hover:bg-secondary disabled:opacity-40"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+          )}
             <Table>
               <TableHeader>
                 <TableRow>
@@ -309,6 +396,7 @@ export function MaterialsPanel({
                     quotes={m.tenkaraMaterialId ? quotesByMaterial?.[m.tenkaraMaterialId] ?? [] : []}
                     base={`/work/orgs/${slug}`}
                     tag={m.tenkaraMaterialId ? clientTags?.[m.tenkaraMaterialId] : undefined}
+                    orgClients={orgClients}
                   />
                 ))}
                 {filteredMaterials.length === 0 && (
@@ -443,6 +531,7 @@ function MaterialRow({
   quotes,
   base,
   tag,
+  orgClients = [],
 }: {
   m: MaterialProfileRow;
   orgId: string;
@@ -452,11 +541,10 @@ function MaterialRow({
   status?: MaterialSourcingStatus;
   quotes: MaterialQuote[];
   base: string;
-  tag?: { clientName: string; isPriority: boolean };
+  tag?: { orgClientId: string | null; isPriority: boolean };
+  orgClients?: OrgClient[];
 }) {
   const [open, setOpen] = useState(false);
-  const [editingClient, setEditingClient] = useState(false);
-  const [clientInput, setClientInput] = useState("");
   // Optimistic priority: flips immediately on click; clears when server state arrives
   const [optimisticPriority, setOptimisticPriority] = useState<boolean | null>(null);
   const [tagPending, startTagTransition] = useTransition();
@@ -467,38 +555,32 @@ function MaterialRow({
   // (grade, INCI, brand, need type) worth seeing to sanity-check matching.
   const detailCount = quotes.length + m.orders.length;
 
-  const currentClientName = tag?.clientName ?? "";
+  const currentClientId = tag?.orgClientId ?? null;
+  const currentClientName = orgClients.find((c) => c.id === currentClientId)?.name ?? "";
   // Display: optimistic value while save is in-flight, server value once refreshed
   const displayPriority = optimisticPriority !== null ? optimisticPriority : (tag?.isPriority ?? false);
 
   // Once router.refresh() lands and tag prop updates, drop the optimistic override
   useEffect(() => { setOptimisticPriority(null); }, [tag?.isPriority]);
 
-  const doSaveTag = (name: string, priority: boolean) => {
+  const doSaveTag = (clientId: string | null, priority: boolean) => {
     if (!m.tenkaraMaterialId) return;
     startTagTransition(async () => {
-      await saveClientTag(orgId, m.tenkaraMaterialId!, name, priority);
+      await saveClientTag(orgId, m.tenkaraMaterialId!, m.label, clientId, priority);
       tagRouter.refresh();
     });
   };
 
-  const startClientEdit = (e: React.MouseEvent) => {
+  const handleClientChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     e.stopPropagation();
-    setClientInput(currentClientName);
-    setEditingClient(true);
-  };
-
-  const commitClientEdit = () => {
-    setEditingClient(false);
-    const trimmed = clientInput.trim();
-    if (trimmed !== currentClientName) doSaveTag(trimmed, displayPriority);
+    doSaveTag(e.target.value || null, displayPriority);
   };
 
   const togglePriority = (e: React.MouseEvent) => {
     e.stopPropagation();
     const next = !displayPriority;
     setOptimisticPriority(next);
-    doSaveTag(currentClientName, next);
+    doSaveTag(currentClientId, next);
   };
 
   return (
@@ -522,34 +604,22 @@ function MaterialRow({
               <span>{m.label}</span>
               <span className="text-xs text-muted-foreground">{open ? "▾" : "▸"}{detailCount > 0 ? ` ${detailCount}` : ""}</span>
             </div>
-            {canEdit && m.tenkaraMaterialId ? (
-              editingClient ? (
-                <input
-                  autoFocus
-                  value={clientInput}
-                  onChange={(e) => setClientInput(e.target.value)}
-                  onBlur={commitClientEdit}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") commitClientEdit();
-                    if (e.key === "Escape") { setClientInput(currentClientName); setEditingClient(false); }
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                  disabled={tagPending}
-                  placeholder="Client name…"
-                  className="text-xs border border-input rounded px-1.5 py-0.5 bg-background focus:outline-none focus:ring-1 focus:ring-ring w-40"
-                />
-              ) : (
-                <button
-                  onClick={startClientEdit}
-                  className={cn(
-                    "text-xs text-left transition-colors",
-                    currentClientName ? "text-sky-700 dark:text-sky-400 font-medium" : "text-muted-foreground/50 hover:text-muted-foreground"
-                  )}
-                  title="Set client name for this material"
-                >
-                  {currentClientName || "Add client…"}
-                </button>
-              )
+            {canEdit && m.tenkaraMaterialId && orgClients.length > 0 ? (
+              <select
+                value={currentClientId ?? ""}
+                onChange={handleClientChange}
+                onClick={(e) => e.stopPropagation()}
+                disabled={tagPending}
+                className={cn(
+                  "text-xs rounded border border-input bg-transparent px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-ring w-36",
+                  currentClientName ? "text-sky-700 dark:text-sky-400 font-medium" : "text-muted-foreground"
+                )}
+              >
+                <option value="">— none —</option>
+                {orgClients.map((c) => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
             ) : currentClientName ? (
               <span className="text-xs text-sky-700 dark:text-sky-400 font-medium">{currentClientName}</span>
             ) : null}
