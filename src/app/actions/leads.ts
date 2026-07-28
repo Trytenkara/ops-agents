@@ -7,11 +7,13 @@ import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { loadMatchCandidates, matchOrderToMaterial } from "@/lib/material-profile";
 import { sanitizeTiers, type PriceTier } from "@/lib/price-tiers";
 import { normalizeCompanyName, hostOf } from "@/lib/tenkara-sourcing-exclusions";
+import { deleteTenkaraDrafts } from "@/lib/tenkara";
 import { isSameCompanyName } from "@/lib/fuzzy";
 
 interface ActionResult {
   ok: boolean;
   error?: string;
+  warning?: string;
 }
 
 export interface CsvUploadResult {
@@ -384,6 +386,7 @@ export async function dropLead(leadId: string, reason: DropReason, note?: string
 
   if (lead.status !== "active") return { ok: false, error: "lead_already_terminal" };
 
+  const payload = (lead.payload as any) ?? {};
   const reasonText = note?.trim() ? `${reason}: ${note.trim()}` : reason;
   const { error } = await admin
     .from("leads_in_flight")
@@ -391,7 +394,7 @@ export async function dropLead(leadId: string, reason: DropReason, note?: string
       status: "terminal",
       drop_reason: reasonText,
       payload: {
-        ...((lead.payload as any) ?? {}),
+        ...payload,
         dropped_by: session.userId,
         dropped_at: new Date().toISOString(),
         drop_reason_code: reason,
@@ -402,17 +405,49 @@ export async function dropLead(leadId: string, reason: DropReason, note?: string
     .eq("status", "active");
   if (error) return { ok: false, error: error.message };
 
+  // If this lead already reached outreach, an agent staged a draft in the email
+  // app (Tenkara). Delete that draft so a dropped lead never leaves a live draft
+  // an operator could still send. Best-effort: a delete miss is logged, not fatal
+  // — the lead is already dropped locally. Only rod_app (Tenkara) drafts are
+  // deletable here; Missive drafts have no delete path and are left as-is.
+  let draftWarning: string | undefined;
+  const outreach = payload.outreach as
+    | { email_client?: string; draft_id?: string; conversation_id?: string }
+    | undefined;
+  if (outreach?.email_client === "rod_app" && (outreach.draft_id || outreach.conversation_id)) {
+    const del = await deleteTenkaraDrafts({
+      draftId: outreach.draft_id,
+      conversationId: outreach.conversation_id,
+    });
+    if (del.ok) {
+      // Mirror the deletion onto the local draft_references record so the
+      // Outreach tracker and All Threads view stop showing it as a live draft.
+      let ref = admin.from("draft_references").update({ status: "discarded" });
+      ref = outreach.draft_id
+        ? ref.eq("draft_id", outreach.draft_id)
+        : ref.eq("thread_id", outreach.conversation_id!);
+      await ref.in("status", ["staged", "reviewed", "blocked"]);
+    } else {
+      draftWarning = `lead dropped, but the email draft could not be deleted (${del.error ?? "unknown"}) — remove it in the Inbox`;
+    }
+  }
+
   await admin.from("audit_log").insert({
     actor_user_id: session.userId,
     action: "lead.dropped",
     target_table: "leads_in_flight",
     target_id: leadId,
-    diff: { from_stage: lead.stage, reason, note: note?.trim() || undefined },
+    diff: {
+      from_stage: lead.stage,
+      reason,
+      note: note?.trim() || undefined,
+      ...(outreach?.email_client === "rod_app" ? { draft_delete_warning: draftWarning ?? null } : {}),
+    },
   });
 
   revalidatePath("/work/review/leads");
   revalidatePath("/work/orgs/[slug]/leads", "page");
-  return { ok: true };
+  return draftWarning ? { ok: true, warning: draftWarning } : { ok: true };
 }
 
 // Manually update the contact email for a single lead. Updates both the

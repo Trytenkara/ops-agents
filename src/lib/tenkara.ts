@@ -237,6 +237,52 @@ export async function setTenkaraConversationAssignee(
   };
 }
 
+// Deletes agent-created drafts from the Tenkara Inbox. Params go in the QUERY
+// STRING (not a JSON body): pass draftId to remove one draft, or conversationId
+// to remove every draft on that thread. Returns { deleted } — deleted:0 for
+// unknown ids (Tenkara still answers HTTP 200). Best-effort like the assignee
+// mirror: returns a result rather than throwing so a delete miss never rolls
+// back the local drop.
+//   DELETE https://tenkara-inbox-nine.vercel.app/api/drafts?id=<draftId>
+//   DELETE .../api/drafts?conversation_id=<conversationId>
+export interface DeleteDraftResult {
+  ok: boolean;
+  status: number;
+  deleted?: number;
+  error?: string;
+}
+
+export async function deleteTenkaraDrafts(params: {
+  draftId?: string | null;
+  conversationId?: string | null;
+}): Promise<DeleteDraftResult> {
+  const token = process.env.TENKARA_API_TOKEN;
+  if (!token) return { ok: false, status: 0, error: "TENKARA_API_TOKEN not configured" };
+
+  const qs = params.draftId
+    ? `id=${encodeURIComponent(params.draftId)}`
+    : params.conversationId
+      ? `conversation_id=${encodeURIComponent(params.conversationId)}`
+      : null;
+  if (!qs) return { ok: false, status: 0, error: "missing draftId or conversationId" };
+
+  let res: Response;
+  try {
+    res = await fetch(`${TENKARA_INBOX_BASE}/api/drafts?${qs}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch (e: any) {
+    return { ok: false, status: 0, error: e?.message ?? String(e) };
+  }
+
+  const body = await res.json().catch(() => ({}) as any);
+  if (!res.ok) {
+    return { ok: false, status: res.status, error: body?.error ?? `HTTP ${res.status}` };
+  }
+  return { ok: true, status: res.status, deleted: body.deleted ?? 0 };
+}
+
 // Per-client Tenkara Inbox account UUIDs (from Rod, 2026-06-18). Conversations
 // MUST be created with an email_account_id — a null account makes the thread
 // invisible on Tenkara's side (placement is driven by the account label). The

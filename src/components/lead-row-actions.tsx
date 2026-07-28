@@ -19,13 +19,18 @@ export function LeadRowActions({ leadId, stage, status, hasBlockedReason, disabl
   const [reason, setReason] = useState<DropReason>("duplicate");
   const [note, setNote] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const [warn, setWarn] = useState<string | null>(null);
 
   if (status !== "active") {
     return <span className="text-xs text-muted-foreground">—</span>;
   }
 
   const canPromote = !disabled && (stage === "enriched" || (stage === "raw" && hasBlockedReason));
-  const canDrop = !disabled && (stage === "raw" || stage === "enriched");
+  const canDrop =
+    !disabled &&
+    (stage === "raw" || stage === "enriched" || stage === "ready_for_outreach" || stage === "ready_for_approval");
+  // Leads past outreach have a draft staged in the email app; dropping deletes it.
+  const dropDeletesDraft = stage === "ready_for_outreach" || stage === "ready_for_approval";
 
   function onPromote() {
     setErr(null);
@@ -37,16 +42,25 @@ export function LeadRowActions({ leadId, stage, status, hasBlockedReason, disabl
 
   function onConfirmDrop() {
     setErr(null);
+    setWarn(null);
     startTransition(async () => {
       const res = await dropLead(leadId, reason, note);
       if (!res.ok) setErr(res.error ?? "failed");
-      else setDropping(false);
+      else {
+        setDropping(false);
+        if (res.warning) setWarn(res.warning);
+      }
     });
   }
 
   if (dropping) {
     return (
       <div className="flex flex-col gap-1 items-end">
+        {dropDeletesDraft && (
+          <span className="text-[10px] text-muted-foreground text-right w-40">
+            Also deletes the staged draft in the email app.
+          </span>
+        )}
         <Select
           size="sm"
           className="w-40"
@@ -93,6 +107,7 @@ export function LeadRowActions({ leadId, stage, status, hasBlockedReason, disabl
       )}
       {!canPromote && !canDrop && <span className="text-xs text-muted-foreground">—</span>}
       {err && <span className="text-[10px] text-destructive ml-1">{err}</span>}
+      {warn && <span className="text-[10px] text-amber-600 ml-1">{warn}</span>}
     </div>
   );
 }
