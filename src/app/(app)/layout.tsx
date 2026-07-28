@@ -4,6 +4,8 @@ import { Shell, type OrgItem } from "@/components/nav";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { orgDisplayName } from "@/lib/org-display";
 
+export const dynamic = "force-dynamic";
+
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
   if (!session) redirect("/login");
