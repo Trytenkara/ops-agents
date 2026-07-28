@@ -264,13 +264,18 @@ registerAgent({
                 .eq("supplier_id", group.supplier_id)
                 .eq("email_client", "rod_app")
                 .not("thread_id", "is", null)
+                .not("status", "in", '("discarded","superseded","blocked")')
                 .order("created_at", { ascending: false })
                 .limit(1)
                 .maybeSingle();
               existingConversationId = (existingRef as any)?.thread_id ?? null;
             }
-          } catch {
-            // best-effort — fall through to create a new conversation
+          } catch (err) {
+            await ctx.log(`Thread lookup failed for ${group.supplier_name} — falling through to new conversation`, {
+              level: "warn",
+              step: "stage",
+              data: { error: String(err), supplier_id: group.supplier_id },
+            });
           }
 
           if (existingConversationId) {
@@ -287,7 +292,7 @@ registerAgent({
             await ctx.log(`Replying into existing thread ${existingConversationId} for ${group.supplier_name}`, { step: "stage", data: { existing_thread: true } });
           } else {
             const c = await createTenkaraConversation({
-              externalId: `agent-02-reval-${group.client_org_id}-${group.supplier_id}-${today}`,
+              externalId: `agent-02-reval-${group.client_org_id}-${group.supplier_id}`,
               to: { name: group.supplier_contact_name ?? "", address: group.supplier_contact_email },
               subject: draft.subject,
               bodyHtml: bodyToHtml(draft.body),
@@ -425,7 +430,7 @@ registerAgent({
               ghost_brand: r.ghostBrand ?? null,
               missive_draft_link: emailClient === "missive" ? missiveDraftLink(r.missiveConversationId, r.missiveDraftId) : null,
               ...(emailClient === "rod_app"
-                ? { draft_kind: "cold_outbound", external_id: `agent-02-reval-${r.group.client_org_id}-${r.group.supplier_id}-${today}` }
+                ? { draft_kind: "cold_outbound", external_id: `agent-02-reval-${r.group.client_org_id}-${r.group.supplier_id}` }
                 : {}),
               qa_findings: qaFindings,
               qa_linted_at: new Date().toISOString(),
