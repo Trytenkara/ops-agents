@@ -38,7 +38,23 @@ export async function middleware(request: NextRequest) {
       },
     });
 
-    const { data: { user } } = await supabase.auth.getUser();
+    let user;
+    try {
+      const userPromise = supabase.auth.getUser();
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("auth timeout")), 5000)
+      );
+      const { data } = await Promise.race([userPromise, timeoutPromise]) as Awaited<ReturnType<typeof supabase.auth.getUser>>;
+      user = data?.user;
+    } catch (authErr: any) {
+      if (authErr?.message === "auth timeout") {
+        return new NextResponse(
+          "Authentication service temporarily unavailable. Please try again in a moment.",
+          { status: 503, headers: { "content-type": "text/plain" } }
+        );
+      }
+      throw authErr;
+    }
 
     const isAuthPage = request.nextUrl.pathname.startsWith("/login") ||
                        request.nextUrl.pathname.startsWith("/signup") ||
