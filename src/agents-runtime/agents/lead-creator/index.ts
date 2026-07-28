@@ -367,6 +367,32 @@ registerAgent({
       }
     }
 
+    // Priority bump: materials tagged is_priority=true in material_client_tags come
+    // first in the processing order for their org. Purely a stable sort — no materials
+    // are added or removed, and other orgs are unaffected. Fail-open: a query error
+    // leaves the order unchanged. Only applied on cron runs (not targeted single-material).
+    if (!onlyMaterialId) {
+      try {
+        const oaOrgIds = Array.from(new Set([...tenkaraOrgToOaOrg.values()].filter(Boolean)));
+        if (oaOrgIds.length) {
+          const { data: priorityRows } = await admin
+            .from("material_client_tags")
+            .select("tenkara_material_id")
+            .in("org_id", oaOrgIds)
+            .eq("is_priority", true);
+          const prioritySet = new Set((priorityRows ?? []).map((r: any) => r.tenkara_material_id as string));
+          if (prioritySet.size > 0) {
+            const pri = materials.filter((m) => prioritySet.has(m.id));
+            const rest = materials.filter((m) => !prioritySet.has(m.id));
+            materials = [...pri, ...rest];
+            await ctx.log(`Priority queue: moved ${pri.length} material(s) to front of run`, { step: "priority" });
+          }
+        }
+      } catch (e: any) {
+        await ctx.log(`Priority queue lookup failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "priority" });
+      }
+    }
+
     if (materials.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
