@@ -81,28 +81,65 @@ registerAgent({
       return;
     }
 
-    // 1. Pull enriched leads, best completeness first.
-    const { data: leads, error: pullErr } = await admin
-      .from("leads_in_flight")
-      .select("id, org_id, supplier_id, assigned_operator_id, supplier_name, material_id, material_name, payload, confidence_score")
-      .eq("stage", "enriched")
-      .eq("status", "active")
-      .order("created_at", { ascending: false })
-      .limit(maxDrafts * 4); // over-fetch to allow filtering before capping
+    // 1. Pull enriched leads, best completeness first — but ONLY from orgs that
+    //    are online for outreach (sourcing_status = 'active'). Filtering by org
+    //    status *here*, before the cap, is what makes "pause" actually mean "out
+    //    of the queue": a paused org's stranded enriched leads must never occupy
+    //    the draft window and shove a live client past it. Previously the org
+    //    filter ran only in the candidate loop below — after this newest-first
+    //    cap — so a paused org (e.g. Aurora) with fresher leftover leads starved
+    //    live clients entirely. Real clients (is_internal=false) are fetched
+    //    before internal test orgs so a high-volume test org can't bury them.
+    const orgStatuses = await loadOrgStatuses(admin);
+    const { data: orgInternalRows } = await admin.from("orgs").select("id, is_internal");
+    const isInternalById = new Map<string, boolean>((orgInternalRows ?? []).map((o: any) => [o.id, !!o.is_internal]));
+    const eligibleOrgIds = [...orgStatuses.byOaId.entries()]
+      .filter(([, s]) => outreachAllowed(s))
+      .map(([id]) => id);
+    const realOrgIds = eligibleOrgIds.filter((id) => !isInternalById.get(id));
+    const internalOrgIds = eligibleOrgIds.filter((id) => isInternalById.get(id));
 
-    if (pullErr) {
-      await ctx.log(`Pull failed: ${pullErr.message}`, { level: "error", step: "pull" });
+    const leadCols =
+      "id, org_id, supplier_id, assigned_operator_id, supplier_name, material_id, material_name, payload, confidence_score";
+    const fetchEnriched = (ids: string[], limit: number) =>
+      ids.length && limit > 0
+        ? admin
+            .from("leads_in_flight")
+            .select(leadCols)
+            .eq("stage", "enriched")
+            .eq("status", "active")
+            .in("org_id", ids)
+            .order("created_at", { ascending: false })
+            .limit(limit)
+        : Promise.resolve({ data: [] as any[], error: null as any });
+
+    const cap = maxDrafts * 4; // over-fetch to allow filtering before capping
+    const realRes = await fetchEnriched(realOrgIds, cap);
+    if (realRes.error) {
+      await ctx.log(`Pull failed: ${realRes.error.message}`, { level: "error", step: "pull" });
       ctx.setStatus("failure");
-      ctx.setSummary(`Pull failed: ${pullErr.message}`);
+      ctx.setSummary(`Pull failed: ${realRes.error.message}`);
       return;
     }
-    if (!leads || leads.length === 0) {
+    let leads = realRes.data ?? [];
+    if (leads.length < cap) {
+      const fillRes = await fetchEnriched(internalOrgIds, cap - leads.length);
+      if (fillRes.error) {
+        await ctx.log(`Internal-org pull failed (non-fatal): ${fillRes.error.message}`, { level: "warn", step: "pull" });
+      } else {
+        leads = leads.concat(fillRes.data ?? []);
+      }
+    }
+    if (!leads.length) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary("No enriched leads ready for outreach.");
+      ctx.setSummary("No enriched leads ready for outreach (online orgs).");
       return;
     }
-    await ctx.log(`Pulled ${leads.length} enriched leads (pre-filter)`, { step: "pull" });
+    await ctx.log(
+      `Pulled ${leads.length} enriched leads (pre-filter) · eligible orgs: real=${realOrgIds.length} internal=${internalOrgIds.length}`,
+      { step: "pull" }
+    );
 
     // 2. Resolve org info + classify in one pass. We only contact suppliers on
     //    behalf of orgs that map cleanly to a known active/ghost label.
@@ -224,8 +261,9 @@ registerAgent({
     }
 
     const candidates: Candidate[] = [];
-    // Per-org switch: outreach only acts for orgs whose sourcing_status is 'active'.
-    const orgStatuses = await loadOrgStatuses(admin);
+    // Per-org switch (orgStatuses loaded above at the fetch): outreach only acts
+    // for orgs whose sourcing_status is 'active'. The fetch already excludes
+    // paused orgs; this is a belt-and-suspenders guard in the candidate loop.
     let droppedNoContact = 0;
     let droppedNoOrg = 0;
     let droppedSkipClient = 0;
