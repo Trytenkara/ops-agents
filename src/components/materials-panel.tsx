@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useRef, useState, useEffect, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -457,6 +457,8 @@ function MaterialRow({
   const [open, setOpen] = useState(false);
   const [editingClient, setEditingClient] = useState(false);
   const [clientInput, setClientInput] = useState("");
+  // Optimistic priority: flips immediately on click; clears when server state arrives
+  const [optimisticPriority, setOptimisticPriority] = useState<boolean | null>(null);
   const [tagPending, startTagTransition] = useTransition();
   const tagRouter = useRouter();
 
@@ -466,7 +468,11 @@ function MaterialRow({
   const detailCount = quotes.length + m.orders.length;
 
   const currentClientName = tag?.clientName ?? "";
-  const currentIsPriority = tag?.isPriority ?? false;
+  // Display: optimistic value while save is in-flight, server value once refreshed
+  const displayPriority = optimisticPriority !== null ? optimisticPriority : (tag?.isPriority ?? false);
+
+  // Once router.refresh() lands and tag prop updates, drop the optimistic override
+  useEffect(() => { setOptimisticPriority(null); }, [tag?.isPriority]);
 
   const doSaveTag = (name: string, priority: boolean) => {
     if (!m.tenkaraMaterialId) return;
@@ -485,12 +491,14 @@ function MaterialRow({
   const commitClientEdit = () => {
     setEditingClient(false);
     const trimmed = clientInput.trim();
-    if (trimmed !== currentClientName) doSaveTag(trimmed, currentIsPriority);
+    if (trimmed !== currentClientName) doSaveTag(trimmed, displayPriority);
   };
 
   const togglePriority = (e: React.MouseEvent) => {
     e.stopPropagation();
-    doSaveTag(currentClientName, !currentIsPriority);
+    const next = !displayPriority;
+    setOptimisticPriority(next);
+    doSaveTag(currentClientName, next);
   };
 
   return (
@@ -502,15 +510,13 @@ function MaterialRow({
               {canEdit && m.tenkaraMaterialId && (
                 <button
                   onClick={togglePriority}
-                  disabled={tagPending}
-                  title={currentIsPriority ? "Priority — click to remove" : "Mark as priority (moves to front of discovery queue)"}
+                  title={displayPriority ? "Priority — click to remove" : "Mark as priority (moves to front of discovery queue)"}
                   className={cn(
-                    "text-base leading-none shrink-0 transition-opacity",
-                    tagPending && "opacity-40",
-                    currentIsPriority ? "text-amber-500" : "text-muted-foreground/40 hover:text-amber-400"
+                    "text-base leading-none shrink-0 transition-colors",
+                    displayPriority ? "text-amber-500 hover:text-amber-400" : "text-muted-foreground/40 hover:text-amber-400"
                   )}
                 >
-                  {currentIsPriority ? "★" : "☆"}
+                  {displayPriority ? "★" : "☆"}
                 </button>
               )}
               <span>{m.label}</span>
