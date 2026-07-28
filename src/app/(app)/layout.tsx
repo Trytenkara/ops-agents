@@ -19,6 +19,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     const { data } = await admin
       .from("orgs")
       .select("slug, name, display_name, is_internal")
+      .neq("sourcing_status", "off")
       .order("is_internal", { ascending: true })
       .order("name");
     orgRows = (data ?? []) as any;

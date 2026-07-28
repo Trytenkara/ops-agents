@@ -75,10 +75,10 @@ export default async function LeadsPage({
   // Org dropdown options: assigned orgs for scoped users, all orgs for global.
   let orgOptions: { id: string; slug: string; name: string }[] = [];
   if (assigned === null) {
-    const { data } = await admin.from("orgs").select("id, slug, name").order("name");
+    const { data } = await admin.from("orgs").select("id, slug, name").neq("sourcing_status", "off").order("name");
     orgOptions = (data ?? []) as any[];
   } else if (assigned.length > 0) {
-    const { data } = await admin.from("orgs").select("id, slug, name").in("id", assigned).order("name");
+    const { data } = await admin.from("orgs").select("id, slug, name").in("id", assigned).neq("sourcing_status", "off").order("name");
     orgOptions = (data ?? []) as any[];
   }
   const selectedOrg = orgSlug ? orgOptions.find((o) => o.slug === orgSlug) ?? null : null;

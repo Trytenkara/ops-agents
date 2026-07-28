@@ -15,7 +15,7 @@ export default async function ReviewByOrgPage() {
   const admin = createAdminClient();
   const assigned = await getAssignedOrgIds(session);
 
-  let orgQuery = admin.from("orgs").select("id, slug, name, display_name, is_internal").order("is_internal").order("name");
+  let orgQuery = admin.from("orgs").select("id, slug, name, display_name, is_internal").neq("sourcing_status", "off").order("is_internal").order("name");
   if (assigned) {
     if (assigned.length === 0) {
       return <p className="text-sm text-muted-foreground">No orgs assigned to you yet.</p>;
