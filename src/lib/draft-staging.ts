@@ -1,6 +1,6 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { createMissiveDraft, missiveDraftLink } from "@/lib/missive";
-import { createTenkaraDraft, createTenkaraConversation } from "@/lib/tenkara";
+import { createTenkaraDraft, createTenkaraConversation, setTenkaraConversationAssignee } from "@/lib/tenkara";
 import { bodyToHtml } from "@/lib/email-style";
 import { MISSIVE_ORGANIZATION_ID, MISSIVE_TEAM_ID } from "@/agents-runtime/agents/quote-revalidation/config";
 import { lintDraft, type Finding } from "@/agents-runtime/agents/outreach-qa/lint";
@@ -17,6 +17,31 @@ import { postAgentAlert } from "@/lib/slack-alert";
 // only on the hourly sweep.
 
 type Admin = ReturnType<typeof createAdminClient>;
+
+// Auto-assign a Tenkara conversation to the operator the draft is assigned to in
+// the Control Room, mirroring the assignment onto the email app at creation time
+// (previously only a manual Control Room assign pushed the assignee). Best-effort:
+// resolves the operator's login email, then PATCHes the conversation. A miss (no
+// email on the operator, an email that isn't an active Tenkara member → 422, or a
+// thread our token didn't create → 403) is logged, never thrown, so it can't roll
+// back a staged draft.
+export async function mirrorDraftAssignee(
+  admin: Admin,
+  threadId: string | null | undefined,
+  operatorId: string | null | undefined
+): Promise<void> {
+  if (!threadId || !operatorId) return;
+  const { data: op } = await admin.from("users").select("email").eq("id", operatorId).maybeSingle();
+  const email = op?.email ?? null;
+  if (!email) {
+    console.warn(`[mirrorDraftAssignee] operator ${operatorId} has no email; skipped conversation ${threadId}`);
+    return;
+  }
+  const res = await setTenkaraConversationAssignee(threadId, email);
+  if (!res.ok) {
+    console.warn(`[mirrorDraftAssignee] Tenkara assignee mirror failed for conversation ${threadId}: ${res.status} ${res.error}`);
+  }
+}
 
 export interface StageDraftInput {
   admin: Admin;
@@ -204,6 +229,12 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
     .maybeSingle();
 
   if (error) return { ok: false, error: `draft_references: ${error.message}`, qaFindings };
+
+  // Mirror the Control Room operator onto the Tenkara conversation so the email
+  // app shows the same assignee the moment the draft is staged.
+  if (emailClient === "rod_app") {
+    await mirrorDraftAssignee(admin, threadId, assignedOperator ?? null);
+  }
 
   return {
     ok: true,

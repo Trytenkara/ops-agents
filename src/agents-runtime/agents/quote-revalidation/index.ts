@@ -12,6 +12,7 @@ import { lintDraft } from "../outreach-qa/lint";
 import { postQrSummary } from "./slack-notifier";
 import { getOrgOperatorPool, getSupplierAssignments, resolveSupplierOperatorId } from "@/lib/operator-assignment";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
+import { mirrorDraftAssignee } from "@/lib/draft-staging";
 
 // Now runs daily (was weekly), so a quote that's expiring stays "overdue" for
 // days. Debounce: don't re-draft a quote we already drafted within this window,
@@ -378,6 +379,12 @@ registerAgent({
           const manual = await getSupplierAssignments(admin, (oaOrg as any).id).catch(() => new Map<string, string>());
           const resolved = resolveSupplierOperatorId(manual, pool, r.group.supplier_id);
           if (resolved) assignedOperator = resolved;
+        }
+        // Mirror the Control Room operator onto the Tenkara conversation so the
+        // email app shows the same assignee (Agent 02 creates conversations
+        // directly, bypassing stageDraft's mirror).
+        if (emailClient === "rod_app") {
+          await mirrorDraftAssignee(admin, r.missiveConversationId, assignedOperator);
         }
         const qaFindings = lintDraft({
           subject: r.subject ?? null,
