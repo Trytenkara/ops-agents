@@ -57,6 +57,25 @@ export async function enrichAndStageLead(
   // re-adds it when this attempt also fails.
   const { enrichment_blocked_reason: _priorBlock, ...priorPayload } = lead.payload ?? {};
 
+  // A marketplace-trust penalty (Send-Inquiry / price-range / low-trust-China
+  // listing) down-ranks the lead's confidence so it sorts to the bottom of the
+  // confidence-ordered enrichment/outreach queues. Soft only: it never blocks
+  // outreach or drops the lead. No-op when the lead was never confidence-scored.
+  //
+  // Anchor the reduction on the ORIGINAL (pre-penalty) confidence, stored once as
+  // enrichment.confidence_base — otherwise a blocked marketplace lead that gets
+  // re-enriched each run would subtract the penalty repeatedly and decay to zero.
+  const penalty = result.marketplace_trust?.penalty ?? 0;
+  const priorBase =
+    typeof lead.payload?.enrichment?.confidence_base === "number"
+      ? lead.payload.enrichment.confidence_base
+      : typeof lead.confidence_score === "number"
+      ? lead.confidence_score
+      : null;
+  const downrankedConfidence =
+    penalty > 0 && priorBase != null ? Math.max(0, Math.round((priorBase - penalty) * 100) / 100) : null;
+  const confidencePatch = downrankedConfidence != null ? { confidence_score: downrankedConfidence } : {};
+
   const mergedPayload = {
     ...priorPayload,
     enrichment: {
@@ -65,9 +84,12 @@ export async function enrichAndStageLead(
       contact: result.contact,
       tenkara_supplier: result.tenkara_supplier,
       legitimacy_check: result.legitimacy_check,
+      marketplace_trust: result.marketplace_trust,
       aggregator_contact_email: result.aggregator_contact_email,
       completeness_score: result.completeness_score,
       completeness_factors: result.completeness_factors,
+      // Preserve the pre-penalty confidence so re-runs stay idempotent.
+      ...(downrankedConfidence != null ? { confidence_base: priorBase } : {}),
       enriched_at: attemptedAt,
       enrichment_run_id: runId,
     },
@@ -88,7 +110,7 @@ export async function enrichAndStageLead(
   if (result.outreach_ready) {
     const { data, error } = await admin
       .from("leads_in_flight")
-      .update({ stage: "enriched", payload: mergedPayload, last_enrichment_attempt_at: attemptedAt })
+      .update({ stage: "enriched", payload: mergedPayload, last_enrichment_attempt_at: attemptedAt, ...confidencePatch })
       .eq("id", lead.id)
       .eq("stage", "raw")
       .eq("status", "active")
@@ -107,6 +129,7 @@ export async function enrichAndStageLead(
     .update({
       payload: { ...mergedPayload, enrichment_blocked_reason: reason },
       last_enrichment_attempt_at: attemptedAt,
+      ...confidencePatch,
     })
     .eq("id", lead.id)
     .eq("stage", "raw")

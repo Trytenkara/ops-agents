@@ -15,6 +15,10 @@ export interface RawLead {
   supplier_name: string | null;
   material_name: string | null;
   payload: Record<string, any> | null;
+  // Lead-creation confidence (0..1), if scored. Enrichment lowers it by any
+  // marketplace-trust penalty so a down-ranked lead sorts to the bottom of the
+  // confidence-ordered enrichment/outreach queues. Null when never scored.
+  confidence_score?: number | null;
 }
 
 export interface WebsiteProbe {
@@ -76,6 +80,38 @@ export function isAggregatorDomain(host: string | null | undefined): boolean {
 export function isAggregatorEmail(email: string | null | undefined): boolean {
   if (!email) return false;
   return isAggregatorDomain(email.split("@")[1] ?? null);
+}
+
+// Low-trust B2B marketplaces (subset of AGGREGATOR_DOMAINS). These are RFQ-relay
+// directories with thin supplier vetting, where a firm purchasable price is the
+// exception and "Send Inquiry" / wide price ranges are the norm. Used only to
+// *down-rank* a marketplace lead's confidence — never to drop it.
+const LOW_TRUST_MARKETPLACE_DOMAINS = [
+  "alibaba.com",
+  "aliexpress.com",
+  "1688.com",
+  "made-in-china.com",
+  "dhgate.com",
+  "indiamart.com",
+  "tradeindia.com",
+  "exportersindia.com",
+  "ec21.com",
+  "tradekey.com",
+  "globalsources.com",
+  "go4worldbusiness.com",
+];
+
+// China-only supplier platforms: every listing is a mainland-China supplier, so
+// the host alone establishes China origin without any other signal.
+const CHINA_ONLY_MARKETPLACE_DOMAINS = ["made-in-china.com", "1688.com"];
+
+function hostMatchesAny(host: string, domains: string[]): boolean {
+  const h = host.toLowerCase().replace(/^www\./, "");
+  return domains.some((d) => h === d || h.endsWith(`.${d}`));
+}
+
+export function isLowTrustMarketplace(host: string | null | undefined): boolean {
+  return !!host && hostMatchesAny(host, LOW_TRUST_MARKETPLACE_DOMAINS);
 }
 
 // Placeholder / no-reply / script-artifact emails that are clearly not a real
@@ -158,12 +194,30 @@ export interface LegitimacyCheck {
   signals: string[];                // human-readable for UI / CSV
 }
 
+// Marketplace-listing confidence signals (Ben's enrichment rules). A firm,
+// purchasable price is what makes a marketplace lead trustworthy; "Send Inquiry"
+// / RFQ-only CTAs and wide price ranges are not. Low-trust marketplaces hosting a
+// China-based supplier are down-weighted further. All penalties are SOFT — they
+// lower completeness_score (so the lead sorts to the bottom of the queue) but
+// never block outreach or drop the lead.
+export interface MarketplaceTrustCheck {
+  marketplace_host: string | null;    // the aggregator/marketplace host of the listing
+  is_low_trust_marketplace: boolean;  // one of the shady low-trust directories
+  send_inquiry_only: boolean;         // listing pushes an inquiry/quote CTA, no firm price
+  price_range_only: boolean;          // price shown as a range, not a firm number
+  china_origin: boolean;              // supplier appears to be China-based
+  penalty: number;                    // total confidence penalty applied (0..1 magnitude)
+  factors: CompletenessFactor[];      // negative contributions, surfaced in the UI/CSV
+  signals: string[];                  // human-readable reasons
+}
+
 export interface EnrichmentResult {
   website_probe: WebsiteProbe | null;
   email_check: EmailCheck | null;
   contact: ContactDiscovery;
   tenkara_supplier: SupplierEnrichment | null;
   legitimacy_check: LegitimacyCheck | null;
+  marketplace_trust: MarketplaceTrustCheck | null;
   completeness_score: number; // 0..1
   // The factors that produced completeness_score, in scoring order.
   completeness_factors: CompletenessFactor[];
@@ -551,6 +605,89 @@ function scoreCompleteness(args: {
   return { score, factors };
 }
 
+// ---------- Marketplace-listing confidence penalties ------------------------
+//
+// Applied only to marketplace/aggregator listings (a direct manufacturer site
+// with a quote form is a normal RFQ-only supplier, not a low-confidence one).
+
+// "Send Inquiry" / quote-only CTAs — the listing wants you to ask, not buy.
+const SEND_INQUIRY_RE =
+  /send\s+inquiry|send\s+enquiry|contact\s+supplier|inquire\s+now|price\s+on\s+request|request\s+(?:a\s+)?(?:quote|quotation|for\s+quotation)|get\s+(?:a\s+)?quote|post\s+(?:my\s+)?rfq|chat\s+now|start\s+order/i;
+
+// A currency price *range* (e.g. "US$1,100.00-1,300.00", "$5.00 - $10.00",
+// "€10–€20") rather than a single firm number.
+const PRICE_RANGE_RE =
+  /(?:US\s*\$|\$|€|£|₹|¥|RMB|CNY)\s?\d[\d,]*(?:\.\d+)?\s?[-–—~]\s?(?:US\s*\$|\$|€|£|₹|¥|RMB|CNY)?\s?\d[\d,]*(?:\.\d+)?/;
+
+const MP_PENALTY_SEND_INQUIRY = 0.2;
+const MP_PENALTY_PRICE_RANGE = 0.15;
+const MP_PENALTY_LOW_TRUST_CN = 0.25;
+
+function detectChinaOrigin(args: {
+  listingHost: string | null;
+  country: string | null;
+  phone: string | null;
+  emailHost: string | null;
+}): boolean {
+  if (args.listingHost && hostMatchesAny(args.listingHost, CHINA_ONLY_MARKETPLACE_DOMAINS)) return true;
+  const c = (args.country ?? "").toLowerCase();
+  if (/\bchina\b|\bp\.?\s*r\.?\s*china\b|\bprc\b|\bcn\b/.test(c)) return true;
+  if (args.phone) {
+    const d = args.phone.replace(/[^\d+]/g, "");
+    if (/^\+?86\d/.test(d)) return true;
+  }
+  if (args.emailHost && /\.cn$/.test(args.emailHost)) return true;
+  return false;
+}
+
+// Assess a marketplace listing for the two confidence rules. Returns null for a
+// non-marketplace host (rules don't apply). `html` is the listing HTML already
+// fetched during contact discovery — empty when we couldn't fetch it, in which
+// case only the host/origin-based penalty can fire.
+export function assessMarketplaceTrust(args: {
+  listingHost: string | null;
+  html: string;
+  country: string | null;
+  phone: string | null;
+  emailHost: string | null;
+}): MarketplaceTrustCheck | null {
+  const host = args.listingHost;
+  if (!host || !isAggregatorDomain(host)) return null;
+
+  const isLowTrust = isLowTrustMarketplace(host);
+  const china = detectChinaOrigin(args);
+  const html = args.html ?? "";
+  const sendInquiryOnly = html ? SEND_INQUIRY_RE.test(html) : false;
+  const priceRangeOnly = html ? PRICE_RANGE_RE.test(html) : false;
+
+  const factors: CompletenessFactor[] = [];
+  const signals: string[] = [];
+  if (sendInquiryOnly) {
+    factors.push({ label: "marketplace: inquiry/quote only (no firm price)", points: -MP_PENALTY_SEND_INQUIRY });
+    signals.push("inquiry/quote only");
+  }
+  if (priceRangeOnly) {
+    factors.push({ label: "marketplace: price shown as a range", points: -MP_PENALTY_PRICE_RANGE });
+    signals.push("price range, not firm");
+  }
+  if (isLowTrust && china) {
+    factors.push({ label: "low-trust marketplace, China-based supplier", points: -MP_PENALTY_LOW_TRUST_CN });
+    signals.push("low-trust marketplace (China supplier)");
+  }
+
+  const penalty = Math.round(-factors.reduce((s, f) => s + f.points, 0) * 100) / 100;
+  return {
+    marketplace_host: host,
+    is_low_trust_marketplace: isLowTrust,
+    send_inquiry_only: sendInquiryOnly,
+    price_range_only: priceRangeOnly,
+    china_origin: china,
+    penalty,
+    factors,
+    signals,
+  };
+}
+
 // Treat scout-captured "via IndiaMART inquiry" / "contact form" strings as a
 // (weak) contact channel rather than a broken email.
 function isContactPath(s: string | null | undefined): boolean {
@@ -584,6 +721,9 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   let contactUrl: string | null = isContactPath(scoutEmail) ? null : null;
   let contactSource: ContactDiscovery["source"] = email ? "scout" : null;
   let pagesTried = 0;
+  // Listing HTML fetched during contact discovery, reused for marketplace-trust
+  // signal detection (Send Inquiry / price range) with no extra network call.
+  let listingHtml = "";
 
   // If we're missing a direct email or a phone, go fetch — persistently. This is
   // also the auto-resolve path when the only email we had was a marketplace one.
@@ -592,6 +732,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     const d = await discoverContacts(website).catch(() => null);
     if (d) {
       pagesTried = d.pages_tried;
+      listingHtml = d.homepage_html ?? "";
       // Run legitimacy analysis on the homepage HTML we already fetched.
       if (d.homepage_html) {
         legitimacy_check = analyzeLegitimacy(d.homepage_html, website, d.homepage_final_url);
@@ -647,13 +788,32 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
 
   const email_check = email ? checkEmail(email, website) : null;
 
-  const { score: completeness_score, factors: completeness_factors } = scoreCompleteness({
+  const base = scoreCompleteness({
     websiteProbe: website_probe,
     emailCheck: email_check,
     hasPhone: !!phone,
     hasContactUrl: !!contactUrl,
     hasCountry: !!(tenkara_supplier?.country || payload.supplier_country),
   });
+
+  // Marketplace-listing confidence penalties (soft down-rank only). Resolve the
+  // listing host from the supplier website or the scanner's source URL.
+  const listingHost = hostOf(website || (payload.source_url as string | null) || "");
+  const marketplace_trust = assessMarketplaceTrust({
+    listingHost,
+    html: listingHtml,
+    country: tenkara_supplier?.country ?? (payload.supplier_country as string | null) ?? null,
+    phone,
+    emailHost: (email ?? scoutEmail)?.split("@")[1]?.toLowerCase() ?? null,
+  });
+
+  const completeness_factors = marketplace_trust
+    ? [...base.factors, ...marketplace_trust.factors]
+    : base.factors;
+  const completeness_score = Math.max(
+    0,
+    Math.min(1, Math.round(completeness_factors.reduce((s, f) => s + f.points, 0) * 100) / 100)
+  );
 
   // Outreach-ready = we have at least one usable way to reach the supplier:
   // a format-valid email, a phone, a contact/quote-form URL, or a live website.
@@ -673,6 +833,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     contact,
     tenkara_supplier,
     legitimacy_check,
+    marketplace_trust,
     completeness_score,
     completeness_factors,
     outreach_ready,

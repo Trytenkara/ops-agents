@@ -203,7 +203,12 @@ export function LeadsList({
       p.confidence_reason ?? "",
       p.completeness_score ?? "",
       Array.isArray(p.completeness_factors)
-        ? p.completeness_factors.map((f: any) => `${f.label} (+${Math.round((Number(f.points) || 0) * 100)}%)`).join("; ")
+        ? p.completeness_factors
+            .map((f: any) => {
+              const pts = Math.round((Number(f.points) || 0) * 100);
+              return `${f.label} (${pts >= 0 ? `+${pts}` : pts}%)`;
+            })
+            .join("; ")
         : "",
       citations.join("; "),
       p.scout_notes ?? p.scout_rationale ?? "",

@@ -215,11 +215,21 @@ export function EnrichmentDetails({ r }: { r: any }) {
           <div>
             <span className="text-muted-foreground">Completeness</span>
             <div className="mt-0.5 flex flex-wrap gap-1">
-              {factors.map((f: any, i: number) => (
-                <span key={i} className="inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-[10px]">
-                  {f.label} +{Math.round((Number(f.points) || 0) * 100)}%
-                </span>
-              ))}
+              {factors.map((f: any, i: number) => {
+                const pts = Math.round((Number(f.points) || 0) * 100);
+                const negative = pts < 0;
+                return (
+                  <span
+                    key={i}
+                    className={
+                      "inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] " +
+                      (negative ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300" : "bg-muted")
+                    }
+                  >
+                    {f.label} {pts >= 0 ? `+${pts}` : pts}%
+                  </span>
+                );
+              })}
             </div>
           </div>
         )}
@@ -247,6 +257,24 @@ export function EnrichmentDetails({ r }: { r: any }) {
                 ))}
               </div>
             )}
+          </div>
+        )}
+        {/* Marketplace trust (down-rank signals) */}
+        {e.marketplace_trust && e.marketplace_trust.signals?.length > 0 && (
+          <div>
+            <span className="text-amber-700 dark:text-amber-400 font-medium">
+              Marketplace{" "}
+              <span className="text-muted-foreground font-normal">
+                −{Math.round((Number(e.marketplace_trust.penalty) || 0) * 100)}% confidence
+              </span>
+            </span>
+            <div className="mt-0.5 flex flex-wrap gap-1">
+              {e.marketplace_trust.signals.map((s: string, i: number) => (
+                <span key={i} className="inline-flex items-center rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 px-1.5 py-0.5 text-[10px]">
+                  {s}
+                </span>
+              ))}
+            </div>
           </div>
         )}
         {/* Held */}
