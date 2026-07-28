@@ -218,7 +218,7 @@ export function LeadsList({
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className="flex flex-wrap items-end gap-3">
         <div className="flex flex-wrap items-end gap-3">
           {controls}
           <label className="flex flex-col gap-1">
@@ -238,12 +238,13 @@ export function LeadsList({
             <Select size="sm" className="min-w-[9rem]" ariaLabel="Discovered" value={recency} onValueChange={setRecency} options={RECENCY_OPTIONS} />
           </label>
         </div>
-        <ListCsvButton
-          filename={filenameFor(slug, "leads")}
-          headers={csvHeaders}
-          rows={csvRows}
-        />
-        {canAct && orgId && (
+        <div className="ml-auto flex shrink-0 items-end gap-2">
+          <ListCsvButton
+            filename={filenameFor(slug, "leads")}
+            headers={csvHeaders}
+            rows={csvRows}
+          />
+          {canAct && orgId && (
           <div className="flex flex-col items-end gap-1">
             <button
               type="button"
@@ -269,7 +270,8 @@ export function LeadsList({
               </span>
             )}
           </div>
-        )}
+          )}
+        </div>
       </div>
       {selectable && (
         <BulkRemoveBar

@@ -61,12 +61,12 @@ export function MarketplacePricing({ rows, canAct, slug }: { rows: Row[]; canAct
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className="flex flex-wrap items-end gap-3">
         <div className="flex flex-wrap items-end gap-3">{controls}</div>
         <a
           href={exportUrl}
           download
-          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground shadow-sm hover:bg-secondary/60 transition-colors"
+          className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground shadow-sm hover:bg-secondary/60 transition-colors"
         >
           Export CSV
         </a>
