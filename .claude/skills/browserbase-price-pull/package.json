@@ -1,0 +1,11 @@
+{
+  "name": "browserbase-price-pull",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "dependencies": {
+    "@browserbasehq/sdk": "^2.6.0",
+    "playwright-core": "^1.48.0",
+    "@anthropic-ai/sdk": "^0.30.1"
+  }
+}
