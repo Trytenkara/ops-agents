@@ -26,7 +26,7 @@ export async function GET() {
 
   let q = admin
     .from("staged_quotes")
-    .select("supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement")
+    .select("supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, case_type, case_dimensions")
     .eq("status", "approved")
     .order("approved_at", { ascending: false });
   if (assigned) q = q.in("org_id", assigned);
@@ -35,14 +35,27 @@ export async function GET() {
   if (error) return new NextResponse(error.message, { status: 500 });
 
   // Map each row to the full template column set; data we have is filled, the
-  // rest stay blank for ops to complete before upload.
+  // rest stay blank for ops to complete before upload. The case_* dimension
+  // columns are unpacked from the stored case_dimensions jsonb
+  // ({unit, width, height, length, packaging_case_weight}).
   const body = toCsv(
     [...QUOTE_TEMPLATE_HEADERS],
-    (rows ?? []).map((r: any) =>
-      QUOTE_TEMPLATE_HEADERS.map((col) =>
-        col === "material_name" ? correctMaterialSpelling(r[col] ?? "") : r[col] != null ? r[col] : ""
-      )
-    )
+    (rows ?? []).map((r: any) => {
+      const d = r.case_dimensions ?? {};
+      const dim: Record<string, any> = {
+        case_weight: d.packaging_case_weight,
+        case_width: d.width,
+        case_height: d.height,
+        case_length: d.length,
+      };
+      return QUOTE_TEMPLATE_HEADERS.map((col) =>
+        col === "material_name"
+          ? correctMaterialSpelling(r[col] ?? "")
+          : col in dim
+            ? dim[col] != null ? dim[col] : ""
+            : r[col] != null ? r[col] : ""
+      );
+    })
   );
 
   const date = new Date().toISOString().slice(0, 10);

@@ -54,7 +54,7 @@ export default async function StagedQuotesPage({
   let q = admin
     .from("staged_quotes")
     .select(
-      "id, org_id, source, source_attachment_name, source_conversation_id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, currency, confidence, extraction_notes, status, created_at, orgs(slug, name)"
+      "id, org_id, source, source_attachment_name, source_conversation_id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, currency, confidence, extraction_notes, case_type, case_dimensions, dim_source, status, created_at, orgs(slug, name)"
     )
     .eq("status", status)
     .order("created_at", { ascending: false })
