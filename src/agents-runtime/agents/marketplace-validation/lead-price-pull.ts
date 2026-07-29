@@ -256,15 +256,34 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       result = { classification: "needs_review" as const, current_price: null, currency: null, pack_size: null, unit_price: null, tiers: [], source_url: url, source_citations: [], notes: `pull failed: ${e?.message ?? e}` };
     }
 
-    // Normalize a listed non-USD price to USD so the populated number is comparable.
-    if (result.currency && result.currency !== "USD" && result.current_price != null) {
-      const conv = await convertToUsd(result.current_price, result.currency).catch(() => null);
-      if (conv) {
-        result.current_price = conv.usd;
-        if (result.unit_price != null) {
-          const u = await convertToUsd(result.unit_price, result.currency).catch(() => null);
-          if (u) result.unit_price = u.usd;
-        }
+    // Normalize EVERY listed non-USD price to USD before we publish or store it:
+    // the single current_price/unit_price AND every tier in the ladder. Converting
+    // only current_price left the tier ladder in the listed currency (e.g. INR from
+    // IndiaMART) while marketplace_pull.price became USD, so the Control Room rendered
+    // a raw ₹ value as "$" — a ~85x overstatement. If no rate is available for the
+    // listed currency we must NOT emit an unconverted foreign number labeled USD, so
+    // downgrade to needs_review and drop the numbers rather than publish a wrong price.
+    if (result.currency && result.currency !== "USD") {
+      const listed = result.currency;
+      const probe = await convertToUsd(1, listed).catch(() => null);
+      if (!probe) {
+        result.classification = "needs_review";
+        result.current_price = null;
+        result.unit_price = null;
+        result.tiers = [];
+        result.notes = `Listed in ${listed}; USD conversion unavailable — not publishing an unconverted price. ${result.notes ?? ""}`.trim();
+      } else {
+        const toUsd = async (n: number | null): Promise<number | null> => {
+          if (n == null || !Number.isFinite(n)) return n;
+          const c = await convertToUsd(n, listed).catch(() => null);
+          return c ? c.usd : n;
+        };
+        result.current_price = await toUsd(result.current_price);
+        result.unit_price = await toUsd(result.unit_price);
+        result.tiers = await Promise.all(
+          result.tiers.map(async (t) => ({ ...t, price: await toUsd(t.price), unit_price: await toUsd(t.unit_price) })),
+        );
+        result.currency = "USD";
       }
     }
 

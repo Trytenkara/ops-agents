@@ -80,6 +80,7 @@ Rules:
 - current_price and tier prices must be numeric, in the currency AS LISTED on the page. Strip currency symbols to a plain number.
 - "currency": the ISO 4217 code the listed prices are in — "USD", "EUR", "GBP", "INR", "CNY", etc. Infer from the currency symbol/locale (€→EUR, £→GBP, ₹→INR, ¥→CNY or JPY by site, $→USD unless clearly CAD/AUD/etc.). Default "USD" if a bare "$" with no other signal. We convert to USD ourselves — do NOT convert; report the listed currency.
 - source_url must be the actual product page you read from, not a search result.
+- Never fabricate, infer, estimate, round, or back-calculate a price. Only report a number that is explicitly printed on the page for that exact pack size. If the price only appears after selecting a size/variant you cannot confirm was rendered, or you are otherwise unsure of the exact figure, return needs_review — a blank is better than a guess.
 - Never fabricate. If a public price isn't visible, return login_required (if it's behind a login) or needs_review, with a note explaining why.`;
 
 let client: Anthropic | null = null;
