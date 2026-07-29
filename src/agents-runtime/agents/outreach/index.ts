@@ -600,7 +600,7 @@ registerAgent({
       // Drop the lead so it isn't reprocessed (mirrors Agent 07's case handoff).
       await admin
         .from("leads_in_flight")
-        .update({ status: "dropped", payload: { ...p, drop_reason: "manual_outreach_case" } })
+        .update({ status: "dropped", drop_reason: "manual_outreach_case", payload: { ...p, drop_reason: "manual_outreach_case" } })
         .eq("id", c.lead.id);
     }
 

@@ -97,7 +97,7 @@ export function leadRemoval(r: any): { label: string; suppressed: boolean } | nu
   const sup = r?.payload?.outreach_suppressed?.reason as string | undefined;
   if (sup) return { label: REMOVAL_REASON_LABEL[sup] ?? sup, suppressed: true };
   if (r?.status && r.status !== "active") {
-    const raw = (r.drop_reason as string | undefined) ?? "";
+    const raw = ((r.drop_reason as string | undefined) || (r?.payload?.drop_reason as string | undefined)) ?? "";
     const code = raw.split(":")[0].trim();
     return { label: REMOVAL_REASON_LABEL[code] || raw || r.status, suppressed: false };
   }
