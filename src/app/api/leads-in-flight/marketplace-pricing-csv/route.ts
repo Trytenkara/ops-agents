@@ -133,6 +133,12 @@ export async function GET(request: NextRequest) {
         unit_of_measurement: t.unit_of_measurement ?? null,
         case_type: t.case_type ?? null,
       });
+      // Match the tab's derived $/unit: explicit unit_price wins, else price ÷ size.
+      const unitPrice =
+        t.unit_price ??
+        (t.price != null && b.case_size != null && b.case_size !== 0
+          ? Math.round((t.price / b.case_size) * 10000) / 10000
+          : null);
       csvRows.push([
         r.supplier_name ?? null,
         materialName,
@@ -149,7 +155,7 @@ export async function GET(request: NextRequest) {
         dims?.length ?? null,
         dims?.weight_kg ?? null,
         t.price ?? null,
-        t.unit_price ?? null,
+        unitPrice,
         rawPricing,
         moq,
         updatedAt,

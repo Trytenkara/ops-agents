@@ -98,6 +98,17 @@ function emptyTier(): PriceTier {
   };
 }
 
+// $/unit: prefer an explicit unit_price (pulled or operator-typed); otherwise
+// derive it from total price / case size so a priced tier always shows a per-unit
+// figure. Null when there's no price or size to divide.
+function derivedUnitPrice(t: PriceTier): number | null {
+  if (t.unit_price != null) return t.unit_price;
+  if (t.price != null && t.case_size != null && t.case_size !== 0) {
+    return Math.round((t.price / t.case_size) * 10000) / 10000;
+  }
+  return null;
+}
+
 function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: boolean; dimsByPack: Record<string, CaseDims> }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -282,13 +293,23 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
                 />
               </TableCell>
               <TableCell>
-                <Input
-                  inputMode="decimal"
-                  value={num(t.unit_price)}
-                  disabled={!canAct || pending}
-                  placeholder="18.00"
-                  onChange={(e) => setTier(i, { unit_price: toNum(e.target.value) })}
-                />
+                {t.unit_price == null && derivedUnitPrice(t) != null ? (
+                  <span
+                    className="text-sm text-muted-foreground"
+                    title="Derived from price ÷ size — updates automatically when you edit price or size."
+                  >
+                    {derivedUnitPrice(t)}
+                    <span className="ml-1 text-[10px] uppercase tracking-wide opacity-70">est</span>
+                  </span>
+                ) : (
+                  <Input
+                    inputMode="decimal"
+                    value={num(t.unit_price)}
+                    disabled={!canAct || pending}
+                    placeholder="18.00"
+                    onChange={(e) => setTier(i, { unit_price: toNum(e.target.value) })}
+                  />
+                )}
               </TableCell>
               <TableCell className="text-right">
                 {canAct && (
