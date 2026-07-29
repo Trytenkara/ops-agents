@@ -239,33 +239,31 @@ export async function setTenkaraConversationAssignee(
 
 // Deletes agent-created drafts from the Tenkara Inbox. Params go in the QUERY
 // STRING (not a JSON body): pass draftId to remove one draft, or conversationId
-// to remove every draft on that thread. Returns { deleted } — deleted:0 for
-// unknown ids (Tenkara still answers HTTP 200). Best-effort like the assignee
+// to remove every agent draft on that thread. Best-effort like the assignee
 // mirror: returns a result rather than throwing so a delete miss never rolls
 // back the local drop.
 //   DELETE https://tenkara-inbox-nine.vercel.app/api/drafts?id=<draftId>
 //   DELETE .../api/drafts?conversation_id=<conversationId>
+//
+// IMPORTANT: Tenkara answers HTTP 200 { deleted: 0 } for an id it doesn't
+// recognize — it never 404s a stale id. So a draft_id we stored can silently
+// no-op (the draft-slot upsert can rotate a conversation's live draft id out
+// from under our stored one, and an agent overwrite reuses the slot with a new
+// id), leaving the real draft live while the call still looks like a clean 200.
+// To close that gap, when an id-scoped delete removes nothing AND we also know
+// the conversation, we retry by conversation_id — the thread-scoped delete
+// clears whatever agent draft is actually there, which is the correct end state
+// for a dropped lead. `fellBackToConversation` records when the stored id was
+// stale so callers can flag it (Rod asked us to chase silent delete failures).
 export interface DeleteDraftResult {
   ok: boolean;
   status: number;
   deleted?: number;
   error?: string;
+  fellBackToConversation?: boolean;
 }
 
-export async function deleteTenkaraDrafts(params: {
-  draftId?: string | null;
-  conversationId?: string | null;
-}): Promise<DeleteDraftResult> {
-  const token = process.env.TENKARA_API_TOKEN;
-  if (!token) return { ok: false, status: 0, error: "TENKARA_API_TOKEN not configured" };
-
-  const qs = params.draftId
-    ? `id=${encodeURIComponent(params.draftId)}`
-    : params.conversationId
-      ? `conversation_id=${encodeURIComponent(params.conversationId)}`
-      : null;
-  if (!qs) return { ok: false, status: 0, error: "missing draftId or conversationId" };
-
+async function deleteTenkaraDraftsByQuery(qs: string, token: string): Promise<DeleteDraftResult> {
   let res: Response;
   try {
     res = await fetch(`${TENKARA_INBOX_BASE}/api/drafts?${qs}`, {
@@ -281,6 +279,41 @@ export async function deleteTenkaraDrafts(params: {
     return { ok: false, status: res.status, error: body?.error ?? `HTTP ${res.status}` };
   }
   return { ok: true, status: res.status, deleted: body.deleted ?? 0 };
+}
+
+export async function deleteTenkaraDrafts(params: {
+  draftId?: string | null;
+  conversationId?: string | null;
+}): Promise<DeleteDraftResult> {
+  const token = process.env.TENKARA_API_TOKEN;
+  if (!token) return { ok: false, status: 0, error: "TENKARA_API_TOKEN not configured" };
+
+  if (!params.draftId && !params.conversationId) {
+    return { ok: false, status: 0, error: "missing draftId or conversationId" };
+  }
+
+  // No id to target — go straight to the thread-scoped delete.
+  if (!params.draftId) {
+    return deleteTenkaraDraftsByQuery(`conversation_id=${encodeURIComponent(params.conversationId!)}`, token);
+  }
+
+  const byId = await deleteTenkaraDraftsByQuery(`id=${encodeURIComponent(params.draftId)}`, token);
+  // Deleted something, hard-failed, or nothing to fall back to → report as-is.
+  if (!byId.ok || (byId.deleted ?? 0) > 0 || !params.conversationId) return byId;
+
+  // Stale-id no-op: the id matched nothing but a live draft may still exist under
+  // a different id. Clear the whole thread instead.
+  const byConv = await deleteTenkaraDraftsByQuery(
+    `conversation_id=${encodeURIComponent(params.conversationId)}`,
+    token,
+  );
+  if (!byConv.ok) return byConv;
+  return {
+    ok: true,
+    status: byConv.status,
+    deleted: byConv.deleted ?? 0,
+    fellBackToConversation: (byConv.deleted ?? 0) > 0,
+  };
 }
 
 // Per-client Tenkara Inbox account UUIDs (from Rod, 2026-06-18). Conversations
