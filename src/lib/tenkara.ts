@@ -237,24 +237,53 @@ export async function setTenkaraConversationAssignee(
   };
 }
 
+// Tenkara attributes every draft our token creates to this agent identity
+// (drafts carry `created_by_agent`; human/operator drafts carry null). We match
+// on it so a thread-scoped cleanup only ever removes OUR agent's drafts and can
+// never touch a human's. Env-overridable in case Rod renames the token's agent.
+export const TENKARA_AGENT_NAME = process.env.TENKARA_AGENT_NAME ?? "Sammy agent v1";
+
+interface TenkaraDraftListRow {
+  id: string;
+  created_by_agent: string | null;
+}
+
+// Lists the drafts on a conversation. GET /api/drafts?conversation_id=<id> →
+// { drafts: [{ id, created_by_agent, ... }, ...] }. Read-only.
+export async function getTenkaraDrafts(conversationId: string): Promise<TenkaraDraftListRow[]> {
+  const token = process.env.TENKARA_API_TOKEN;
+  if (!token) throw new Error("TENKARA_API_TOKEN not configured");
+  const res = await fetch(
+    `${TENKARA_INBOX_BASE}/api/drafts?conversation_id=${encodeURIComponent(conversationId)}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Tenkara GET /api/drafts failed: ${res.status} ${text.slice(0, 300)}`);
+  }
+  const body = await res.json().catch(() => ({}) as any);
+  return Array.isArray(body?.drafts) ? body.drafts : [];
+}
+
 // Deletes agent-created drafts from the Tenkara Inbox. Params go in the QUERY
-// STRING (not a JSON body): pass draftId to remove one draft, or conversationId
-// to remove every agent draft on that thread. Best-effort like the assignee
-// mirror: returns a result rather than throwing so a delete miss never rolls
-// back the local drop.
+// STRING (not a JSON body). Best-effort like the assignee mirror: returns a
+// result rather than throwing so a delete miss never rolls back the local drop.
 //   DELETE https://tenkara-inbox-nine.vercel.app/api/drafts?id=<draftId>
-//   DELETE .../api/drafts?conversation_id=<conversationId>
 //
 // IMPORTANT: Tenkara answers HTTP 200 { deleted: 0 } for an id it doesn't
 // recognize — it never 404s a stale id. So a draft_id we stored can silently
 // no-op (the draft-slot upsert can rotate a conversation's live draft id out
 // from under our stored one, and an agent overwrite reuses the slot with a new
 // id), leaving the real draft live while the call still looks like a clean 200.
-// To close that gap, when an id-scoped delete removes nothing AND we also know
-// the conversation, we retry by conversation_id — the thread-scoped delete
-// clears whatever agent draft is actually there, which is the correct end state
-// for a dropped lead. `fellBackToConversation` records when the stored id was
-// stale so callers can flag it (Rod asked us to chase silent delete failures).
+//
+// We do NOT fall back to `DELETE ?conversation_id=` — that endpoint has no
+// agent filter and would wipe an operator's own draft on the same thread (Rod,
+// 2026-07-29). Instead, on a stale-id no-op we GET the thread's drafts, keep
+// only rows where created_by_agent === TENKARA_AGENT_NAME, and delete those by
+// id — which survives slot rotation and can never touch a human draft.
+// `fellBackToConversation` records that we resolved the live id via the thread
+// lookup so callers can mirror the deletion broadly. (Once Rod ships token
+// scoping on the conversation_id delete, this can collapse to one call.)
 export interface DeleteDraftResult {
   ok: boolean;
   status: number;
@@ -263,10 +292,10 @@ export interface DeleteDraftResult {
   fellBackToConversation?: boolean;
 }
 
-async function deleteTenkaraDraftsByQuery(qs: string, token: string): Promise<DeleteDraftResult> {
+async function deleteTenkaraDraftById(id: string, token: string): Promise<DeleteDraftResult> {
   let res: Response;
   try {
-    res = await fetch(`${TENKARA_INBOX_BASE}/api/drafts?${qs}`, {
+    res = await fetch(`${TENKARA_INBOX_BASE}/api/drafts?id=${encodeURIComponent(id)}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -292,28 +321,36 @@ export async function deleteTenkaraDrafts(params: {
     return { ok: false, status: 0, error: "missing draftId or conversationId" };
   }
 
-  // No id to target — go straight to the thread-scoped delete.
-  if (!params.draftId) {
-    return deleteTenkaraDraftsByQuery(`conversation_id=${encodeURIComponent(params.conversationId!)}`, token);
+  // Fast path: delete the stored id directly.
+  if (params.draftId) {
+    const byId = await deleteTenkaraDraftById(params.draftId, token);
+    // Deleted something, hard-failed, or no thread to resolve against → done.
+    if (!byId.ok || (byId.deleted ?? 0) > 0 || !params.conversationId) return byId;
   }
 
-  const byId = await deleteTenkaraDraftsByQuery(`id=${encodeURIComponent(params.draftId)}`, token);
-  // Deleted something, hard-failed, or nothing to fall back to → report as-is.
-  if (!byId.ok || (byId.deleted ?? 0) > 0 || !params.conversationId) return byId;
+  // Either no stored id, or the stored id was stale (200 deleted:0). Resolve the
+  // live draft(s) by listing the thread and keeping only our agent's rows, then
+  // delete each by id. Never a thread-scoped delete — that could take a human's.
+  let rows: TenkaraDraftListRow[];
+  try {
+    rows = await getTenkaraDrafts(params.conversationId!);
+  } catch (e: any) {
+    return { ok: false, status: 0, error: e?.message ?? String(e) };
+  }
 
-  // Stale-id no-op: the id matched nothing but a live draft may still exist under
-  // a different id. Clear the whole thread instead.
-  const byConv = await deleteTenkaraDraftsByQuery(
-    `conversation_id=${encodeURIComponent(params.conversationId)}`,
-    token,
-  );
-  if (!byConv.ok) return byConv;
-  return {
-    ok: true,
-    status: byConv.status,
-    deleted: byConv.deleted ?? 0,
-    fellBackToConversation: (byConv.deleted ?? 0) > 0,
-  };
+  const ours = rows.filter((d) => d.created_by_agent === TENKARA_AGENT_NAME);
+  if (ours.length === 0) {
+    // Nothing of ours left on the thread — the draft is already gone.
+    return { ok: true, status: 200, deleted: 0, fellBackToConversation: true };
+  }
+
+  let deleted = 0;
+  for (const d of ours) {
+    const r = await deleteTenkaraDraftById(d.id, token);
+    if (!r.ok) return { ...r, fellBackToConversation: true };
+    deleted += r.deleted ?? 0;
+  }
+  return { ok: true, status: 200, deleted, fellBackToConversation: true };
 }
 
 // Per-client Tenkara Inbox account UUIDs (from Rod, 2026-06-18). Conversations
