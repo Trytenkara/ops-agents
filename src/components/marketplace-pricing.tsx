@@ -10,6 +10,7 @@ import { useListFilter, byString } from "@/components/use-list-filter";
 import { leadMarketKind } from "@/components/lead-rich-row";
 import { saveLeadPriceTiers } from "@/app/actions/leads";
 import type { PriceTier } from "@/lib/price-tiers";
+import { fmtCaseDims, resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
 
 // Marketplace-only view: suppliers whose pricing is published directly on their
 // own site/storefront (site_type M = checkout no-signup, MS = checkout after
@@ -35,7 +36,7 @@ function siteTypeMeta(st: string | null | undefined): { label: string; title: st
   return null;
 }
 
-export function MarketplacePricing({ rows, canAct, slug }: { rows: Row[]; canAct: boolean; slug: string }) {
+export function MarketplacePricing({ rows, canAct, slug, dimsByPack = {} }: { rows: Row[]; canAct: boolean; slug: string; dimsByPack?: Record<string, CaseDims> }) {
   const marketRows = rows.filter(isMarketplace);
 
   const { filtered, controls } = useListFilter(marketRows, {
@@ -77,7 +78,7 @@ export function MarketplacePricing({ rows, canAct, slug }: { rows: Row[]; canAct
       </p>
       <div className="space-y-3">
         {filtered.map((r) => (
-          <MarketplaceLeadCard key={r.id} row={r} canAct={canAct} />
+          <MarketplaceLeadCard key={r.id} row={r} canAct={canAct} dimsByPack={dimsByPack} />
         ))}
         {filtered.length === 0 && <p className="text-sm text-muted-foreground py-4">No marketplace leads match.</p>}
       </div>
@@ -89,7 +90,7 @@ function emptyTier(): PriceTier {
   return { pack_size: "", price: null, unit_price: null };
 }
 
-function MarketplaceLeadCard({ row, canAct }: { row: Row; canAct: boolean }) {
+function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: boolean; dimsByPack: Record<string, CaseDims> }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -193,10 +194,11 @@ function MarketplaceLeadCard({ row, canAct }: { row: Row; canAct: boolean }) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-[40%]">Pack size</TableHead>
-            <TableHead className="w-[24%]">Price (total)</TableHead>
-            <TableHead className="w-[24%]">$ / unit</TableHead>
-            <TableHead className="w-[12%] text-right">{canAct ? "" : ""}</TableHead>
+            <TableHead className="w-[30%]">Pack size</TableHead>
+            <TableHead className="w-[22%]">Case dims (est.)</TableHead>
+            <TableHead className="w-[20%]">Price (total)</TableHead>
+            <TableHead className="w-[18%]">$ / unit</TableHead>
+            <TableHead className="w-[10%] text-right">{canAct ? "" : ""}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -209,6 +211,18 @@ function MarketplaceLeadCard({ row, canAct }: { row: Row; canAct: boolean }) {
                   placeholder="e.g. 25 kg drum"
                   onChange={(e) => setTier(i, { pack_size: e.target.value })}
                 />
+              </TableCell>
+              <TableCell className="text-xs">
+                {fmtCaseDims(resolveCaseDims(dimsByPack, t.pack_size)) ? (
+                  <span
+                    className="text-muted-foreground"
+                    title="AI-estimated outer case from pack size — verify before freight quoting"
+                  >
+                    {fmtCaseDims(resolveCaseDims(dimsByPack, t.pack_size))}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
               </TableCell>
               <TableCell>
                 <Input

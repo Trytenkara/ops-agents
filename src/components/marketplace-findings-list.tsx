@@ -12,8 +12,9 @@ import { MarketplaceFindingActions } from "@/components/marketplace-finding-acti
 import { useListFilter, byString, byNumberDesc, byDateDesc } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
+import { fmtCaseDims, resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
 
-const COLS = 8;
+const COLS = 9;
 
 // Prefer the agent's structured unit_price (Agent 05); fall back to deriving it
 // from the pack-size string.
@@ -44,12 +45,14 @@ export function MarketplaceFindingsList({
   slug = "all",
   orgClients = [],
   tagsByMaterialName = {},
+  dimsByPack = {},
 }: {
   rows: any[];
   canAct: boolean;
   slug?: string;
   orgClients?: { id: string; name: string }[];
   tagsByMaterialName?: Record<string, string>;
+  dimsByPack?: Record<string, CaseDims>;
 }) {
   const [clientFilter, setClientFilter] = useState("all");
   const clientRows = clientFilter === "all"
@@ -81,6 +84,7 @@ export function MarketplaceFindingsList({
     r.supplier_name ?? "",
     r.material_name ?? "",
     r.pack_size ?? "",
+    fmtCaseDims(resolveCaseDims(dimsByPack, r.pack_size)) ?? "",
     perUnitLabel(r),
     r.baseline_price ?? "",
     r.current_price ?? "",
@@ -111,7 +115,7 @@ export function MarketplaceFindingsList({
         {controls}
         <ListCsvButton
           filename={filenameFor(slug, "price-changes")}
-          headers={["Supplier", "Material", "Pack / tier", "Per-unit", "On file", "Current", "Change", "Found"]}
+          headers={["Supplier", "Material", "Pack / tier", "Case dims", "Per-unit", "On file", "Current", "Change", "Found"]}
           rows={csvRows}
         />
       </div>
@@ -119,6 +123,7 @@ export function MarketplaceFindingsList({
         <TableHeader>
           <TableRow>
             <TableHead>Pack / tier</TableHead>
+            <TableHead>Case dims</TableHead>
             <TableHead className="text-right">Per-unit</TableHead>
             <TableHead className="text-right">On file</TableHead>
             <TableHead className="text-right">Current</TableHead>
@@ -153,6 +158,21 @@ export function MarketplaceFindingsList({
                           <span>{r.pack_size}</span>
                         ) : (
                           <span className="text-muted-foreground text-xs">size unknown · bulk total</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="align-top text-xs">
+                        {fmtCaseDims(resolveCaseDims(dimsByPack, r.pack_size)) ? (
+                          <span className="inline-flex flex-col gap-0.5">
+                            <span>{fmtCaseDims(resolveCaseDims(dimsByPack, r.pack_size))}</span>
+                            <span
+                              className="inline-flex w-fit items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                              title="AI-estimated from pack size — verify before freight quoting"
+                            >
+                              AI estimate
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
                         )}
                       </TableCell>
                       <TableCell className="text-right align-top tabular-nums">

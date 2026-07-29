@@ -11,6 +11,7 @@ import { SuppliersCsvUpload } from "@/components/suppliers-csv-upload";
 import { resolveMaterialGrades, resolveSupplierMarketplace, resolveMaterialNames } from "@/lib/tenkara-names";
 import { correctMaterialSpelling } from "@/lib/material-spelling";
 import { leadMarketKind } from "@/lib/lead-market";
+import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
 import { getOrgOperatorPool, pickSupplierOperator, operatorBySupplier, getSupplierAssignments } from "@/lib/operator-assignment";
 import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
 import { orgDisplayName } from "@/lib/org-display";
@@ -25,6 +26,7 @@ export const dynamic = "force-dynamic";
 
 export default async function OrgLeadsPage({ params }: { params: { slug: string } }) {
   const admin = createAdminClient();
+  const marketplaceDims = await loadMarketplaceCaseDims(admin);
   const { data: org } = await admin.from("orgs").select("id, slug, name, display_name, tenkara_org_id").eq("slug", params.slug).maybeSingle();
   if (!org) notFound();
   const orgName = orgDisplayName(org);
@@ -273,7 +275,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           </p>
         </div>
       )}
-      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} />
+      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} />
 
       <section className="space-y-2 pt-2">
         <h2 className="font-serif text-xl tracking-tight">
