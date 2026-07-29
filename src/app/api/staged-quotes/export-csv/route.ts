@@ -26,7 +26,7 @@ export async function GET() {
 
   let q = admin
     .from("staged_quotes")
-    .select("supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement")
+    .select("supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, case_type, case_dimensions")
     .eq("status", "approved")
     .order("approved_at", { ascending: false });
   if (assigned) q = q.in("org_id", assigned);
@@ -40,7 +40,11 @@ export async function GET() {
     [...QUOTE_TEMPLATE_HEADERS],
     (rows ?? []).map((r: any) =>
       QUOTE_TEMPLATE_HEADERS.map((col) =>
-        col === "material_name" ? correctMaterialSpelling(r[col] ?? "") : r[col] != null ? r[col] : ""
+        col === "material_name"
+          ? correctMaterialSpelling(r[col] ?? "")
+          : col === "case_dimensions"
+            ? r[col] != null ? JSON.stringify(r[col]) : ""
+            : r[col] != null ? r[col] : ""
       )
     )
   );

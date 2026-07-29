@@ -1,4 +1,5 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
+import { computeCaseDimensions } from "@/lib/case-dimensions";
 
 // Shared writer for the staged_quotes table (migration 0025). Both the email
 // reply-body extractor and the attachment parser funnel through here so the row
@@ -90,6 +91,18 @@ export async function insertStagedQuotes(
       result.skippedDuplicates++;
       continue;
     }
+    // Best-effort: auto-fill outer case dimensions for the freight calc at
+    // insert time. Never blocks staging — a failure just leaves the columns null
+    // for the case-dimensions backfill (or ops) to fill later.
+    const dims = await computeCaseDimensions({
+      materialName: r.materialName,
+      caseSize: r.caseSize,
+      unitOfMeasurement: r.unitOfMeasurement,
+      moq: r.moqQuantity != null ? `${r.moqQuantity} ${r.moqUnit ?? ""}`.trim() : null,
+      grade: r.grade,
+      raw: r.rawExtract,
+    });
+
     const { error } = await admin.from("staged_quotes").insert({
       org_id: r.orgId,
       run_id: r.runId,
@@ -115,6 +128,9 @@ export async function insertStagedQuotes(
       confidence: r.confidence ?? "needs_review",
       extraction_notes: r.extractionNotes ?? null,
       raw_extract: r.rawExtract ?? {},
+      case_type: dims?.case_type ?? null,
+      case_dimensions: dims?.case_dimensions ?? null,
+      dim_source: dims?.dim_source ?? null,
       status: "pending_review",
     });
     if (error) {

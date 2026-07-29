@@ -25,6 +25,7 @@ export const QUOTE_TEMPLATE_HEADERS = [
   "material_sku",
   "type_of_package",
   "case_type",
+  "case_dimensions",
   "is_international",
   "is_hazardous",
   "is_refrigerated",

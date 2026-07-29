@@ -18,6 +18,11 @@ function fmt(n: number | null): string {
   return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
+function fmtDims(d: any): string | null {
+  if (!d || d.width == null || d.height == null || d.length == null) return null;
+  return `${d.width} x ${d.height} x ${d.length} ${d.unit ?? "in"}`;
+}
+
 export function StagedQuoteHeaders({ showOrg = true }: { showOrg?: boolean }) {
   return (
     <TableRow>
@@ -28,6 +33,7 @@ export function StagedQuoteHeaders({ showOrg = true }: { showOrg?: boolean }) {
       <TableHead className="text-right">Case</TableHead>
       <TableHead>Unit</TableHead>
       <TableHead className="text-right">Per-unit</TableHead>
+      <TableHead>Case dims</TableHead>
       <TableHead>Source</TableHead>
       <TableHead>Conf.</TableHead>
       {showOrg && <TableHead>Org</TableHead>}
@@ -38,7 +44,7 @@ export function StagedQuoteHeaders({ showOrg = true }: { showOrg?: boolean }) {
 
 // Column count for empty-state colSpan. Matches StagedQuoteHeaders.
 export function stagedQuoteColSpan(showOrg = true): number {
-  return showOrg ? 11 : 10;
+  return showOrg ? 12 : 11;
 }
 
 export function StagedQuoteRow({
@@ -69,6 +75,26 @@ export function StagedQuoteRow({
       <TableCell className="text-right align-top">{fmt(r.case_size)}</TableCell>
       <TableCell className="align-top">{r.unit_of_measurement ?? "—"}</TableCell>
       <TableCell className="text-right align-top">{fmt(r.unit_price)}</TableCell>
+      <TableCell className="align-top text-xs">
+        {fmtDims(r.case_dimensions) ? (
+          <span className="inline-flex flex-col gap-0.5">
+            <span>
+              {r.case_type ? <span className="text-muted-foreground">{r.case_type} </span> : null}
+              {fmtDims(r.case_dimensions)}
+            </span>
+            {r.dim_source === "ai_estimated" && (
+              <span
+                className="inline-flex w-fit items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                title="AI-estimated dimensions — verify before Tenkara upload"
+              >
+                AI estimate
+              </span>
+            )}
+          </span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </TableCell>
       <TableCell className="align-top text-xs text-muted-foreground">
         {r.source === "attachment" ? r.source_attachment_name ?? "attachment" : "email body"}
       </TableCell>
