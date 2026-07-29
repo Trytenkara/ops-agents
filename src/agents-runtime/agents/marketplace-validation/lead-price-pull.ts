@@ -1,6 +1,7 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { recheckMarketplaceQuote } from "./price-recheck";
 import { convertToUsd } from "@/lib/fx";
+import { ensureMarketplaceCaseDims } from "@/lib/marketplace-case-dims-fill";
 import { getOrgOperatorPool, getSupplierAssignments, resolveSupplierOperatorId } from "@/lib/operator-assignment";
 
 type Admin = ReturnType<typeof createAdminClient>;
@@ -394,12 +395,14 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     // whose tiers came from an operator is left alone.
     const nextPayload: any = { ...(l.payload ?? {}), marketplace_pull: pull };
     const existingTiers = Array.isArray(l.payload?.price_tiers) ? l.payload.price_tiers : [];
+    let writtenTierPacks: string[] = [];
     if (gotPrice && (existingTiers.length === 0 || isRecheck)) {
       const tiers = result.tiers.length
         ? result.tiers.map((t) => ({ pack_size: t.pack_size ?? "", price: t.price ?? null, unit_price: t.unit_price ?? null }))
         : [{ pack_size: result.pack_size ?? "", price: result.current_price, unit_price: result.unit_price }];
       nextPayload.price_tiers = tiers;
       nextPayload.price_tiers_updated_at = new Date().toISOString();
+      writtenTierPacks = tiers.map((t) => t.pack_size).filter(Boolean);
     }
 
     const { error: upErr } = await admin
@@ -409,6 +412,13 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     if (upErr) {
       await log(`Lead payload update failed for ${l.id}: ${upErr.message}`, { level: "error", step: "mp_leads", data: { lead_id: l.id } });
       return null;
+    }
+
+    // Keep the marketplace case-dims cache warm for any NEW pack sizes this pull
+    // introduced. Cached packs (the common case) cost only an indexed lookup;
+    // best-effort, never blocks the pull.
+    if (writtenTierPacks.length) {
+      await ensureMarketplaceCaseDims(admin, writtenTierPacks);
     }
 
     if (gotPrice) {
