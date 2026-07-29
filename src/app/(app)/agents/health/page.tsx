@@ -7,9 +7,13 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@
 import { relativeTime } from "@/lib/utils";
 import { compareAgentsBySlug } from "@/lib/agents-sort";
 import { HaltAllAgents } from "@/components/halt-all-agents";
-import { RetriggerExportButton } from "@/components/retrigger-export-button";
+import { getApiUsage } from "@/lib/api-usage";
+import { formatUsd, UNMETERED_SERVICES } from "@/lib/api-cost-rates";
 
 export const dynamic = "force-dynamic";
+
+const num = (n: number | null) => (n === null ? "—" : n.toLocaleString());
+const usd = (n: number | null) => (n === null ? "—" : formatUsd(n));
 
 export default async function SystemHealthPage() {
   const session = (await getSession())!;
@@ -22,11 +26,9 @@ export default async function SystemHealthPage() {
     .select("name, slug, last_run_at, status, schedule_cron, schedule_tz, training_wheels");
   const haltedCount = (agentsRaw ?? []).filter((a: any) => a.training_wheels && a.slug !== "agent-01-ping").length;
   const agents = [...(agentsRaw ?? [])].sort(compareAgentsBySlug);
-  const { data: leadExports } = await admin
-    .from("lead_scanner_exports")
-    .select("id, supplier_name, supplier_id, status, generated_at, slack_message_ts, error, generated_by_agent, agents:agents!lead_scanner_exports_generated_by_agent_fkey(name)")
-    .order("generated_at", { ascending: false })
-    .limit(100);
+  const apiUsage = await getApiUsage(admin);
+  const totalEstCost30d = apiUsage.reduce((sum, u) => sum + (u.estCost30d ?? 0), 0);
+  const totalEstCostAll = apiUsage.reduce((sum, u) => sum + u.estCostAll, 0);
 
   const checks = [
     { name: "Supabase (OA DB)", ok: true, note: "connected (this page loaded)" },
@@ -35,13 +37,11 @@ export default async function SystemHealthPage() {
     { name: "Service role key", ok: !!process.env.SUPABASE_SERVICE_ROLE_KEY, note: process.env.SUPABASE_SERVICE_ROLE_KEY ? "configured" : "missing" },
   ];
 
-  const failedCount = (leadExports ?? []).filter((e: any) => e.status === "failed").length;
-
   return (
     <div className="space-y-6 max-w-4xl">
       <div>
         <h1 className="font-serif text-3xl tracking-tight">System health</h1>
-        <p className="text-sm text-muted-foreground mt-1">Connector status, last-run heartbeats, and the Lead Scanner CSV export handoff.</p>
+        <p className="text-sm text-muted-foreground mt-1">Connector status, last-run heartbeats, and estimated external-API usage and cost.</p>
       </div>
 
       {isAdmin && (
@@ -100,57 +100,78 @@ export default async function SystemHealthPage() {
 
       <Card className="tb-surface shadow-none">
         <CardHeader>
-          <div className="flex items-center justify-between gap-3">
-            <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">
-              Lead Scanner exports{" "}
-              <span className="ml-1 text-foreground">· {leadExports?.length ?? 0}</span>
-              {failedCount > 0 && <Badge variant="danger" className="ml-2">{failedCount} failed</Badge>}
-            </CardTitle>
-            {isAdmin && <RetriggerExportButton />}
-          </div>
+          <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">
+            API usage &amp; cost <span className="ml-1 normal-case tracking-normal text-[11px]">· estimated</span>
+          </CardTitle>
         </CardHeader>
-        <CardContent>
-          {(leadExports ?? []).length === 0 ? (
-            <p className="text-sm text-muted-foreground">No exports yet. Agents send CSV exports via <code className="text-xs">/api/agent/lead-exports</code>.</p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Supplier</TableHead>
-                  <TableHead>Agent</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Generated</TableHead>
-                  <TableHead></TableHead>
+        <CardContent className="space-y-3">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Provider</TableHead>
+                <TableHead className="text-right">Units (30d)</TableHead>
+                <TableHead className="text-right">Units (all)</TableHead>
+                <TableHead className="text-right">Failed</TableHead>
+                <TableHead className="text-right">Leads</TableHead>
+                <TableHead className="text-right">Est. rate/unit</TableHead>
+                <TableHead className="text-right">Est. cost (30d)</TableHead>
+                <TableHead className="text-right">Est. cost (all)</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {apiUsage.map((u) => (
+                <TableRow key={u.rate.key}>
+                  <TableCell className="font-medium">
+                    {u.rate.label}
+                    <span className="ml-2 text-[11px] lowercase tracking-wide text-muted-foreground">/ {u.rate.unitLabel}</span>
+                    <span className="ml-2 text-[11px] uppercase tracking-wide text-muted-foreground">{u.rate.confidence}</span>
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">{num(u.units30d)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{num(u.unitsAll)}</TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">{num(u.failedAll)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{num(u.leads)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatUsd(u.rate.usdPerUnit)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{usd(u.estCost30d)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{usd(u.estCostAll)}</TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(leadExports as any[]).map((e) => (
-                  <TableRow key={e.id} className={e.status === "failed" ? "bg-destructive/5" : undefined}>
-                    <TableCell className="font-medium">{e.supplier_name ?? e.supplier_id ?? "—"}</TableCell>
-                    <TableCell className="text-muted-foreground">{e.agents?.name ?? "—"}</TableCell>
-                    <TableCell><ExportStatus s={e.status} /></TableCell>
-                    <TableCell className="text-muted-foreground">{relativeTime(e.generated_at)}</TableCell>
-                    <TableCell className="text-right text-xs">
-                      {e.slack_message_ts && (
-                        <span className="text-muted-foreground font-mono">{e.slack_message_ts.slice(0, 14)}</span>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+              ))}
+              {apiUsage.length > 0 && (
+                <TableRow>
+                  <TableCell className="font-semibold">Total</TableCell>
+                  <TableCell />
+                  <TableCell />
+                  <TableCell />
+                  <TableCell />
+                  <TableCell />
+                  <TableCell className="text-right font-semibold tabular-nums">{formatUsd(totalEstCost30d)}</TableCell>
+                  <TableCell className="text-right font-semibold tabular-nums">{formatUsd(totalEstCostAll)}</TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+          <div className="space-y-1 text-xs text-muted-foreground">
+            <p>
+              Estimates only. This app counts activity it triggers (discovery calls fired by Agent 03, price-pull sessions
+              opened by Agent 05) and what landed; true credit and browser-hour consumption and billing live in the remote
+              agents and each provider account, not here. Rates are editable in <code>lib/api-cost-rates.ts</code>.
+            </p>
+            {apiUsage.map((u) => (
+              <p key={u.rate.key}>
+                <span className="font-medium text-foreground">{u.rate.label}:</span> {u.rate.assumption} (source: {u.rate.source})
+              </p>
+            ))}
+            <p className="pt-1">
+              <span className="font-medium text-foreground">Also in use (not per-call metered here):</span>{" "}
+              {UNMETERED_SERVICES.map((s, i) => (
+                <span key={s.label}>
+                  {i > 0 && "; "}
+                  {s.label} ({s.note})
+                </span>
+              ))}
+            </p>
+          </div>
         </CardContent>
       </Card>
     </div>
   );
-}
-
-function ExportStatus({ s }: { s: string }) {
-  if (s === "queued") return <Badge variant="secondary">Queued</Badge>;
-  if (s === "sent") return <Badge variant="warn">Sent</Badge>;
-  if (s === "acknowledged_by_andrew") return <Badge variant="default">✓ Ack'd</Badge>;
-  if (s === "uploaded") return <Badge variant="success">Uploaded</Badge>;
-  if (s === "failed") return <Badge variant="danger">Failed (&gt;72h)</Badge>;
-  return <Badge variant="secondary">{s}</Badge>;
 }

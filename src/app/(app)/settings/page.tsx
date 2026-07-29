@@ -1,15 +1,9 @@
 import Link from "next/link";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ResetClientData } from "@/components/reset-client-data";
 import { orgDisplayName } from "@/lib/org-display";
-import { getApiUsage, type ProviderUsage } from "@/lib/api-usage";
-import { formatUsd, UNMETERED_SERVICES } from "@/lib/api-cost-rates";
-
-const num = (n: number | null) => (n === null ? "—" : n.toLocaleString());
-const usd = (n: number | null) => (n === null ? "—" : formatUsd(n));
 
 export const dynamic = "force-dynamic";
 
@@ -37,14 +31,6 @@ export default async function SettingsPage() {
     const { data } = await createAdminClient().from("orgs").select("id, slug, name, display_name").order("name");
     orgs = (data ?? []).map((o: any) => ({ id: o.id, name: orgDisplayName(o) }));
   }
-
-  // Estimated external-API usage/cost for the discovery providers (monitors+admins).
-  let apiUsage: ProviderUsage[] = [];
-  if (isMonitor) {
-    apiUsage = await getApiUsage(createAdminClient());
-  }
-  const totalEstCost30d = apiUsage.reduce((sum, u) => sum + (u.estCost30d ?? 0), 0);
-  const totalEstCostAll = apiUsage.reduce((sum, u) => sum + u.estCostAll, 0);
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -86,83 +72,6 @@ export default async function SettingsPage() {
             {isAdmin && <LinkRow href="/agents/config" label="Configuration" hint="Prompts, schedules, training wheels" />}
             <LinkRow href="/agents/audit" label="Audit log" />
             <LinkRow href="/agents/health" label="System health" hint="Connectors and last runs" />
-          </CardContent>
-        </Card>
-      )}
-
-      {isMonitor && (
-        <Card className="tb-surface shadow-none">
-          <CardHeader>
-            <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">
-              API usage &amp; cost <span className="ml-1 normal-case tracking-normal text-[11px]">· estimated</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Provider</TableHead>
-                  <TableHead className="text-right">Units (30d)</TableHead>
-                  <TableHead className="text-right">Units (all)</TableHead>
-                  <TableHead className="text-right">Failed</TableHead>
-                  <TableHead className="text-right">Leads</TableHead>
-                  <TableHead className="text-right">Est. rate/unit</TableHead>
-                  <TableHead className="text-right">Est. cost (30d)</TableHead>
-                  <TableHead className="text-right">Est. cost (all)</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {apiUsage.map((u) => (
-                  <TableRow key={u.rate.key}>
-                    <TableCell className="font-medium">
-                      {u.rate.label}
-                      <span className="ml-2 text-[11px] lowercase tracking-wide text-muted-foreground">/ {u.rate.unitLabel}</span>
-                      <span className="ml-2 text-[11px] uppercase tracking-wide text-muted-foreground">{u.rate.confidence}</span>
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{num(u.units30d)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{num(u.unitsAll)}</TableCell>
-                    <TableCell className="text-right tabular-nums text-muted-foreground">{num(u.failedAll)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{num(u.leads)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatUsd(u.rate.usdPerUnit)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{usd(u.estCost30d)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{usd(u.estCostAll)}</TableCell>
-                  </TableRow>
-                ))}
-                {apiUsage.length > 0 && (
-                  <TableRow>
-                    <TableCell className="font-semibold">Total</TableCell>
-                    <TableCell />
-                    <TableCell />
-                    <TableCell />
-                    <TableCell />
-                    <TableCell />
-                    <TableCell className="text-right font-semibold tabular-nums">{formatUsd(totalEstCost30d)}</TableCell>
-                    <TableCell className="text-right font-semibold tabular-nums">{formatUsd(totalEstCostAll)}</TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-            <div className="space-y-1 text-xs text-muted-foreground">
-              <p>
-                Estimates only. This app counts activity it triggers (discovery calls fired by Agent 03, price-pull sessions
-                opened by Agent 05) and what landed; true credit and browser-hour consumption and billing live in the remote
-                agents and each provider account, not here. Rates are editable in <code>lib/api-cost-rates.ts</code>.
-              </p>
-              {apiUsage.map((u) => (
-                <p key={u.rate.key}>
-                  <span className="font-medium text-foreground">{u.rate.label}:</span> {u.rate.assumption} (source: {u.rate.source})
-                </p>
-              ))}
-              <p className="pt-1">
-                <span className="font-medium text-foreground">Also in use (not per-call metered here):</span>{" "}
-                {UNMETERED_SERVICES.map((s, i) => (
-                  <span key={s.label}>
-                    {i > 0 && "; "}
-                    {s.label} ({s.note})
-                  </span>
-                ))}
-              </p>
-            </div>
           </CardContent>
         </Card>
       )}
