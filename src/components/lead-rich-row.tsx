@@ -434,6 +434,12 @@ export function LeadRichRow({
               </Badge>
             );
           })()}
+          {Array.isArray(r.flags) &&
+            r.flags.map((f: { code: string; label: string }) => (
+              <Badge key={f.code} variant="warn" title="Advisory flag; lead stays in the pipeline">
+                {f.label}
+              </Badge>
+            ))}
         </div>
         {(r.payload?.supplier_country || r.payload?.supplier_role) && (
           <div className="text-xs text-muted-foreground">

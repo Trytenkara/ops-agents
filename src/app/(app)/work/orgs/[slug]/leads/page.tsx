@@ -11,6 +11,8 @@ import { SuppliersCsvUpload } from "@/components/suppliers-csv-upload";
 import { resolveMaterialGrades, resolveSupplierMarketplace, resolveMaterialNames } from "@/lib/tenkara-names";
 import { correctMaterialSpelling } from "@/lib/material-spelling";
 import { leadMarketKind } from "@/lib/lead-market";
+import { computeLeadFlags } from "@/lib/lead-flags";
+import { getClientRequirements } from "@/lib/tenkara-requirements";
 import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
 import { getOrgOperatorPool, pickSupplierOperator, operatorBySupplier, getSupplierAssignments } from "@/lib/operator-assignment";
 import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
@@ -137,6 +139,19 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     }
   }
 
+  // Client's dealbreaker certifications (read-only from Tenkara), used to flag
+  // leads whose supplier doesn't list a required cert. Best-effort: on failure
+  // the flag simply doesn't fire.
+  const dealbreakerCerts = org.tenkara_org_id
+    ? await getClientRequirements(org.tenkara_org_id)
+        .then((items) =>
+          items
+            .filter((it) => it.kind === "certification" && it.dealbreaker && it.detail)
+            .flatMap((it) => it.detail!.split(",").map((s) => s.trim()).filter(Boolean))
+        )
+        .catch(() => [] as string[])
+    : ([] as string[]);
+
   leads = leads.map((r) => {
     const flag = r.supplier_id ? leadMarketplace.get(r.supplier_id) : undefined;
     const market_kind =
@@ -173,6 +188,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
       operator_assigned_id,
       operator_auto_name,
       tenkara_assignee_name,
+      flags: computeLeadFlags(r.payload, { dealbreakerCerts }),
     };
   });
 
