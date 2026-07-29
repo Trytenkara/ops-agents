@@ -187,8 +187,8 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
               </Badge>
             )}
             {pull?.status === "needs_manual_pull" && (
-              <Badge variant="warn" title="Auto-pull couldn't get a price — an operator was tagged to pull it manually.">
-                needs manual pull{pull.reason ? ` · ${pullReasonLabel[pull.reason] ?? pull.reason}` : ""}
+              <Badge variant="danger" title="Auto-scrape couldn't get a price — an operator must enter it manually.">
+                unable to scrape{pull.reason ? ` · ${pullReasonLabel[pull.reason] ?? pull.reason}` : ""}
               </Badge>
             )}
             {(!pull || pull.status === "pending") && (

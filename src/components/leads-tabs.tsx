@@ -5,12 +5,12 @@ import { cn, relativeTime } from "@/lib/utils";
 import { LeadsList } from "@/components/leads-list";
 import { MarketplacePricing } from "@/components/marketplace-pricing";
 import { OutreachTrackerPanel } from "@/components/outreach-tracker-panel";
-import { leadMarketKind } from "@/components/lead-rich-row";
+import { leadMarketKind, isOperatorDropped } from "@/components/lead-rich-row";
 import type { OutreachTracker } from "@/lib/outreach-tracker";
 import type { RunStat } from "@/components/agent-runs-strip";
 import type { CaseDims } from "@/lib/marketplace-case-dims";
 
-type Tab = "all" | "raw" | "enriched" | "ready" | "held" | "marketplace" | "outreach" | "removed";
+type Tab = "all" | "raw" | "enriched" | "ready" | "held" | "marketplace" | "outreach" | "removed" | "dropped";
 
 // The sourcing pipeline as a live funnel: each stage is the output of one agent,
 // so surfacing raw -> enriched -> ready-to-send -> held (with counts + the
@@ -64,6 +64,26 @@ export function LeadsTabs({
   const visibleRows = clientFilter === "all"
     ? rows
     : rows.filter((r: any) => r.material_id && tagsByMaterialId[r.material_id] === clientFilter);
+
+  // Split the removed set: operator-dropped leads get their own tab; everything
+  // else (auto-dropped, deduped, freight-filtered, suppressed) needs a human to
+  // move it forward.
+  const droppedRows = removedRows.filter((r: any) => isOperatorDropped(r));
+  const enrichmentRows = removedRows.filter((r: any) => !isOperatorDropped(r));
+
+  // Active marketplace leads whose price auto-scrape gave up (needs_manual_pull).
+  // They stay in Marketplace pricing so an operator can type a price in, but also
+  // surface here with a red "Unable to scrape" flag so the un-fillable ones aren't
+  // lost among filled rows. Deduped against the removed set (a lead later dropped
+  // shows under its drop reason instead).
+  const removedIds = new Set(removedRows.map((r: any) => r.id));
+  const needsPriceInput = visibleRows.filter(
+    (r: any) =>
+      !removedIds.has(r.id) &&
+      (r.market_kind ?? leadMarketKind(r.payload?.site_type)) === "marketplace" &&
+      r.payload?.marketplace_pull?.status === "needs_manual_pull"
+  );
+  const enrichmentDisplay = [...enrichmentRows, ...needsPriceInput];
 
   const marketCount = visibleRows.filter(
     (r) => (r.market_kind ?? leadMarketKind(r.payload?.site_type)) === "marketplace"
@@ -178,7 +198,8 @@ export function LeadsTabs({
         {tabBtn("all", "All leads", visibleRows.length)}
         {tabBtn("marketplace", "Marketplace pricing", marketCount)}
         {tabBtn("outreach", "Outreach", trackerCount)}
-        {tabBtn("removed", "Filtered out", removedRows.length)}
+        {tabBtn("removed", "Requires human enrichment", enrichmentDisplay.length)}
+        {tabBtn("dropped", "Dropped", droppedRows.length)}
       </div>
 
       {tab === "all" && (
@@ -195,15 +216,26 @@ export function LeadsTabs({
         />
       )}
       {tab === "removed" &&
-        (removedRows.length > 0 ? (
+        (enrichmentDisplay.length > 0 ? (
           <>
             <p className="text-sm text-muted-foreground -mb-1">
-              Leads that left the pipeline — dropped, deduped, filtered out (freight/logistics), or suppressed before outreach (do-not-contact / excluded country / prior relationship). Each row shows the reason.
+              Leads the fleet could not complete on its own: no contact recovered, deduped, freight/logistics filtered, suppressed before outreach (do-not-contact, excluded country, prior relationship), or a marketplace price the auto-scrape couldn&apos;t get (needs a manual price). Each row shows the reason.
             </p>
-            <LeadsList rows={removedRows} canAct={false} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
+            <LeadsList rows={enrichmentDisplay} canAct={false} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
           </>
         ) : (
-          <p className="text-sm text-muted-foreground py-4">Nothing has been removed or filtered out for this client yet.</p>
+          <p className="text-sm text-muted-foreground py-4">No leads are waiting on human enrichment for this client yet.</p>
+        ))}
+      {tab === "dropped" &&
+        (droppedRows.length > 0 ? (
+          <>
+            <p className="text-sm text-muted-foreground -mb-1">
+              Leads an operator manually dropped. Each row shows the reason it was dropped.
+            </p>
+            <LeadsList rows={droppedRows} canAct={false} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground py-4">No leads have been manually dropped for this client yet.</p>
         ))}
       {tab === "marketplace" && <MarketplacePricing rows={visibleRows} canAct={canAct} slug={slug} dimsByPack={dimsByPack} />}
       {tab === "outreach" &&

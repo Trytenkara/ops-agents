@@ -91,16 +91,43 @@ const REMOVAL_REASON_LABEL: Record<string, string> = {
   excluded_country: "Excluded country (client setting)",
 };
 
+// Marketplace price-pull give-up reasons: the auto-scrape couldn't land a price,
+// so an operator has to enter it by hand. Surfaced as a red "Unable to scrape" flag.
+const SCRAPE_REASON_LABEL: Record<string, string> = {
+  link_broken: "link broken",
+  login_required: "price behind login",
+  needs_review: "no price found on page",
+};
+
 // Resolve a removal/suppression reason for a lead, if any: outreach suppression
 // (lead still active) takes precedence, else the drop_reason on a dropped/terminal
 // lead. Returns a friendly label + whether it was a pre-outreach suppression.
-export function leadRemoval(r: any): { label: string; suppressed: boolean } | null {
+export type RemovalKind = "suppressed" | "dropped" | "enrichment" | "scrape";
+
+// A lead is "dropped" only when an operator physically dropped it (dropLead sets
+// payload.dropped_by). Automatic terminal/dropped states (escalation, no-contact,
+// dedup, freight filter) are treated as "enrichment" — the fleet couldn't finish
+// on its own and a human needs to step in.
+export function isOperatorDropped(r: any): boolean {
+  return Boolean(r?.payload?.dropped_by);
+}
+
+export function leadRemoval(r: any): { label: string; kind: RemovalKind } | null {
   const sup = r?.payload?.outreach_suppressed?.reason as string | undefined;
-  if (sup) return { label: REMOVAL_REASON_LABEL[sup] ?? sup, suppressed: true };
+  if (sup) return { label: REMOVAL_REASON_LABEL[sup] ?? sup, kind: "suppressed" };
   if (r?.status && r.status !== "active") {
     const raw = ((r.drop_reason as string | undefined) || (r?.payload?.drop_reason as string | undefined)) ?? "";
     const code = raw.split(":")[0].trim();
-    return { label: REMOVAL_REASON_LABEL[code] || raw || r.status, suppressed: false };
+    return {
+      label: REMOVAL_REASON_LABEL[code] || raw || r.status,
+      kind: isOperatorDropped(r) ? "dropped" : "enrichment",
+    };
+  }
+  // Active marketplace lead whose price auto-scrape gave up — needs an operator
+  // to type the price in. Reported as a red flag so it isn't lost among filled rows.
+  const mp = r?.payload?.marketplace_pull;
+  if (mp?.status === "needs_manual_pull") {
+    return { label: SCRAPE_REASON_LABEL[mp.reason as string] ?? "needs a manual price", kind: "scrape" };
   }
   return null;
 }
@@ -429,8 +456,30 @@ export function LeadRichRow({
             const removal = leadRemoval(r);
             if (!removal) return null;
             return (
-              <Badge variant="danger" title={removal.suppressed ? "Suppressed before outreach" : "Filtered out of the pipeline"}>
-                {removal.suppressed ? "Suppressed" : "Filtered out"}: {removal.label}
+              <Badge
+                variant={
+                  removal.kind === "dropped" || removal.kind === "suppressed" || removal.kind === "scrape"
+                    ? "danger"
+                    : "warn"
+                }
+                title={
+                  removal.kind === "suppressed"
+                    ? "Suppressed before outreach"
+                    : removal.kind === "dropped"
+                    ? "Dropped by an operator"
+                    : removal.kind === "scrape"
+                    ? "Auto-scrape couldn't get a price — an operator must enter it manually"
+                    : "Requires human enrichment before it can continue"
+                }
+              >
+                {removal.kind === "suppressed"
+                  ? "Suppressed"
+                  : removal.kind === "dropped"
+                  ? "Dropped"
+                  : removal.kind === "scrape"
+                  ? "Unable to scrape"
+                  : "Requires human enrichment"}
+                : {removal.label}
               </Badge>
             );
           })()}
