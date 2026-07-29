@@ -12,6 +12,7 @@ import { MarketplaceFindingsList } from "@/components/marketplace-findings-list"
 import { RequoteList, type RequoteRow } from "@/components/requote-list";
 import { DirectPricesOnFile, type DirectPriceRow } from "@/components/direct-prices-on-file";
 import { PriceIndexTabs } from "@/components/price-index-tabs";
+import { loadMarketplaceCaseDims, fmtCaseDims } from "@/lib/marketplace-case-dims";
 import { cn } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -64,7 +65,7 @@ export default async function OrgPriceIndexPage({
       .limit(200),
     admin
       .from("staged_quotes")
-      .select("id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, currency, grade, status, created_at")
+      .select("id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, currency, grade, status, created_at, case_type, case_dimensions")
       .eq("org_id", org.id)
       .not("material_id", "is", null)
       .order("created_at", { ascending: false })
@@ -225,7 +226,16 @@ export default async function OrgPriceIndexPage({
     grade: s.grade ?? null,
     status: s.status ?? null,
     createdAt: s.created_at ?? null,
+    caseDims: fmtCaseDims({
+      case_type: s.case_type ?? null,
+      width: s.case_dimensions?.width ?? null,
+      height: s.case_dimensions?.height ?? null,
+      length: s.case_dimensions?.length ?? null,
+      weight_kg: s.case_dimensions?.packaging_case_weight ?? null,
+    }),
   }));
+
+  const marketplaceDims = await loadMarketplaceCaseDims(admin);
 
   const base = `/work/orgs/${org.slug}/price-index`;
 
@@ -280,7 +290,7 @@ export default async function OrgPriceIndexPage({
                 No {STATUSES.find((s) => s.value === status)?.label.toLowerCase()} marketplace prices yet.
               </p>
             ) : (
-              <MarketplaceFindingsList rows={marketplaceRows} canAct={canAct} slug={org.slug} orgClients={orgClients} tagsByMaterialName={tagsByMaterialName} />
+              <MarketplaceFindingsList rows={marketplaceRows} canAct={canAct} slug={org.slug} orgClients={orgClients} tagsByMaterialName={tagsByMaterialName} dimsByPack={marketplaceDims} />
             )}
           </section>
         }

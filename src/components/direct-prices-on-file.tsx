@@ -18,6 +18,7 @@ export type DirectPriceRow = {
   grade: string | null;
   status: string | null;
   createdAt: string | null;
+  caseDims: string | null;
 };
 
 function fmtPrice(r: DirectPriceRow): string {
@@ -46,6 +47,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
     r.supplierName ?? "",
     r.materialName ?? "",
     fmtPrice(r),
+    r.caseDims ?? "",
     r.grade ?? "",
     r.status ?? "",
     r.createdAt ?? "",
@@ -57,7 +59,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
         {controls}
         <ListCsvButton
           filename={filenameFor(slug, "direct-prices-on-file")}
-          headers={["Supplier", "Material", "Price", "Grade", "Status", "Captured"]}
+          headers={["Supplier", "Material", "Price", "Case dims", "Grade", "Status", "Captured"]}
           rows={csvRows}
         />
       </div>
@@ -67,6 +69,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
             <TableHead>Supplier</TableHead>
             <TableHead>Material</TableHead>
             <TableHead className="text-right">Price on file</TableHead>
+            <TableHead>Case dims</TableHead>
             <TableHead>Grade</TableHead>
             <TableHead>Captured</TableHead>
           </TableRow>
@@ -86,13 +89,28 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
                   )}
                 </div>
               </TableCell>
+              <TableCell className="text-xs">
+                {r.caseDims ? (
+                  <span className="inline-flex flex-col gap-0.5">
+                    <span>{r.caseDims}</span>
+                    <span
+                      className="inline-flex w-fit items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                      title="AI-estimated dimensions — verify before freight quoting"
+                    >
+                      AI estimate
+                    </span>
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </TableCell>
               <TableCell className="text-muted-foreground">{r.grade ?? "—"}</TableCell>
               <TableCell className="text-muted-foreground">{relativeTime(r.createdAt)}</TableCell>
             </TableRow>
           ))}
           {filtered.length === 0 && (
             <TableRow>
-              <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+              <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
                 No direct prices on file yet.
               </TableCell>
             </TableRow>

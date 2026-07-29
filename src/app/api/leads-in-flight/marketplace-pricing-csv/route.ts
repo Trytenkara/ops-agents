@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getAssignedOrgIds } from "@/lib/org-access";
 import { toCsv, type CsvCell } from "@/lib/csv";
 import { correctMaterialSpelling } from "@/lib/material-spelling";
+import { loadMarketplaceCaseDims, resolveCaseDims } from "@/lib/marketplace-case-dims";
 
 // GET /api/leads-in-flight/marketplace-pricing-csv?org=<slug>
 // Exports marketplace-tab leads (site_type M/MS) as one row per price tier.
@@ -76,6 +77,11 @@ export async function GET(request: NextRequest) {
     "pull_status",
     "pull_reason",
     "pack_size",
+    "case_type",
+    "case_width_in",
+    "case_height_in",
+    "case_length_in",
+    "case_weight_kg",
     "price_total",
     "price_per_unit",
     "raw_listed_pricing",
@@ -83,6 +89,8 @@ export async function GET(request: NextRequest) {
     "tiers_updated_at",
     "lead_id",
   ];
+
+  const dimsByPack = await loadMarketplaceCaseDims(admin);
 
   // Expand each lead into one row per price tier. If no tiers exist, emit one
   // row with empty tier columns so every lead is still visible in the export.
@@ -103,6 +111,7 @@ export async function GET(request: NextRequest) {
       Array.isArray(p.price_tiers) && p.price_tiers.length > 0 ? p.price_tiers : [{}];
 
     for (const t of tiers) {
+      const dims = resolveCaseDims(dimsByPack, t.pack_size ?? null);
       csvRows.push([
         r.supplier_name ?? null,
         materialName,
@@ -111,6 +120,11 @@ export async function GET(request: NextRequest) {
         pullStatus,
         pullReason,
         t.pack_size ?? null,
+        dims?.case_type ?? null,
+        dims?.width ?? null,
+        dims?.height ?? null,
+        dims?.length ?? null,
+        dims?.weight_kg ?? null,
         t.price ?? null,
         t.unit_price ?? null,
         rawPricing,

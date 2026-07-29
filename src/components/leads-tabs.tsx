@@ -8,6 +8,7 @@ import { OutreachTrackerPanel } from "@/components/outreach-tracker-panel";
 import { leadMarketKind } from "@/components/lead-rich-row";
 import type { OutreachTracker } from "@/lib/outreach-tracker";
 import type { RunStat } from "@/components/agent-runs-strip";
+import type { CaseDims } from "@/lib/marketplace-case-dims";
 
 type Tab = "all" | "raw" | "enriched" | "ready" | "held" | "marketplace" | "outreach" | "removed";
 
@@ -42,6 +43,7 @@ export function LeadsTabs({
   runs = [],
   orgClients = [],
   tagsByMaterialId = {},
+  dimsByPack = {},
 }: {
   rows: any[];
   removedRows?: any[];
@@ -53,6 +55,7 @@ export function LeadsTabs({
   runs?: RunStat[];
   orgClients?: { id: string; name: string }[];
   tagsByMaterialId?: Record<string, string>; // tenkara_material_id → org_client_id
+  dimsByPack?: Record<string, CaseDims>;
 }) {
   const [clientFilter, setClientFilter] = useState("all");
 
@@ -202,7 +205,7 @@ export function LeadsTabs({
         ) : (
           <p className="text-sm text-muted-foreground py-4">Nothing has been removed or filtered out for this client yet.</p>
         ))}
-      {tab === "marketplace" && <MarketplacePricing rows={visibleRows} canAct={canAct} slug={slug} />}
+      {tab === "marketplace" && <MarketplacePricing rows={visibleRows} canAct={canAct} slug={slug} dimsByPack={dimsByPack} />}
       {tab === "outreach" &&
         (trackerCount > 0 ? (
           <OutreachTrackerPanel tracker={tracker} slug={slug} />
