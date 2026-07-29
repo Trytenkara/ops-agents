@@ -72,7 +72,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     const { data: page } = await admin
       .from("leads_in_flight")
       .select(
-        "id, org_id, supplier_name, supplier_id, assigned_operator_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)"
+        "id, org_id, supplier_name, supplier_id, assigned_operator_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, updated_at, orgs(slug, name)"
       )
       .eq("org_id", org.id)
       .eq("status", "active")
@@ -185,7 +185,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   const { data: removedRaw } = await admin
     .from("leads_in_flight")
     .select(
-      "id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)"
+      "id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, updated_at, orgs(slug, name)"
     )
     .eq("org_id", org.id)
     .or("status.in.(dropped,terminal),payload->>outreach_suppressed.not.is.null")

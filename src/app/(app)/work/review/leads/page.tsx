@@ -116,7 +116,7 @@ export default async function LeadsPage({
     admin
       .from("leads_in_flight")
       .select(
-        "id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, orgs(slug, name)"
+        "id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, updated_at, orgs(slug, name)"
       )
   );
   if (sort === "completeness") {

@@ -12,5 +12,5 @@ export function leadMarketKind(siteType: string | null | undefined): "marketplac
 // Column count for empty-state colSpan. Matches LeadRichHeaders. Pure helper,
 // kept here so Server Components can call it (see note above).
 export function leadRichColSpan(showOrg = true, selectable = false): number {
-  return (showOrg ? 10 : 9) + (selectable ? 1 : 0);
+  return (showOrg ? 11 : 10) + (selectable ? 1 : 0);
 }

@@ -335,6 +335,7 @@ export function LeadRichHeaders({
       <TableHead>Source</TableHead>
       {showOrg && <TableHead>Org</TableHead>}
       <TableHead>Staged</TableHead>
+      <TableHead>Updated</TableHead>
       <TableHead>Run</TableHead>
       <TableHead className="text-right">Action</TableHead>
     </TableRow>
@@ -601,6 +602,9 @@ export function LeadRichRow({
         </TableCell>
       )}
       <TableCell className="text-muted-foreground">{relativeTime(r.created_at)}</TableCell>
+      <TableCell className="text-muted-foreground">
+        {r.updated_at ? relativeTime(r.updated_at) : <span>—</span>}
+      </TableCell>
       <TableCell>
         {r.agent_run_id ? (
           <a
