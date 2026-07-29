@@ -76,7 +76,8 @@ async function fetchExpiringMarketplaceQuotes(): Promise<QuoteRow[]> {
         and mq.product_url not ilike '%localhost%'
         and mq.product_url not ilike '%.invalid%'
         and length(regexp_replace(mq.product_url, '^https?://[^/]+', '')) > 1
-        and mq.replaced_quote_id is null
+        -- The platform counts both an unset status and 'active' as a live quote.
+        and (mq.status is null or mq.status = 'active')
         and mq.reanalyze is not null
         and mq.reanalyze::date >= current_date
         and mq.reanalyze::date <  current_date + 7
