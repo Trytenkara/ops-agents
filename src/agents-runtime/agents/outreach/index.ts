@@ -6,11 +6,10 @@ import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import { compileWaitMs } from "@/lib/agent-timing";
 import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 import { runOutreachForSupplier, type OutreachLead } from "./run-outreach";
-import { composeOutreachDraft } from "./drafter";
-import { isAggregatorEmail } from "../data-enrichment/enrich";
+import { isAggregatorEmail, isAggregatorDomain } from "../data-enrichment/enrich";
 import { suppliersWithPriorRelationship } from "@/lib/tenkara-relationships";
 import { getSourcingExclusions, exclusionReason } from "@/lib/tenkara-sourcing-exclusions";
-import { resolveMaterialNames, resolveMaterialGrades } from "@/lib/tenkara-names";
+import { resolveMaterialNames } from "@/lib/tenkara-names";
 
 // v1 trim (vs. full spec):
 //   - pre-outreach only. Reply tracking + follow-up cadence land with Agent 08.
@@ -176,10 +175,9 @@ registerAgent({
     // 3. Filter to leads we can actually draft for.
     type Candidate = {
       lead: (typeof leads)[number];
-      // "email" → draft a Tenkara email; "manual" → open a contact-via-form case.
-      channel: "email" | "manual";
+      channel: "email";
       email: string | null;
-      channelUrl: string | null; // for channel="manual": the form / inquiry URL
+      channelUrl: string | null;
       contactName: string | null;
       mode: "active" | "ghost";
       ghostBrand?: string;
@@ -220,16 +218,6 @@ registerAgent({
       await ctx.log(`Material-name resolve failed: ${e?.message ?? e}`, { level: "warn", step: "material_names" });
     }
 
-    // Client-specified grade per material (materials.grade in Tenkara), so the
-    // manual-channel RFQ below can name what we're after. Best-effort: a failure
-    // just omits grade and the draft falls back to the generic grade ask.
-    let matGradesById = new Map<string, string>();
-    try {
-      matGradesById = await resolveMaterialGrades(leads.map((l) => l.material_id).filter(Boolean) as string[]);
-    } catch (e: any) {
-      await ctx.log(`Material-grade resolve failed: ${e?.message ?? e}`, { level: "warn", step: "material_grades" });
-    }
-
     // Compile-gate: which suppliers still have a material being enriched? We only
     // draft a supplier's first email once we have their ENTIRE list, so a supplier
     // with a sibling lead still at stage='raw' (and not terminally blocked, and not
@@ -264,7 +252,8 @@ registerAgent({
     // Per-org switch (orgStatuses loaded above at the fetch): outreach only acts
     // for orgs whose sourcing_status is 'active'. The fetch already excludes
     // paused orgs; this is a belt-and-suspenders guard in the candidate loop.
-    let droppedNoContact = 0;
+    let filteredNoContact = 0; // non-marketplace, no cold-emailable contact → filtered out
+    let marketplacePricingLeft = 0; // marketplace, no email → left active for price-pull
     let droppedNoOrg = 0;
     let droppedSkipClient = 0;
     let droppedPausedOrg = 0;
@@ -315,17 +304,15 @@ registerAgent({
       const aggregatorEmail = isAggregatorEmail(email);
       const hasEmail = !!email && formatValid && !aggregatorEmail;
       // A reachable non-email channel: a discovered contact/quote form, or the
-      // supplier's own site/listing we can submit an inquiry through.
+      // supplier's own site/listing.
       const channelUrl =
         (payload.enrichment?.contact?.contact_url as string | undefined) ??
         (payload.supplier_website as string | undefined) ??
         (payload.source_url as string | undefined) ??
         null;
-      const channel: "email" | "manual" | null = hasEmail ? "email" : channelUrl ? "manual" : null;
-      if (!channel) {
-        droppedNoContact++; // no email AND no contactable channel — genuinely unreachable
-        continue;
-      }
+
+      // Resolve org + client policy before any channel decision, so a paused or
+      // unmapped client never has leads filtered out from under it.
       if (!lead.org_id) {
         droppedNoOrg++;
         continue;
@@ -353,11 +340,39 @@ registerAgent({
         droppedSkipClient++;
         continue;
       }
+
+      // No cold-emailable address. Marketplaces stay in the pipeline so price-pull
+      // (Agent 05 / browserbase) can quote them; if pricing can't be pulled the
+      // lead is flagged there, never filtered. Everything else is filtered out as
+      // "no contact recovered" — we no longer open manual-outreach cases here.
+      if (!hasEmail) {
+        const host = channelUrl
+          ? channelUrl.replace(/^https?:\/\//, "").split("/")[0].toLowerCase().replace(/^www\./, "")
+          : null;
+        const isMarketplace =
+          isAggregatorDomain(host) ||
+          payload.site_type === "M" ||
+          payload.site_type === "MS" ||
+          payload.supplier_role === "Marketplace" ||
+          payload.supplier_role === "Reseller" ||
+          (lead as any).market_kind === "marketplace";
+        if (isMarketplace) {
+          marketplacePricingLeft++;
+          continue;
+        }
+        await admin
+          .from("leads_in_flight")
+          .update({ status: "dropped", drop_reason: "no_contact_recovered", payload: { ...payload, drop_reason: "no_contact_recovered" } })
+          .eq("id", lead.id);
+        filteredNoContact++;
+        continue;
+      }
+
       candidates.push({
         lead,
-        channel,
-        email: hasEmail ? email : null,
-        channelUrl: channel === "manual" ? channelUrl : null,
+        channel: "email",
+        email,
+        channelUrl: null,
         contactName: payload.supplier_contact_name ?? null,
         mode: cls.mode,
         ghostBrand: cls.ghostBrand,
@@ -375,16 +390,15 @@ registerAgent({
     }
 
     const emailCount = candidates.filter((c) => c.channel === "email").length;
-    const manualCount = candidates.filter((c) => c.channel === "manual").length;
     await ctx.log(
-      `Filtered: ${candidates.length} actionable (${emailCount} email, ${manualCount} manual-contact) · dropped ${droppedNoContact} (no contact channel), ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${droppedPausedOrg ? `, ${droppedPausedOrg} (org not active)` : ""}${heldForSpelling ? ` · held ${heldForSpelling} (pending spelling review)` : ""}${heldForMissingName ? ` · held ${heldForMissingName} (missing material name)` : ""}${heldPhasedCarry ? ` · skipped ${heldPhasedCarry} (held for follow-up)` : ""}`,
+      `Filtered: ${candidates.length} actionable (${emailCount} email) · filtered out ${filteredNoContact} (no contact recovered), left ${marketplacePricingLeft} marketplace for price-pull, ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${droppedPausedOrg ? `, ${droppedPausedOrg} (org not active)` : ""}${heldForSpelling ? ` · held ${heldForSpelling} (pending spelling review)` : ""}${heldForMissingName ? ` · held ${heldForMissingName} (missing material name)` : ""}${heldPhasedCarry ? ` · skipped ${heldPhasedCarry} (held for follow-up)` : ""}`,
       { step: "filter" }
     );
 
     if (candidates.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary(`No actionable leads after filters (no_contact=${droppedNoContact}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${droppedPausedOrg ? `, paused_org=${droppedPausedOrg}` : ""}${heldForSpelling ? `, held_spelling=${heldForSpelling}` : ""}${heldForMissingName ? `, held_missing_name=${heldForMissingName}` : ""}).`);
+      ctx.setSummary(`No actionable leads after filters (no_contact=${filteredNoContact}, marketplace_pricing=${marketplacePricingLeft}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${droppedPausedOrg ? `, paused_org=${droppedPausedOrg}` : ""}${heldForSpelling ? `, held_spelling=${heldForSpelling}` : ""}${heldForMissingName ? `, held_missing_name=${heldForMissingName}` : ""}).`);
       return;
     }
 
@@ -513,96 +527,13 @@ registerAgent({
     //       sourcing from that supplier, so a supplier never gets a separate
     //       mail per material.
     let staged = 0; // first-contact email drafts staged (one per supplier)
-    let manualCased = 0;
     let missiveErrors = 0;
     let promoted = 0; // leads promoted to ready_for_outreach (the first pool)
-    let dedupSkipped = 0;
     let heldSuppliers = 0; // suppliers held because a sibling material is blocked
     let heldCompiling = 0; // suppliers held: full material list not yet enriched
     let phasedHeld = 0; // materials held for a follow-up (not in the first pool)
 
     const emailCandidates = candidatesNoPrior.filter((c) => c.channel === "email");
-    const manualCandidates = candidatesNoPrior.filter((c) => c.channel === "manual");
-
-    // Email drafts are the primary outreach; manual-contact cases (no-email
-    // suppliers → web-form todo) are a fallback. Reserve the per-run cap for
-    // emails FIRST so a batch dominated by no-email suppliers can't starve real
-    // email outreach (previously the manual loop ran first and ate the whole cap,
-    // e.g. California drafted 0 emails while creating manual cases every run).
-    const emailSupplierCount = new Set(
-      emailCandidates.map((c) => (c.lead.supplier_id ? `s:${c.lead.supplier_id}` : `e:${(c.email ?? "").toLowerCase()}`))
-    ).size;
-    const manualBudget = Math.max(0, maxDrafts - Math.min(emailSupplierCount, maxDrafts));
-
-    // ---- Manual-contact cases (per material) --------------------------------
-    for (const c of manualCandidates) {
-      if (manualCased >= manualBudget) break;
-      const { data: existing } = await admin
-        .from("cases")
-        .select("id")
-        .eq("org_id", c.lead.org_id)
-        .eq("supplier_id", c.lead.supplier_id)
-        .eq("material_id", c.lead.material_id)
-        .eq("type", "manual_outreach")
-        .eq("status", "open")
-        .maybeSingle();
-      if (existing) {
-        dedupSkipped++;
-        continue;
-      }
-
-      const p = (c.lead.payload ?? {}) as any;
-      const aggregatorEmail = p.enrichment?.aggregator_contact_email ?? null;
-      const manualMatName = c.lead.material_name?.trim() || "the material";
-      const manualGrade = c.lead.material_id ? matGradesById.get(c.lead.material_id) ?? null : null;
-      const draft = await composeOutreachDraft({
-        mode: c.mode,
-        ghostBrand: c.ghostBrand,
-        clientOrgName: c.clientOrgName,
-        supplierContactName: c.contactName,
-        supplierCompanyName: c.lead.supplier_name,
-        materialName: manualMatName,
-        inciName: p.inci ?? p.inci_name ?? null,
-        materials: [{ name: manualMatName, inciName: p.inci ?? p.inci_name ?? null, grade: manualGrade }],
-        signal: p.signal ?? null,
-        isMarketplace: (c.lead as any).market_kind === "marketplace" || p.site_type === "M" || p.site_type === "MS",
-      });
-      const { error: caseErr } = await admin.from("cases").insert({
-        org_id: c.lead.org_id,
-        type: "manual_outreach",
-        status: "open",
-        supplier_id: c.lead.supplier_id,
-        material_id: c.lead.material_id,
-        recommended_action:
-          `No direct supplier email for ${c.lead.supplier_name ?? "this supplier"}. Send the RFQ for ${c.lead.material_name?.trim() || "the material"} via their contact form / marketplace inquiry: ${c.channelUrl ?? "(see supplier site)"}` +
-          (aggregatorEmail ? ` · marketplace listing shows ${aggregatorEmail} — do not cold-email the marketplace` : ""),
-        assigned_operator: c.assignedOperator,
-        metadata: {
-          source_agent: "agent-04-outreach",
-          source_run_id: ctx.runId,
-          lead_id: c.lead.id,
-          supplier_name: c.lead.supplier_name,
-          material_name: c.lead.material_name,
-          contact_url: c.channelUrl,
-          aggregator_contact_email: aggregatorEmail,
-          outreach_mode: c.mode,
-          ghost_brand: c.ghostBrand ?? null,
-          rfq_subject: draft.subject,
-          rfq_body: draft.body,
-        },
-      });
-      if (caseErr) {
-        missiveErrors++;
-        await ctx.log(`Manual-outreach case insert failed for ${c.lead.supplier_name}: ${caseErr.message}`, { level: "error", step: "manual_contact" });
-        continue;
-      }
-      manualCased++;
-      // Drop the lead so it isn't reprocessed (mirrors Agent 07's case handoff).
-      await admin
-        .from("leads_in_flight")
-        .update({ status: "dropped", drop_reason: "manual_outreach_case", payload: { ...p, drop_reason: "manual_outreach_case" } })
-        .eq("id", c.lead.id);
-    }
 
     // ---- First-contact email drafts (per supplier, small pool) --------------
     // Phased outreach: group each supplier's actionable materials, then send ONE
@@ -646,7 +577,7 @@ registerAgent({
     };
 
     for (const [key, group] of emailBySupplier) {
-      if (staged + manualCased >= maxDrafts) break;
+      if (staged >= maxDrafts) break;
       const primary = group[0];
       const supplierId = primary.lead.supplier_id;
 
@@ -755,18 +686,18 @@ registerAgent({
     }
 
     await recordOrgRuns(admin, "agent-04-outreach", [...dueOrgIds04]);
-    ctx.setItemsProcessed(staged + manualCased);
-    ctx.setStatus(missiveErrors > 0 && staged + manualCased === 0 ? "failure" : missiveErrors > 0 ? "partial" : "success");
+    ctx.setItemsProcessed(staged);
+    ctx.setStatus(missiveErrors > 0 && staged === 0 ? "failure" : missiveErrors > 0 ? "partial" : "success");
     ctx.setSummary(
-      `Staged ${staged} first-contact email${staged === 1 ? "" : "s"} · ${manualCased} manual-contact case${manualCased === 1 ? "" : "s"} · promoted ${promoted} to ready_for_outreach${phasedHeld ? ` · ${phasedHeld} material${phasedHeld === 1 ? "" : "s"} held for follow-up` : ""}` +
+      `Staged ${staged} first-contact email${staged === 1 ? "" : "s"} · promoted ${promoted} to ready_for_outreach${phasedHeld ? ` · ${phasedHeld} material${phasedHeld === 1 ? "" : "s"} held for follow-up` : ""}` +
         (heldSuppliers ? ` · held ${heldSuppliers} supplier${heldSuppliers === 1 ? "" : "s"} (blocked material)` : "") +
         (heldCompiling ? ` · held ${heldCompiling} supplier${heldCompiling === 1 ? "" : "s"} (compiling full list)` : "") +
         (missiveErrors ? ` · ${missiveErrors} errors` : "") +
         (priorRelSkipped ? ` · skipped ${priorRelSkipped} existing-relationship` : "") +
         (equipmentSkipped ? ` · skipped ${equipmentSkipped} equipment-supplier` : "") +
-        (dedupSkipped ? ` · skipped ${dedupSkipped} already-staged/cased` : "") +
-        (droppedNoContact || droppedNoOrg || droppedSkipClient
-          ? ` · dropped ${droppedNoContact + droppedNoOrg + droppedSkipClient} pre-filter`
+        (marketplacePricingLeft ? ` · left ${marketplacePricingLeft} marketplace for price-pull` : "") +
+        (filteredNoContact || droppedNoOrg || droppedSkipClient
+          ? ` · filtered ${filteredNoContact + droppedNoOrg + droppedSkipClient} pre-outreach`
           : "")
     );
   },

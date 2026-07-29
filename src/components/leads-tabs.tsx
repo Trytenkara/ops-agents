@@ -178,7 +178,7 @@ export function LeadsTabs({
         {tabBtn("all", "All leads", visibleRows.length)}
         {tabBtn("marketplace", "Marketplace pricing", marketCount)}
         {tabBtn("outreach", "Outreach", trackerCount)}
-        {tabBtn("removed", "Removed / filtered out", removedRows.length)}
+        {tabBtn("removed", "Filtered out", removedRows.length)}
       </div>
 
       {tab === "all" && (

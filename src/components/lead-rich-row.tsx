@@ -79,7 +79,8 @@ const REMOVAL_REASON_LABEL: Record<string, string> = {
   duplicate: "Duplicate lead",
   duplicate_open_case: "Duplicate of an open case",
   escalated_to_case: "Escalated to a case",
-  manual_outreach_case: "Manual outreach case",
+  manual_outreach_case: "No contact recovered",
+  no_contact_recovered: "No contact recovered",
   not_a_supplier: "Not actually a supplier",
   wrong_material: "Wrong material",
   already_relationship: "Already a supplier relationship",
@@ -428,8 +429,8 @@ export function LeadRichRow({
             const removal = leadRemoval(r);
             if (!removal) return null;
             return (
-              <Badge variant="danger" title={removal.suppressed ? "Suppressed before outreach" : "Removed from the pipeline"}>
-                {removal.suppressed ? "Suppressed" : "Removed"}: {removal.label}
+              <Badge variant="danger" title={removal.suppressed ? "Suppressed before outreach" : "Filtered out of the pipeline"}>
+                {removal.suppressed ? "Suppressed" : "Filtered out"}: {removal.label}
               </Badge>
             );
           })()}
