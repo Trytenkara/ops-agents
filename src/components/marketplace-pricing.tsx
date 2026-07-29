@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { useListFilter, byString } from "@/components/use-list-filter";
 import { leadMarketKind } from "@/components/lead-rich-row";
 import { saveLeadPriceTiers } from "@/app/actions/leads";
-import type { PriceTier } from "@/lib/price-tiers";
+import { type PriceTier, tierBreakdown, composePackSize } from "@/lib/price-tiers";
 import { fmtCaseDims, resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
 
 // Marketplace-only view: suppliers whose pricing is published directly on their
@@ -74,7 +74,8 @@ export function MarketplacePricing({ rows, canAct, slug, dimsByPack = {} }: { ro
       </div>
       <p className="text-xs text-muted-foreground">
         {filtered.length} marketplace supplier{filtered.length === 1 ? "" : "s"} with direct website pricing. Structure
-        each published price ladder into tiers — pack size, total price, and the derived $/unit.
+        each published price ladder into tiers — size, unit, and case type (drum, bag…), total price, and the
+        derived $/unit. The split columns export straight into the platform's quote fields.
       </p>
       <div className="space-y-3">
         {filtered.map((r) => (
@@ -87,7 +88,14 @@ export function MarketplacePricing({ rows, canAct, slug, dimsByPack = {} }: { ro
 }
 
 function emptyTier(): PriceTier {
-  return { pack_size: "", price: null, unit_price: null };
+  return {
+    pack_size: "",
+    price: null,
+    unit_price: null,
+    case_size: null,
+    unit_of_measurement: null,
+    case_type: null,
+  };
 }
 
 function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: boolean; dimsByPack: Record<string, CaseDims> }) {
@@ -96,11 +104,20 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   const initial: PriceTier[] = Array.isArray(row.payload?.price_tiers) && row.payload.price_tiers.length
-    ? row.payload.price_tiers.map((t: any) => ({
-        pack_size: t.pack_size ?? "",
-        price: t.price ?? null,
-        unit_price: t.unit_price ?? null,
-      }))
+    ? row.payload.price_tiers.map((t: any) => {
+        const tier: PriceTier = {
+          pack_size: t.pack_size ?? "",
+          price: t.price ?? null,
+          unit_price: t.unit_price ?? null,
+          case_size: t.case_size ?? null,
+          unit_of_measurement: t.unit_of_measurement ?? null,
+          case_type: t.case_type ?? null,
+        };
+        // Prefill the split cells by parsing pack_size when the agent only wrote
+        // the free-text (operator edits then persist explicit values).
+        const b = tierBreakdown(tier);
+        return { ...tier, ...b };
+      })
     : [emptyTier()];
   const [tiers, setTiers] = useState<PriceTier[]>(initial);
 
@@ -129,21 +146,33 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
   }
   function save() {
     setMsg(null);
+    // Keep the free-text pack_size in sync with the split cells so downstream
+    // readers (display, $/unit math, older views) stay populated.
+    const toSave: PriceTier[] = tiers.map((t) => ({
+      ...t,
+      pack_size:
+        composePackSize({
+          case_size: t.case_size,
+          unit_of_measurement: t.unit_of_measurement,
+          case_type: t.case_type,
+        }) ?? t.pack_size,
+    }));
     start(async () => {
-      const r = await saveLeadPriceTiers(row.id, tiers);
+      const r = await saveLeadPriceTiers(row.id, toSave);
       if (r.ok) setMsg({ kind: "ok", text: "Saved" });
       else setMsg({ kind: "err", text: r.error ?? "failed" });
       router.refresh();
     });
   }
 
-  const num = (v: number | null) => (v == null ? "" : String(v));
+  const num = (v: number | null | undefined) => (v == null ? "" : String(v));
   const toNum = (s: string): number | null => {
     const t = s.trim();
     if (t === "") return null;
     const n = Number(t.replace(/[^0-9.]/g, ""));
     return Number.isFinite(n) ? n : null;
   };
+  const toText = (s: string): string | null => s.trim() || null;
 
   return (
     <div className="rounded-xl border border-border bg-card p-4 space-y-3">
@@ -194,11 +223,13 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="w-[30%]">Pack size</TableHead>
-            <TableHead className="w-[22%]">Case dims (est.)</TableHead>
-            <TableHead className="w-[20%]">Price (total)</TableHead>
-            <TableHead className="w-[18%]">$ / unit</TableHead>
-            <TableHead className="w-[10%] text-right">{canAct ? "" : ""}</TableHead>
+            <TableHead className="w-[10%]" title="Units per case (case_size)">Size</TableHead>
+            <TableHead className="w-[10%]" title="Unit of measurement (kg, lb, g, L…)">Unit</TableHead>
+            <TableHead className="w-[14%]" title="Container / packaging (case_type): drum, pail, bag…">Case type</TableHead>
+            <TableHead className="w-[20%]">Case dims (est.)</TableHead>
+            <TableHead className="w-[18%]">Price (total)</TableHead>
+            <TableHead className="w-[16%]">$ / unit</TableHead>
+            <TableHead className="w-[12%] text-right">{canAct ? "" : ""}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -206,10 +237,27 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
             <TableRow key={i}>
               <TableCell>
                 <Input
-                  value={t.pack_size ?? ""}
+                  inputMode="decimal"
+                  value={num(t.case_size)}
                   disabled={!canAct || pending}
-                  placeholder="e.g. 25 kg drum"
-                  onChange={(e) => setTier(i, { pack_size: e.target.value })}
+                  placeholder="25"
+                  onChange={(e) => setTier(i, { case_size: toNum(e.target.value) })}
+                />
+              </TableCell>
+              <TableCell>
+                <Input
+                  value={t.unit_of_measurement ?? ""}
+                  disabled={!canAct || pending}
+                  placeholder="kg"
+                  onChange={(e) => setTier(i, { unit_of_measurement: toText(e.target.value) })}
+                />
+              </TableCell>
+              <TableCell>
+                <Input
+                  value={t.case_type ?? ""}
+                  disabled={!canAct || pending}
+                  placeholder="drum"
+                  onChange={(e) => setTier(i, { case_type: toText(e.target.value) })}
                 />
               </TableCell>
               <TableCell className="text-xs">

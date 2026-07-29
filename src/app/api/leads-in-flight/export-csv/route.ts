@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getAssignedOrgIds } from "@/lib/org-access";
 import { toCsv, type CsvCell } from "@/lib/csv";
 import { correctMaterialSpelling } from "@/lib/material-spelling";
+import { leadPackBreakdown } from "@/lib/price-tiers";
 
 // GET /api/leads-in-flight/export-csv?stage=raw&material=SCI&source=ai_discovery&drift=1
 // RLS-scoped to caller's assigned orgs. Mirrors the filters available on
@@ -121,6 +122,9 @@ export async function GET(request: NextRequest) {
     "country",
     "listing_url",
     "pack_sizes_pricing",
+    "case_size",
+    "unit_of_measurement",
+    "case_type",
     "sales_email",
     "sales_phone",
     "hq_address",
@@ -149,6 +153,7 @@ export async function GET(request: NextRequest) {
     (rows ?? []).map((r: any) => {
       const p = r.payload ?? {};
       const citations: string[] = Array.isArray(p.source_citations) ? p.source_citations : [];
+      const pack = leadPackBreakdown(p);
       return [
         r.id,
         r.orgs?.slug ?? null,
@@ -162,6 +167,9 @@ export async function GET(request: NextRequest) {
         p.supplier_country ?? null,
         p.supplier_website ?? p.source_url ?? null,
         p.pack_sizes_pricing ?? null,
+        pack.case_size,
+        pack.unit_of_measurement,
+        pack.case_type,
         p.supplier_contact_email ?? null,
         p.supplier_phone ?? null,
         p.hq_address ?? null,

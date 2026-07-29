@@ -5,6 +5,7 @@ import { getAssignedOrgIds } from "@/lib/org-access";
 import { toCsv, type CsvCell } from "@/lib/csv";
 import { correctMaterialSpelling } from "@/lib/material-spelling";
 import { loadMarketplaceCaseDims, resolveCaseDims } from "@/lib/marketplace-case-dims";
+import { tierBreakdown } from "@/lib/price-tiers";
 
 // GET /api/leads-in-flight/marketplace-pricing-csv?org=<slug>
 // Exports marketplace-tab leads (site_type M/MS) as one row per price tier.
@@ -76,8 +77,10 @@ export async function GET(request: NextRequest) {
     "site_type",
     "pull_status",
     "pull_reason",
-    "pack_size",
+    "case_size",
+    "unit_of_measurement",
     "case_type",
+    "pack_size",
     "case_width_in",
     "case_height_in",
     "case_length_in",
@@ -107,11 +110,29 @@ export async function GET(request: NextRequest) {
     const updatedAt: string | null = p.price_tiers_updated_at ?? null;
     const materialName = correctMaterialSpelling(r.material_name);
 
-    const tiers: { pack_size?: string; price?: number | null; unit_price?: number | null }[] =
-      Array.isArray(p.price_tiers) && p.price_tiers.length > 0 ? p.price_tiers : [{}];
+    const tiers: {
+      pack_size?: string | null;
+      price?: number | null;
+      unit_price?: number | null;
+      case_size?: number | null;
+      unit_of_measurement?: string | null;
+      case_type?: string | null;
+    }[] = Array.isArray(p.price_tiers) && p.price_tiers.length > 0 ? p.price_tiers : [{}];
 
     for (const t of tiers) {
       const dims = resolveCaseDims(dimsByPack, t.pack_size ?? null);
+      // Structured pack-size split (case_size / unit / case_type) so the export
+      // maps straight onto the Tenkara quote columns. Prefer operator-entered
+      // values; otherwise derive them from the free-text pack_size. case_type
+      // prefers the curated case-dimensions value, falling back to the parse.
+      const b = tierBreakdown({
+        pack_size: t.pack_size ?? null,
+        price: t.price ?? null,
+        unit_price: t.unit_price ?? null,
+        case_size: t.case_size ?? null,
+        unit_of_measurement: t.unit_of_measurement ?? null,
+        case_type: t.case_type ?? null,
+      });
       csvRows.push([
         r.supplier_name ?? null,
         materialName,
@@ -119,8 +140,10 @@ export async function GET(request: NextRequest) {
         siteType,
         pullStatus,
         pullReason,
+        b.case_size,
+        b.unit_of_measurement,
+        dims?.case_type ?? b.case_type,
         t.pack_size ?? null,
-        dims?.case_type ?? null,
         dims?.width ?? null,
         dims?.height ?? null,
         dims?.length ?? null,

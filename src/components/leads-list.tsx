@@ -10,6 +10,7 @@ import { BulkRemoveBar } from "@/components/bulk-remove-bar";
 import { removeLeads, importEmailsFromCsv, type EmailImportResult } from "@/app/actions/leads";
 import { Select } from "@/components/ui/select";
 import { filenameFor } from "@/lib/csv";
+import { leadPackBreakdown } from "@/lib/price-tiers";
 
 const TYPE_OPTIONS = [
   { value: "all", label: "All types" },
@@ -166,7 +167,7 @@ export function LeadsList({
   // complete — no separate server download needed.
   const csvHeaders = [
     "Material", "INCI name", "Trade name", "Supplier", "Role", "Type", "Country",
-    "Website", "Pack sizes / pricing", "Email", "Phone", "HQ address",
+    "Website", "Pack sizes / pricing", "Size", "Unit", "Case type", "Email", "Phone", "HQ address",
     "Supplier background", "Grades offered", "Certifications", "MOQ",
     "Returned price", "Operator", "Signal", "Source", "Match", "Stage", "Status",
     "Confidence", "Confidence reason", "Completeness", "Completeness reason",
@@ -175,6 +176,7 @@ export function LeadsList({
   const csvRows = filtered.map((r: any) => {
     const p = r.payload ?? {};
     const citations: string[] = Array.isArray(p.source_citations) ? p.source_citations : [];
+    const pack = leadPackBreakdown(p);
     return [
       r.material_name ?? "",
       p.inci_name ?? "",
@@ -185,6 +187,9 @@ export function LeadsList({
       countryOf(r),
       p.supplier_website ?? p.source_url ?? "",
       p.pack_sizes_pricing ?? "",
+      pack.case_size ?? "",
+      pack.unit_of_measurement ?? "",
+      pack.case_type ?? "",
       p.supplier_contact_email ?? "",
       p.supplier_phone ?? "",
       p.hq_address ?? "",
