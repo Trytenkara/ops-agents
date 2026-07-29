@@ -6,7 +6,10 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { ResetClientData } from "@/components/reset-client-data";
 import { orgDisplayName } from "@/lib/org-display";
 import { getApiUsage, type ProviderUsage } from "@/lib/api-usage";
-import { formatUsd } from "@/lib/api-cost-rates";
+import { formatUsd, UNMETERED_SERVICES } from "@/lib/api-cost-rates";
+
+const num = (n: number | null) => (n === null ? "—" : n.toLocaleString());
+const usd = (n: number | null) => (n === null ? "—" : formatUsd(n));
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +43,7 @@ export default async function SettingsPage() {
   if (isMonitor) {
     apiUsage = await getApiUsage(createAdminClient());
   }
-  const totalEstCost30d = apiUsage.reduce((sum, u) => sum + u.estCost30d, 0);
+  const totalEstCost30d = apiUsage.reduce((sum, u) => sum + (u.estCost30d ?? 0), 0);
   const totalEstCostAll = apiUsage.reduce((sum, u) => sum + u.estCostAll, 0);
 
   return (
@@ -99,11 +102,11 @@ export default async function SettingsPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Provider</TableHead>
-                  <TableHead className="text-right">Calls (30d)</TableHead>
-                  <TableHead className="text-right">Calls (all)</TableHead>
+                  <TableHead className="text-right">Units (30d)</TableHead>
+                  <TableHead className="text-right">Units (all)</TableHead>
                   <TableHead className="text-right">Failed</TableHead>
-                  <TableHead className="text-right">Leads landed</TableHead>
-                  <TableHead className="text-right">Est. rate/call</TableHead>
+                  <TableHead className="text-right">Leads</TableHead>
+                  <TableHead className="text-right">Est. rate/unit</TableHead>
                   <TableHead className="text-right">Est. cost (30d)</TableHead>
                   <TableHead className="text-right">Est. cost (all)</TableHead>
                 </TableRow>
@@ -113,15 +116,16 @@ export default async function SettingsPage() {
                   <TableRow key={u.rate.key}>
                     <TableCell className="font-medium">
                       {u.rate.label}
+                      <span className="ml-2 text-[11px] lowercase tracking-wide text-muted-foreground">/ {u.rate.unitLabel}</span>
                       <span className="ml-2 text-[11px] uppercase tracking-wide text-muted-foreground">{u.rate.confidence}</span>
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{u.firedOk30d.toLocaleString()}</TableCell>
-                    <TableCell className="text-right tabular-nums">{u.firedOkAll.toLocaleString()}</TableCell>
-                    <TableCell className="text-right tabular-nums text-muted-foreground">{u.firedFailedAll.toLocaleString()}</TableCell>
-                    <TableCell className="text-right tabular-nums">{u.leadsLanded.toLocaleString()}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatUsd(u.rate.usdPerCall)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatUsd(u.estCost30d)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatUsd(u.estCostAll)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{num(u.units30d)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{num(u.unitsAll)}</TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">{num(u.failedAll)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{num(u.leads)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatUsd(u.rate.usdPerUnit)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{usd(u.estCost30d)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{usd(u.estCostAll)}</TableCell>
                   </TableRow>
                 ))}
                 {apiUsage.length > 0 && (
@@ -140,15 +144,24 @@ export default async function SettingsPage() {
             </Table>
             <div className="space-y-1 text-xs text-muted-foreground">
               <p>
-                Estimates only. This app counts discovery calls fired by Agent 03 and leads that landed; true credit
-                consumption and billing live in the remote discovery agent and each provider account, not here. Rates are
-                editable in <code>lib/api-cost-rates.ts</code>.
+                Estimates only. This app counts activity it triggers (discovery calls fired by Agent 03, price-pull sessions
+                opened by Agent 05) and what landed; true credit and browser-hour consumption and billing live in the remote
+                agents and each provider account, not here. Rates are editable in <code>lib/api-cost-rates.ts</code>.
               </p>
               {apiUsage.map((u) => (
                 <p key={u.rate.key}>
                   <span className="font-medium text-foreground">{u.rate.label}:</span> {u.rate.assumption} (source: {u.rate.source})
                 </p>
               ))}
+              <p className="pt-1">
+                <span className="font-medium text-foreground">Also in use (not per-call metered here):</span>{" "}
+                {UNMETERED_SERVICES.map((s, i) => (
+                  <span key={s.label}>
+                    {i > 0 && "; "}
+                    {s.label} ({s.note})
+                  </span>
+                ))}
+              </p>
             </div>
           </CardContent>
         </Card>
