@@ -8,7 +8,7 @@ import { SupplierOperatorAssign } from "@/components/supplier-operator-assign";
 import { LeadOperatorAssign } from "@/components/lead-operator-assign";
 import { deriveMatchTier } from "@/lib/lead-match-tier";
 import { leadMarketKind, leadRichColSpan } from "@/lib/lead-market";
-import { updateLeadEmail } from "@/app/actions/leads";
+import { updateLeadEmail, updateLeadPhone } from "@/app/actions/leads";
 
 export { leadMarketKind, leadRichColSpan };
 
@@ -196,6 +196,58 @@ function EmailEditInline({ leadId, currentEmail }: { leadId: string; currentEmai
   );
 }
 
+// Inline phone editor — mirrors EmailEditInline. Free-form (no format check).
+function PhoneEditInline({ leadId, currentPhone }: { leadId: string; currentPhone: string | null }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(currentPhone ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+
+  if (!editing) {
+    return (
+      <span className="inline-flex items-center gap-1">
+        {currentPhone ?? <span className="text-muted-foreground italic">no phone</span>}
+        <button
+          onClick={() => { setValue(currentPhone ?? ""); setError(null); setEditing(true); }}
+          className="text-muted-foreground hover:text-foreground ml-1"
+          title="Edit phone"
+          type="button"
+        >✎</button>
+      </span>
+    );
+  }
+
+  const save = () => {
+    setError(null);
+    startTransition(async () => {
+      const result = await updateLeadPhone(leadId, value);
+      if (result.ok) { setEditing(false); }
+      else { setError(result.error ?? "failed"); }
+    });
+  };
+
+  return (
+    <span className="inline-flex flex-col gap-0.5">
+      <span className="inline-flex items-center gap-1">
+        <input
+          autoFocus
+          type="tel"
+          value={value}
+          onChange={(e: { target: { value: string } }) => setValue(e.target.value)}
+          onKeyDown={(e: { key: string }) => { if (e.key === "Enter") save(); if (e.key === "Escape") setEditing(false); }}
+          className="text-xs border border-border rounded px-1 py-0.5 bg-background min-w-[18ch]"
+          disabled={pending}
+        />
+        <button onClick={save} disabled={pending} className="text-xs text-emerald-700 dark:text-emerald-400 font-medium disabled:opacity-50" type="button">
+          {pending ? "…" : "Save"}
+        </button>
+        <button onClick={() => setEditing(false)} disabled={pending} className="text-xs text-muted-foreground" type="button">Cancel</button>
+      </span>
+      {error && <span className="text-xs text-red-500">{error}</span>}
+    </span>
+  );
+}
+
 // Per-lead enrichment breakdown: what the enrichment stage resolved, scored,
 // cleared, and why it was held — read entirely from the stored payload.enrichment
 // (works retroactively; no re-enrichment needed). Renders nothing until a lead
@@ -220,7 +272,7 @@ export function EnrichmentDetails({ r }: { r: any }) {
             <span className="text-emerald-700 dark:text-emerald-400 font-medium">Resolved</span>
             <ul className="ml-2 mt-0.5 space-y-0.5">
               {contact.email && <li>email: <EmailEditInline leadId={r.id} currentEmail={contact.email} />{srcLabel && <span className="text-muted-foreground"> ({srcLabel})</span>}</li>}
-              {contact.phone && <li>phone: {contact.phone}</li>}
+              <li>phone: <PhoneEditInline leadId={r.id} currentPhone={contact.phone ?? null} /></li>
               {contact.contact_url && <li>contact form{contact.pages_tried ? <span className="text-muted-foreground"> · {contact.pages_tried} pages checked</span> : null}</li>}
             </ul>
           </div>
