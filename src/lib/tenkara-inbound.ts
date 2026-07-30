@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { stageDraft } from "@/lib/draft-staging";
 import { composeReply } from "@/agents-runtime/agents/email-scanner/reply-drafter";
@@ -40,6 +41,8 @@ export interface InboundMessage {
   body_text?: string | null;
   body_html?: string | null;
   received_at?: string | null;
+  to_email?: string | null;
+  email_account_id?: string | null;
 }
 
 export interface InboundResult {
@@ -63,27 +66,66 @@ const GENERIC_EMAIL_DOMAINS = new Set([
   "protonmail.com", "proton.me", "qq.com", "163.com", "126.com", "sina.com",
 ]);
 
+async function resolveInboundOrg(admin: Admin, msg: InboundMessage): Promise<{ orgId: string; accountKey: string } | null> {
+  let accountId = msg.email_account_id?.trim() || null;
+  let toEmail = msg.to_email?.trim().toLowerCase() || null;
+
+  if (!accountId && !toEmail) {
+    const messages = await getTenkaraConversationMessages(msg.conversation_id);
+    const inboundRecipient = [...messages].reverse().find((m) => m.to)?.to ?? null;
+    toEmail = inboundRecipient?.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0]?.toLowerCase() ?? null;
+  }
+
+  let accountRows: any[] = [];
+  let addressRows: any[] = [];
+  if (accountId) {
+    const { data, error } = await admin.from("orgs").select("id").eq("tenkara_email_account_id", accountId).limit(2);
+    if (error) throw new Error(`org lookup by Tenkara account failed: ${error.message}`);
+    accountRows = data ?? [];
+  }
+  if (toEmail) {
+    const { data, error } = await admin.from("orgs").select("id").ilike("tenkara_email_address", toEmail).limit(2);
+    if (error) throw new Error(`org lookup by Tenkara address failed: ${error.message}`);
+    addressRows = data ?? [];
+  }
+
+  const accountOrg = accountRows.length === 1 ? accountRows[0].id : null;
+  const addressOrg = addressRows.length === 1 ? addressRows[0].id : null;
+  if (accountOrg && addressOrg && accountOrg !== addressOrg) throw new Error("Tenkara account and recipient resolve to different clients");
+  const orgId = accountOrg ?? addressOrg;
+  if (!orgId) return null;
+  return { orgId, accountKey: accountId ?? toEmail! };
+}
+
 export async function handleInboundReply(admin: Admin, msg: InboundMessage): Promise<InboundResult> {
+  let inboundOrg: { orgId: string; accountKey: string } | null = null;
+  try {
+    inboundOrg = await resolveInboundOrg(admin, msg);
+  } catch (error: any) {
+    return { status: 503, body: { error: "inbound_org_lookup_failed", detail: error?.message ?? String(error) } };
+  }
   // 1. Find the originating draft (the one our agent posted that this replies to).
   let ref: any = null;
   if (msg.in_reply_to_draft_id) {
-    const { data } = await admin
+    let lookup = admin
       .from("draft_references")
       .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata")
       .eq("draft_id", msg.in_reply_to_draft_id)
-      .eq("email_client", "rod_app")
-      .maybeSingle();
+      .eq("email_client", "rod_app");
+    if (inboundOrg) lookup = lookup.eq("org_id", inboundOrg.orgId);
+    const { data, error } = await lookup.maybeSingle();
+    if (error) return { status: 503, body: { error: "draft_match_failed", detail: error.message } };
     ref = data;
   }
   if (!ref) {
-    const { data } = await admin
+    let lookup = admin
       .from("draft_references")
       .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata")
       .eq("thread_id", msg.conversation_id)
-      .eq("email_client", "rod_app")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .eq("email_client", "rod_app");
+    if (inboundOrg) lookup = lookup.eq("org_id", inboundOrg.orgId);
+    const { data, error } = await lookup.order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (error) return { status: 503, body: { error: "thread_match_failed", detail: error.message } };
     ref = data;
   }
 
@@ -99,17 +141,18 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   // subsequent messages in this new thread WILL match by thread_id automatically —
   // this fix is self-propagating.
   let domainMatchFallback = false;
-  if (!ref) {
+  if (!ref && inboundOrg) {
     const fromAddr = parseFrom(msg.from).address.toLowerCase();
     const senderDomain = fromAddr.split("@")[1] ?? null;
     if (senderDomain && !GENERIC_EMAIL_DOMAINS.has(senderDomain)) {
-      const { data: domainRefs } = await admin
+      const { data: domainRefs, error } = await admin
         .from("draft_references")
         .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata")
         .eq("email_client", "rod_app")
+        .eq("org_id", inboundOrg.orgId)
         .filter("metadata->>supplier_contact_email", "ilike", `%@${senderDomain}`)
-        .order("created_at", { ascending: false })
-        .limit(5);
+        .order("created_at", { ascending: false });
+      if (error) return { status: 503, body: { error: "domain_match_failed", detail: error.message } };
       if (domainRefs && domainRefs.length > 0) {
         const uniqueSuppliers = new Set(domainRefs.map((r: any) => r.supplier_id).filter(Boolean));
         if (uniqueSuppliers.size === 1) {
@@ -128,17 +171,17 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   // broke). We apply it regardless of domain, but only accept a result that
   // resolves to exactly ONE supplier (unambiguous single-supplier match).
   let exactAddressMatch = false;
-  if (!ref) {
+  if (!ref && inboundOrg) {
     const fromAddr = parseFrom(msg.from).address;
     if (fromAddr) {
-      const { data: addrRefs } = await admin
+      const { data: addrRefs, error } = await admin
         .from("draft_references")
         .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata")
         .eq("email_client", "rod_app")
-        // ilike with no wildcards = a case-insensitive exact-address match.
+        .eq("org_id", inboundOrg.orgId)
         .filter("metadata->>supplier_contact_email", "ilike", fromAddr)
-        .order("created_at", { ascending: false })
-        .limit(5);
+        .order("created_at", { ascending: false });
+      if (error) return { status: 503, body: { error: "address_match_failed", detail: error.message } };
       if (addrRefs && addrRefs.length > 0) {
         const uniqueSuppliers = new Set(addrRefs.map((r: any) => r.supplier_id).filter(Boolean));
         if (uniqueSuppliers.size === 1) {
@@ -153,7 +196,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   // pre-filters to conversations our agents touched, so a true miss is rare, but
   // silently dropping it means an operator never sees a supplier (or client) who
   // replied out-of-thread. Record it instead of dropping (alert + triage case).
-  if (!ref) return await recordUnmatchedInbound(admin, msg);
+  if (!ref) return await recordUnmatchedInbound(admin, msg, inboundOrg);
 
   // 2. Idempotency: if we already drafted a reply for this inbound message, no-op.
   const { data: dupe } = await admin
@@ -590,110 +633,185 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   return { status: 200, body: { drafted: true, draft_ref_id: staged.draftRefId, draft_id: staged.draftId, quotes_staged: quotesStaged, introduced_materials: introducedMaterialIds.length, domain_match_fallback: domainMatchFallback || undefined, exact_address_match: exactAddressMatch || undefined } };
 }
 
-// (B) RECORD-not-DROP for a truly unmatched inbound. Makes an out-of-thread reply
-// visible to operators instead of silently 200-dropping it. Non-goals (deliberate):
-// no auto-draft (we have no reliable supplier/material context) and no auto-create
-// of supplier/material rows (that stays the operator's decision). Idempotent so
-// Rod's webhook retries / repeat sends never re-alert on the same message_id.
-async function recordUnmatchedInbound(admin: Admin, msg: InboundMessage): Promise<InboundResult> {
+async function recordUnmatchedInbound(
+  admin: Admin,
+  msg: InboundMessage,
+  inboundOrg: { orgId: string; accountKey: string } | null
+): Promise<InboundResult> {
   const from = parseFrom(msg.from);
-
-  // A mailer-daemon with no matched draft is a delivery failure we can't tie back
-  // to an outreach. It is NOT a supplier reply, so never alert on it as one.
   if (isBounce(from.address, msg.subject ?? null)) {
     return { status: 200, body: { ignored: true, reason: "unmatched_bounce" } };
   }
-
-  // Idempotency guard. Key the message_id in agent_state under Agent 08 (the reply
-  // handler). Mirrors the draft dedupe on in_reply_to_message_id, but here there is
-  // no draft to key off, so we use agent_state (works whether or not an org resolves).
-  const { data: agent08 } = await admin
-    .from("agents")
-    .select("id")
-    .eq("slug", "agent-08-email-scanner")
+  const processingToken = randomUUID();
+  const eventKey = `${msg.conversation_id}:${msg.message_id}`;
+  const { data: insertedEvent, error: insertEventError } = await admin
+    .from("unmatched_inbound_events")
+    .insert({
+      message_id: msg.message_id,
+      conversation_id: msg.conversation_id,
+      org_id: inboundOrg?.orgId ?? null,
+      account_id: msg.email_account_id ?? null,
+      recipient_email: msg.to_email ?? null,
+      sender_email: from.address.toLowerCase(),
+      processing_token: inboundOrg ? processingToken : null,
+      claimed_at: inboundOrg ? new Date().toISOString() : null,
+    })
+    .select("id, case_id, draft_reference_id")
     .maybeSingle();
-  const agentId: string | null = agent08?.id ?? null;
-  const stateKey = `unmatched_inbound:${msg.message_id}`;
-  if (agentId) {
-    const { data: seen } = await admin
-      .from("agent_state")
-      .select("key")
-      .eq("agent_id", agentId)
-      .eq("key", stateKey)
-      .maybeSingle();
-    if (seen) return { status: 200, body: { deduped: true, reason: "recorded_unmatched" } };
+
+  if (!inboundOrg) {
+    if (insertEventError && insertEventError.code !== "23505") {
+      return { status: 503, body: { error: "unmatched_dead_letter_failed", detail: insertEventError.message } };
+    }
+    const slackSafe = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/@/g, "＠");
+    await postAgentAlert([
+      ":warning: *Unmatched inbound needs client assignment*",
+      `from: ${slackSafe(from.address)}`,
+      `subject: ${slackSafe(msg.subject ?? "(none)")}`,
+      `conversation: ${slackSafe(msg.conversation_id)}`,
+      "The event was recorded, but its receiving inbox is not mapped to a Control Room client.",
+    ].join("\n"));
+    return { status: 200, body: { recorded_unmatched: true, needs_org_assignment: true } };
   }
 
-  // Best-effort org resolution. The primary thread_id lookup was scoped to
-  // email_client='rod_app'; a draft under a different client may still carry this
-  // thread and tell us the client. Only used to attach a triage case; if it stays
-  // null we alert-only (cases.org_id is NOT NULL, so no case without an org).
-  const { data: anyRef } = await admin
-    .from("draft_references")
-    .select("org_id")
-    .eq("thread_id", msg.conversation_id)
-    .not("org_id", "is", null)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const orgId: string | null = anyRef?.org_id ?? null;
+  let event = insertedEvent;
+  if (insertEventError) {
+    if (insertEventError.code !== "23505") {
+      return { status: 503, body: { error: "unmatched_event_claim_failed", detail: insertEventError.message } };
+    }
+    const { data: existing, error: readError } = await admin
+      .from("unmatched_inbound_events")
+      .select("id, case_id, draft_reference_id, claimed_at")
+      .eq("conversation_id", msg.conversation_id)
+      .eq("message_id", msg.message_id)
+      .maybeSingle();
+    if (readError || !existing) {
+      return { status: 503, body: { error: "unmatched_event_read_failed", detail: readError?.message } };
+    }
+    if (existing.case_id && existing.draft_reference_id) {
+      return { status: 200, body: { deduped: true, reason: "recorded_unmatched", case_id: existing.case_id, draft_ref_id: existing.draft_reference_id } };
+    }
+    const staleBefore = new Date(Date.now() - 60_000).toISOString();
+    const { data: claimed, error: leaseError } = await admin
+      .from("unmatched_inbound_events")
+      .update({ processing_token: processingToken, claimed_at: new Date().toISOString(), org_id: inboundOrg.orgId })
+      .eq("id", existing.id)
+      .or(`claimed_at.is.null,claimed_at.lt.${staleBefore}`)
+      .select("id, case_id, draft_reference_id")
+      .maybeSingle();
+    if (leaseError) return { status: 503, body: { error: "unmatched_event_lease_failed", detail: leaseError.message } };
+    if (!claimed) return { status: 503, body: { error: "unmatched_event_processing" } };
+    event = claimed;
+  }
+  if (!event) return { status: 503, body: { error: "unmatched_event_missing" } };
 
-  const preview = (msg.body_text ?? "").replace(/\s+/g, " ").trim().slice(0, 300);
   const senderLabel = from.name ? `${from.name} <${from.address}>` : from.address;
-
-  await postAgentAlert(
-    [
-      ":envelope_with_arrow: *Unmatched inbound* (a reply we can't tie to an outreach thread).",
-      `from: ${senderLabel}`,
-      `subject: ${msg.subject ?? "(none)"}`,
-      preview ? `> ${preview}` : "(no body)",
-      `conversation: ${msg.conversation_id}`,
-      orgId ? "An `unmatched_inbound` case was opened for triage." : "No client could be resolved, triage manually.",
-    ].join("\n")
-  );
-
-  // Open a triage case only when we know the client. Extra existence check on
-  // message_id keeps the case idempotent even if agentId (the agent_state key)
-  // couldn't be resolved.
-  let caseOpened = false;
-  if (orgId) {
-    const { data: existingCase } = await admin
+  let caseId: string | null = event.case_id ?? null;
+  if (!caseId) {
+    const { data: existingCase, error: existingError } = await admin
       .from("cases")
       .select("id")
+      .eq("org_id", inboundOrg.orgId)
       .eq("type", "unmatched_inbound")
       .eq("metadata->>message_id", msg.message_id)
       .maybeSingle();
-    if (!existingCase) {
-      await admin.from("cases").insert({
-        org_id: orgId,
-        type: "unmatched_inbound",
-        status: "open",
-        originating_thread_id: msg.conversation_id,
-        recommended_action: `Inbound from ${senderLabel} ("${msg.subject ?? "no subject"}") did not match any outreach. Link it to a supplier/lead or dismiss.`,
+    if (existingError) return { status: 503, body: { error: "unmatched_case_read_failed", detail: existingError.message } };
+    caseId = existingCase?.id ?? null;
+    if (!caseId) {
+      const { data: insertedCase, error: insertError } = await admin
+        .from("cases")
+        .insert({
+          org_id: inboundOrg.orgId,
+          type: "unmatched_inbound",
+          status: "open",
+          originating_thread_id: msg.conversation_id,
+          recommended_action: `Review the clarification draft for inbound from ${senderLabel}, then link the conversation to the correct supplier and material.`,
+          metadata: {
+            source: "tenkara-inbound-unmatched",
+            message_id: msg.message_id,
+            conversation_id: msg.conversation_id,
+            sender_name: from.name,
+            sender_email: from.address,
+            subject: msg.subject ?? null,
+          },
+        })
+        .select("id")
+        .maybeSingle();
+      if (insertError || !insertedCase?.id) {
+        return { status: 503, body: { error: "unmatched_case_create_failed", detail: insertError?.message } };
+      }
+      caseId = insertedCase.id;
+    }
+    const { error: eventCaseError } = await admin
+      .from("unmatched_inbound_events")
+      .update({ case_id: caseId })
+      .eq("id", event.id);
+    if (eventCaseError) return { status: 503, body: { error: "unmatched_event_case_update_failed", detail: eventCaseError.message } };
+  }
+
+  let draftRefId: string | null = event.draft_reference_id ?? null;
+  if (!draftRefId) {
+    const { data: existingDraft, error: draftReadError } = await admin
+      .from("draft_references")
+      .select("id")
+      .eq("email_client", "rod_app")
+      .eq("metadata->>unmatched_event_key", eventKey)
+      .maybeSingle();
+    if (draftReadError) return { status: 503, body: { error: "unmatched_draft_read_failed", detail: draftReadError.message } };
+    draftRefId = existingDraft?.id ?? null;
+    if (!draftRefId) {
+      const { data: agent08, error: agentError } = await admin
+        .from("agents")
+        .select("id")
+        .eq("slug", "agent-08-email-scanner")
+        .maybeSingle();
+      if (agentError) return { status: 503, body: { error: "unmatched_agent_read_failed", detail: agentError.message } };
+
+      const subject = msg.subject?.trim() ? `Re: ${msg.subject.replace(/^re:\s*/i, "")}` : "Re: Your message";
+      const body = [
+        "Thanks for reaching out.",
+        "",
+        "We could not confidently match this message to an active sourcing inquiry. Could you confirm the company you represent and the material or product this message concerns?",
+        "",
+        "Once confirmed, our sourcing team will connect your response to the correct request.",
+      ].join("\n");
+      const staged = await stageDraft({
+        admin,
+        agentId: agent08?.id ?? null,
+        runId: null,
+        orgId: inboundOrg.orgId,
+        to: { name: from.name, address: from.address },
+        subject,
+        body,
+        emailClient: "rod_app",
+        conversationId: msg.conversation_id,
         metadata: {
-          source: "tenkara-inbound-unmatched",
-          message_id: msg.message_id,
-          conversation_id: msg.conversation_id,
-          sender_name: from.name,
-          sender_email: from.address,
-          subject: msg.subject ?? null,
-          body_preview: preview,
+          draft_kind: "unmatched_inbound_clarification",
+          unmatched_event_key: eventKey,
+          in_reply_to_message_id: msg.message_id,
+          triage_case_id: caseId,
         },
       });
+      if (!staged.ok || !staged.draftRefId) {
+        return { status: 503, body: { error: "unmatched_draft_create_failed", detail: staged.error } };
+      }
+      draftRefId = staged.draftRefId;
     }
-    caseOpened = true;
+    const { error: eventDraftError } = await admin
+      .from("unmatched_inbound_events")
+      .update({ draft_reference_id: draftRefId })
+      .eq("id", event.id);
+    if (eventDraftError) return { status: 503, body: { error: "unmatched_event_draft_update_failed", detail: eventDraftError.message } };
   }
 
-  // Mark the message_id AFTER acting, so a crash mid-way lets a retry re-record.
-  if (agentId) {
-    await admin
-      .from("agent_state")
-      .upsert(
-        { agent_id: agentId, key: stateKey, value: { recorded_at: new Date().toISOString(), org_id: orgId } },
-        { onConflict: "agent_id,key" }
-      );
-  }
+  const slackSafe = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/@/g, "＠");
+  await postAgentAlert([
+    ":envelope_with_arrow: *Unmatched inbound recorded for triage*",
+    `from: ${slackSafe(senderLabel)}`,
+    `subject: ${slackSafe(msg.subject ?? "(none)")}`,
+    `conversation: ${slackSafe(msg.conversation_id)}`,
+    "A triage case and review-only clarification draft were created.",
+  ].join("\n"));
 
-  // Return 200 (Rod shouldn't retry) but flag that we recorded it, not dropped it.
-  return { status: 200, body: { recorded_unmatched: true, org_id: orgId, case_opened: caseOpened } };
+  return { status: 200, body: { recorded_unmatched: true, org_id: inboundOrg.orgId, case_id: caseId, draft_ref_id: draftRefId } };
 }

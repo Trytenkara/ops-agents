@@ -41,6 +41,8 @@ const inboundSchema = z
     body_html: z.string().nullish(),
     received_at: z.string().nullish(),
     timestamp: z.string().nullish(),
+    to_email: z.string().nullish(),
+    email_account_id: z.string().nullish(),
   })
   .transform((v) => {
     const from =
