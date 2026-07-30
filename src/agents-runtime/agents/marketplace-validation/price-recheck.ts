@@ -7,8 +7,10 @@ import Anthropic from "@anthropic-ai/sdk";
 // search and we parse its JSON response.
 
 const MODEL = "claude-sonnet-5";
-const MAX_WEB_USES = 6;
-const MAX_OUTPUT_TOKENS = 1024;
+const MAX_WEB_USES = 6;   // web_search calls (link repair)
+const MAX_FETCH_USES = 5; // web_fetch calls (read the actual product page)
+const MAX_OUTPUT_TOKENS = 2048; // room for a full multi-tier ladder + JSON
+const WEB_FETCH_BETA = "web-fetch-2025-09-10";
 
 export interface RecheckInput {
   supplier_name: string;
@@ -45,10 +47,10 @@ const SYSTEM_PROMPT = `You are a B2B sourcing analyst checking whether a marketp
 
 You will be given: the supplier name, material name, our baseline price/case_size/unit, and the product_url we have stored.
 
-Use the web_search tool to:
-1. Visit the product_url (and follow obvious redirects).
-2. If that fails, try one query like "<supplier_name> <material_name> price" to find the current product page.
-3. Read the current listed price for the closest matching pack size (the one most similar to our baseline case_size + unit).
+Use the web_fetch and web_search tools:
+1. web_fetch the product_url and READ the page itself — the current listed price and EVERY visible pack-size / volume-break tier, stock status, and whether pricing is public or gated. (web_fetch reads the real page; do not rely on search snippets when you can fetch.)
+2. If the fetched page does NOT show a public numeric price for THIS material — i.e. it is a dead link, a PDF/datasheet, a contact / RFQ / "request a quote" page, a homepage, a showroom, a category / search-results listing, or the WRONG product — you MUST use web_search to locate the correct DIRECT product page for this supplier + material (queries like "<supplier_name> <material_name> price" and "<material_name> buy <supplier_name>"), then web_fetch that page and read it. Prefer the supplier's own product page over a directory. Do NOT return link_broken or needs_review for a bad on-file URL until you have tried at least one web_search followed by a web_fetch of a better page. Only classify login_required (behind a login / "request price") or needs_review AFTER a genuine product page still yields no public price.
+3. Report the current listed price for the closest matching pack size (the one most similar to our baseline case_size + unit), plus every visible tier.
 
 Return ONLY a JSON object (no prose) like:
 
@@ -115,15 +117,17 @@ function buildUserMessage(input: RecheckInput): string {
 }
 
 export async function recheckMarketplaceQuote(input: RecheckInput): Promise<RecheckResult> {
-  const res = await anthropic().messages.create({
+  const res = await anthropic().beta.messages.create({
     model: input.model ?? MODEL,
     max_tokens: MAX_OUTPUT_TOKENS,
+    betas: [WEB_FETCH_BETA],
     system: SYSTEM_PROMPT,
-    tools: [{
-      type: "web_search_20260209",
-      name: "web_search",
-      max_uses: MAX_WEB_USES,
-    } as any],
+    tools: [
+      // Read the actual product page (Ben's algorithm) — the highest-yield signal.
+      { type: "web_fetch_20250910", name: "web_fetch", max_uses: MAX_FETCH_USES } as any,
+      // Repair dead / wrong / gated URLs and find the correct product page.
+      { type: "web_search_20260209", name: "web_search", max_uses: MAX_WEB_USES } as any,
+    ],
     messages: [{ role: "user", content: buildUserMessage(input) }],
   });
   const text = res.content.map((b: any) => (b.type === "text" ? b.text : "")).join("");
