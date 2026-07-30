@@ -139,8 +139,13 @@ const BLOCKED_REASON_LABEL: Record<string, string> = {
   all_contact_channels_invalid: "Tried the site + contact pages — no reachable email, phone, or form found.",
 };
 
-const CONTACT_SOURCE_LABEL: Record<string, string> = {
-  scout: "from scout", discovered: "found on site", path: "contact form", tenkara: "Tenkara record",
+const CONTACT_SOURCE_BADGE: Record<string, { label: string; variant: BadgeVariant; title: string }> = {
+  scout: { label: "Scout", variant: "secondary", title: "Contact supplied by Scout discovery" },
+  discovered: { label: "Supplier website", variant: "success", title: "Contact found on the supplier's own website" },
+  path: { label: "Contact form", variant: "outline", title: "Supplier is reachable through a website contact form" },
+  tenkara: { label: "Tenkara", variant: "info", title: "Contact pulled from the existing Tenkara supplier record" },
+  zoominfo: { label: "ZoomInfo", variant: "accent", title: "Contact enriched through ZoomInfo" },
+  getprospect: { label: "GetProspect", variant: "accent", title: "Contact enriched through GetProspect" },
 };
 
 // Inline email editor — pencil icon next to the resolved email, opens an input
@@ -260,7 +265,7 @@ export function EnrichmentDetails({ r }: { r: any }) {
   const probe = e.website_probe ?? null;
   const cleared = e.aggregator_contact_email as string | undefined;
   const blocked = r?.payload?.enrichment_blocked_reason as string | undefined;
-  const srcLabel = contact.source ? (CONTACT_SOURCE_LABEL[contact.source] ?? contact.source) : null;
+  const sourceBadge = contact.source ? CONTACT_SOURCE_BADGE[contact.source] : null;
 
   return (
     <details className="text-xs mt-1">
@@ -269,9 +274,13 @@ export function EnrichmentDetails({ r }: { r: any }) {
         {/* Added / resolved */}
         {(contact.email || contact.phone || contact.contact_url) && (
           <div>
-            <span className="text-emerald-700 dark:text-emerald-400 font-medium">Resolved</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-emerald-700 dark:text-emerald-400 font-medium">Resolved</span>
+              {sourceBadge && <Badge variant={sourceBadge.variant} title={sourceBadge.title}>{sourceBadge.label}</Badge>}
+            </div>
             <ul className="ml-2 mt-0.5 space-y-0.5">
-              {contact.email && <li>email: <EmailEditInline leadId={r.id} currentEmail={contact.email} />{srcLabel && <span className="text-muted-foreground"> ({srcLabel})</span>}</li>}
+              {contact.poc_name && <li>contact: {contact.poc_name}{contact.poc_title ? <span className="text-muted-foreground"> · {contact.poc_title}</span> : null}</li>}
+              {contact.email && <li>email: <EmailEditInline leadId={r.id} currentEmail={contact.email} /></li>}
               <li>phone: <PhoneEditInline leadId={r.id} currentPhone={contact.phone ?? null} /></li>
               {contact.contact_url && <li>contact form{contact.pages_tried ? <span className="text-muted-foreground"> · {contact.pages_tried} pages checked</span> : null}</li>}
             </ul>
