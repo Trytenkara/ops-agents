@@ -1,135 +1,100 @@
-// Backlog #14 - keep inquiring until every approval-required quote field is
-// captured (or the supplier hard-declines).
-//
-// The supplier reply drafter historically asked for the "basics" (price, MOQ,
-// lead time, packaging, payment terms) and then stopped. Ops still has to chase
-// the remaining approval-required fields by hand. This module derives, from the
-// captured staged_quote state for a supplier+material, which approval-required
-// fields are still MISSING, so the drafter can ask for the next few, turn by
-// turn, until the quote is complete.
-//
-// APPROVAL-REQUIRED FIELDS (canonical source of truth in code):
-//   Quote-level  - src/lib/quote-profiles.ts QUOTING_FIELDS + the staged_quotes
-//                  columns (migrations 0025/0040/0042/0053): price, case_size,
-//                  unit_of_measurement, case_type + case_dimensions, lead_time,
-//                  moq_quantity/unit, payment_terms, grade.
-//   Supplier     - src/lib/supplier-profiles.ts COMPLETENESS_FIELDS: poc_*,
-//                  shipping_*, payment_* (asked/verified on the Suppliers tab).
-//
-// We only chase the fields a supplier can reasonably answer over email and that
-// do not violate an existing drafting rule:
-//   - grade is EXCLUDED: we never ask a supplier to pick/suggest a grade, and we
-//     only record a grade the supplier states themselves. (existing rule)
-//   - quote_expiry is EXCLUDED: ops applies a 90-day default; not chaseable.
-//   - hazmat / handling is EXCLUDED here: only asked when the material is
-//     actually hazardous or the supplier raised it, which the drafter's system
-//     prompt already gates on relevance.
-//   - supplier POC address / phone are EXCLUDED: the drafter defers on giving or
-//     inventing contact/address details; we do not open new asks for them here.
-//
-// A missing field NEVER blocks a draft - this only adds a gentle, natural ask
-// for the top couple of still-missing items.
-
-// One row of captured pricing for a supplier+material (subset of staged_quotes
-// columns we key completeness off of). All fields optional / nullable.
 export interface StagedQuoteFieldState {
   price?: number | null;
   case_size?: number | null;
   unit_of_measurement?: string | null;
   case_type?: string | null;
   case_dimensions?: Record<string, any> | null;
+  dim_source?: string | null;
+  raw_extract?: Record<string, any> | null;
   lead_time_days?: number | null;
   lead_time_text?: string | null;
   moq_quantity?: number | null;
   moq_unit?: string | null;
   payment_terms?: string | null;
-  grade?: string | null;
   status?: string | null;
 }
 
+export interface SupplierApprovalState {
+  poc_email?: string | null;
+  poc_phone?: string | null;
+  poc_name?: string | null;
+  shipping_address?: string | null;
+  shipping_terms?: string | null;
+  shipping_email?: string | null;
+  billing_email?: string | null;
+  billing_poc_name?: string | null;
+  payment_upfront_pct?: number | null;
+  payment_net_days?: number | null;
+  payment_completion?: string | null;
+  payment_credit_line?: string | null;
+}
+
+// Approval fields intentionally excluded from supplier email asks:
+// supplier_type is derived from marketplace/direct lead provenance; quote expiry
+// uses the approved 90-day default. Operator verification checkboxes are also
+// workflow state, not supplier-provided facts.
+export const NON_SUPPLIER_ASKABLE_FIELDS = ["supplier_type", "quote_expiry"] as const;
+
 export interface MissingApprovalField {
   key: string;
-  // A natural-language clause the drafter can drop into a sentence, e.g.
-  // "Could you also share <clause>?". No em dashes (house style).
   clause: string;
+  detect: RegExp;
 }
 
-// Env flag - the "keep asking until complete" expansion is ON by default but
-// trivially disabled by setting COMPLETENESS_FOLLOWUP_ENABLED to 0/false/off/no.
-// Reversible kill-switch for this live-client behavior change.
 export function completenessFollowupEnabled(): boolean {
-  const v = (process.env.COMPLETENESS_FOLLOWUP_ENABLED ?? "").trim().toLowerCase();
-  if (v === "") return true; // default ON
-  return !(v === "0" || v === "false" || v === "off" || v === "no");
+  const value = (process.env.COMPLETENESS_FOLLOWUP_ENABLED ?? "").trim().toLowerCase();
+  return value === "" || !["0", "false", "off", "no"].includes(value);
 }
 
-function has(v: unknown): boolean {
-  return v !== null && v !== undefined && v !== "";
+function has(value: unknown): boolean {
+  return value !== null && value !== undefined && value !== "";
 }
 
-function dimsPresent(cd: Record<string, any> | null | undefined): boolean {
-  if (!cd || typeof cd !== "object") return false;
-  return has(cd.width) || has(cd.height) || has(cd.length) || has(cd.packaging_case_weight);
-}
-
-// Which approval-required fields are still missing across the captured rows for
-// this supplier+material, in the order we prefer to ask for them. A field counts
-// as present if ANY non-dismissed row supplies it. Returns [] when complete.
 export function computeMissingApprovalFields(
-  rows: StagedQuoteFieldState[]
+  rows: StagedQuoteFieldState[],
+  supplier: SupplierApprovalState | null = null,
 ): MissingApprovalField[] {
-  const live = (rows ?? []).filter((r) => (r?.status ?? "") !== "dismissed");
-  const any = (pred: (r: StagedQuoteFieldState) => boolean) => live.some(pred);
-
+  const live = (rows ?? []).filter((row) => (row?.status ?? "") !== "dismissed");
+  const any = (predicate: (row: StagedQuoteFieldState) => boolean) => live.some(predicate);
   const missing: MissingApprovalField[] = [];
+  const add = (key: string, clause: string, detect: RegExp) => missing.push({ key, clause, detect });
 
-  // Price first - if we somehow have rows but no price yet, it's the top ask.
-  if (!any((r) => has(r.price))) {
-    missing.push({
-      key: "price",
-      clause: "your EXW pricing, including any tiered or volume price breaks",
-    });
-  }
-  if (!any((r) => has(r.lead_time_days) || has(r.lead_time_text))) {
-    missing.push({ key: "lead_time", clause: "your typical lead time" });
-  }
-  if (!any((r) => has(r.moq_quantity))) {
-    missing.push({ key: "moq", clause: "your MOQ" });
-  }
-  if (!any((r) => has(r.case_size) && has(r.unit_of_measurement))) {
-    missing.push({
-      key: "pack_size",
-      clause: "the pack or case size and the unit it ships in",
-    });
-  }
-  if (!any((r) => has(r.payment_terms))) {
-    missing.push({
-      key: "payment_terms",
-      clause: "your standard payment terms (for example Net 30)",
-    });
-  }
-  if (!any((r) => has(r.case_type) || dimsPresent(r.case_dimensions))) {
-    missing.push({
-      key: "packaging",
-      clause: "packaging details (case type, weight, and dimensions)",
-    });
-  }
+  if (!any((row) => has(row.price))) add("price", "EXW pricing, including any tiered or volume price breaks", /\b(price|pricing|exw|usd|\$)\b/i);
+  if (!any((row) => has(row.lead_time_days) || has(row.lead_time_text))) add("lead_time", "typical lead time", /\blead\s*time|turnaround|ready\s*(?:in|within)/i);
+  if (!any((row) => has(row.moq_quantity) && has(row.moq_unit))) add("moq", "MOQ and its unit", /\bmoq|minimum order/i);
+  if (!any((row) => has(row.case_size) && has(row.unit_of_measurement))) add("pack_size", "pack or case size and unit", /\bpack|case size|bag size|drum size/i);
+
+  const supplierDimensions = live.map((row) => row.raw_extract?.supplier_dimensions ?? (row.dim_source === "supplier" ? row.case_dimensions ?? {} : {}));
+  if (!any((row) => has(row.raw_extract?.supplier_case_type) || (row.dim_source === "supplier" && has(row.case_type)))) add("case_type", "case or packaging type", /\bcase type|packaging type|bag|drum|pail|carton|tote/i);
+  if (!supplierDimensions.some((dims) => has(dims.length))) add("case_length", "outer case length", /\b(?:case|package).*length|length.*(?:case|package)/i);
+  if (!supplierDimensions.some((dims) => has(dims.width))) add("case_width", "outer case width", /\b(?:case|package).*width|width.*(?:case|package)/i);
+  if (!supplierDimensions.some((dims) => has(dims.height))) add("case_height", "outer case height", /\b(?:case|package).*height|height.*(?:case|package)/i);
+  if (!supplierDimensions.some((dims) => has(dims.unit))) add("dimensions_unit", "dimension unit (inches or centimeters)", /\binches?|\bcm\b|centimeters?|dimension unit/i);
+  if (!supplierDimensions.some((dims) => has(dims.packaging_case_weight))) add("case_weight", "gross case weight", /\bgross.*weight|case weight|package weight/i);
+
+  const paymentPresent = any((row) => has(row.payment_terms)) || !!(supplier && (has(supplier.payment_net_days) || has(supplier.payment_completion) || has(supplier.payment_credit_line)));
+  if (!paymentPresent) add("payment_terms", "standard payment terms", /\bpayment terms?|net\s*\d+|deposit|prepaid|credit line/i);
+  if (!has(supplier?.payment_upfront_pct)) add("payment_upfront_pct", "upfront or deposit percentage (please confirm 0% if none)", /\bupfront|deposit|prepaid|0%/i);
+
+  if (!has(supplier?.poc_name)) add("poc_name", "primary sales contact name", /\bcontact name|sales contact|primary contact/i);
+  if (!has(supplier?.poc_email)) add("poc_email", "primary sales contact email", /\bcontact email|sales email|email address/i);
+  if (!has(supplier?.poc_phone)) add("poc_phone", "primary sales contact phone number", /\bcontact phone|phone number|telephone/i);
+  if (!has(supplier?.shipping_address)) add("shipping_address", "shipping or pickup address", /\bshipping address|pickup address|ship from/i);
+  if (!has(supplier?.shipping_terms)) add("shipping_terms", "available shipping terms", /\bshipping terms?|incoterms?|exw|fob|ddp/i);
+  if (!has(supplier?.shipping_email)) add("shipping_email", "shipping contact email", /\bshipping email|logistics email/i);
+  if (!has(supplier?.billing_email)) add("billing_email", "billing contact email", /\bbilling email|accounts? receivable/i);
+  if (!has(supplier?.billing_poc_name)) add("billing_poc_name", "billing contact name", /\bbilling contact|accounts? receivable contact/i);
 
   return missing;
 }
 
-// Build one short, natural ask sentence from the top `max` missing fields. Keeps
-// it to a couple of items per message (turn-by-turn), never a full checklist.
-// Returns "" when nothing is missing. No em dashes.
-export function buildCompletenessAsk(
-  missing: MissingApprovalField[],
-  max = 2
-): string {
-  const clauses = (missing ?? []).slice(0, Math.max(1, max)).map((m) => m.clause);
+export function buildCompletenessAsk(missing: MissingApprovalField[]): string {
+  const clauses = (missing ?? []).map((field) => field.clause);
   if (!clauses.length) return "";
-  const joined =
-    clauses.length === 1
-      ? clauses[0]
-      : `${clauses.slice(0, -1).join(", ")} and ${clauses[clauses.length - 1]}`;
-  return `Could you also share ${joined}?`;
+  const joined = clauses.length === 1 ? clauses[0] : `${clauses.slice(0, -1).join(", ")}, and ${clauses[clauses.length - 1]}`;
+  return `To complete our review, could you also share ${joined}?`;
+}
+
+export function missingAsksNotCovered(body: string, missing: MissingApprovalField[]): MissingApprovalField[] {
+  return missing.filter((field) => !field.detect.test(body));
 }

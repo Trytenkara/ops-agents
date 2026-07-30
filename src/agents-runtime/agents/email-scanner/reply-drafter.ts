@@ -65,8 +65,8 @@ const SYSTEM = `You draft short, professional replies to suppliers on behalf of 
 - MATERIAL IDENTITY — a materially different product is NOT our material even if the name is similar (e.g. "paprika colorant / oleoresin" is not "paprika powder"; a technical grade is not a food grade if we asked for food grade). If what they offer is a different product than we requested, do not proceed as if it matches — ask a clarifying question or treat as a decline; do not request pricing on the wrong product.
 - SHIPPING TERMS — when you ask for pricing, also cover shipping: tell them we can arrange our own shipping and prefer EXW (Ex Works) terms. If they can't do EXW that's fine, but still ask for their EXW price so we can compare. Fold this into the pricing ask naturally (EXW price for the stated quantity, plus MOQ and lead time).
 - PAYMENT TERMS — when asking for pricing, also request payment terms (net-30, net-60, etc.) if the supplier hasn't already provided them. Fold this naturally into the pricing ask alongside MOQ and lead time.
-- ASK ONLY WHAT'S RELEVANT — do NOT ask for hazmat / DOT / dangerous-goods / special-handling details unless the material is actually hazardous or the supplier themselves raised it. For a non-hazardous material, never request hazmat classification. Likewise, do not hard-block or withhold the pricing ask just because the supplier hasn't provided every detail (case dimensions, packaging specs, etc.) — those are nice-to-haves; proceed with what they gave and keep things moving. Ask for at most one or two missing essentials, not an exhaustive checklist.
-- KEEP INQUIRING UNTIL COMPLETE. If the input lists "Still needed to complete this quote", those are approval-required details we do not have yet. When the supplier is engaged (not declining), naturally ask for the TOP ONE OR TWO of them in this reply. Do NOT dump the whole list; work through them a couple at a time across replies until they are all captured or the supplier declines. Never re-ask for something they already provided, and never ask the supplier to pick or suggest a grade. If the list is empty or absent, do not invent a new ask.
+- ASK ONLY WHAT'S RELEVANT — do NOT ask for hazmat / DOT / dangerous-goods / special-handling details unless the material is actually hazardous or the supplier themselves raised it. For a non-hazardous material, never request hazmat classification. Do not hard-block or withhold a pricing ask because details are missing.
+- KEEP INQUIRING UNTIL COMPLETE. If the input lists "Still needed to complete this quote", those are approval-required details we do not have yet. When the supplier is engaged (not declining), ask for all of them in one concise, organized question. Never re-ask for something already provided, and never ask the supplier to pick or suggest a grade.
 - Be concise (3-6 sentences). Warm, businesslike, no fluff.
 - NEVER invent prices, quantities, commitments, ship dates, or terms. If a specific is needed, ask for it rather than stating one.
 - NEVER state a shipping address, phone number, or email address. You do not have real ones. If a supplier asks for an address or contact number (e.g. to "assign a representative"), DEFER — say it will be provided once terms are agreed, and keep the thread as the point of contact. Do not make one up under any circumstances.
@@ -126,7 +126,7 @@ export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
     ...(missing.length
       ? [
           "",
-          `Still needed to complete this quote (ask for the top one or two only, naturally, if the supplier is engaged; do not list them all, and never ask them to choose a grade): ${missing
+          `Still needed to complete this quote (ask for the all only, naturally, if the supplier is engaged; do not list them all, and never ask them to choose a grade): ${missing
             .map((m) => m.clause)
             .join("; ")}`,
         ]
@@ -150,14 +150,12 @@ export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
     draft.subject = input.theirSubject ? `Re: ${input.theirSubject.replace(/^re:\s*/i, "")}` : `Re: ${input.materialName ?? "your message"}`;
   }
 
-  // Backlog #14 deterministic backstop: if there are still-missing approval
-  // fields, the supplier is engaged, and the model's body contains no question
-  // at all, fold in a concise ask for the top couple of missing items before the
-  // sign-off. Purely additive - it never blocks or replaces the draft, and it
-  // stays quiet when the model already asked something or nothing is missing.
-  if (missing.length && draft.engaged && draft.body && !/\?/.test(draft.body)) {
-    const ask = buildCompletenessAsk(missing, 2);
-    if (ask) draft.body = insertBeforeSignoff(draft.body, ask, signoff);
+  // Deterministic completeness backstop: one canonical question always lists
+  // every missing supplier/quote field. This guarantees coverage regardless of
+  // how the model phrases its conversational response.
+  if (missing.length && draft.engaged && draft.body) {
+    const ask = buildCompletenessAsk(missing);
+    if (ask && !draft.body.includes(ask)) draft.body = insertBeforeSignoff(draft.body, ask, signoff);
   }
   return draft;
 }
