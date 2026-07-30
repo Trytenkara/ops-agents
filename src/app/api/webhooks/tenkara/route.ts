@@ -143,40 +143,49 @@ export async function POST(request: NextRequest) {
   const newStatus = EVENT_TO_STATUS[event];
   const reviewedAt = occurred_at ?? new Date().toISOString();
 
-  // Match on Tenkara's draft id within Rod's app namespace.
+  // Agent 02 writes one reference per quote, so one Tenkara draft can match multiple rows.
   let lookup = admin
     .from("draft_references")
     .select("id, status, metadata")
     .eq("draft_id", draft_id)
     .eq("email_client", "rod_app");
   if (thread_id) lookup = lookup.eq("thread_id", thread_id);
-  const { data: draft, error: lookupErr } = await lookup.maybeSingle();
+  const { data: drafts, error: lookupErr } = await lookup;
 
   if (lookupErr) return NextResponse.json({ error: lookupErr.message }, { status: 500 });
-  if (!draft) return NextResponse.json({ error: "draft_not_found" }, { status: 404 });
+  if (!drafts?.length) return NextResponse.json({ error: "draft_not_found" }, { status: 404 });
 
-  // Idempotent: a redelivered webhook for an already-terminal draft is a no-op.
-  if (draft.status === "sent" || draft.status === "discarded") {
-    return NextResponse.json({ draft_id: draft.id, status: draft.status, deduped: true });
+  const pendingDrafts = drafts.filter((draft) => draft.status !== "sent" && draft.status !== "discarded");
+  if (!pendingDrafts.length) {
+    return NextResponse.json({ draft_id: drafts[0].id, status: drafts[0].status, deduped: true });
   }
 
-  const metadata = {
-    ...(draft.metadata ?? {}),
-    tenkara_webhook: { event, operator: operator ?? null, occurred_at: reviewedAt },
-  };
-
-  const { error: updateErr } = await admin
-    .from("draft_references")
-    .update({ status: newStatus, reviewed_at: reviewedAt, metadata })
-    .eq("id", draft.id);
+  const updateResults = await Promise.all(
+    pendingDrafts.map((draft) =>
+      admin
+        .from("draft_references")
+        .update({
+          status: newStatus,
+          reviewed_at: reviewedAt,
+          metadata: {
+            ...(draft.metadata ?? {}),
+            tenkara_webhook: { event, operator: operator ?? null, occurred_at: reviewedAt },
+          },
+        })
+        .eq("id", draft.id),
+    ),
+  );
+  const updateErr = updateResults.find((result) => result.error)?.error;
   if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 });
 
-  await admin.from("audit_log").insert({
-    action: `draft.${newStatus}`,
-    target_table: "draft_references",
-    target_id: draft.id,
-    diff: { source: "tenkara_webhook", event, operator: operator ?? null },
-  });
+  await admin.from("audit_log").insert(
+    pendingDrafts.map((draft) => ({
+      action: `draft.${newStatus}`,
+      target_table: "draft_references",
+      target_id: draft.id,
+      diff: { source: "tenkara_webhook", event, operator: operator ?? null },
+    })),
+  );
 
-  return NextResponse.json({ draft_id: draft.id, status: newStatus });
+  return NextResponse.json({ draft_id: drafts[0].id, status: newStatus, updated: pendingDrafts.length });
 }
