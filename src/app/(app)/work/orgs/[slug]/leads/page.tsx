@@ -160,15 +160,20 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     // A supplier-backed lead's owner syncs with its supplier (supplier_assignment);
     // a Scout lead (no supplier_id) uses its own lead-level manual claim. In both
     // cases the auto default is sticky-random over the pool — keyed by supplier_id
-    // when present, else the lead id so Scout leads spread across operators instead
-    // of all collapsing onto pool[0]. Same key outreach uses, so the displayed
-    // owner matches who actually gets the drafts.
+    // when present, else the EMAIL consolidation key so every material row of one
+    // Scout supplier resolves to the SAME operator (matching the single consolidated
+    // outreach thread), falling back to the lead id only when there's no email.
+    // Same key outreach uses, so the displayed owner matches who gets the drafts.
+    const scoutAutoKey = (() => {
+      const em = String(r.payload?.supplier_contact_email ?? "").trim().toLowerCase();
+      return em ? `e:${em}` : r.id;
+    })();
     const operator_assigned_id = r.supplier_id
       ? supplierAssignments.get(r.supplier_id) ?? null
       : r.assigned_operator_id ?? null;
     const operator_auto_name = r.supplier_id
       ? autoOwners[r.supplier_id]?.name ?? null
-      : pickSupplierOperator(operatorPool, r.id)?.name ?? null;
+      : pickSupplierOperator(operatorPool, scoutAutoKey)?.name ?? null;
     // Static label (rows without an assign control): a manual claim wins, else auto.
     const operator_name =
       (operator_assigned_id ? operatorNameById.get(operator_assigned_id) ?? null : null) ?? operator_auto_name;
