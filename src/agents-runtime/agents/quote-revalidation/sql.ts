@@ -2,9 +2,10 @@ import { tenkaraQuery } from "@/lib/tenkara-readonly";
 
 // One row per (material × supplier) latest expiring/expired quote, across every org.
 // Filters out:
-//   - quotes where status is 'active' (a current, still-valid quote — nothing to
-//     revalidate). Everything else past its reanalyze date is in scope, including
-//     status 'expired': revalidation is exactly for expiring-soon/expired quotes.
+//   - quotes that are still current ('active') or already archived ('updated',
+//     'out_of_stock'). Everything else past its reanalyze date is in scope,
+//     including status 'expired': revalidation is exactly for expiring-soon and
+//     expired quotes.
 //   - quotes with no supplier contact email, or a malformed one (junk like
 //     'Online', a missing TLD, or two addresses crammed into one field)
 //   - non-latest quotes for the same material/supplier pair
@@ -69,7 +70,15 @@ export async function queryOverdueRows(): Promise<OverdueRow[]> {
       LEFT JOIN users qa ON qa.id = mq.user_id
       LEFT JOIN operators_view ov ON ov.email = qa.email
       WHERE
-        (mq.status IS NULL OR mq.status::text <> 'active')
+        -- Tenkara marks a live quote with status IS NULL; 'active' is a near-dead
+        -- value (30 rows out of 1,198 in prod). Excluding only 'active' therefore
+        -- let every archived quote back in: an operator marks a supplier out of
+        -- stock, its quotes all go 'out_of_stock', and this picked them straight
+        -- back up for re-solicitation. The replacement quotes made the pair live
+        -- again silently, so the next archive fired a duplicate out-of-stock
+        -- notification. Exclude the archived states explicitly. 'expired' stays
+        -- in scope: that is precisely what revalidation is for.
+        (mq.status IS NULL OR mq.status::text NOT IN ('active', 'updated', 'out_of_stock'))
         -- Monitor quotes due by their reanalyze date, AND quotes that never got
         -- a reanalyze date (manually added, cold-solicit, or onboarded-client
         -- quotes) once they've aged past a default validity window — otherwise
@@ -119,8 +128,13 @@ export async function queryAudit(): Promise<OrgAudit[]> {
       COUNT(DISTINCT m.id) AS managed_materials,
       COUNT(DISTINCT m.id) FILTER (
         WHERE EXISTS (
+          -- A live quote is status IS NULL or 'active', the same pair
+          -- marketplace-validation already uses. Matching only 'active' reported
+          -- 0 materials-with-a-live-quote for orgs whose quotes are all
+          -- NULL-status, which is almost all of them.
           SELECT 1 FROM material_quotes mq2
-          WHERE mq2.material_id = m.id AND mq2.status = 'active'
+          WHERE mq2.material_id = m.id
+            AND (mq2.status IS NULL OR mq2.status::text = 'active')
         )
       ) AS materials_with_active_quote
     FROM organizations o

@@ -70,15 +70,22 @@ async function gatherTenkaraData(tenkaraOrgId: string): Promise<TenkaraData | nu
         [tenkaraOrgId]
       ),
       tenkaraQuery<any>(
+        // Scope through materials.user_id, not material_quotes.user_id: the latter
+        // is the operator who entered the quote, who belongs to the Tenkara org,
+        // not the customer's. Joining on it returned 0 quotes and 0 suppliers for
+        // every client org.
         `select count(*)::int as quotes, count(distinct q.supplier_id)::int as suppliers
-           from public.material_quotes q join public.users u on u.id = q.user_id
+           from public.material_quotes q
+           join public.materials m on m.id = q.material_id
+           join public.users u on u.id = m.user_id
           where u.organization_id = $1::uuid`,
         [tenkaraOrgId]
       ),
       tenkaraQuery<any>(
         `select s.name, max(q.quote_date)::text as last_quote
            from public.material_quotes q
-           join public.users u on u.id = q.user_id
+           join public.materials m on m.id = q.material_id
+           join public.users u on u.id = m.user_id
            join public.suppliers s on s.id = q.supplier_id
           where u.organization_id = $1::uuid
           group by s.name order by max(q.quote_date) desc nulls last limit 10`,
