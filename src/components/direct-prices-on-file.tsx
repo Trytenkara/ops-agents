@@ -15,16 +15,27 @@ export type DirectPriceRow = {
   unitPrice: number | null;
   unitOfMeasurement: string | null;
   currency: string | null;
+  previousPrice: number | null;
+  previousUnitPrice: number | null;
   grade: string | null;
   status: string | null;
   createdAt: string | null;
   caseDims: string | null;
 };
 
-function fmtPrice(r: DirectPriceRow): string {
-  if (r.unitPrice != null) return `${r.currency ?? "USD"} ${r.unitPrice.toFixed(2)}/${r.unitOfMeasurement ?? "unit"}`;
-  if (r.price != null) return `${r.currency ?? "USD"} ${r.price}`;
+function fmtPrice(r: DirectPriceRow, previous = false): string {
+  const unitPrice = previous ? r.previousUnitPrice : r.unitPrice;
+  const price = previous ? r.previousPrice : r.price;
+  if (unitPrice != null) return `${r.currency ?? "USD"} ${unitPrice.toFixed(2)}/${r.unitOfMeasurement ?? "unit"}`;
+  if (price != null) return `${r.currency ?? "USD"} ${price}`;
   return "";
+}
+
+function directPctChange(r: DirectPriceRow): number | null {
+  const current = r.unitPrice ?? r.price;
+  const previous = r.previousUnitPrice ?? r.previousPrice;
+  if (current == null || previous == null || previous === 0) return null;
+  return ((current - previous) / previous) * 100;
 }
 
 // Current direct-supplier prices we already hold (from staged_quotes) that
@@ -46,7 +57,9 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
   const csvRows = filtered.map((r) => [
     r.supplierName ?? "",
     r.materialName ?? "",
+    fmtPrice(r, true),
     fmtPrice(r),
+    directPctChange(r) != null ? `${directPctChange(r)!.toFixed(1)}%` : "",
     r.caseDims ?? "",
     r.grade ?? "",
     r.status ?? "",
@@ -59,7 +72,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
         {controls}
         <ListCsvButton
           filename={filenameFor(slug, "direct-prices-on-file")}
-          headers={["Supplier", "Material", "Price", "Case dims", "Grade", "Status", "Captured"]}
+          headers={["Supplier", "Material", "On file", "Current", "Change", "Case dims", "Grade", "Status", "Updated"]}
           rows={csvRows}
         />
       </div>
@@ -68,10 +81,12 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
           <TableRow>
             <TableHead>Supplier</TableHead>
             <TableHead>Material</TableHead>
-            <TableHead className="text-right">Price on file</TableHead>
+            <TableHead className="text-right" title="Previous captured direct price for this supplier × material">On file</TableHead>
+            <TableHead className="text-right" title="Latest captured direct price for this supplier × material">Current</TableHead>
+            <TableHead className="text-right" title="Percent change from On file to Current">Δ</TableHead>
             <TableHead>Case dims</TableHead>
             <TableHead>Grade</TableHead>
-            <TableHead>Captured</TableHead>
+            <TableHead title="When this direct price was captured / last updated">Updated</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -79,6 +94,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
             <TableRow key={r.id}>
               <TableCell className="font-medium">{r.supplierName ?? "—"}</TableCell>
               <TableCell>{r.materialName ?? "—"}</TableCell>
+              <TableCell className="text-right tabular-nums text-muted-foreground">{fmtPrice(r, true) || "—"}</TableCell>
               <TableCell className="text-right tabular-nums">
                 <div className="flex flex-col items-end gap-0.5">
                   <span className="font-medium text-foreground">{fmtPrice(r) || "—"}</span>
@@ -88,6 +104,15 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
                     </Badge>
                   )}
                 </div>
+              </TableCell>
+              <TableCell className="text-right tabular-nums">
+                {directPctChange(r) == null ? (
+                  <span className="text-muted-foreground">—</span>
+                ) : (
+                  <span className={directPctChange(r)! > 0 ? "text-amber-700 dark:text-amber-400" : "text-emerald-700 dark:text-emerald-400"}>
+                    {directPctChange(r)! > 0 ? "+" : ""}{directPctChange(r)!.toFixed(1)}%
+                  </span>
+                )}
               </TableCell>
               <TableCell className="text-xs">
                 {r.caseDims ? (
@@ -110,7 +135,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
           ))}
           {filtered.length === 0 && (
             <TableRow>
-              <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+              <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                 No direct prices on file yet.
               </TableCell>
             </TableRow>

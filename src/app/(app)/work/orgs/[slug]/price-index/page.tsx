@@ -218,19 +218,25 @@ export default async function OrgPriceIndexPage({
     if (supplierName) consumedDirectKeys.add(`${normName(supplierName)}|${d.material_id}`);
   }
   const directOnFileMap = new Map<string, any>();
+  const previousDirectMap = new Map<string, any>();
   for (const s of (stagedRes.data ?? []) as any[]) {
     if (s.status === "dismissed" || !s.material_id) continue;
     const k = `${s.supplier_id ?? normName(s.supplier_name)}|${s.material_id}`;
     if (consumedDirectKeys.has(k)) continue;
     if (!directOnFileMap.has(k)) directOnFileMap.set(k, s); // newest-first, first wins
+    else if (!previousDirectMap.has(k)) previousDirectMap.set(k, s); // second-newest = on-file baseline
   }
-  const directOnFile: DirectPriceRow[] = Array.from(directOnFileMap.values()).map((s: any) => ({
-    id: s.id,
+  const directOnFile: DirectPriceRow[] = Array.from(directOnFileMap.entries()).map(([k, s]: [string, any]) => {
+    const previous = previousDirectMap.get(k);
+    return {
+      id: s.id,
     supplierName: s.supplier_name ?? null,
     materialName: s.material_name ? correctMaterialSpelling(s.material_name) : null,
     price: s.price != null ? Number(s.price) : null,
     unitPrice: s.unit_price != null ? Number(s.unit_price) : null,
-    unitOfMeasurement: s.unit_of_measurement ?? null,
+    previousPrice: previous?.price != null ? Number(previous.price) : null,
+    previousUnitPrice: previous?.unit_price != null ? Number(previous.unit_price) : null,
+    unitOfMeasurement: s.unit_of_measurement ?? previous?.unit_of_measurement ?? null,
     currency: s.currency ?? null,
     grade: s.grade ?? null,
     status: s.status ?? null,
@@ -241,8 +247,9 @@ export default async function OrgPriceIndexPage({
       height: s.case_dimensions?.height ?? null,
       length: s.case_dimensions?.length ?? null,
       weight_kg: s.case_dimensions?.packaging_case_weight ?? null,
-    }),
-  }));
+      }),
+    };
+  });
 
   const quoteProfiles = await getQuoteProfiles(admin, org.id).catch(() => []);
   const marketplaceDims = await loadMarketplaceCaseDims(admin);

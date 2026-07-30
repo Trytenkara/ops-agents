@@ -13,8 +13,9 @@ import { useListFilter, byString, byNumberDesc, byDateDesc } from "@/components/
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
 import { fmtCaseDims, resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
+import { relativeTime } from "@/lib/utils";
 
-const COLS = 9;
+const COLS = 10;
 
 // Prefer the agent's structured unit_price (Agent 05); fall back to deriving it
 // from the pack-size string.
@@ -115,7 +116,7 @@ export function MarketplaceFindingsList({
         {controls}
         <ListCsvButton
           filename={filenameFor(slug, "price-changes")}
-          headers={["Supplier", "Material", "Pack / tier", "Case dims", "Per-unit", "On file", "Current", "Change", "Found"]}
+          headers={["Supplier", "Material", "Pack / tier", "Case dims", "Per-unit", "On file", "Current", "Change", "Updated"]}
           rows={csvRows}
         />
       </div>
@@ -125,11 +126,12 @@ export function MarketplaceFindingsList({
             <TableHead>Pack / tier</TableHead>
             <TableHead>Case dims</TableHead>
             <TableHead className="text-right">Per-unit</TableHead>
-            <TableHead className="text-right">On file</TableHead>
-            <TableHead className="text-right">Current</TableHead>
-            <TableHead className="text-right">Δ%</TableHead>
+            <TableHead className="text-right" title="Previous marketplace scrape for this pack size">On file</TableHead>
+            <TableHead className="text-right" title="Latest marketplace scrape for this pack size">Current</TableHead>
+            <TableHead className="text-right" title="Percent change from On file to Current">Δ</TableHead>
             <TableHead>Supplier / source</TableHead>
             <TableHead>Status</TableHead>
+            <TableHead title="When this marketplace price was last checked / refreshed">Updated</TableHead>
             <TableHead className="text-right">Action</TableHead>
           </TableRow>
         </TableHeader>
@@ -207,6 +209,9 @@ export function MarketplaceFindingsList({
                         )}
                       </TableCell>
                       <TableCell className="align-top"><ClassificationBadge value={r.classification ?? null} /></TableCell>
+                      <TableCell className="text-muted-foreground align-top text-xs" title={r.created_at ? new Date(r.created_at).toLocaleString() : undefined}>
+                        {r.created_at ? relativeTime(r.created_at) : "—"}
+                      </TableCell>
                       <TableCell className="text-right align-top">
                         {r.kind === "on_file" ? (
                           <span className="text-muted-foreground text-xs">—</span>
