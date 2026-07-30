@@ -43,9 +43,10 @@ export interface InsertStagedResult {
   errors: number;
 }
 
-// Dedup key within a message: same message + attachment + material + price
-// shouldn't be staged twice across re-runs. We check existing rows for the
-// message and skip ones that already match.
+function approvedKey(orgId: string | null, supplierName: string | null, materialName: string | null): string {
+  return [orgId ?? "", (supplierName ?? "").trim().toLowerCase(), (materialName ?? "").trim().toLowerCase()].join("|");
+}
+
 function dupKey(r: {
   source_message_id: string | null;
   source_attachment_name: string | null;
@@ -80,6 +81,22 @@ export async function insertStagedQuotes(
     for (const r of (data ?? []) as any[]) existingKeys.add(dupKey(r));
   }
 
+  // Guard against re-staging quotes for supplier+material combos that are
+  // already approved. Without this, a follow-up email or webhook retry creates
+  // a new pending_review row that shadows the approved one in the UI.
+  const orgIds = Array.from(new Set(rows.map((r) => r.orgId).filter(Boolean))) as string[];
+  const approvedSet = new Set<string>();
+  if (orgIds.length) {
+    const { data } = await admin
+      .from("staged_quotes")
+      .select("org_id, supplier_name, material_name")
+      .in("org_id", orgIds)
+      .eq("status", "approved");
+    for (const r of (data ?? []) as any[]) {
+      approvedSet.add(approvedKey(r.org_id, r.supplier_name, r.material_name));
+    }
+  }
+
   for (const r of rows) {
     const key = dupKey({
       source_message_id: r.sourceMessageId ?? null,
@@ -88,6 +105,10 @@ export async function insertStagedQuotes(
       price: r.price,
     });
     if (existingKeys.has(key)) {
+      result.skippedDuplicates++;
+      continue;
+    }
+    if (approvedSet.has(approvedKey(r.orgId, r.supplierName, r.materialName))) {
       result.skippedDuplicates++;
       continue;
     }
