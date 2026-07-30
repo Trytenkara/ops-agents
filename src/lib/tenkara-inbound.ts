@@ -120,9 +120,40 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     }
   }
 
-  // Rod pre-filters to conversations our agents touched, so a miss is benign —
-  // ack with 200 so it isn't retried.
-  if (!ref) return { status: 200, body: { ignored: true, reason: "no_matching_draft" } };
+  // Fallback: EXACT sender-ADDRESS matching. The domain fallback above deliberately
+  // skips generic free-email domains (gmail/outlook/...) because a whole domain is
+  // far too broad to trust there. But the FULL address is unambiguous even on a
+  // generic domain, so we can safely match a supplier who replies from the very
+  // gmail/personal address we already emailed (or whose draft_id/thread linkage
+  // broke). We apply it regardless of domain, but only accept a result that
+  // resolves to exactly ONE supplier (unambiguous single-supplier match).
+  let exactAddressMatch = false;
+  if (!ref) {
+    const fromAddr = parseFrom(msg.from).address;
+    if (fromAddr) {
+      const { data: addrRefs } = await admin
+        .from("draft_references")
+        .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata")
+        .eq("email_client", "rod_app")
+        // ilike with no wildcards = a case-insensitive exact-address match.
+        .filter("metadata->>supplier_contact_email", "ilike", fromAddr)
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (addrRefs && addrRefs.length > 0) {
+        const uniqueSuppliers = new Set(addrRefs.map((r: any) => r.supplier_id).filter(Boolean));
+        if (uniqueSuppliers.size === 1) {
+          ref = addrRefs[0];
+          exactAddressMatch = true;
+        }
+      }
+    }
+  }
+
+  // Still unmatched: no draft_id, thread_id, domain, or exact-address match. Rod
+  // pre-filters to conversations our agents touched, so a true miss is rare, but
+  // silently dropping it means an operator never sees a supplier (or client) who
+  // replied out-of-thread. Record it instead of dropping (alert + triage case).
+  if (!ref) return await recordUnmatchedInbound(admin, msg);
 
   // 2. Idempotency: if we already drafted a reply for this inbound message, no-op.
   const { data: dupe } = await admin
@@ -205,6 +236,9 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     // Set when a new contact started a fresh thread and we matched via sender domain.
     // The actual reply draft is staged into the new conversation; this flag is for audit.
     domain_match_fallback: domainMatchFallback || undefined,
+    // Set when we matched on the exact full sender address (e.g. a supplier replying
+    // from the same gmail/personal address we emailed). Audit flag only.
+    exact_address_match: exactAddressMatch || undefined,
   };
   await admin
     .from("draft_references")
@@ -553,5 +587,113 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     })
     .eq("id", ref.id);
 
-  return { status: 200, body: { drafted: true, draft_ref_id: staged.draftRefId, draft_id: staged.draftId, quotes_staged: quotesStaged, introduced_materials: introducedMaterialIds.length, domain_match_fallback: domainMatchFallback || undefined } };
+  return { status: 200, body: { drafted: true, draft_ref_id: staged.draftRefId, draft_id: staged.draftId, quotes_staged: quotesStaged, introduced_materials: introducedMaterialIds.length, domain_match_fallback: domainMatchFallback || undefined, exact_address_match: exactAddressMatch || undefined } };
+}
+
+// (B) RECORD-not-DROP for a truly unmatched inbound. Makes an out-of-thread reply
+// visible to operators instead of silently 200-dropping it. Non-goals (deliberate):
+// no auto-draft (we have no reliable supplier/material context) and no auto-create
+// of supplier/material rows (that stays the operator's decision). Idempotent so
+// Rod's webhook retries / repeat sends never re-alert on the same message_id.
+async function recordUnmatchedInbound(admin: Admin, msg: InboundMessage): Promise<InboundResult> {
+  const from = parseFrom(msg.from);
+
+  // A mailer-daemon with no matched draft is a delivery failure we can't tie back
+  // to an outreach. It is NOT a supplier reply, so never alert on it as one.
+  if (isBounce(from.address, msg.subject ?? null)) {
+    return { status: 200, body: { ignored: true, reason: "unmatched_bounce" } };
+  }
+
+  // Idempotency guard. Key the message_id in agent_state under Agent 08 (the reply
+  // handler). Mirrors the draft dedupe on in_reply_to_message_id, but here there is
+  // no draft to key off, so we use agent_state (works whether or not an org resolves).
+  const { data: agent08 } = await admin
+    .from("agents")
+    .select("id")
+    .eq("slug", "agent-08-email-scanner")
+    .maybeSingle();
+  const agentId: string | null = agent08?.id ?? null;
+  const stateKey = `unmatched_inbound:${msg.message_id}`;
+  if (agentId) {
+    const { data: seen } = await admin
+      .from("agent_state")
+      .select("key")
+      .eq("agent_id", agentId)
+      .eq("key", stateKey)
+      .maybeSingle();
+    if (seen) return { status: 200, body: { deduped: true, reason: "recorded_unmatched" } };
+  }
+
+  // Best-effort org resolution. The primary thread_id lookup was scoped to
+  // email_client='rod_app'; a draft under a different client may still carry this
+  // thread and tell us the client. Only used to attach a triage case; if it stays
+  // null we alert-only (cases.org_id is NOT NULL, so no case without an org).
+  const { data: anyRef } = await admin
+    .from("draft_references")
+    .select("org_id")
+    .eq("thread_id", msg.conversation_id)
+    .not("org_id", "is", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const orgId: string | null = anyRef?.org_id ?? null;
+
+  const preview = (msg.body_text ?? "").replace(/\s+/g, " ").trim().slice(0, 300);
+  const senderLabel = from.name ? `${from.name} <${from.address}>` : from.address;
+
+  await postAgentAlert(
+    [
+      ":envelope_with_arrow: *Unmatched inbound* (a reply we can't tie to an outreach thread).",
+      `from: ${senderLabel}`,
+      `subject: ${msg.subject ?? "(none)"}`,
+      preview ? `> ${preview}` : "(no body)",
+      `conversation: ${msg.conversation_id}`,
+      orgId ? "An `unmatched_inbound` case was opened for triage." : "No client could be resolved, triage manually.",
+    ].join("\n")
+  );
+
+  // Open a triage case only when we know the client. Extra existence check on
+  // message_id keeps the case idempotent even if agentId (the agent_state key)
+  // couldn't be resolved.
+  let caseOpened = false;
+  if (orgId) {
+    const { data: existingCase } = await admin
+      .from("cases")
+      .select("id")
+      .eq("type", "unmatched_inbound")
+      .eq("metadata->>message_id", msg.message_id)
+      .maybeSingle();
+    if (!existingCase) {
+      await admin.from("cases").insert({
+        org_id: orgId,
+        type: "unmatched_inbound",
+        status: "open",
+        originating_thread_id: msg.conversation_id,
+        recommended_action: `Inbound from ${senderLabel} ("${msg.subject ?? "no subject"}") did not match any outreach. Link it to a supplier/lead or dismiss.`,
+        metadata: {
+          source: "tenkara-inbound-unmatched",
+          message_id: msg.message_id,
+          conversation_id: msg.conversation_id,
+          sender_name: from.name,
+          sender_email: from.address,
+          subject: msg.subject ?? null,
+          body_preview: preview,
+        },
+      });
+    }
+    caseOpened = true;
+  }
+
+  // Mark the message_id AFTER acting, so a crash mid-way lets a retry re-record.
+  if (agentId) {
+    await admin
+      .from("agent_state")
+      .upsert(
+        { agent_id: agentId, key: stateKey, value: { recorded_at: new Date().toISOString(), org_id: orgId } },
+        { onConflict: "agent_id,key" }
+      );
+  }
+
+  // Return 200 (Rod shouldn't retry) but flag that we recorded it, not dropped it.
+  return { status: 200, body: { recorded_unmatched: true, org_id: orgId, case_opened: caseOpened } };
 }
