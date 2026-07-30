@@ -32,7 +32,7 @@ export default async function CasesPage({ params }: { params: { slug: string } }
     <div className="space-y-6">
       <ListPageHeader
         level={2}
-        title="Cases"
+        title="Email Escalations"
         description="Things that need a human: stale leads (Agent 07), no-reply calling escalations, and supplier forms to fill/sign (Agent 15). Pick a case, take the recommended action, and resolve."
         collectedBy="Agents 07 + 15"
         explainer={

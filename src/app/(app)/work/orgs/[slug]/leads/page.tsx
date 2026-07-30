@@ -256,7 +256,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     <div className="space-y-6">
       <ListPageHeader
         level={2}
-        title="Supplier Leads"
+        title="Agent Supplier Leads"
         description={`Supplier-centric view of leads for ${orgName}. Track supplier qualification, approval data, and sourcing progress.`}
         collectedBy="Agent 03 (Lead Creator) + Agent 06 (Enrichment)"
         actions={
