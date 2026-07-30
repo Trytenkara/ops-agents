@@ -2,9 +2,10 @@ import { tenkaraQuery } from "@/lib/tenkara-readonly";
 
 // One row per (material × supplier) latest expiring/expired quote, across every org.
 // Filters out:
-//   - quotes where status is 'active' (a current, still-valid quote — nothing to
-//     revalidate). Everything else past its reanalyze date is in scope, including
-//     status 'expired': revalidation is exactly for expiring-soon/expired quotes.
+//   - archived quotes ('updated', 'out_of_stock'). Everything else past its
+//     reanalyze date is in scope, including live quotes (status IS NULL or
+//     'active') and 'expired' ones: revalidation is exactly for quotes that are
+//     expiring soon or already expired.
 //   - quotes with no supplier contact email, or a malformed one (junk like
 //     'Online', a missing TLD, or two addresses crammed into one field)
 //   - non-latest quotes for the same material/supplier pair
@@ -69,7 +70,10 @@ export async function queryOverdueRows(): Promise<OverdueRow[]> {
       LEFT JOIN users qa ON qa.id = mq.user_id
       LEFT JOIN operators_view ov ON ov.email = qa.email
       WHERE
-        (mq.status IS NULL OR mq.status::text <> 'active')
+        -- Archived quotes must never re-enter supplier solicitation. Liveness is
+        -- not a reason to skip: the reanalyze date below decides whether a NULL or
+        -- active quote is due.
+        (mq.status IS NULL OR mq.status::text NOT IN ('updated', 'out_of_stock'))
         -- Monitor quotes due by their reanalyze date, AND quotes that never got
         -- a reanalyze date (manually added, cold-solicit, or onboarded-client
         -- quotes) once they've aged past a default validity window — otherwise
