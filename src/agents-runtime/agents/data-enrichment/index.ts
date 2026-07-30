@@ -47,7 +47,7 @@ registerAgent({
     //    come back for a retry only after the queue has cycled.
     const { data: leads, error: pullErr } = await admin
       .from("leads_in_flight")
-      .select("id, org_id, supplier_id, supplier_name, material_name, payload, confidence_score")
+      .select("id, org_id, supplier_id, supplier_name, material_name, source, payload, confidence_score")
       .eq("stage", "raw")
       .eq("status", "active")
       .in("org_id", sourcingOrgIds)
@@ -86,13 +86,14 @@ registerAgent({
     const blockedReasons: Record<string, number> = {};
     const startedAt = Date.now();
 
-    type LeadRow = { id: string; supplier_id: string | null; supplier_name: string | null; material_name: string | null; payload: any; confidence_score: number | null };
+    type LeadRow = { id: string; supplier_id: string | null; supplier_name: string | null; material_name: string | null; source: string | null; payload: any; confidence_score: number | null };
     async function processLead(row: LeadRow): Promise<void> {
       const lead: RawLead = {
         id: row.id,
         supplier_id: row.supplier_id,
         supplier_name: row.supplier_name,
         material_name: row.material_name,
+        source: row.source,
         payload: row.payload ?? {},
         confidence_score: row.confidence_score,
       };

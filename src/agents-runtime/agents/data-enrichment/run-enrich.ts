@@ -55,7 +55,16 @@ export async function enrichAndStageLead(
   // Drop any marker left by an earlier block: a lead that has since become
   // reachable must not be promoted still carrying "held". The block path below
   // re-adds it when this attempt also fails.
-  const { enrichment_blocked_reason: _priorBlock, ...priorPayload } = lead.payload ?? {};
+  //
+  // Also strip any prior material-relevance flag/note. We re-derive it from this
+  // run's assessment below (re-added only when still not relevant), so a lead that
+  // now matches gets its flag cleared and re-runs never double-stamp it.
+  const {
+    enrichment_blocked_reason: _priorBlock,
+    relevance_flag: _priorRelFlag,
+    relevance_note: _priorRelNote,
+    ...priorPayload
+  } = lead.payload ?? {};
 
   // A marketplace-trust penalty (Send-Inquiry / price-range / low-trust-China
   // listing) down-ranks the lead's confidence so it sorts to the bottom of the
@@ -83,9 +92,22 @@ export async function enrichAndStageLead(
     ? `Low confidence result from ${result.marketplace_trust.marketplace_host ?? "marketplace"}`
     : null;
 
+  // Advisory material-relevance flag for importyeti/sourceready leads whose product
+  // text shows zero overlap with the target material. Set exactly the same way as
+  // marketplace_source_note: annotate only, never block or drop. Re-derived every
+  // run (the prior flag was stripped above), so it stays idempotent.
+  const relevancePatch =
+    result.material_relevance && !result.material_relevance.relevant
+      ? {
+          relevance_flag: "material_capability_unverified" as const,
+          relevance_note: result.material_relevance.note,
+        }
+      : {};
+
   const mergedPayload = {
     ...priorPayload,
     ...(marketplaceSourceNote ? { marketplace_source_note: marketplaceSourceNote } : {}),
+    ...relevancePatch,
     enrichment: {
       website_probe: result.website_probe,
       email_check: result.email_check,
@@ -93,6 +115,7 @@ export async function enrichAndStageLead(
       tenkara_supplier: result.tenkara_supplier,
       legitimacy_check: result.legitimacy_check,
       marketplace_trust: result.marketplace_trust,
+      material_relevance: result.material_relevance,
       aggregator_contact_email: result.aggregator_contact_email,
       completeness_score: result.completeness_score,
       completeness_factors: result.completeness_factors,
