@@ -4,6 +4,7 @@ import { getSession, hasAnyRole } from "@/lib/auth";
 import { getMaterialProfile } from "@/lib/material-profile";
 import { getMaterialSourcingStatus } from "@/lib/material-sourcing-status";
 import { MaterialsPanel } from "@/components/materials-panel";
+import { TdbOverviewSubnav } from "@/components/tdb-overview-subnav";
 import { ListPageHeader } from "@/components/list-page-header";
 import { DensityToggle } from "@/components/density-toggle";
 import Link from "next/link";
@@ -52,6 +53,7 @@ export default async function OrgMaterialsPage({ params }: { params: { slug: str
 
   return (
     <div className="space-y-6">
+      <TdbOverviewSubnav slug={org.slug} />
       <ListPageHeader
         level={2}
         title="Materials"

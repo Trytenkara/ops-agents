@@ -2,6 +2,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { notFound } from "next/navigation";
 import { ListPageHeader } from "@/components/list-page-header";
 import { ClientSuppliersSection } from "@/components/client-suppliers-section";
+import { TdbOverviewSubnav } from "@/components/tdb-overview-subnav";
 import { getClientSuppliers } from "@/lib/client-suppliers";
 import { getOrgOperatorPool, operatorBySupplier, getSupplierAssignments } from "@/lib/operator-assignment";
 import { getSession, hasAnyRole } from "@/lib/auth";
@@ -36,6 +37,7 @@ export default async function OrgSuppliersPage({ params }: { params: { slug: str
 
   return (
     <div className="space-y-6">
+      <TdbOverviewSubnav slug={org.slug} />
       <ListPageHeader
         level={2}
         title="Suppliers"

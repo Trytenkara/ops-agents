@@ -14,7 +14,7 @@ export function OrgSubnav({
   sections,
 }: {
   base: string;
-  sections: { href: string; label: string; disabled?: boolean; dev?: boolean }[];
+  sections: { href: string; label: string; disabled?: boolean; dev?: boolean; match?: string[] }[];
 }) {
   const pathname = usePathname() ?? "";
   const [pendingHref, setPendingHref] = useState<string | null>(null);
@@ -28,7 +28,11 @@ export function OrgSubnav({
     <nav className="flex gap-1 text-sm">
       {sections.map((s) => {
         const href = `${base}${s.href}`;
-        const active = s.href === "" ? pathname === base : pathname === href || pathname.startsWith(href + "/");
+        const matchActive = (s.match ?? []).some((m) => {
+          const mh = `${base}${m}`;
+          return pathname === mh || pathname.startsWith(mh + "/");
+        });
+        const active = (s.href === "" ? pathname === base : pathname === href || pathname.startsWith(href + "/")) || matchActive;
         const pending = pendingHref === href && !active;
         // Greyed, non-interactive tab (e.g. a surface that isn't ready to open yet).
         if (s.disabled) {

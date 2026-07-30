@@ -8,8 +8,7 @@ export const dynamic = "force-dynamic";
 const sections = [
   { href: "", label: "Overview" },
   { href: "/profile", label: "Client Profile" },
-  { href: "/materials", label: "Materials" },
-  { href: "/suppliers", label: "Suppliers" },
+  { href: "/materials", label: "TDB Overview", match: ["/suppliers"] },
   { href: "/leads", label: "Supplier Leads" },
   { href: "/price-index", label: "Quotes" },
   { href: "/threads", label: "All Threads" },
