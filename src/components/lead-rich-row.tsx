@@ -536,6 +536,17 @@ export function LeadRichRow({
               </Badge>
             );
           })()}
+          {r.payload?.relevance_flag === "material_capability_unverified" && (
+            <Badge
+              variant="warn"
+              title={
+                (r.payload?.relevance_note as string | undefined) ??
+                "No product-text match to the target material; verify this supplier actually handles it. Advisory only; the lead stays in the pipeline."
+              }
+            >
+              Material fit unverified
+            </Badge>
+          )}
           {Array.isArray(r.flags) &&
             r.flags.map((f: { code: string; label: string }) => (
               <Badge key={f.code} variant="warn" title="Advisory flag; lead stays in the pipeline">
