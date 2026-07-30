@@ -203,7 +203,7 @@ export function LeadsTabs({
 
       {/* Lenses over the same client. Export lives with the filters below. */}
       <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1">
-        {tabBtn("suppliers", "Suppliers", supplierCount)}
+        {tabBtn("suppliers", "Supplier Validation", supplierCount)}
         {tabBtn("all", "All leads", visibleRows.length)}
         {tabBtn("marketplace", "Marketplace pricing", marketCount)}
         {tabBtn("outreach", "Outreach", trackerCount)}
