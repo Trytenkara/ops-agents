@@ -5,16 +5,13 @@ import { orgDisplayName } from "@/lib/org-display";
 
 export const dynamic = "force-dynamic";
 
-// Ordered to follow the sourcing flow left-to-right: client demand/reference
-// first, then the discover → outreach → pipeline → quotes line, then
-// analysis, then supplier/exception surfaces.
 const sections = [
   { href: "", label: "Overview" },
   { href: "/profile", label: "Client Profile" },
   { href: "/materials", label: "Materials" },
   { href: "/suppliers", label: "Suppliers" },
   { href: "/leads", label: "Leads" },
-  { href: "/price-index", label: "Live Price Index" },
+  { href: "/price-index", label: "Quotes" },
   { href: "/threads", label: "All Threads" },
   { href: "/savings", label: "Savings" },
   { href: "/cases", label: "Cases" },
