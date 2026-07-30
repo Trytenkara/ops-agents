@@ -5,12 +5,14 @@ import { cn, relativeTime } from "@/lib/utils";
 import { LeadsList } from "@/components/leads-list";
 import { MarketplacePricing } from "@/components/marketplace-pricing";
 import { OutreachTrackerPanel } from "@/components/outreach-tracker-panel";
+import { SupplierLeadsView } from "@/components/supplier-leads-view";
 import { leadMarketKind, isOperatorDropped } from "@/components/lead-rich-row";
 import type { OutreachTracker } from "@/lib/outreach-tracker";
 import type { RunStat } from "@/components/agent-runs-strip";
 import type { CaseDims } from "@/lib/marketplace-case-dims";
+import type { SupplierProfile } from "@/lib/supplier-profiles";
 
-type Tab = "all" | "raw" | "enriched" | "ready" | "held" | "marketplace" | "outreach" | "removed" | "dropped";
+type Tab = "all" | "raw" | "enriched" | "ready" | "held" | "marketplace" | "outreach" | "removed" | "dropped" | "suppliers";
 
 // The sourcing pipeline as a live funnel: each stage is the output of one agent,
 // so surfacing raw -> enriched -> ready-to-send -> held (with counts + the
@@ -44,6 +46,7 @@ export function LeadsTabs({
   orgClients = [],
   tagsByMaterialId = {},
   dimsByPack = {},
+  supplierProfiles = [],
 }: {
   rows: any[];
   removedRows?: any[];
@@ -56,6 +59,7 @@ export function LeadsTabs({
   orgClients?: { id: string; name: string }[];
   tagsByMaterialId?: Record<string, string>; // tenkara_material_id → org_client_id
   dimsByPack?: Record<string, CaseDims>;
+  supplierProfiles?: SupplierProfile[];
 }) {
   const [clientFilter, setClientFilter] = useState("all");
 
@@ -98,7 +102,9 @@ export function LeadsTabs({
     return visibleRows.filter((r) => r.stage === stage).length;
   };
 
-  const [tab, setTab] = useState<Tab>(rows.length === 0 && trackerCount > 0 ? "outreach" : "all");
+  const supplierCount = new Set(visibleRows.map((r: any) => r.supplier_id ?? r.supplier_name).filter(Boolean)).size;
+
+  const [tab, setTab] = useState<Tab>("suppliers");
 
   const tabBtn = (key: Tab, label: string, count?: number) => (
     <button
@@ -195,6 +201,7 @@ export function LeadsTabs({
 
       {/* Lenses over the same client. Export lives with the filters below. */}
       <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1">
+        {tabBtn("suppliers", "Suppliers", supplierCount)}
         {tabBtn("all", "All leads", visibleRows.length)}
         {tabBtn("marketplace", "Marketplace pricing", marketCount)}
         {tabBtn("outreach", "Outreach", trackerCount)}
@@ -202,6 +209,16 @@ export function LeadsTabs({
         {tabBtn("dropped", "Dropped", droppedRows.length)}
       </div>
 
+      {tab === "suppliers" && orgId && (
+        <SupplierLeadsView
+          rows={visibleRows}
+          profiles={supplierProfiles}
+          canAct={canAct}
+          slug={slug}
+          orgId={orgId}
+          operatorOptions={operatorOptions}
+        />
+      )}
       {tab === "all" && (
         <LeadsList rows={visibleRows} canAct={canAct} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
       )}

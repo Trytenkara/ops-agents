@@ -17,6 +17,7 @@ import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
 import { getOrgOperatorPool, pickSupplierOperator, operatorBySupplier, getSupplierAssignments } from "@/lib/operator-assignment";
 import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
 import { orgDisplayName } from "@/lib/org-display";
+import { getSupplierProfiles } from "@/lib/supplier-profiles";
 import { AgentRunsStrip, type RunStat } from "@/components/agent-runs-strip";
 import { RunNowButton } from "@/components/run-now-button";
 import { MaterialFlagsPrompt, type MaterialFlag } from "@/components/material-flags-prompt";
@@ -237,6 +238,9 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     marketplace: { total: 0, emailed: 0, manual: 0, needsPull: 0, pending: 0 },
   }));
 
+  // Supplier profiles for the supplier-centric view (approval tracking)
+  const supplierProfiles = await getSupplierProfiles(admin, org.id).catch(() => []);
+
   // Client folders — for the client filter on the leads list.
   const [{ data: tagRows }, { data: orgClientRows }] = await Promise.all([
     admin.from("material_client_tags").select("tenkara_material_id, org_client_id").eq("org_id", org.id),
@@ -252,8 +256,8 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     <div className="space-y-6">
       <ListPageHeader
         level={2}
-        title="Leads"
-        description={`Suppliers discovered for ${orgName}. Export the CSV for the manual supplier-sourcing index.`}
+        title="Supplier Leads"
+        description={`Supplier-centric view of leads for ${orgName}. Track supplier qualification, approval data, and sourcing progress.`}
         collectedBy="Agent 03 (Lead Creator) + Agent 06 (Enrichment)"
         actions={
           canAct ? (
@@ -291,7 +295,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           </p>
         </div>
       )}
-      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} />
+      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} />
 
       <section className="space-y-2 pt-2">
         <h2 className="font-serif text-xl tracking-tight">

@@ -1,0 +1,451 @@
+"use client";
+
+import { useState, useTransition } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
+import { SupplierProfileCard } from "@/components/supplier-profile-card";
+import { seedSupplierProfiles, createSupplierProfile } from "@/app/actions/supplier-profiles";
+import { LeadRichRow, LeadRichHeaders, leadRichColSpan, LeadMatchBadge, LeadSourceBadge } from "@/components/lead-rich-row";
+import { ListCsvButton } from "@/components/list-csv-button";
+import { filenameFor } from "@/lib/csv";
+import { profileCompleteness, type SupplierProfile } from "@/lib/supplier-profiles";
+import { deriveMatchTier } from "@/lib/lead-match-tier";
+import { leadMarketKind } from "@/lib/lead-market";
+import { relativeTime } from "@/lib/utils";
+
+interface SupplierGroup {
+  supplierName: string;
+  supplierId: string | null;
+  profile: SupplierProfile | null;
+  leads: any[];
+  marketKind: "marketplace" | "direct" | null;
+  latestLead: string | null;
+}
+
+const SORT_OPTIONS = [
+  { value: "leads", label: "Most leads" },
+  { value: "name", label: "Supplier (A-Z)" },
+  { value: "completeness", label: "Profile completeness" },
+  { value: "newest", label: "Newest leads" },
+];
+
+const STATUS_FILTER = [
+  { value: "all", label: "All statuses" },
+  { value: "draft", label: "Draft" },
+  { value: "pending_review", label: "Pending Review" },
+  { value: "ready_for_submission", label: "Ready" },
+  { value: "submitted", label: "Submitted" },
+  { value: "no_profile", label: "No profile yet" },
+];
+
+export function SupplierLeadsView({
+  rows,
+  profiles,
+  canAct,
+  slug,
+  orgId,
+  operatorOptions,
+}: {
+  rows: any[];
+  profiles: SupplierProfile[];
+  canAct: boolean;
+  slug: string;
+  orgId: string;
+  operatorOptions?: { id: string; name: string }[];
+}) {
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState("leads");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [expandedSupplier, setExpandedSupplier] = useState<string | null>(null);
+  const [showLeadsFor, setShowLeadsFor] = useState<string | null>(null);
+  const [seeding, startSeed] = useTransition();
+  const [seedResult, setSeedResult] = useState<string | null>(null);
+
+  const profileBySupplier = new Map<string, SupplierProfile>();
+  const profileByName = new Map<string, SupplierProfile>();
+  for (const p of profiles) {
+    if (p.supplier_id) profileBySupplier.set(p.supplier_id, p);
+    profileByName.set(p.supplier_name.toLowerCase(), p);
+  }
+
+  // Group leads by supplier
+  const groupMap = new Map<string, SupplierGroup>();
+  for (const lead of rows) {
+    const key = lead.supplier_id ?? lead.supplier_name ?? "unknown";
+    let group = groupMap.get(key);
+    if (!group) {
+      const profile = lead.supplier_id
+        ? profileBySupplier.get(lead.supplier_id) ?? null
+        : profileByName.get((lead.supplier_name ?? "").toLowerCase()) ?? null;
+      const mk = (lead.market_kind as string | null) ?? leadMarketKind(lead.payload?.site_type);
+      group = {
+        supplierName: lead.supplier_name ?? "Unknown",
+        supplierId: lead.supplier_id ?? null,
+        profile,
+        leads: [],
+        marketKind: mk === "marketplace" ? "marketplace" : mk === "direct" ? "direct" : null,
+        latestLead: null,
+      };
+      groupMap.set(key, group);
+    }
+    group.leads.push(lead);
+    if (!group.latestLead || (lead.created_at && lead.created_at > group.latestLead)) {
+      group.latestLead = lead.created_at;
+    }
+  }
+
+  // Also add profiles that have no matching leads yet
+  for (const p of profiles) {
+    const key = p.supplier_id ?? p.supplier_name.toLowerCase();
+    if (!groupMap.has(key)) {
+      groupMap.set(key, {
+        supplierName: p.supplier_name,
+        supplierId: p.supplier_id,
+        profile: p,
+        leads: [],
+        marketKind: p.supplier_type,
+        latestLead: null,
+      });
+    }
+  }
+
+  let groups = Array.from(groupMap.values());
+
+  // Filters
+  if (search) {
+    const q = search.toLowerCase();
+    groups = groups.filter((g) => {
+      const hay = `${g.supplierName} ${g.profile?.poc_email ?? ""} ${g.profile?.poc_name ?? ""} ${g.leads.map((l: any) => l.material_name ?? "").join(" ")}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }
+  if (statusFilter !== "all") {
+    if (statusFilter === "no_profile") {
+      groups = groups.filter((g) => !g.profile);
+    } else {
+      groups = groups.filter((g) => g.profile?.approval_status === statusFilter);
+    }
+  }
+
+  // Sort
+  groups = [...groups].sort((a, b) => {
+    switch (sort) {
+      case "name":
+        return a.supplierName.localeCompare(b.supplierName);
+      case "completeness": {
+        const aPct = a.profile ? profileCompleteness(a.profile).pct : -1;
+        const bPct = b.profile ? profileCompleteness(b.profile).pct : -1;
+        return bPct - aPct;
+      }
+      case "newest": {
+        const aDate = a.latestLead ?? "";
+        const bDate = b.latestLead ?? "";
+        return bDate.localeCompare(aDate);
+      }
+      default:
+        return b.leads.length - a.leads.length;
+    }
+  });
+
+  const totalSuppliers = groupMap.size;
+  const withProfile = Array.from(groupMap.values()).filter((g) => g.profile).length;
+  const avgCompleteness = withProfile > 0
+    ? Math.round(
+        Array.from(groupMap.values())
+          .filter((g) => g.profile)
+          .reduce((sum, g) => sum + profileCompleteness(g.profile!).pct, 0) / withProfile
+      )
+    : 0;
+
+  function handleSeed() {
+    startSeed(async () => {
+      const res = await seedSupplierProfiles(orgId);
+      if (res.ok) {
+        setSeedResult(`Seeded ${res.count ?? 0} new profiles`);
+        setTimeout(() => setSeedResult(null), 3000);
+      }
+    });
+  }
+
+  // CSV export: one row per supplier with profile completeness + lead counts
+  const csvHeaders = [
+    "Supplier", "Type", "Leads", "Profile Status", "Completeness %",
+    "POC Email", "POC Phone", "POC Name",
+    "Shipping Address", "Shipping Terms", "Shipping Email",
+    "DDP Can Book", "DDP Min", "DDP Max",
+    "Billing Email", "Billing POC",
+    "Upfront %", "Net Days", "Payment Completion", "Credit Line",
+    "Hazmat Fee", "Temp Storage Fee", "Liftgate Fee", "Special Packaging Fee",
+    "Materials",
+  ];
+  const csvRows = groups.map((g) => {
+    const p = g.profile;
+    const materials = Array.from(new Set(g.leads.map((l: any) => l.material_name).filter(Boolean))).join("; ");
+    return [
+      g.supplierName,
+      g.marketKind ?? "",
+      g.leads.length,
+      p?.approval_status ?? "no profile",
+      p ? profileCompleteness(p).pct : "",
+      p?.poc_email ?? "",
+      p?.poc_phone ?? "",
+      p?.poc_name ?? "",
+      p?.shipping_address ?? "",
+      p?.shipping_terms ?? "",
+      p?.shipping_email ?? "",
+      p?.ddp_can_book ? "Yes" : "No",
+      p?.ddp_min_limit ?? "",
+      p?.ddp_max_limit ?? "",
+      p?.billing_email ?? "",
+      p?.billing_poc_name ?? "",
+      p?.payment_upfront_pct ?? "",
+      p?.payment_net_days ?? "",
+      p?.payment_completion ?? "",
+      p?.payment_credit_line ?? "",
+      p?.hazmat_handling_fee ?? 0,
+      p?.temp_storage_fee ?? 0,
+      p?.liftgate_fee ?? 0,
+      p?.special_packaging_fee ?? 0,
+      materials,
+    ];
+  });
+
+  return (
+    <div className="space-y-4">
+      {/* Summary bar */}
+      <div className="flex items-center gap-4 text-sm flex-wrap">
+        <span className="text-muted-foreground">
+          {totalSuppliers} supplier{totalSuppliers !== 1 ? "s" : ""}
+        </span>
+        <span className="text-muted-foreground">
+          {withProfile} with profile{withProfile !== totalSuppliers ? ` (${totalSuppliers - withProfile} need profiles)` : ""}
+        </span>
+        <span className="text-muted-foreground">Avg completeness: {avgCompleteness}%</span>
+        {canAct && (
+          <Button variant="outline" size="sm" onClick={handleSeed} disabled={seeding}>
+            {seeding ? "Seeding..." : "Seed profiles from leads"}
+          </Button>
+        )}
+        {seedResult && <span className="text-xs text-green-600">{seedResult}</span>}
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Search</span>
+          <Input
+            type="text"
+            placeholder="supplier, material, email..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-8 w-56"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Profile status</span>
+          <Select
+            size="sm"
+            className="min-w-[10rem]"
+            ariaLabel="Status"
+            value={statusFilter}
+            onValueChange={setStatusFilter}
+            options={STATUS_FILTER}
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Sort</span>
+          <Select
+            size="sm"
+            className="min-w-[10rem]"
+            ariaLabel="Sort"
+            value={sort}
+            onValueChange={setSort}
+            options={SORT_OPTIONS}
+          />
+        </label>
+        <div className="ml-auto">
+          <ListCsvButton
+            filename={filenameFor(slug, "supplier-leads")}
+            headers={csvHeaders}
+            rows={csvRows}
+          />
+        </div>
+      </div>
+
+      {/* Supplier groups */}
+      <div className="space-y-2">
+        {groups.map((g) => {
+          const key = g.supplierId ?? g.supplierName;
+          const isExpanded = expandedSupplier === key;
+          const isShowingLeads = showLeadsFor === key;
+          const comp = g.profile ? profileCompleteness(g.profile) : null;
+          const materials = Array.from(new Set(g.leads.map((l: any) => l.material_name).filter(Boolean)));
+          const stages = { raw: 0, enriched: 0, ready_for_outreach: 0, held: 0 };
+          for (const l of g.leads) {
+            if (l.needs_material_name) stages.held++;
+            else if (l.stage in stages) (stages as any)[l.stage]++;
+          }
+
+          return (
+            <div key={key} className="rounded-lg border bg-card overflow-hidden">
+              {/* Supplier summary row */}
+              <div
+                className="flex items-center justify-between px-4 py-3 hover:bg-accent/50 cursor-pointer transition-colors"
+                onClick={() => setExpandedSupplier(isExpanded ? null : key)}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="text-xs text-muted-foreground">{isExpanded ? "v" : ">"}</span>
+                  <span className="font-medium text-sm truncate">{g.supplierName}</span>
+                  {g.marketKind && (
+                    <Badge variant={g.marketKind === "marketplace" ? "accent" : "secondary"}>
+                      {g.marketKind === "marketplace" ? "Marketplace" : "Direct"}
+                    </Badge>
+                  )}
+                  {g.profile ? (
+                    <Badge variant={
+                      g.profile.approval_status === "ready_for_submission" || g.profile.approval_status === "submitted" ? "success" :
+                      g.profile.approval_status === "pending_review" ? "warn" : "secondary"
+                    }>
+                      {g.profile.approval_status.replace(/_/g, " ")}
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline">No profile</Badge>
+                  )}
+                </div>
+                <div className="flex items-center gap-4 shrink-0">
+                  {/* Stage dots */}
+                  <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                    {stages.raw > 0 && <span title="Raw"><span className="inline-block h-1.5 w-1.5 rounded-full bg-slate-400" /> {stages.raw}</span>}
+                    {stages.enriched > 0 && <span title="Enriched"><span className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500" /> {stages.enriched}</span>}
+                    {stages.ready_for_outreach > 0 && <span title="Ready"><span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" /> {stages.ready_for_outreach}</span>}
+                    {stages.held > 0 && <span title="Held"><span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" /> {stages.held}</span>}
+                  </div>
+                  <span className="text-xs text-muted-foreground">
+                    {g.leads.length} lead{g.leads.length !== 1 ? "s" : ""}
+                  </span>
+                  {comp && (
+                    <div className="flex items-center gap-2 w-20">
+                      <div className="h-1.5 flex-1 bg-secondary rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full ${comp.pct >= 80 ? "bg-green-500" : comp.pct >= 50 ? "bg-yellow-500" : "bg-red-400"}`}
+                          style={{ width: `${comp.pct}%` }}
+                        />
+                      </div>
+                      <span className="text-xs text-muted-foreground tabular-nums">{comp.pct}%</span>
+                    </div>
+                  )}
+                  {materials.length > 0 && (
+                    <span className="text-xs text-muted-foreground truncate max-w-[16ch]" title={materials.join(", ")}>
+                      {materials[0]}{materials.length > 1 ? ` +${materials.length - 1}` : ""}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Expanded: profile card + leads */}
+              {isExpanded && (
+                <div className="border-t px-4 py-4 space-y-4 bg-muted/20">
+                  {/* Profile card */}
+                  {g.profile ? (
+                    <SupplierProfileCard
+                      profile={g.profile}
+                      orgId={orgId}
+                      leadCount={g.leads.length}
+                      canAct={canAct}
+                    />
+                  ) : (
+                    <div className="rounded-lg border border-dashed p-4 text-center space-y-2">
+                      <p className="text-sm text-muted-foreground">
+                        No approval profile yet for this supplier.
+                      </p>
+                      {canAct && (
+                        <CreateProfileButton
+                          orgId={orgId}
+                          supplierId={g.supplierId}
+                          supplierName={g.supplierName}
+                          lead={g.leads[0]}
+                        />
+                      )}
+                    </div>
+                  )}
+
+                  {/* Leads for this supplier */}
+                  {g.leads.length > 0 && (
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => setShowLeadsFor(isShowingLeads ? null : key)}
+                        className="text-xs text-muted-foreground hover:text-foreground mb-2"
+                      >
+                        {isShowingLeads ? "Hide" : "Show"} {g.leads.length} lead{g.leads.length !== 1 ? "s" : ""}
+                      </button>
+                      {isShowingLeads && (
+                        <Table>
+                          <TableHeader>
+                            <LeadRichHeaders showOrg={false} selectable={false} />
+                          </TableHeader>
+                          <TableBody>
+                            {g.leads.map((lead: any) => (
+                              <LeadRichRow
+                                key={lead.id}
+                                r={lead}
+                                canAct={canAct}
+                                showOrg={false}
+                                orgId={orgId}
+                                operatorOptions={operatorOptions}
+                              />
+                            ))}
+                          </TableBody>
+                        </Table>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {groups.length === 0 && (
+          <p className="text-center text-muted-foreground py-8">No suppliers match your filters.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CreateProfileButton({
+  orgId,
+  supplierId,
+  supplierName,
+  lead,
+}: {
+  orgId: string;
+  supplierId: string | null;
+  supplierName: string;
+  lead?: any;
+}) {
+  const [creating, startCreate] = useTransition();
+
+  function handleCreate() {
+    startCreate(async () => {
+      const p = lead?.payload ?? {};
+      const isMarketplace = p.site_type === "M" || p.site_type === "MS" ? "marketplace" : "direct";
+      await createSupplierProfile(orgId, supplierId, supplierName, {
+        supplier_type: isMarketplace as "marketplace" | "direct",
+        poc_email: p.supplier_contact_email ?? p.contact_email ?? null,
+        poc_phone: p.sales_phone ?? null,
+        poc_name: p.poc_name ?? null,
+        shipping_address: p.hq_address ?? null,
+      });
+    });
+  }
+
+  return (
+    <Button variant="outline" size="sm" onClick={handleCreate} disabled={creating}>
+      {creating ? "Creating..." : "Create profile"}
+    </Button>
+  );
+}

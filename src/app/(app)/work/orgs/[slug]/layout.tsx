@@ -10,7 +10,7 @@ const sections = [
   { href: "/profile", label: "Client Profile" },
   { href: "/materials", label: "Materials" },
   { href: "/suppliers", label: "Suppliers" },
-  { href: "/leads", label: "Leads" },
+  { href: "/leads", label: "Supplier Leads" },
   { href: "/price-index", label: "Quotes" },
   { href: "/threads", label: "All Threads" },
   { href: "/savings", label: "Savings" },
