@@ -5,7 +5,7 @@
 // every existing lead with no re-run and no DB write.
 
 export interface LeadFlag {
-  code: "inactive_site" | "missing_cert" | "sample_only";
+  code: "inactive_site" | "missing_cert" | "sample_only" | "below_onboarded_bar";
   label: string;
 }
 
@@ -53,6 +53,17 @@ function sampleOnly(payload: any): LeadFlag | null {
   return null;
 }
 
+// The client has been marked "onboarded" and this lead was re-filtered below the
+// onboarded bar (see lib/onboarded-bar.ts). Read straight from the advisory the
+// re-filter wrote (payload.below_onboarded_bar) so it renders retroactively with
+// no recompute; clearing that advisory (moving back to motherlode) drops the flag.
+function belowOnboardedBar(payload: any): LeadFlag | null {
+  const b = payload?.below_onboarded_bar;
+  if (!b || typeof b !== "object") return null;
+  const reason = typeof b.reason === "string" && b.reason.trim() ? `: ${b.reason.trim()}` : "";
+  return { code: "below_onboarded_bar", label: `Below onboarded bar${reason}` };
+}
+
 export function computeLeadFlags(payload: any, ctx: LeadFlagContext = {}): LeadFlag[] {
   const flags: LeadFlag[] = [];
   const site = inactiveSite(payload);
@@ -61,5 +72,7 @@ export function computeLeadFlags(payload: any, ctx: LeadFlagContext = {}): LeadF
   if (cert) flags.push(cert);
   const sample = sampleOnly(payload);
   if (sample) flags.push(sample);
+  const onboarded = belowOnboardedBar(payload);
+  if (onboarded) flags.push(onboarded);
   return flags;
 }

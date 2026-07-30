@@ -3,9 +3,12 @@ import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateClientProfile } from "@/lib/client-profile";
 import { extractDocumentText } from "@/lib/po-parse";
+import { evaluateOnboardedBar } from "@/lib/onboarded-bar";
 import { revalidatePath } from "next/cache";
 
 interface Result { ok: boolean; error?: string }
+
+type Admin = ReturnType<typeof createAdminClient>;
 
 const EDIT_ROLES = ["admin", "ops_lead", "ops_operator"] as const;
 
@@ -41,6 +44,131 @@ export async function setOrgSourcingStatus(orgId: string, status: SourcingStatus
   if (error) return { ok: false, error: error.message };
   revalidatePath(`/work/orgs`);
   revalidatePath(`/work/orgs/${orgId}`);
+  return { ok: true };
+}
+
+// Client onboarding stage (see migration 0058). motherlode = early wide-net
+// sourcing (surface everyone); onboarded = graduated client, tighter bar. Moving
+// to onboarded re-filters this org's active leads: leads below the onboarded bar
+// get a reversible advisory (payload.below_onboarded_bar) shown as a badge in the
+// Leads UI — nothing is deleted or filtered out. Moving back to motherlode clears
+// that advisory. Restricted to admin/ops_lead since it changes how the client's
+// whole lead list reads.
+const ONBOARDING_STAGES = ["motherlode", "onboarded"] as const;
+export type OnboardingStageInput = (typeof ONBOARDING_STAGES)[number];
+
+// Bounded page size / hard cap for the re-filter sweep (mirrors the Leads page).
+const REFILTER_PAGE = 1000;
+const REFILTER_HARD_CAP = 5000;
+
+// Idempotent re-filter over one org's ACTIVE leads. When stage === 'onboarded',
+// stamp payload.below_onboarded_bar on leads below the bar and clear it from leads
+// at/above it; when 'motherlode', clear the advisory from every lead. Only writes
+// a row when its advisory actually changes, so re-running the same stage is a
+// no-op. Scoped by org_id so it never touches another client's leads. Returns how
+// many advisories were added/cleared.
+async function applyOnboardedRefilter(
+  admin: Admin,
+  orgId: string,
+  stage: OnboardingStageInput,
+): Promise<{ flagged: number; cleared: number; scanned: number }> {
+  let flagged = 0;
+  let cleared = 0;
+  let scanned = 0;
+  const flaggedAt = new Date().toISOString();
+
+  for (let from = 0; from < REFILTER_HARD_CAP; from += REFILTER_PAGE) {
+    const { data: page, error } = await admin
+      .from("leads_in_flight")
+      .select("id, source, payload, confidence_score")
+      .eq("org_id", orgId)
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .range(from, from + REFILTER_PAGE - 1);
+    if (error) throw new Error(error.message);
+    if (!page || page.length === 0) break;
+
+    for (const r of page as any[]) {
+      scanned++;
+      const payload = (r.payload as any) ?? {};
+      const hasAdvisory = payload.below_onboarded_bar != null;
+
+      // Onboarded: below-bar leads should carry the advisory, at/above should not.
+      // Motherlode: no lead should carry it.
+      const shouldFlag = stage === "onboarded" && evaluateOnboardedBar(r).below;
+
+      if (shouldFlag && !hasAdvisory) {
+        const reason = evaluateOnboardedBar(r).reason;
+        const { error: upErr } = await admin
+          .from("leads_in_flight")
+          .update({ payload: { ...payload, below_onboarded_bar: { reason, flagged_at: flaggedAt } } })
+          .eq("id", r.id)
+          .eq("status", "active");
+        if (upErr) throw new Error(upErr.message);
+        flagged++;
+      } else if (!shouldFlag && hasAdvisory) {
+        const next = { ...payload };
+        delete next.below_onboarded_bar;
+        const { error: upErr } = await admin
+          .from("leads_in_flight")
+          .update({ payload: next })
+          .eq("id", r.id)
+          .eq("status", "active");
+        if (upErr) throw new Error(upErr.message);
+        cleared++;
+      }
+    }
+
+    if (page.length < REFILTER_PAGE) break;
+  }
+
+  return { flagged, cleared, scanned };
+}
+
+export async function setOrgOnboardingStage(orgId: string, stage: OnboardingStageInput): Promise<Result> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" };
+  if (!hasAnyRole(session, ["admin", "ops_lead"])) return { ok: false, error: "forbidden" };
+  if (!ONBOARDING_STAGES.includes(stage)) return { ok: false, error: "invalid stage" };
+
+  const admin = createAdminClient();
+
+  // Read the current stage so this action is idempotent: re-selecting the same
+  // stage still re-runs the (idempotent) re-filter, which self-heals any drift
+  // without double-counting or touching other orgs.
+  const { data: org, error: readErr } = await admin
+    .from("orgs")
+    .select("id, onboarding_stage")
+    .eq("id", orgId)
+    .maybeSingle();
+  if (readErr) return { ok: false, error: readErr.message };
+  if (!org) return { ok: false, error: "org not found" };
+  const prevStage = (org.onboarding_stage ?? "motherlode") as OnboardingStageInput;
+
+  const { error } = await admin
+    .from("orgs")
+    .update({ onboarding_stage: stage, updated_at: new Date().toISOString() })
+    .eq("id", orgId);
+  if (error) return { ok: false, error: error.message };
+
+  let counts: { flagged: number; cleared: number; scanned: number };
+  try {
+    counts = await applyOnboardedRefilter(admin, orgId, stage);
+  } catch (e: any) {
+    return { ok: false, error: `stage saved, but re-filter failed: ${e?.message ?? "unknown"}` };
+  }
+
+  await admin.from("audit_log").insert({
+    actor_user_id: session.userId,
+    action: "org.onboarding_stage_set",
+    target_table: "orgs",
+    target_id: orgId,
+    diff: { from: prevStage, to: stage, ...counts },
+  });
+
+  revalidatePath(`/work/orgs`);
+  revalidatePath(`/work/orgs/${orgId}`);
+  revalidatePath("/work/orgs/[slug]/leads", "page");
   return { ok: true };
 }
 
