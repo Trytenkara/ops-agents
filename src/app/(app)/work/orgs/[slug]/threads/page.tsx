@@ -10,6 +10,8 @@ import { ThreadsList, type ThreadRow, type ThreadKind } from "@/components/threa
 import { PanelTabs } from "@/components/panel-tabs";
 import { CasesSection } from "@/components/cases-section";
 import { loadOrgCases, caseCategory } from "@/lib/org-cases";
+import { getOutreachTracker } from "@/lib/outreach-tracker";
+import { OutreachSummaryView } from "@/components/outreach-summary-view";
 
 export const dynamic = "force-dynamic";
 
@@ -79,6 +81,12 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
     // Tenkara unreachable — rows fall back to "name unavailable".
   }
 
+  const tracker = await getOutreachTracker(admin, org.id).catch(() => ({
+    materials: [],
+    totals: { emails: 0, qaFlagged: 0, manual: 0, skipped: 0, suppliers: 0 },
+    marketplace: { total: 0, emailed: 0, manual: 0, needsPull: 0, pending: 0 },
+  }));
+
   const threadRows: ThreadRow[] = rows
     .filter((d: any) => d.agents?.slug !== "agent-02-revalidation")
     .map((d: any) => ({
@@ -117,6 +125,14 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
       />
       <PanelTabs
         tabs={[
+          {
+            key: "outreach",
+            label: "Outreach Summary",
+            badge: tracker.totals.emails,
+            content: (
+              <OutreachSummaryView tracker={tracker} threads={threadRows} slug={params.slug} />
+            ),
+          },
           {
             key: "threads",
             label: "Threads",
