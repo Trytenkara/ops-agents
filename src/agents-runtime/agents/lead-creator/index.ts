@@ -115,6 +115,15 @@ const SIGNAL_REASON: Record<CandidateSupplier["signal"], string> = {
   quoted_similar_inci: "previously quoted a material with a similar INCI",
   quoted_similar_name: "previously quoted a similarly-named material",
 };
+
+// Relevance tier: "Confirmed" = supplier is verified to handle the exact target
+// material. "Potential" = adjacent/similar supplier, not confirmed for this material.
+const SIGNAL_RELEVANCE: Record<CandidateSupplier["signal"], "Confirmed" | "Potential"> = {
+  quoted_same_material: "Confirmed",
+  catalog_match: "Confirmed",
+  quoted_similar_inci: "Potential",
+  quoted_similar_name: "Potential",
+};
 function describeCandidateConfidence(c: CandidateSupplier): string {
   const n = c.signal_count ?? 1;
   const seen = n > 1 ? ` (seen ${n}×)` : "";
@@ -715,6 +724,7 @@ registerAgent({
             signal: c.signal,
             signal_count: c.signal_count,
             confidence_reason: describeCandidateConfidence(c),
+            relevance_tier: SIGNAL_RELEVANCE[c.signal],
             tenkara_org_id: material.tenkara_org_id,
           },
           confidence_score: scoreCandidate(c),
@@ -859,6 +869,7 @@ registerAgent({
               site_type: s.site_type,            // M / MS / N — surfaced in UI
               confidence_hint: s.confidence_hint,
               confidence_reason: describeScoutConfidence(s.confidence_hint),
+              relevance_tier: s.confidence_hint === "strong" ? "Confirmed" : "Potential",
               completeness_score: scoutCompleteness(s),
               source_url: s.url,
               source_citations: s.source_citations,

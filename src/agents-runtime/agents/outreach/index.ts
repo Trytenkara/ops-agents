@@ -264,13 +264,26 @@ registerAgent({
     // Suppliers with at least one material blocked this run (spelling flag /
     // missing name). We hold the WHOLE supplier so they get one complete
     // consolidated email later, never a partial now.
+    //
+    // Unify keys early: if a lead without supplier_id shares an email with one
+    // that has it, use the supplier_id key so blocked-supplier tracking is
+    // consistent with the outreach grouping below (prevents partial blocks).
+    const earlyEmailToSupplierId = new Map<string, string>();
+    for (const l of leads) {
+      const em = String((l.payload as any)?.supplier_contact_email ?? "").trim().toLowerCase();
+      if (l.supplier_id && em) earlyEmailToSupplierId.set(em, l.supplier_id);
+    }
     const blockedSupplierKeys = new Set<string>();
-    const supplierKeyForLead = (l: (typeof leads)[number]): string =>
-      l.supplier_id
-        ? `s:${l.supplier_id}`
-        : (l.payload as any)?.supplier_contact_email
-          ? `e:${String((l.payload as any).supplier_contact_email).toLowerCase()}`
-          : `l:${l.id}`;
+    const supplierKeyForLead = (l: (typeof leads)[number]): string => {
+      if (l.supplier_id) return `s:${l.supplier_id}`;
+      const em = String((l.payload as any)?.supplier_contact_email ?? "").trim().toLowerCase();
+      if (em) {
+        const siblingId = earlyEmailToSupplierId.get(em);
+        if (siblingId) return `s:${siblingId}`;
+        return `e:${em}`;
+      }
+      return `l:${l.id}`;
+    };
 
     for (const lead of leads) {
       const payload = (lead.payload ?? {}) as any;
@@ -547,8 +560,24 @@ registerAgent({
     // with the whole list"). The rest are held (payload.phased_hold) for the reply
     // loop to introduce after the supplier engages.
     const firstPoolSize = envFirstPoolSize();
-    const supplierKeyOf = (c: Candidate): string =>
-      c.lead.supplier_id ? `s:${c.lead.supplier_id}` : `e:${(c.email ?? "").toLowerCase()}`;
+
+    // Unify grouping keys: when a scout lead (no supplier_id) shares an email
+    // with a graph/IY lead (has supplier_id), join the supplier_id group. This
+    // prevents the same real supplier from landing in two groups and getting two
+    // separate cold emails.
+    const emailToSupplierId = new Map<string, string>();
+    for (const c of emailCandidates) {
+      if (c.lead.supplier_id && c.email) {
+        emailToSupplierId.set(c.email.toLowerCase(), c.lead.supplier_id);
+      }
+    }
+    const supplierKeyOf = (c: Candidate): string => {
+      if (c.lead.supplier_id) return `s:${c.lead.supplier_id}`;
+      const siblingId = c.email ? emailToSupplierId.get(c.email.toLowerCase()) : null;
+      if (siblingId) return `s:${siblingId}`;
+      return `e:${(c.email ?? "").toLowerCase()}`;
+    };
+
     const emailBySupplier = new Map<string, Candidate[]>();
     for (const c of emailCandidates) {
       const k = supplierKeyOf(c);
@@ -619,26 +648,46 @@ registerAgent({
         continue;
       }
 
-      // Already contacted? If a live draft exists for this supplier, first contact
-      // already happened — these newly-enriched materials are follow-ups, so hold
-      // them for the reply loop rather than opening a second cold thread. Match on
-      // supplier_id when we have one; web-discovered suppliers (no supplier_id, the
-      // common case for Scout leads) are matched on the contact email so a second
-      // material to the same address in a LATER run is held, not sent as a fresh
-      // cold email. Grouping already consolidates same-run materials by email key.
+      // Already contacted? If a live draft exists for this supplier from ANY
+      // agent (not just Agent 04 — Agent 02 revalidation also opens threads),
+      // first contact already happened. Hold for the reply loop rather than
+      // opening a second cold thread. Match on supplier_id first, then fall back
+      // to email/domain match (catches cross-source duplicates where a scout lead
+      // has supplier_id: null but the same email as an existing graph-lead draft).
       {
-        let q = admin
-          .from("draft_references")
-          .select("id")
-          .eq("agent_id", tackleAgentId)
-          .eq("org_id", primary.lead.org_id)
-          .in("status", ["staged", "reviewed", "sent"])
-          .limit(1);
-        q = supplierId
-          ? q.eq("supplier_id", supplierId)
-          : q.ilike("metadata->>supplier_contact_email", primary.email!);
-        const { data: existing } = await q;
-        if (existing && existing.length) {
+        const FREE_DOMAINS = new Set([
+          "gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com",
+          "icloud.com", "me.com", "protonmail.com", "proton.me", "live.com",
+        ]);
+        let existing: any[] = [];
+        if (supplierId) {
+          const { data } = await admin
+            .from("draft_references")
+            .select("id")
+            .eq("org_id", primary.lead.org_id)
+            .in("status", ["staged", "reviewed", "sent"])
+            .eq("supplier_id", supplierId)
+            .limit(1);
+          existing = data ?? [];
+        }
+        if (!existing.length && primary.email) {
+          const emailAddr = primary.email;
+          const domain = emailAddr.split("@")[1]?.toLowerCase();
+          let q = admin
+            .from("draft_references")
+            .select("id")
+            .eq("org_id", primary.lead.org_id)
+            .in("status", ["staged", "reviewed", "sent"])
+            .limit(1);
+          if (domain && !FREE_DOMAINS.has(domain)) {
+            q = q.or(`metadata->>supplier_contact_email.ilike.${emailAddr},metadata->>supplier_contact_email.ilike.%@${domain}`);
+          } else {
+            q = q.ilike("metadata->>supplier_contact_email", emailAddr);
+          }
+          const { data } = await q;
+          existing = data ?? [];
+        }
+        if (existing.length) {
           await holdForFollowup(group, [], existing[0].id);
           continue;
         }

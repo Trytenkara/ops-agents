@@ -334,15 +334,43 @@ async function fetchPageText(url: string): Promise<{ ok: boolean; status: number
 const ASSET_EXT_RE = /\.(png|jpe?g|gif|svg|webp|ico|css|js|woff2?)$/i;
 const JUNK_EMAIL_RE = /(sentry|wixpress|example\.|your-?email|email@|name@|user@|domain\.com|@2x|\.png|\.jpg)/i;
 
+// Third-party service domains whose emails frequently appear embedded on corporate
+// websites (tracking pixels, HR widgets, analytics tools, CMS/marketing automation).
+// These are never a supplier's sales inbox.
+const THIRD_PARTY_SERVICE_DOMAINS = new Set([
+  "personio.de", "personio.com", "greenhouse.io", "lever.co", "workday.com",
+  "researchdive.com", "grandviewresearch.com", "mordorintelligence.com",
+  "hubspot.com", "mailchimp.com", "constantcontact.com", "marketo.com",
+  "zendesk.com", "intercom.io", "freshdesk.com", "salesforce.com",
+  "typeform.com", "surveymonkey.com", "jotform.com",
+  "cloudflare.com", "akamai.com", "fastly.com",
+  "google.com", "facebook.com", "twitter.com", "linkedin.com", "instagram.com",
+  "youtube.com", "tiktok.com", "pinterest.com",
+  "shopify.com", "squarespace.com", "wix.com", "wordpress.com", "webflow.com",
+  "stripe.com", "paypal.com",
+  "trustpilot.com", "capterra.com", "g2.com",
+  "zoominfo.com", "apollo.io", "lusha.com", "clearbit.com",
+  "calendly.com", "gong.io", "drift.com",
+]);
+
+function isThirdPartyServiceEmail(email: string): boolean {
+  const domain = email.split("@")[1]?.toLowerCase();
+  if (!domain) return false;
+  return THIRD_PARTY_SERVICE_DOMAINS.has(domain);
+}
+
 export function extractEmails(html: string): string[] {
   const found = new Set<string>();
+  const ok = (e: string) =>
+    EMAIL_RE.test(e) && !JUNK_EMAIL_RE.test(e) && !ASSET_EXT_RE.test(e) &&
+    !isPlaceholderEmail(e) && !isThirdPartyServiceEmail(e) && !isAggregatorEmail(e);
   for (const m of html.matchAll(/mailto:([^"'?>\s]+)/gi)) {
     const e = decodeURIComponent(m[1]).trim().toLowerCase();
-    if (EMAIL_RE.test(e) && !JUNK_EMAIL_RE.test(e) && !ASSET_EXT_RE.test(e) && !isPlaceholderEmail(e)) found.add(e);
+    if (ok(e)) found.add(e);
   }
   for (const m of html.matchAll(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi)) {
     const e = m[0].trim().toLowerCase();
-    if (EMAIL_RE.test(e) && !JUNK_EMAIL_RE.test(e) && !ASSET_EXT_RE.test(e) && !isPlaceholderEmail(e)) found.add(e);
+    if (ok(e)) found.add(e);
   }
   return Array.from(found).slice(0, 8);
 }
@@ -738,13 +766,25 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
         legitimacy_check = analyzeLegitimacy(d.homepage_html, website, d.homepage_final_url);
       }
       if (!email && d.emails.length) {
-        // Only accept the supplier's own inbox — skip any aggregator addresses
-        // the site might list. Prefer an email whose domain matches the site.
+        // Only accept emails from the supplier's own domain. Emails scraped from
+        // corporate sites often include third-party services (HR, analytics,
+        // tracking) that are not the supplier's inbox. Hard-require a domain
+        // match against the supplier website; fall back to contact_url only.
         const siteHost = hostOf(website);
-        const own = d.emails.filter((e) => !isAggregatorEmail(e));
-        const pick = own.find((e) => e.split("@")[1]?.replace(/^www\./, "") === siteHost) ?? own[0] ?? null;
+        const own = d.emails.filter((e) => !isAggregatorEmail(e) && !isThirdPartyServiceEmail(e));
+        const domainMatch = siteHost
+          ? own.filter((e) => {
+              const emailDomain = e.split("@")[1]?.replace(/^www\./, "");
+              if (!emailDomain) return false;
+              return emailDomain === siteHost || siteHost.endsWith(`.${emailDomain}`) || emailDomain.endsWith(`.${siteHost}`);
+            })
+          : [];
+        const pick = domainMatch[0] ?? null;
         if (pick) {
           email = pick;
+          contactSource = "discovered";
+        } else if (own.length && !siteHost) {
+          email = own[0];
           contactSource = "discovered";
         } else if (!aggregatorEmail) {
           aggregatorEmail = d.emails.find((e) => isAggregatorEmail(e)) ?? null;

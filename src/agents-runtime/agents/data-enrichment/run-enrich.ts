@@ -76,8 +76,16 @@ export async function enrichAndStageLead(
     penalty > 0 && priorBase != null ? Math.max(0, Math.round((priorBase - penalty) * 100) / 100) : null;
   const confidencePatch = downrankedConfidence != null ? { confidence_score: downrankedConfidence } : {};
 
+  // Human-readable flag for low-trust marketplace listings (Alibaba, IndiaMART,
+  // etc.) so ops can see at a glance in the Leads tab. Built from the marketplace
+  // trust assessment signals.
+  const marketplaceSourceNote = result.marketplace_trust?.is_low_trust_marketplace
+    ? `Low confidence result from ${result.marketplace_trust.marketplace_host ?? "marketplace"}`
+    : null;
+
   const mergedPayload = {
     ...priorPayload,
+    ...(marketplaceSourceNote ? { marketplace_source_note: marketplaceSourceNote } : {}),
     enrichment: {
       website_probe: result.website_probe,
       email_check: result.email_check,

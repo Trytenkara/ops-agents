@@ -475,6 +475,7 @@ export function LeadRichRow({
       .join(", ");
   const confidenceReason = (r.payload?.confidence_reason as string | undefined) ?? undefined;
   const confidencePct = r.confidence_score != null ? Math.round(Number(r.confidence_score) * 100) : null;
+  const relevanceTier = (r.payload?.relevance_tier as "Confirmed" | "Potential" | undefined) ?? undefined;
   const citations = Array.isArray(r.payload?.source_citations) ? r.payload.source_citations : [];
 
   return (
@@ -658,28 +659,35 @@ export function LeadRichRow({
         })()}
       </TableCell>
       <TableCell className="align-top">
-        {signal ? (
-          <Badge
-            variant="secondary"
-            title={
-              confidenceReason
-                ? `Confidence ${confidencePct != null ? `${confidencePct}% — ` : ""}${confidenceReason}`
-                : `Why this supplier surfaced as a lead${signalCount != null ? ` — seen ${signalCount}×` : ""}`
-            }
-          >
-            {humanizeSignal(signal)}
-            {signalCount != null && signalCount > 1 && <span className="ml-1 text-muted-foreground">×{signalCount}</span>}
-          </Badge>
-        ) : confidenceReason ? (
-          <span
-            className="text-xs text-muted-foreground"
-            title={`Confidence ${confidencePct != null ? `${confidencePct}% — ` : ""}${confidenceReason}`}
-          >
-            {confidencePct != null ? `${confidencePct}%` : "—"}
-          </span>
-        ) : (
-          <span className="text-muted-foreground text-xs">—</span>
-        )}
+        <div className="flex flex-col gap-1">
+          {signal ? (
+            <Badge
+              variant="secondary"
+              title={
+                confidenceReason
+                  ? `Confidence ${confidencePct != null ? `${confidencePct}% — ` : ""}${confidenceReason}`
+                  : `Why this supplier surfaced as a lead${signalCount != null ? ` — seen ${signalCount}×` : ""}`
+              }
+            >
+              {humanizeSignal(signal)}
+              {signalCount != null && signalCount > 1 && <span className="ml-1 text-muted-foreground">×{signalCount}</span>}
+            </Badge>
+          ) : confidenceReason ? (
+            <span
+              className="text-xs text-muted-foreground"
+              title={`Confidence ${confidencePct != null ? `${confidencePct}% — ` : ""}${confidenceReason}`}
+            >
+              {confidencePct != null ? `${confidencePct}%` : "—"}
+            </span>
+          ) : (
+            <span className="text-muted-foreground text-xs">—</span>
+          )}
+          {relevanceTier && (
+            <span className={`text-[10px] font-medium ${relevanceTier === "Confirmed" ? "text-green-700 dark:text-green-400" : "text-amber-600 dark:text-amber-400"}`}>
+              {relevanceTier}
+            </span>
+          )}
+        </div>
       </TableCell>
       <TableCell className="align-top">
         {marketKind ? (
