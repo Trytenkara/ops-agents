@@ -411,7 +411,7 @@ export async function dropLead(leadId: string, reason: DropReason, note?: string
   // — the lead is already dropped locally. Only rod_app (Tenkara) drafts are
   // deletable here; Missive drafts have no delete path and are left as-is.
   let draftWarning: string | undefined;
-  let draftDeleteStaleId = false;
+  let draftDeleteThreadScoped = false;
   const outreach = payload.outreach as
     | { email_client?: string; draft_id?: string; conversation_id?: string }
     | undefined;
@@ -420,14 +420,14 @@ export async function dropLead(leadId: string, reason: DropReason, note?: string
       draftId: outreach.draft_id,
       conversationId: outreach.conversation_id,
     });
-    draftDeleteStaleId = del.fellBackToConversation ?? false;
+    draftDeleteThreadScoped = del.threadScoped ?? false;
     if (del.ok) {
       // Mirror the deletion onto the local draft_references record so the
       // Outreach tracker and All Threads view stop showing it as a live draft.
-      // When the delete fell back to a thread-scoped clear (the stored draft_id
-      // was stale), mirror that breadth locally by keying on the conversation so
-      // any row carrying a rotated draft_id is caught too.
-      const keyByThread = del.fellBackToConversation || !outreach.draft_id;
+      // A thread-scoped delete clears our draft across the whole conversation, so
+      // mirror that breadth locally by keying on the conversation (any row
+      // carrying a rotated draft_id is caught too).
+      const keyByThread = del.threadScoped || !outreach.draft_id;
       let ref = admin.from("draft_references").update({ status: "discarded" });
       ref = keyByThread && outreach.conversation_id
         ? ref.eq("thread_id", outreach.conversation_id)
@@ -448,7 +448,7 @@ export async function dropLead(leadId: string, reason: DropReason, note?: string
       reason,
       note: note?.trim() || undefined,
       ...(outreach?.email_client === "rod_app"
-        ? { draft_delete_warning: draftWarning ?? null, draft_delete_stale_id: draftDeleteStaleId }
+        ? { draft_delete_warning: draftWarning ?? null, draft_delete_thread_scoped: draftDeleteThreadScoped }
         : {}),
     },
   });
