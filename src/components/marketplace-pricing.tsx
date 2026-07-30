@@ -11,6 +11,7 @@ import { leadMarketKind } from "@/components/lead-rich-row";
 import { saveLeadPriceTiers } from "@/app/actions/leads";
 import { type PriceTier, tierBreakdown, composePackSize } from "@/lib/price-tiers";
 import { fmtCaseDims, resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
+import { relativeTime } from "@/lib/utils";
 
 // Marketplace-only view: suppliers whose pricing is published directly on their
 // own site/storefront (site_type M = checkout no-signup, MS = checkout after
@@ -145,6 +146,10 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
   const rawPricing = row.payload?.pack_sizes_pricing as string | undefined;
   const moq = row.payload?.moq as string | undefined;
   const updatedAt = row.payload?.price_tiers_updated_at as string | undefined;
+  // Read-only reference to the last-scraped ladder (Agent 05 stamps previous_price
+  // + price_changed_at per tier). Indexed to match `initial`'s order on load; used
+  // only to display "last price" / when it changed, never edited or saved here.
+  const priorTiers: any[] = Array.isArray(row.payload?.price_tiers) ? row.payload.price_tiers : [];
 
   function setTier(i: number, patch: Partial<PriceTier>) {
     setTiers((prev) => prev.map((t, idx) => (idx === i ? { ...t, ...patch } : t)));
@@ -238,8 +243,9 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
             <TableHead className="w-[10%]" title="Unit of measurement (kg, lb, g, L…)">Unit</TableHead>
             <TableHead className="w-[14%]" title="Container / packaging (case_type): drum, pail, bag…">Case type</TableHead>
             <TableHead className="w-[20%]">Case dims (est.)</TableHead>
-            <TableHead className="w-[18%]">Price (total)</TableHead>
-            <TableHead className="w-[16%]">$ / unit</TableHead>
+            <TableHead className="w-[15%]">Price (total)</TableHead>
+            <TableHead className="w-[15%]" title="Last scraped price for this pack — auto-updates when the marketplace price changes">Last price</TableHead>
+            <TableHead className="w-[13%]">$ / unit</TableHead>
             <TableHead className="w-[12%] text-right">{canAct ? "" : ""}</TableHead>
           </TableRow>
         </TableHeader>
@@ -291,6 +297,24 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
                   placeholder="450.00"
                   onChange={(e) => setTier(i, { price: toNum(e.target.value) })}
                 />
+              </TableCell>
+              <TableCell className="text-xs tabular-nums align-middle">
+                {(() => {
+                  const prev = priorTiers[i]?.previous_price;
+                  const changedAt = priorTiers[i]?.price_changed_at as string | undefined;
+                  if (prev == null) return <span className="text-muted-foreground">—</span>;
+                  const moved = t.price != null && Number(prev) !== Number(t.price);
+                  return (
+                    <span className={moved ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground"}>
+                      ${Number(prev).toFixed(2)}
+                      {changedAt && (
+                        <span className="ml-1 text-[10px] opacity-70" title={new Date(changedAt).toLocaleString()}>
+                          {moved ? "changed " : "checked "}{relativeTime(changedAt)}
+                        </span>
+                      )}
+                    </span>
+                  );
+                })()}
               </TableCell>
               <TableCell>
                 {t.unit_price == null && derivedUnitPrice(t) != null ? (
