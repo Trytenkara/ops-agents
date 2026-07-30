@@ -2,10 +2,10 @@ import { tenkaraQuery } from "@/lib/tenkara-readonly";
 
 // One row per (material × supplier) latest expiring/expired quote, across every org.
 // Filters out:
-//   - quotes that are still current ('active') or already archived ('updated',
-//     'out_of_stock'). Everything else past its reanalyze date is in scope,
-//     including status 'expired': revalidation is exactly for expiring-soon and
-//     expired quotes.
+//   - archived quotes ('updated', 'out_of_stock'). Everything else past its
+//     reanalyze date is in scope, including live quotes (status IS NULL or
+//     'active') and 'expired' ones: revalidation is exactly for quotes that are
+//     expiring soon or already expired.
 //   - quotes with no supplier contact email, or a malformed one (junk like
 //     'Online', a missing TLD, or two addresses crammed into one field)
 //   - non-latest quotes for the same material/supplier pair
@@ -70,15 +70,19 @@ export async function queryOverdueRows(): Promise<OverdueRow[]> {
       LEFT JOIN users qa ON qa.id = mq.user_id
       LEFT JOIN operators_view ov ON ov.email = qa.email
       WHERE
-        -- Tenkara marks a live quote with status IS NULL; 'active' is a near-dead
-        -- value (30 rows out of 1,198 in prod). Excluding only 'active' therefore
-        -- let every archived quote back in: an operator marks a supplier out of
-        -- stock, its quotes all go 'out_of_stock', and this picked them straight
-        -- back up for re-solicitation. The replacement quotes made the pair live
-        -- again silently, so the next archive fired a duplicate out-of-stock
-        -- notification. Exclude the archived states explicitly. 'expired' stays
-        -- in scope: that is precisely what revalidation is for.
-        (mq.status IS NULL OR mq.status::text NOT IN ('active', 'updated', 'out_of_stock'))
+        -- Exclude the archived states, and only those. Previously this excluded
+        -- 'active' alone, which let every archived quote back in: an operator marks
+        -- a supplier out of stock, its quotes all go 'out_of_stock', and this picked
+        -- them straight back up for re-solicitation. The replacement quotes made the
+        -- pair live again silently, so the next archive fired a duplicate
+        -- out-of-stock notification.
+        --
+        -- Liveness is not a reason to skip. Tenkara marks a live quote with
+        -- status IS NULL, and those have always been revalidated when due; 'active'
+        -- means the same thing on 30 of 1,198 rows, so excluding it treated two
+        -- spellings of "live" differently and stranded those rows forever. The
+        -- reanalyze date below is what decides whether a quote is due.
+        (mq.status IS NULL OR mq.status::text NOT IN ('updated', 'out_of_stock'))
         -- Monitor quotes due by their reanalyze date, AND quotes that never got
         -- a reanalyze date (manually added, cold-solicit, or onboarded-client
         -- quotes) once they've aged past a default validity window — otherwise
