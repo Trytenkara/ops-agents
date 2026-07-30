@@ -425,8 +425,9 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     // whose tiers came from an operator is left alone.
     const nextPayload: any = { ...(l.payload ?? {}), marketplace_pull: pull };
     const existingTiers = Array.isArray(l.payload?.price_tiers) ? l.payload.price_tiers : [];
+    const operatorEdited = !!l.payload?.price_tiers_updated_by;
     let writtenTierPacks: string[] = [];
-    if (gotPrice && (existingTiers.length === 0 || isRecheck)) {
+    if (gotPrice && (existingTiers.length === 0 || (isRecheck && !operatorEdited))) {
       // Track last price + change PER TIER (not just the base): match each new
       // pack size to its prior scrape by pack_size so the marketplace tab can show
       // current-vs-last + a changed flag for EVERY tier. previous_price carries the
