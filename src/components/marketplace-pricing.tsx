@@ -227,6 +227,11 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
           )}
         </div>
         <div className="text-right text-[11px] text-muted-foreground">
+          {(pull?.pulled_at || updatedAt) && (
+            <div title={pull?.pulled_at ? new Date(pull.pulled_at).toLocaleString() : (updatedAt ? new Date(updatedAt).toLocaleString() : undefined)}>
+              <span className="font-medium text-foreground">Updated</span> {relativeTime(pull?.pulled_at ?? updatedAt ?? null)}
+            </div>
+          )}
           {(rawPricing || moq) && (
             <div className="max-w-[36ch]">
               {rawPricing && <div title="What Scout captured off the listing"><span className="font-medium text-foreground">Listed:</span> {rawPricing}</div>}
