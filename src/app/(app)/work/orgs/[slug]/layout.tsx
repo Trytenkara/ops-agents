@@ -8,12 +8,11 @@ export const dynamic = "force-dynamic";
 const sections = [
   { href: "", label: "Overview" },
   { href: "/profile", label: "Client Profile" },
-  { href: "/materials", label: "Sourcing Overview", match: ["/suppliers"] },
+  { href: "/materials", label: "Platform Data", match: ["/suppliers"] },
   { href: "/leads", label: "Agent Supplier Leads" },
   { href: "/price-index", label: "Agent Quotes" },
   { href: "/threads", label: "Email Thread Tracker" },
   { href: "/savings", label: "Cost Savings and Reports" },
-  { href: "/cases", label: "Email Escalations" },
 ];
 
 export default async function OrgLayout({
