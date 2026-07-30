@@ -305,10 +305,17 @@ export function ClientSuppliersSection({
             {suppliers.total} total · {suppliers.approved.length} approved · {suppliers.pending_review.length} pending ·{" "}
             {suppliers.denied.length} denied
           </span>
+          <a
+            href={`/api/supplier-profiles/export-csv?org_id=${orgId}`}
+            download
+            className="inline-flex items-center rounded-md border border-input bg-background px-3 py-1 text-xs font-medium hover:bg-accent transition-colors"
+          >
+            Export CSV
+          </a>
           <TemplateDownloadButton
             headers={SUPPLIER_TEMPLATE_HEADERS}
             filename="tenkara-suppliers-template.csv"
-            label="Supplier template"
+            label="Blank template"
           />
         </div>
       </div>
