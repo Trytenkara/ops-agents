@@ -486,6 +486,32 @@ export async function updateLeadEmail(leadId: string, email: string): Promise<Ac
   return { ok: true };
 }
 
+// Manually update the contact phone for a single lead. Mirrors updateLeadEmail:
+// updates both the top-level supplier_phone (read by outreach) and
+// enrichment.contact.phone (read by the UI). Phone is free-form, so no format
+// validation — trim and store, empty clears it.
+export async function updateLeadPhone(leadId: string, phone: string): Promise<ActionResult> {
+  const guard = await assertCanActOnLead(leadId);
+  if ("error" in guard) return { ok: false, error: guard.error };
+  const { admin, lead } = guard;
+
+  const trimmed = phone.trim();
+
+  const payload = (lead.payload as any) ?? {};
+  const enrichment = payload.enrichment ? { ...payload.enrichment } : {};
+  enrichment.contact = { ...(enrichment.contact ?? {}), phone: trimmed || null };
+
+  const { error } = await admin
+    .from("leads_in_flight")
+    .update({ payload: { ...payload, supplier_phone: trimmed || null, enrichment } })
+    .eq("id", leadId);
+
+  if (error) return { ok: false, error: error.message };
+  revalidatePath("/work/review/leads");
+  revalidatePath("/work/orgs/[slug]/leads", "page");
+  return { ok: true };
+}
+
 export interface EmailImportResult {
   ok: boolean;
   error?: string;
