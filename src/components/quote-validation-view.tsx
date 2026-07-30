@@ -1,0 +1,376 @@
+"use client";
+
+import { useState, useTransition } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { QuoteProfileCard } from "@/components/quote-profile-card";
+import { seedQuoteProfiles, createQuoteProfile } from "@/app/actions/quote-profiles";
+import { ListCsvButton } from "@/components/list-csv-button";
+import { filenameFor } from "@/lib/csv";
+import { quoteCompleteness, type QuoteProfile } from "@/lib/quote-profiles";
+
+interface SupplierQuoteGroup {
+  supplierName: string;
+  supplierId: string | null;
+  quotes: QuoteProfile[];
+}
+
+const SORT_OPTIONS = [
+  { value: "quotes", label: "Most quotes" },
+  { value: "name", label: "Supplier (A-Z)" },
+  { value: "completeness", label: "Avg completeness" },
+  { value: "newest", label: "Newest" },
+];
+
+const STATUS_FILTER = [
+  { value: "all", label: "All statuses" },
+  { value: "draft", label: "Draft" },
+  { value: "pending_review", label: "Pending Review" },
+  { value: "ready_for_submission", label: "Ready" },
+  { value: "submitted", label: "Submitted" },
+];
+
+export function QuoteValidationView({
+  profiles,
+  canAct,
+  slug,
+  orgId,
+}: {
+  profiles: QuoteProfile[];
+  canAct: boolean;
+  slug: string;
+  orgId: string;
+}) {
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState("quotes");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [expandedSupplier, setExpandedSupplier] = useState<string | null>(null);
+  const [seeding, startSeed] = useTransition();
+  const [seedResult, setSeedResult] = useState<string | null>(null);
+  const [showAddQuote, setShowAddQuote] = useState(false);
+
+  // Group quotes by supplier
+  const groupMap = new Map<string, SupplierQuoteGroup>();
+  for (const q of profiles) {
+    const key = q.supplier_id ?? q.supplier_name.toLowerCase();
+    let group = groupMap.get(key);
+    if (!group) {
+      group = { supplierName: q.supplier_name, supplierId: q.supplier_id, quotes: [] };
+      groupMap.set(key, group);
+    }
+    group.quotes.push(q);
+  }
+
+  let groups = Array.from(groupMap.values());
+
+  // Filters
+  if (search) {
+    const q = search.toLowerCase();
+    groups = groups.filter((g) => {
+      const hay = `${g.supplierName} ${g.quotes.map((qq) => qq.material_name).join(" ")}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }
+  if (statusFilter !== "all") {
+    groups = groups.map((g) => ({
+      ...g,
+      quotes: g.quotes.filter((q) => q.approval_status === statusFilter),
+    })).filter((g) => g.quotes.length > 0);
+  }
+
+  // Sort
+  groups = [...groups].sort((a, b) => {
+    switch (sort) {
+      case "name":
+        return a.supplierName.localeCompare(b.supplierName);
+      case "completeness": {
+        const aAvg = a.quotes.length ? a.quotes.reduce((s, q) => s + quoteCompleteness(q).pct, 0) / a.quotes.length : 0;
+        const bAvg = b.quotes.length ? b.quotes.reduce((s, q) => s + quoteCompleteness(q).pct, 0) / b.quotes.length : 0;
+        return bAvg - aAvg;
+      }
+      case "newest": {
+        const aDate = a.quotes.reduce((max, q) => q.updated_at > max ? q.updated_at : max, "");
+        const bDate = b.quotes.reduce((max, q) => q.updated_at > max ? q.updated_at : max, "");
+        return bDate.localeCompare(aDate);
+      }
+      default:
+        return b.quotes.length - a.quotes.length;
+    }
+  });
+
+  const totalQuotes = profiles.length;
+  const avgCompleteness = totalQuotes > 0
+    ? Math.round(profiles.reduce((s, q) => s + quoteCompleteness(q).pct, 0) / totalQuotes)
+    : 0;
+  const totalSuppliers = groupMap.size;
+
+  function handleSeed() {
+    startSeed(async () => {
+      const res = await seedQuoteProfiles(orgId);
+      if (res.ok) {
+        setSeedResult(`Seeded ${res.count ?? 0} new quote profiles`);
+        setTimeout(() => setSeedResult(null), 3000);
+      }
+    });
+  }
+
+  // CSV export
+  const csvHeaders = [
+    "Supplier", "Material", "Price", "Case Size", "Units", "Unit Price", "Currency",
+    "Case Type", "Case Width", "Case Height", "Case Length", "Case Weight",
+    "Quote Expiry", "Lead Time Days",
+    "Hazardous", "Refrigerated", "Protect From Freezing",
+    "Name Match", "INCI Match", "Grades Match", "Additional Grades",
+    "Pre-Order COA Met", "Pre-Order SDS Met", "Pre-Order TDS Met", "Pre-Order Sample Met",
+    "Status", "Completeness %", "Notes",
+  ];
+  const csvRows = profiles.map((q) => {
+    const up = q.price != null && q.case_size && q.case_size > 0 ? (q.price / q.case_size).toFixed(4) : "";
+    return [
+      q.supplier_name, q.material_name,
+      q.price ?? "", q.case_size ?? "", q.unit_of_measurement ?? "", up, q.currency,
+      q.case_type ?? "", q.case_width ?? "", q.case_height ?? "", q.case_length ?? "", q.case_weight ?? "",
+      q.quote_expiry ?? "", q.lead_time_days ?? "",
+      q.is_hazardous ? "Yes" : "No", q.is_refrigerated ? "Yes" : "No", q.protect_from_freezing ? "Yes" : "No",
+      q.name_match ? "Yes" : "No", q.inci_match ? "Yes" : "No", q.grades_match ? "Yes" : "No", q.additional_grades ?? "",
+      q.preorder_coa_met ? "Yes" : "No", q.preorder_sds_met ? "Yes" : "No",
+      q.preorder_tds_met ? "Yes" : "No", q.preorder_sample_met ? "Yes" : "No",
+      q.approval_status, quoteCompleteness(q).pct,
+      q.purchasing_notes ?? q.notes ?? "",
+    ];
+  });
+
+  return (
+    <div className="space-y-4">
+      {/* Summary */}
+      <div className="flex items-center gap-4 text-sm flex-wrap">
+        <span className="text-muted-foreground">{totalSuppliers} supplier{totalSuppliers !== 1 ? "s" : ""}</span>
+        <span className="text-muted-foreground">{totalQuotes} quote{totalQuotes !== 1 ? "s" : ""}</span>
+        <span className="text-muted-foreground">Avg completeness: {avgCompleteness}%</span>
+        {canAct && (
+          <>
+            <Button variant="outline" size="sm" onClick={handleSeed} disabled={seeding}>
+              {seeding ? "Seeding..." : "Seed from staged quotes"}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setShowAddQuote(true)}>
+              Add quote
+            </Button>
+          </>
+        )}
+        {seedResult && <span className="text-xs text-green-600">{seedResult}</span>}
+      </div>
+
+      {/* Add quote form */}
+      {showAddQuote && canAct && (
+        <AddQuoteForm orgId={orgId} onClose={() => setShowAddQuote(false)} />
+      )}
+
+      {/* Filters */}
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Search</span>
+          <Input
+            type="text"
+            placeholder="supplier, material..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="h-8 w-56"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Status</span>
+          <Select size="sm" className="min-w-[10rem]" ariaLabel="Status" value={statusFilter} onValueChange={setStatusFilter} options={STATUS_FILTER} />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Sort</span>
+          <Select size="sm" className="min-w-[10rem]" ariaLabel="Sort" value={sort} onValueChange={setSort} options={SORT_OPTIONS} />
+        </label>
+        <div className="ml-auto">
+          <ListCsvButton filename={filenameFor(slug, "quote-validation")} headers={csvHeaders} rows={csvRows} />
+        </div>
+      </div>
+
+      {/* Supplier groups */}
+      <div className="space-y-2">
+        {groups.map((g) => {
+          const key = g.supplierId ?? g.supplierName;
+          const isExpanded = expandedSupplier === key;
+          const avgPct = g.quotes.length
+            ? Math.round(g.quotes.reduce((s, q) => s + quoteCompleteness(q).pct, 0) / g.quotes.length)
+            : 0;
+          const materials = g.quotes.map((q) => q.material_name);
+          const statuses = { draft: 0, pending_review: 0, ready_for_submission: 0, submitted: 0 };
+          for (const q of g.quotes) {
+            if (q.approval_status in statuses) (statuses as any)[q.approval_status]++;
+          }
+
+          return (
+            <div key={key} className="rounded-lg border bg-card overflow-hidden">
+              {/* Supplier summary row */}
+              <div
+                className="flex items-center justify-between px-4 py-3 hover:bg-accent/50 cursor-pointer transition-colors"
+                onClick={() => setExpandedSupplier(isExpanded ? null : key)}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="text-xs text-muted-foreground">{isExpanded ? "v" : ">"}</span>
+                  <span className="font-medium text-sm truncate">{g.supplierName}</span>
+                  {/* Status summary badges */}
+                  {statuses.ready_for_submission > 0 && <Badge variant="success">{statuses.ready_for_submission} ready</Badge>}
+                  {statuses.pending_review > 0 && <Badge variant="warn">{statuses.pending_review} pending</Badge>}
+                  {statuses.draft > 0 && <Badge variant="secondary">{statuses.draft} draft</Badge>}
+                  {statuses.submitted > 0 && <Badge variant="success">{statuses.submitted} submitted</Badge>}
+                </div>
+                <div className="flex items-center gap-4 shrink-0">
+                  <span className="text-xs text-muted-foreground">
+                    {g.quotes.length} quote{g.quotes.length !== 1 ? "s" : ""}
+                  </span>
+                  <div className="flex items-center gap-2 w-20">
+                    <div className="h-1.5 flex-1 bg-secondary rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${avgPct >= 80 ? "bg-green-500" : avgPct >= 50 ? "bg-yellow-500" : "bg-red-400"}`}
+                        style={{ width: `${avgPct}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-muted-foreground tabular-nums">{avgPct}%</span>
+                  </div>
+                  <span className="text-xs text-muted-foreground truncate max-w-[20ch]" title={materials.join(", ")}>
+                    {materials[0]}{materials.length > 1 ? ` +${materials.length - 1}` : ""}
+                  </span>
+                </div>
+              </div>
+
+              {/* Expanded: quote cards */}
+              {isExpanded && (
+                <div className="border-t px-4 py-4 space-y-4 bg-muted/20">
+                  {g.quotes.map((q) => (
+                    <QuoteProfileCard
+                      key={q.id}
+                      profile={q}
+                      orgId={orgId}
+                      canAct={canAct}
+                    />
+                  ))}
+                  {canAct && (
+                    <AddQuoteForSupplier
+                      orgId={orgId}
+                      supplierName={g.supplierName}
+                      supplierId={g.supplierId}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {groups.length === 0 && (
+          <div className="rounded-lg border border-dashed p-6 text-center space-y-2">
+            <p className="text-sm text-muted-foreground">
+              No quote profiles yet. Click "Seed from staged quotes" to create profiles from existing pricing data, or "Add quote" to create one manually.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AddQuoteForm({ orgId, onClose }: { orgId: string; onClose: () => void }) {
+  const [supplierName, setSupplierName] = useState("");
+  const [materialName, setMaterialName] = useState("");
+  const [creating, startCreate] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  function handleCreate() {
+    if (!supplierName.trim() || !materialName.trim()) {
+      setError("Supplier and material names are required");
+      return;
+    }
+    startCreate(async () => {
+      const res = await createQuoteProfile(orgId, {
+        supplier_name: supplierName.trim(),
+        material_name: materialName.trim(),
+      });
+      if (res.ok) onClose();
+      else setError(res.error ?? "Failed to create");
+    });
+  }
+
+  return (
+    <div className="rounded-lg border bg-card p-4 space-y-3">
+      <h4 className="text-sm font-semibold">Add new quote</h4>
+      <div className="flex flex-wrap gap-3">
+        <label className="flex flex-col gap-1 flex-1 min-w-[14rem]">
+          <span className="text-xs text-muted-foreground">Supplier name</span>
+          <Input value={supplierName} onChange={(e) => setSupplierName(e.target.value)} className="h-8" placeholder="e.g. Acme Chemicals" />
+        </label>
+        <label className="flex flex-col gap-1 flex-1 min-w-[14rem]">
+          <span className="text-xs text-muted-foreground">Material name</span>
+          <Input value={materialName} onChange={(e) => setMaterialName(e.target.value)} className="h-8" placeholder="e.g. Citric Acid" />
+        </label>
+      </div>
+      {error && <p className="text-xs text-red-500">{error}</p>}
+      <div className="flex gap-2">
+        <Button size="sm" onClick={handleCreate} disabled={creating}>
+          {creating ? "Creating..." : "Create"}
+        </Button>
+        <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+      </div>
+    </div>
+  );
+}
+
+function AddQuoteForSupplier({
+  orgId,
+  supplierName,
+  supplierId,
+}: {
+  orgId: string;
+  supplierName: string;
+  supplierId: string | null;
+}) {
+  const [show, setShow] = useState(false);
+  const [materialName, setMaterialName] = useState("");
+  const [creating, startCreate] = useTransition();
+
+  if (!show) {
+    return (
+      <button
+        type="button"
+        onClick={() => setShow(true)}
+        className="text-xs text-muted-foreground hover:text-foreground border border-dashed rounded px-3 py-1.5"
+      >
+        + Add quote for {supplierName}
+      </button>
+    );
+  }
+
+  function handleCreate() {
+    if (!materialName.trim()) return;
+    startCreate(async () => {
+      const res = await createQuoteProfile(orgId, {
+        supplier_id: supplierId,
+        supplier_name: supplierName,
+        material_name: materialName.trim(),
+      });
+      if (res.ok) {
+        setShow(false);
+        setMaterialName("");
+      }
+    });
+  }
+
+  return (
+    <div className="flex items-end gap-2">
+      <label className="flex flex-col gap-1">
+        <span className="text-xs text-muted-foreground">Material name</span>
+        <Input value={materialName} onChange={(e) => setMaterialName(e.target.value)} className="h-8 w-48" placeholder="e.g. Citric Acid" />
+      </label>
+      <Button size="sm" onClick={handleCreate} disabled={creating}>
+        {creating ? "..." : "Add"}
+      </Button>
+      <Button variant="outline" size="sm" onClick={() => setShow(false)}>Cancel</Button>
+    </div>
+  );
+}

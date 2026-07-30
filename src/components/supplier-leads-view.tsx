@@ -63,6 +63,7 @@ export function SupplierLeadsView({
   const [showLeadsFor, setShowLeadsFor] = useState<string | null>(null);
   const [seeding, startSeed] = useTransition();
   const [seedResult, setSeedResult] = useState<string | null>(null);
+  const [showAddSupplier, setShowAddSupplier] = useState(false);
 
   const profileBySupplier = new Map<string, SupplierProfile>();
   const profileByName = new Map<string, SupplierProfile>();
@@ -225,12 +226,22 @@ export function SupplierLeadsView({
         </span>
         <span className="text-muted-foreground">Avg completeness: {avgCompleteness}%</span>
         {canAct && (
-          <Button variant="outline" size="sm" onClick={handleSeed} disabled={seeding}>
-            {seeding ? "Seeding..." : "Seed profiles from leads"}
-          </Button>
+          <>
+            <Button variant="outline" size="sm" onClick={handleSeed} disabled={seeding}>
+              {seeding ? "Seeding..." : "Seed profiles from leads"}
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setShowAddSupplier(true)}>
+              Add supplier
+            </Button>
+          </>
         )}
         {seedResult && <span className="text-xs text-green-600">{seedResult}</span>}
       </div>
+
+      {/* Add supplier form */}
+      {showAddSupplier && canAct && (
+        <AddSupplierForm orgId={orgId} onClose={() => setShowAddSupplier(false)} />
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap items-end gap-3">
@@ -447,5 +458,62 @@ function CreateProfileButton({
     <Button variant="outline" size="sm" onClick={handleCreate} disabled={creating}>
       {creating ? "Creating..." : "Create profile"}
     </Button>
+  );
+}
+
+function AddSupplierForm({ orgId, onClose }: { orgId: string; onClose: () => void }) {
+  const [supplierName, setSupplierName] = useState("");
+  const [pocEmail, setPocEmail] = useState("");
+  const [supplierType, setSupplierType] = useState<"marketplace" | "direct">("direct");
+  const [creating, startCreate] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  function handleCreate() {
+    if (!supplierName.trim()) {
+      setError("Supplier name is required");
+      return;
+    }
+    startCreate(async () => {
+      const res = await createSupplierProfile(orgId, null, supplierName.trim(), {
+        supplier_type: supplierType,
+        poc_email: pocEmail.trim() || null,
+      });
+      if (res.ok) onClose();
+      else setError(res.error ?? "Failed to create");
+    });
+  }
+
+  return (
+    <div className="rounded-lg border bg-card p-4 space-y-3">
+      <h4 className="text-sm font-semibold">Add new supplier</h4>
+      <div className="flex flex-wrap gap-3">
+        <label className="flex flex-col gap-1 flex-1 min-w-[14rem]">
+          <span className="text-xs text-muted-foreground">Supplier name</span>
+          <Input value={supplierName} onChange={(e) => setSupplierName(e.target.value)} className="h-8" placeholder="e.g. Acme Chemicals" />
+        </label>
+        <label className="flex flex-col gap-1 flex-1 min-w-[14rem]">
+          <span className="text-xs text-muted-foreground">Email (optional)</span>
+          <Input value={pocEmail} onChange={(e) => setPocEmail(e.target.value)} className="h-8" placeholder="contact@example.com" type="email" />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Type</span>
+          <select
+            value={supplierType}
+            onChange={(e) => setSupplierType(e.target.value as "marketplace" | "direct")}
+            className="flex h-8 rounded-md border border-input bg-transparent px-2 text-sm"
+          >
+            <option value="direct">Direct</option>
+            <option value="marketplace">Marketplace</option>
+          </select>
+        </label>
+      </div>
+      {error && <p className="text-xs text-red-500">{error}</p>}
+      <div className="flex gap-2">
+        <Button size="sm" onClick={handleCreate} disabled={creating}>
+          {creating ? "Creating..." : "Create"}
+        </Button>
+        <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+      </div>
+    </div>
   );
 }

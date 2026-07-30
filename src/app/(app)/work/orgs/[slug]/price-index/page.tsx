@@ -12,6 +12,8 @@ import { MarketplaceFindingsList } from "@/components/marketplace-findings-list"
 import { RequoteList, type RequoteRow } from "@/components/requote-list";
 import { DirectPricesOnFile, type DirectPriceRow } from "@/components/direct-prices-on-file";
 import { PriceIndexTabs } from "@/components/price-index-tabs";
+import { QuoteValidationView } from "@/components/quote-validation-view";
+import { getQuoteProfiles } from "@/lib/quote-profiles";
 import { CasesSection } from "@/components/cases-section";
 import { loadOrgCases, caseCategory } from "@/lib/org-cases";
 import { loadMarketplaceCaseDims, fmtCaseDims } from "@/lib/marketplace-case-dims";
@@ -237,6 +239,7 @@ export default async function OrgPriceIndexPage({
     }),
   }));
 
+  const quoteProfiles = await getQuoteProfiles(admin, org.id).catch(() => []);
   const marketplaceDims = await loadMarketplaceCaseDims(admin);
 
   const { openRows: caseOpen, resolvedRows: caseResolved } = await loadOrgCases(admin, org.id);
@@ -272,6 +275,15 @@ export default async function OrgPriceIndexPage({
         marketplaceCount={marketplaceRows.length}
         directCount={requotes.length + directOnFile.length}
         escalationsCount={quoteCasesOpen.length}
+        validationCount={quoteProfiles.length}
+        validation={
+          <QuoteValidationView
+            profiles={quoteProfiles}
+            canAct={canAct}
+            slug={org.slug}
+            orgId={org.id}
+          />
+        }
         escalations={
           <section className="space-y-3">
             <p className="text-sm text-muted-foreground">
