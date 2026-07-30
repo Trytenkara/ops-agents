@@ -9,6 +9,11 @@ import { getTenkaraMessageAttachments, downloadTenkaraAttachment } from "@/lib/t
 import { parseAttachmentBytes, deriveExt, isPricingCandidateExt } from "@/agents-runtime/agents/email-scanner/attachment-parser";
 import { getTenkaraConversationMessages } from "@/lib/tenkara";
 import { postAgentAlert } from "@/lib/slack-alert";
+import {
+  completenessFollowupEnabled,
+  computeMissingApprovalFields,
+  type MissingApprovalField,
+} from "@/lib/quote-completeness";
 
 // A "reply" from a mailer-daemon isn't the supplier — it's a delivery failure.
 // Detect it so we never draft a reply to the daemon and can restart outreach.
@@ -451,6 +456,29 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   }
   const heldMaterialNames = heldLeads.map((l) => l.material_name).filter((n): n is string => !!n && !!n.trim());
 
+  // Backlog #14: from everything captured for this supplier+material so far
+  // (including the quotes just staged above from this very reply), work out which
+  // approval-required quote fields are still missing, so the reply keeps inquiring
+  // for the next couple until the quote is complete. Best-effort and gated by
+  // COMPLETENESS_FOLLOWUP_ENABLED; a miss just means no completeness ask this turn.
+  let missingApprovalFields: MissingApprovalField[] = [];
+  if (completenessFollowupEnabled() && ref.supplier_id) {
+    try {
+      let sq = admin
+        .from("staged_quotes")
+        .select(
+          "price, case_size, unit_of_measurement, case_type, case_dimensions, lead_time_days, lead_time_text, moq_quantity, moq_unit, payment_terms, grade, status"
+        )
+        .eq("supplier_id", ref.supplier_id)
+        .not("status", "eq", "dismissed");
+      if (ref.material_id) sq = sq.eq("material_id", ref.material_id);
+      const { data: capturedRows } = await sq;
+      missingApprovalFields = computeMissingApprovalFields((capturedRows ?? []) as any);
+    } catch {
+      missingApprovalFields = [];
+    }
+  }
+
   const reply = await composeReply({
     mode,
     clientOrgName: orgName,
@@ -464,6 +492,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     receivedAttachments,
     threadContext,
     heldMaterialNames,
+    missingApprovalFields,
   });
 
   // Introduce held materials only when the supplier engaged. The reply draft then
