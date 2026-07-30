@@ -332,6 +332,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       next_check_at: string;
       stable_streak: number;
       last_change_at: string | null;
+      previous_price: number | null;
       history: any[];
     } | null = null;
     if (gotPrice) {
@@ -363,6 +364,9 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         next_check_at: new Date(Date.now() + intervalDays * 86400000).toISOString(),
         stable_streak: streak,
         last_change_at: changed ? nowIso : (priorPull?.last_change_at ?? null),
+        // The price at the previous scrape, so the Quotes/marketplace tab can show a
+        // "last price" column next to the auto-updated current price.
+        previous_price: priorPrice ?? (priorPull?.previous_price ?? null),
         history,
       };
     }
