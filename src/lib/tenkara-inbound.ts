@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { stageDraft } from "@/lib/draft-staging";
 import { composeReply } from "@/agents-runtime/agents/email-scanner/reply-drafter";
-import { extractQuotesFromReplyText, type ExtractedQuote } from "@/lib/reply-quote-extract";
+import { extractQuotesFromReplyText, type ExtractedQuote, type ReplyQuoteExtraction } from "@/lib/reply-quote-extract";
 import { insertStagedQuotes, type StagedQuoteInput, type StagedQuoteSource } from "@/lib/staged-quotes";
 import { classifyDocType, insertSupplierDocuments, type SupplierDocumentInput } from "@/lib/supplier-documents";
 import { extractDocumentFields, isDocExtractableExt } from "@/lib/document-extract";
@@ -10,6 +10,12 @@ import { getTenkaraMessageAttachments, downloadTenkaraAttachment } from "@/lib/t
 import { parseAttachmentBytes, deriveExt, isPricingCandidateExt } from "@/agents-runtime/agents/email-scanner/attachment-parser";
 import { getTenkaraConversationMessages } from "@/lib/tenkara";
 import { postAgentAlert } from "@/lib/slack-alert";
+import { upsertSupplierProfile } from "@/lib/supplier-profiles";
+import {
+  completenessFollowupEnabled,
+  computeMissingApprovalFields,
+  type MissingApprovalField,
+} from "@/lib/quote-completeness";
 
 // A "reply" from a mailer-daemon isn't the supplier — it's a delivery failure.
 // Detect it so we never draft a reply to the daemon and can restart outreach.
@@ -154,8 +160,8 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
         .order("created_at", { ascending: false });
       if (error) return { status: 503, body: { error: "domain_match_failed", detail: error.message } };
       if (domainRefs && domainRefs.length > 0) {
-        const uniqueSuppliers = new Set(domainRefs.map((r: any) => r.supplier_id).filter(Boolean));
-        if (uniqueSuppliers.size === 1) {
+        const uniqueTargets = new Set(domainRefs.map((r: any) => `${r.supplier_id ?? ""}:${r.material_id ?? ""}`));
+        if (uniqueTargets.size === 1 && domainRefs[0]?.supplier_id && domainRefs[0]?.material_id) {
           ref = domainRefs[0];
           domainMatchFallback = true;
         }
@@ -183,8 +189,8 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
         .order("created_at", { ascending: false });
       if (error) return { status: 503, body: { error: "address_match_failed", detail: error.message } };
       if (addrRefs && addrRefs.length > 0) {
-        const uniqueSuppliers = new Set(addrRefs.map((r: any) => r.supplier_id).filter(Boolean));
-        if (uniqueSuppliers.size === 1) {
+        const uniqueTargets = new Set(addrRefs.map((r: any) => `${r.supplier_id ?? ""}:${r.material_id ?? ""}`));
+        if (uniqueTargets.size === 1 && addrRefs[0]?.supplier_id && addrRefs[0]?.material_id) {
           ref = addrRefs[0];
           exactAddressMatch = true;
         }
@@ -316,6 +322,18 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     await admin.from("leads_in_flight").update({ payload: newPayload }).eq("id", leadId);
   }
 
+  const MAX_REPLY_TURNS = 8;
+  const { data: conversationRefs } = await admin
+    .from("draft_references")
+    .select("metadata")
+    .eq("email_client", "rod_app")
+    .eq("org_id", ref.org_id)
+    .eq("thread_id", msg.conversation_id);
+  const currentTurns = Math.max(
+    Number(refMeta.reply_turns ?? 0),
+    ...((conversationRefs ?? []) as any[]).map((row) => Number((row.metadata ?? {}).reply_turns ?? 0)),
+  );
+
   // Without an Anthropic key we can still record the reply; just don't auto-draft.
   if (!process.env.ANTHROPIC_API_KEY) {
     return { status: 200, body: { reply_detected: true, drafted: false, reason: "no_anthropic_key" } };
@@ -326,6 +344,17 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   // photographed price sheets). Best-effort: extraction must never block the
   // reply draft.
   let quotesStaged = 0;
+  let bodyExtraction: ReplyQuoteExtraction = {
+    quotes: [],
+    details: {
+      material_name: null, case_size: null, unit_of_measurement: null, case_type: null,
+      case_length: null, case_width: null, case_height: null, dimensions_unit: null, case_weight: null,
+      lead_time_days: null, lead_time_text: null, moq_quantity: null, moq_unit: null, payment_terms: null,
+      poc_name: null, poc_email: null, poc_phone: null, shipping_address: null, shipping_terms: null,
+      shipping_email: null, billing_email: null, billing_poc_name: null,
+    },
+    declined: false,
+  };
   // Non-inline files the supplier attached to THIS reply. Surfaced to the reply
   // drafter so it acknowledges them instead of insisting the attachment "didn't
   // come through" and asking the supplier to resend it.
@@ -340,9 +369,11 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       attachmentUrl: string | null;
     }[] = [];
 
-    // Inline: prefer the HTML body — suppliers put price ladders in tables that
-    // the flattened text loses. Falls back to plain text.
-    for (const q of await extractQuotesFromReplyText(msg.body_html || msg.body_text)) {
+    // Inline: prefer the HTML body because suppliers put price ladders in tables.
+    // Detail-only replies (MOQ, lead time, terms, packaging) are persisted below
+    // even when no price line is present.
+    bodyExtraction = await extractQuotesFromReplyText(msg.body_html || msg.body_text);
+    for (const q of bodyExtraction.quotes) {
       captured.push({ q, source: "email_body", attachmentName: null, attachmentUrl: null });
     }
 
@@ -489,8 +520,104 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
         }
       }
     }
+
+    const d = bodyExtraction.details;
+    const normalizeMaterial = (value: string | null | undefined) => (value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const statedMaterial = normalizeMaterial(d.material_name);
+    const threadMaterial = normalizeMaterial(leadRow?.material_name);
+    const detailMaterialMatches = !statedMaterial || !threadMaterial || statedMaterial === threadMaterial || statedMaterial.includes(threadMaterial) || threadMaterial.includes(statedMaterial);
+    const hasQuoteDetails = detailMaterialMatches && [d.case_size, d.unit_of_measurement, d.case_type, d.case_length, d.case_width, d.case_height, d.dimensions_unit, d.case_weight, d.lead_time_days, d.lead_time_text, d.moq_quantity, d.moq_unit, d.payment_terms].some((value) => value != null && value !== "");
+    if (hasQuoteDetails && ref.org_id && ref.supplier_id && ref.material_id) {
+      const { data: quoteRows, error: quoteReadError } = await admin
+        .from("staged_quotes")
+        .select("id, raw_extract, case_dimensions, dim_source")
+        .eq("org_id", ref.org_id)
+        .eq("supplier_id", ref.supplier_id)
+        .eq("material_id", ref.material_id)
+        .not("status", "eq", "dismissed")
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (quoteReadError) throw quoteReadError;
+      let quote = quoteRows?.[0] ?? null;
+      if (!quote) {
+        const { data: inserted, error: insertError } = await admin
+          .from("staged_quotes")
+          .insert({
+            org_id: ref.org_id,
+            source: "email_body",
+            source_conversation_id: msg.conversation_id,
+            source_message_id: msg.message_id,
+            supplier_id: ref.supplier_id,
+            supplier_name: leadRow?.supplier_name ?? from.name ?? null,
+            material_id: ref.material_id,
+            material_name: leadRow?.material_name ?? d.material_name ?? null,
+            price: null,
+            confidence: "needs_review",
+            raw_extract: { detail_intake: true },
+            status: "pending_review",
+          })
+          .select("id, raw_extract, case_dimensions, dim_source")
+          .single();
+        if (insertError) throw insertError;
+        quote = inserted;
+      }
+
+      const priorRaw = (quote.raw_extract ?? {}) as Record<string, any>;
+      const supplierDims = { ...(priorRaw.supplier_dimensions ?? {}) };
+      if (d.case_length != null) supplierDims.length = d.case_length;
+      if (d.case_width != null) supplierDims.width = d.case_width;
+      if (d.case_height != null) supplierDims.height = d.case_height;
+      if (d.dimensions_unit) supplierDims.unit = d.dimensions_unit;
+      if (d.case_weight != null) supplierDims.packaging_case_weight = d.case_weight;
+
+      const detailPatch: Record<string, any> = {
+        raw_extract: {
+          ...priorRaw,
+          supplier_dimensions: supplierDims,
+          supplier_case_type: d.case_type ?? priorRaw.supplier_case_type ?? null,
+          last_detail_message_id: msg.message_id,
+        },
+      };
+      if (d.case_size != null) detailPatch.case_size = d.case_size;
+      if (d.unit_of_measurement) detailPatch.unit_of_measurement = d.unit_of_measurement;
+      if (d.case_type) detailPatch.case_type = d.case_type;
+      if (d.lead_time_days != null) detailPatch.lead_time_days = d.lead_time_days;
+      if (d.lead_time_text) detailPatch.lead_time_text = d.lead_time_text;
+      if (d.moq_quantity != null) detailPatch.moq_quantity = d.moq_quantity;
+      if (d.moq_unit) detailPatch.moq_unit = d.moq_unit;
+      if (d.payment_terms) detailPatch.payment_terms = d.payment_terms;
+      const completeDims = supplierDims.length != null && supplierDims.width != null && supplierDims.height != null && !!supplierDims.unit && supplierDims.packaging_case_weight != null;
+      if (completeDims) {
+        detailPatch.case_dimensions = supplierDims;
+        detailPatch.dim_source = "supplier";
+      }
+      const { error: quoteUpdateError } = await admin.from("staged_quotes").update(detailPatch).eq("id", quote.id);
+      if (quoteUpdateError) throw quoteUpdateError;
+    }
+
+    const profilePatch: Record<string, any> = {};
+    for (const key of ["poc_name", "poc_email", "poc_phone", "shipping_address", "shipping_terms", "shipping_email", "billing_email", "billing_poc_name"] as const) {
+      if (d[key]) profilePatch[key] = d[key];
+    }
+    if (d.payment_terms) {
+      const net = d.payment_terms.match(/\bnet\s*(\d{1,3})\b/i);
+      const upfront = d.payment_terms.match(/(\d{1,3}(?:\.\d+)?)\s*%\s*(?:upfront|deposit|prepaid)/i);
+      if (net) profilePatch.payment_net_days = Number(net[1]);
+      if (upfront) profilePatch.payment_upfront_pct = Number(upfront[1]);
+      profilePatch.payment_completion = d.payment_terms;
+    }
+    if (Object.keys(profilePatch).length && ref.org_id && ref.supplier_id) {
+      const profile = await upsertSupplierProfile(
+        admin,
+        ref.org_id,
+        ref.supplier_id,
+        leadRow?.supplier_name ?? from.name ?? ref.supplier_id,
+      );
+      const { error: profileUpdateError } = await admin.from("supplier_profiles").update(profilePatch).eq("id", profile.id);
+      if (profileUpdateError) throw profileUpdateError;
+    }
   } catch {
-    // swallow — reply drafting proceeds regardless
+    // Reply drafting proceeds even when quote/profile persistence fails.
   }
 
   // 5. Compose the reply. Pull the full thread from Tenkara for context so the
@@ -528,6 +655,46 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   }
   const heldMaterialNames = heldLeads.map((l) => l.material_name).filter((n): n is string => !!n && !!n.trim());
 
+  // Backlog #14: from everything captured for this supplier+material so far
+  // (including the quotes just staged above from this very reply), work out which
+  // approval-required quote fields are still missing, so the reply keeps inquiring
+  // for the next couple until the quote is complete. Best-effort and gated by
+  // COMPLETENESS_FOLLOWUP_ENABLED; a miss just means no completeness ask this turn.
+  let missingApprovalFields: MissingApprovalField[] = [];
+  if (completenessFollowupEnabled() && ref.supplier_id) {
+    try {
+      if (!ref.org_id || !ref.material_id) throw new Error("completeness requires exact org and material");
+      const { data: capturedRows, error: quoteError } = await admin
+        .from("staged_quotes")
+        .select(
+          "price, case_size, unit_of_measurement, case_type, case_dimensions, dim_source, raw_extract, lead_time_days, lead_time_text, moq_quantity, moq_unit, payment_terms, status"
+        )
+        .eq("org_id", ref.org_id)
+        .eq("supplier_id", ref.supplier_id)
+        .eq("material_id", ref.material_id)
+        .not("status", "eq", "dismissed");
+      if (quoteError) throw quoteError;
+      const { data: supplierProfile, error: profileError } = await admin
+        .from("supplier_profiles")
+        .select("poc_email, poc_phone, poc_name, shipping_address, shipping_terms, shipping_email, billing_email, billing_poc_name, payment_upfront_pct, payment_net_days, payment_completion, payment_credit_line")
+        .eq("org_id", ref.org_id)
+        .eq("supplier_id", ref.supplier_id)
+        .maybeSingle();
+      if (profileError) throw profileError;
+      missingApprovalFields = computeMissingApprovalFields((capturedRows ?? []) as any, supplierProfile as any);
+    } catch {
+      missingApprovalFields = [];
+    }
+  }
+
+  if (currentTurns >= MAX_REPLY_TURNS && !bodyExtraction.declined) {
+    await admin
+      .from("draft_references")
+      .update({ metadata: { ...refMeta, flow_status: "stale", reply_detected: replyDetected, reply_turns: currentTurns, note: `max ${MAX_REPLY_TURNS} turns reached` } })
+      .eq("id", ref.id);
+    return { status: 200, body: { reply_detected: true, drafted: false, reason: "max_reply_turns" } };
+  }
+
   const reply = await composeReply({
     mode,
     clientOrgName: orgName,
@@ -541,11 +708,11 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     receivedAttachments,
     threadContext,
     heldMaterialNames,
+    missingApprovalFields: bodyExtraction.declined ? [] : missingApprovalFields,
   });
 
-  // Introduce held materials only when the supplier engaged. The reply draft then
-  // covers the original material plus the introduced ones, so credit them all.
-  const introduceHeld = reply.engaged && heldLeads.length > 0;
+  // Introduce held materials only when the supplier engaged and did not hard-decline.
+  const introduceHeld = !bodyExtraction.declined && reply.engaged && heldLeads.length > 0;
   const introducedMaterialIds = introduceHeld ? (heldLeads.map((l) => l.material_id).filter(Boolean) as string[]) : [];
   const replyMaterialIds = Array.from(new Set([ref.material_id, ...introducedMaterialIds].filter(Boolean))) as string[];
 
@@ -582,9 +749,13 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       in_reply_to_message_id: msg.message_id,
       reply_to_conversation_id: msg.conversation_id,
       lead_id: leadId ?? null,
+      reply_turns: bodyExtraction.declined ? currentTurns : currentTurns + 1,
     },
   });
   if (!staged.ok) return { status: 502, body: { error: `stage_reply_failed: ${staged.error}` } };
+  if (staged.blocked || !staged.draftId) {
+    return { status: 200, body: { drafted: false, blocked: true, draft_ref_id: staged.draftRefId } };
+  }
 
   // Release the introduced materials: they're now part of this live conversation.
   // Clear the hold and promote them. Fires once — the hold is gone, so a later
@@ -618,7 +789,8 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     .update({
       metadata: {
         ...refMeta,
-        flow_status: flowAt("responded"),
+        flow_status: bodyExtraction.declined ? "closed_declined" : flowAt("responded"),
+        reply_turns: bodyExtraction.declined ? currentTurns : currentTurns + 1,
         reply_detected: replyDetected,
         reply_draft: {
           draft_ref_id: staged.draftRefId,
