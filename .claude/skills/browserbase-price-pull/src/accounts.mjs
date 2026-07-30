@@ -121,18 +121,33 @@ function hostOf(url) {
 //   needs_review   — web_search found no numeric price in snippets, often because
 //                    the price is JS-rendered (absent from static search results).
 // link_broken is intentionally excluded (a dead URL won't render either).
-export async function listLoginRequiredLeads(orgId, { host, reasons = ["login_required"] } = {}) {
-  const reasonFilter =
-    reasons.length === 1
-      ? `&payload->marketplace_pull->>reason=eq.${reasons[0]}`
-      : `&payload->marketplace_pull->>reason=in.(${reasons.join(",")})`;
-  const rows =
-    (await oa(
+export async function listLoginRequiredLeads(orgId, { host, reasons = ["login_required"], all = false } = {}) {
+  const sel = `&select=id,org_id,supplier_name,material_name,payload`;
+  let query;
+  if (all) {
+    // Refresh mode: EVERY marketplace lead (priced or not), so the daily pull
+    // re-checks live prices and reflects any change. `marketplace_pull` is set by
+    // Agent 05 for exactly the marketplace listings, so its presence is the marker.
+    query =
       `leads_in_flight?org_id=eq.${orgId}&status=eq.active` +
-        `&payload->marketplace_pull->>status=eq.needs_manual_pull` +
-        reasonFilter +
-        `&select=id,org_id,supplier_name,material_name,payload&order=created_at.asc`
-    )) ?? [];
+      `&payload->marketplace_pull=not.is.null` +
+      sel +
+      `&order=payload->marketplace_pull->>pulled_at.asc.nullsfirst,created_at.asc`;
+  } else {
+    const reasonFilter =
+      reasons.length === 1
+        ? `&payload->marketplace_pull->>reason=eq.${reasons[0]}`
+        : `&payload->marketplace_pull->>reason=in.(${reasons.join(",")})`;
+    query =
+      `leads_in_flight?org_id=eq.${orgId}&status=eq.active` +
+      `&payload->marketplace_pull->>status=eq.needs_manual_pull` +
+      reasonFilter +
+      sel +
+      // Stalest-first: never-attempted (null `at`) leads, then the ones we pulled
+      // longest ago, so time-boxed batches advance through the pool.
+      `&order=payload->marketplace_pull->>at.asc.nullsfirst,created_at.asc`;
+  }
+  const rows = (await oa(query)) ?? [];
   return rows
     .map((l) => ({ ...l, url: listingUrl(l.payload) }))
     .filter((l) => l.url && (!host || hostOf(l.url) === host));
@@ -142,37 +157,62 @@ export async function listLoginRequiredLeads(orgId, { host, reasons = ["login_re
 // Marketplace-pricing tab and downstream tiering read it identically.
 export async function writePull(lead, result) {
   const url = lead.url;
+  const source = result.source ?? "browserbase_login"; // e.g. "browserbase_agent" for the native-agent tier
+  const now = new Date().toISOString();
   const gotPrice = result.classification === "current_price_found" && result.current_price != null;
-  const pull = gotPrice
-    ? {
-        status: "pulled",
-        unit_price: result.unit_price ?? null,
-        price: result.current_price,
-        pack_size: result.pack_size ?? null,
-        currency: result.currency ?? "USD",
-        source_url: result.source_url ?? url,
-        source: "browserbase_login",
-        pulled_at: new Date().toISOString(),
-      }
-    : {
-        status: "needs_manual_pull",
-        reason: result.classification, // login_required | link_broken | needs_review
-        source: "browserbase_login",
-        source_url: url,
-        last_notes: result.notes ?? null,
-        at: new Date().toISOString(),
-      };
+  const prev = lead.payload?.marketplace_pull ?? {};
+  const hadPrice = prev.status === "pulled" && prev.price != null;
 
-  const nextPayload = { ...(lead.payload ?? {}), marketplace_pull: pull };
-  const existingTiers = Array.isArray(lead.payload?.price_tiers) ? lead.payload.price_tiers : [];
-  if (gotPrice && existingTiers.length === 0) {
+  const nextPayload = { ...(lead.payload ?? {}) };
+  let pull;
+
+  if (gotPrice) {
+    // Daily refresh may read a DIFFERENT price than last time — reflect it live
+    // (price + tier ladder) on every successful pull, and note when it changed.
+    const priceChanged = hadPrice && prev.price !== result.current_price;
+    pull = {
+      status: "pulled",
+      unit_price: result.unit_price ?? null,
+      price: result.current_price,
+      pack_size: result.pack_size ?? null,
+      currency: result.currency ?? "USD",
+      source_url: result.source_url ?? url,
+      source,
+      pulled_at: now,
+      ...(priceChanged ? { previous_price: prev.price, price_changed_at: now } : {}),
+    };
     const tiers = (result.tiers ?? []).length
       ? result.tiers.map((t) => ({ pack_size: t.pack_size ?? "", price: t.price ?? null, unit_price: t.unit_price ?? null }))
       : [{ pack_size: result.pack_size ?? "", price: result.current_price, unit_price: result.unit_price ?? null }];
     nextPayload.price_tiers = tiers;
-    nextPayload.price_tiers_updated_at = new Date().toISOString();
+    nextPayload.price_tiers_updated_at = now;
+  } else if (hadPrice) {
+    // Refresh could NOT read a price this run, but we already have a good one.
+    // NEVER wipe good pricing on a transient miss — keep the last-known price live
+    // and FLAG that today's refresh failed, with the reason WHY, for ops visibility.
+    pull = {
+      ...prev,
+      source,
+      refresh_failed_at: now,
+      refresh_fail_reason: result.classification, // login_required | link_broken | needs_review
+      refresh_fail_notes: result.notes ?? null,
+    };
+  } else {
+    // No price now and none before — flag for manual pull WITH the reason why.
+    pull = {
+      status: "needs_manual_pull",
+      reason: result.classification, // login_required | link_broken | needs_review
+      source,
+      source_url: url,
+      last_notes: result.notes ?? null,
+      // Preserve the escalation marker so we don't re-run the expensive agent
+      // tier on a lead it already failed to resolve.
+      ...(result.agent_attempted_at ? { agent_attempted_at: result.agent_attempted_at } : {}),
+      at: now,
+    };
   }
 
+  nextPayload.marketplace_pull = pull;
   await oa(`leads_in_flight?id=eq.${lead.id}`, {
     method: "PATCH",
     body: { payload: nextPayload },
@@ -181,6 +221,29 @@ export async function writePull(lead, result) {
 }
 
 // ---- cases ----------------------------------------------------------------
+
+// Durable Tier-2 marker: stamp a lead with the agent run it was handed to, BEFORE
+// polling. If the process dies mid-run, a --harvest pass reads agent_run_id back
+// off the lead and writes the result — so we never lose (or re-pay for) the work.
+export async function stampAgentRun(lead, runId, stamp) {
+  const mp = { ...(lead.payload?.marketplace_pull ?? {}) };
+  mp.agent_run_id = runId;
+  mp.agent_attempted_at = stamp;
+  const nextPayload = { ...(lead.payload ?? {}), marketplace_pull: mp };
+  await oa(`leads_in_flight?id=eq.${lead.id}`, { method: "PATCH", body: { payload: nextPayload } });
+}
+
+// Leads that were handed to an agent run but not yet resolved (still
+// needs_manual_pull with an agent_run_id) — the harvest queue.
+export async function listPendingAgentRunLeads(orgId) {
+  const rows =
+    (await oa(
+      `leads_in_flight?org_id=eq.${orgId}&select=id,supplier_name,material_name,payload` +
+        `&payload->marketplace_pull->>status=eq.needs_manual_pull` +
+        `&payload->marketplace_pull->>agent_run_id=not.is.null`,
+    )) ?? [];
+  return rows.map((l) => ({ ...l, url: listingUrl(l.payload), runId: l.payload?.marketplace_pull?.agent_run_id }));
+}
 
 // Open a case (the human "click the confirm link" task). Returns the case id.
 export async function openCase({ orgId, type, recommended_action, metadata, assigned_operator }) {

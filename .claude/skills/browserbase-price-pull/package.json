@@ -4,8 +4,10 @@
   "type": "module",
   "version": "0.1.0",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.1",
     "@browserbasehq/sdk": "^2.6.0",
+    "@browserbasehq/stagehand": "^3.7.1",
     "playwright-core": "^1.48.0",
-    "@anthropic-ai/sdk": "^0.30.1"
+    "zod": "^4.4.3"
   }
 }
