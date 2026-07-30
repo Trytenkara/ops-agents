@@ -35,6 +35,33 @@ const DAILY_SOFT_LIMIT = Number(process.env.PRICE_PULL_DAILY_SOFT_LIMIT || 500);
 // pulled lead isn't frozen — it's re-checked on a cadence that widens while the
 // price holds steady and snaps back to daily the moment it moves (AIMD backoff).
 const CHANGE_THRESHOLD_PCT = 1.0;                 // <1% move treated as unchanged (matches Agent 05's quote-recheck threshold).
+
+// Currency safety net. The reader sometimes reports "USD" (or leaves it blank,
+// which we treat as USD) for a listing that is actually in INR/EUR/etc., so the
+// convert-to-USD step never fires and a raw foreign number gets published as
+// dollars (e.g. ₹149 rendered as $149, ~85x too high). These two signals let us
+// correct or quarantine the clear cases deterministically, independent of the
+// model. Non-obvious foreign-.com cases still rely on the reader's own currency
+// detection (see the price-recheck prompt).
+const CURRENCY_TOKENS: Array<[RegExp, string]> = [
+  // "rs" only counts as rupees when adjacent to a digit (Rs 72 / 72 Rs) to avoid
+  // matching stray letters; ₹/INR/rupees are unambiguous on their own.
+  [/₹|\binr\b|rupees?|(?:^|[^a-z])rs\.?\s*\d|\d\s*rs\.?(?:$|[^a-z])/i, "INR"],
+  [/€|\beur\b|euros?/i, "EUR"],
+  [/£|\bgbp\b/i, "GBP"],
+  [/\bcny\b|\brmb\b|人民币|元/i, "CNY"],
+  [/\baud\b/i, "AUD"],
+  [/\bcad\b/i, "CAD"],
+];
+// Hosts that price in their domestic currency even when a "$"/"USD" slips through.
+const DOMESTIC_CURRENCY_HOSTS: RegExp[] = [
+  /\.in$/, /\.pk$/, /\.kz$/, /\.cn$/, /\.id$/, /\.vn$/, /\.br$/, /\.lk$/, /\.bd$/,
+  /indiamart/, /exportersindia/, /tradeindia/, /flagma/,
+];
+function sniffCurrencyToken(text: string): string | null {
+  for (const [re, code] of CURRENCY_TOKENS) if (re.test(text)) return code;
+  return null;
+}
 const INTERVAL_LADDER_DAYS = [1, 2, 4, 7, 14, 30]; // stable_streak → days until next check (capped at 30).
 const HISTORY_DEPTH = 10;                          // capped per-lead price-check history kept in payload.
 // Re-checks are lower-stakes than a first extraction (comparing to a known
@@ -277,6 +304,34 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       });
     } catch (e: any) {
       result = { classification: "needs_review" as const, current_price: null, currency: null, pack_size: null, unit_price: null, tiers: [], source_url: url, source_citations: [], notes: `pull failed: ${e?.message ?? e}` };
+    }
+
+    // Currency safety net (runs BEFORE conversion below). Correct a wrong/blank
+    // currency label so the conversion step actually fires, and quarantine prices
+    // from domestic-currency hosts whose currency we can't confirm — rather than
+    // letting a raw foreign number publish as USD.
+    if (result.classification === "current_price_found") {
+      const priceText = [result.pack_size, result.notes, ...result.tiers.map((t) => t.pack_size)]
+        .filter(Boolean)
+        .join(" | ");
+      const token = sniffCurrencyToken(priceText);
+      const host = hostOf(result.source_url ?? url) ?? "";
+      const domesticHost = DOMESTIC_CURRENCY_HOSTS.some((re) => re.test(host));
+      const labeledUsdOrBlank = result.currency == null || result.currency === "USD";
+      if (token && token !== "USD" && result.currency !== token) {
+        // Explicit foreign token in the price text overrides a wrong/blank label;
+        // the conversion block below then converts it to USD.
+        result.notes = `Currency corrected to ${token} (detected in price text; was ${result.currency ?? "unspecified"}). ${result.notes ?? ""}`.trim();
+        result.currency = token;
+      } else if (labeledUsdOrBlank && domesticHost) {
+        // Domestic-currency host with no positive USD confirmation — refuse to
+        // publish an unconverted number as USD; flag for manual confirmation.
+        result.classification = "needs_review";
+        result.current_price = null;
+        result.unit_price = null;
+        result.tiers = [];
+        result.notes = `Price on a domestic-currency host (${host}) with unconfirmed currency — not publishing as USD. ${result.notes ?? ""}`.trim();
+      }
     }
 
     // Normalize EVERY listed non-USD price to USD before we publish or store it:
