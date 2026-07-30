@@ -427,11 +427,31 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     const existingTiers = Array.isArray(l.payload?.price_tiers) ? l.payload.price_tiers : [];
     let writtenTierPacks: string[] = [];
     if (gotPrice && (existingTiers.length === 0 || isRecheck)) {
-      const tiers = result.tiers.length
+      // Track last price + change PER TIER (not just the base): match each new
+      // pack size to its prior scrape by pack_size so the marketplace tab can show
+      // current-vs-last + a changed flag for EVERY tier. previous_price carries the
+      // prior scrape's price for that pack (its own prior previous_price if this
+      // scrape didn't move); price_changed_at stamps when that tier last moved.
+      const packKey = (p: any) => String(p ?? "").trim().toLowerCase();
+      const priorByPack = new Map((existingTiers as any[]).map((t) => [packKey(t.pack_size), t]));
+      const raw = result.tiers.length
         ? result.tiers.map((t) => ({ pack_size: t.pack_size ?? "", price: t.price ?? null, unit_price: t.unit_price ?? null }))
         : [{ pack_size: result.pack_size ?? "", price: result.current_price, unit_price: result.unit_price }];
+      const tiers = raw.map((t) => {
+        const prior: any = priorByPack.get(packKey(t.pack_size));
+        const priorPriceTier = prior && typeof prior.price === "number" ? prior.price : null;
+        const moved =
+          priorPriceTier != null && t.price != null && Math.abs(t.price - priorPriceTier) / priorPriceTier >= CHANGE_THRESHOLD_PCT / 100;
+        return {
+          ...t,
+          // last price shown for this pack: the prior scrape's price, or the
+          // last-different price we already had if this scrape didn't move it.
+          previous_price: moved ? priorPriceTier : (prior?.previous_price ?? priorPriceTier ?? null),
+          price_changed_at: moved ? nowIso : (prior?.price_changed_at ?? null),
+        };
+      });
       nextPayload.price_tiers = tiers;
-      nextPayload.price_tiers_updated_at = new Date().toISOString();
+      nextPayload.price_tiers_updated_at = nowIso;
       writtenTierPacks = tiers.map((t) => t.pack_size).filter(Boolean);
     }
 
