@@ -108,7 +108,7 @@ export async function insertStagedQuotes(
       result.skippedDuplicates++;
       continue;
     }
-    if (approvedSet.has(approvedKey(r.orgId, r.supplierName, r.materialName))) {
+    if (approvedSet.has(approvedKey(r.orgId, r.supplierName ?? null, r.materialName ?? null))) {
       result.skippedDuplicates++;
       continue;
     }
