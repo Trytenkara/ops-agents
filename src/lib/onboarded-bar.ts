@@ -1,5 +1,5 @@
 // The "onboarded bar" — the tighter quality bar applied once a client graduates
-// from the early wide-net "motherlode" stage to "onboarded" (see migration 0058
+// from the early wide-net "motherlode" stage to "onboarded" (see migration 0059
 // and setOrgOnboardingStage). A motherlode client wants everyone surfaced; an
 // onboarded client wants only leads we have real confidence in.
 //

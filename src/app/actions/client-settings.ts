@@ -47,7 +47,7 @@ export async function setOrgSourcingStatus(orgId: string, status: SourcingStatus
   return { ok: true };
 }
 
-// Client onboarding stage (see migration 0058). motherlode = early wide-net
+// Client onboarding stage (see migration 0059). motherlode = early wide-net
 // sourcing (surface everyone); onboarded = graduated client, tighter bar. Moving
 // to onboarded re-filters this org's active leads: leads below the onboarded bar
 // get a reversible advisory (payload.below_onboarded_bar) shown as a badge in the
