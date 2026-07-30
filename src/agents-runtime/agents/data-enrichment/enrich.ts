@@ -1,4 +1,5 @@
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
+import { enrichContactViaZoomInfo, isZoomInfoConfigured } from "@/lib/zoominfo";
 
 // Pre-outreach enrichment building blocks. No LLM, no Missive — those land
 // when Agent 04 (Outreach) and Agent 08 (Email Scanner) ship.
@@ -154,7 +155,9 @@ export interface ContactDiscovery {
   phone: string | null;        // best discovered/known phone
   contact_url: string | null;  // contact page / quote-form URL used as a channel
   pages_tried: number;         // how many pages we actually fetched
-  source: "scout" | "discovered" | "path" | "tenkara" | null; // where the channel came from
+  source: "scout" | "discovered" | "path" | "tenkara" | "zoominfo" | null; // where the channel came from
+  poc_name?: string | null;    // contact person name (currently ZoomInfo-only)
+  poc_title?: string | null;   // contact person title (currently ZoomInfo-only)
 }
 
 export interface SupplierEnrichment {
@@ -812,6 +815,33 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     }
   }
 
+  // ZoomInfo fallback (#9): the web + Tenkara gave us no direct email. Rather
+  // than drop the lead into the manual "needs human enrichment" queue, ask
+  // ZoomInfo for the supplier's best POC. Fallback-only by design — it never
+  // runs when we already resolved a direct email, so credits are spent only on
+  // the leads that would otherwise be dead ends. Soft: any miss leaves the lead
+  // exactly as it was.
+  let zoomContactName: string | null = null;
+  let zoomContactTitle: string | null = null;
+  if (!email && isZoomInfoConfigured()) {
+    const zi = await enrichContactViaZoomInfo({
+      companyName: (payload.supplier_name as string | null) ?? tenkara_supplier?.address ?? null,
+      website,
+    }).catch(() => null);
+    if (zi?.email && EMAIL_RE.test(zi.email) && !isAggregatorEmail(zi.email) && !isThirdPartyServiceEmail(zi.email)) {
+      email = zi.email.toLowerCase();
+      contactSource = "zoominfo";
+      zoomContactName = zi.contactName;
+      zoomContactTitle = zi.title;
+      if (!phone && zi.phone) phone = zi.phone;
+    } else if (!phone && zi?.phone) {
+      phone = zi.phone;
+      if (!contactSource) contactSource = "zoominfo";
+      zoomContactName = zi.contactName;
+      zoomContactTitle = zi.title;
+    }
+  }
+
   // A scout-supplied contact path (e.g. "via IndiaMART inquiry") still counts.
   if (!email && !phone && !contactUrl && (isContactPath(scoutEmail) || isContactPath(scoutPhone))) {
     contactUrl = website || null;
@@ -865,7 +895,15 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     blocked_reason = !website && !scoutEmail && !scoutPhone ? "no_contact_channels" : "all_contact_channels_invalid";
   }
 
-  const contact: ContactDiscovery = { email, phone, contact_url: contactUrl, pages_tried: pagesTried, source: contactSource };
+  const contact: ContactDiscovery = {
+    email,
+    phone,
+    contact_url: contactUrl,
+    pages_tried: pagesTried,
+    source: contactSource,
+    poc_name: zoomContactName,
+    poc_title: zoomContactTitle,
+  };
 
   return {
     website_probe,
