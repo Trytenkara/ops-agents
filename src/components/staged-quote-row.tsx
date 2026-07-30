@@ -85,9 +85,17 @@ export function StagedQuoteRow({
             {r.dim_source === "ai_estimated" && (
               <span
                 className="inline-flex w-fit items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-                title="AI-estimated dimensions — verify before Tenkara upload"
+                title="AI-estimated dimensions, verify before Tenkara upload"
               >
                 AI estimate
+              </span>
+            )}
+            {r.dim_source === "operator_approved" && (
+              <span
+                className="inline-flex w-fit items-center rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+                title="Operator-approved dimensions from the case calculator"
+              >
+                Operator approved
               </span>
             )}
           </span>
@@ -112,6 +120,12 @@ export function StagedQuoteRow({
             case_size: r.case_size,
             unit_of_measurement: r.unit_of_measurement,
             currency: r.currency,
+          }}
+          caseInit={{
+            case_type: r.case_type ?? null,
+            case_size: r.case_size ?? null,
+            unit_of_measurement: r.unit_of_measurement ?? null,
+            case_dimensions: r.case_dimensions ?? null,
           }}
         />
       </TableCell>

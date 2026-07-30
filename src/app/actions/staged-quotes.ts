@@ -3,6 +3,16 @@ import { revalidatePath } from "next/cache";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
+import {
+  computeCaseFromUnits,
+  buildCaseDimensionsJson,
+  OPERATOR_DIM_SOURCE,
+  CASE_TYPES,
+  STACK_AXES,
+  type StackAxis,
+  type CaseType,
+  type CaseCalcInput,
+} from "@/lib/case-dims-calc";
 
 interface ActionResult {
   ok: boolean;
@@ -84,6 +94,62 @@ export async function reopenStagedQuote(stagedId: string): Promise<ActionResult>
       approved_at: null,
       dismissed_by: null,
       dismissed_at: null,
+    })
+    .eq("id", stagedId);
+  if (error) return { ok: false, error: error.message };
+  revalidatePath(PATH);
+  return { ok: true };
+}
+
+export interface CaseDimsSave {
+  unitsPerCase: number | null;
+  length: number | null; // per-unit, inches
+  width: number | null;
+  height: number | null;
+  weight: number | null; // per-unit
+  weightUnit: "kg" | "lb";
+  stackAxis: StackAxis;
+  caseType: CaseType;
+}
+
+// Operator-approved case dimensions from the calculator panel. The stored value
+// is RECOMPUTED here from the raw inputs via the shared pure function (single
+// source of truth, so the client display and the persisted value can never drift),
+// and flagged dim_source = operator_approved. Case-dimension columns only; the
+// quote's price/status are untouched.
+export async function saveCaseDimensions(
+  stagedId: string,
+  input: CaseDimsSave
+): Promise<ActionResult> {
+  const ctx = await assertCanActOnStaged(stagedId);
+  if ("error" in ctx) return { ok: false, error: ctx.error };
+  const { admin } = ctx;
+
+  const axis: StackAxis = STACK_AXES.includes(input.stackAxis) ? input.stackAxis : "height";
+  const weightUnit: "kg" | "lb" = input.weightUnit === "lb" ? "lb" : "kg";
+  const caseType: CaseType = CASE_TYPES.includes(input.caseType) ? input.caseType : "Box/Bag";
+  const calcInput: CaseCalcInput = {
+    unitsPerCase: input.unitsPerCase,
+    stackAxis: axis,
+    unit: {
+      length: input.length,
+      width: input.width,
+      height: input.height,
+      weight: input.weight,
+      weightUnit,
+    },
+  };
+  const res = computeCaseFromUnits(calcInput);
+  if (res.width == null && res.height == null && res.length == null) {
+    return { ok: false, error: "Enter at least one unit dimension to compute case size." };
+  }
+
+  const { error } = await admin
+    .from("staged_quotes")
+    .update({
+      case_type: caseType,
+      case_dimensions: buildCaseDimensionsJson(calcInput, res),
+      dim_source: OPERATOR_DIM_SOURCE,
     })
     .eq("id", stagedId);
   if (error) return { ok: false, error: error.message };

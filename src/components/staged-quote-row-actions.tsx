@@ -8,15 +8,17 @@ import {
   updateStagedQuote,
   type StagedQuoteEdit,
 } from "@/app/actions/staged-quotes";
+import { CaseDimsCalculator, type CaseDimsInit } from "@/components/case-dims-calculator";
 
 interface Props {
   stagedId: string;
   status: "pending_review" | "approved" | "dismissed";
   initial: StagedQuoteEdit;
+  caseInit: CaseDimsInit;
   disabled?: boolean;
 }
 
-export function StagedQuoteRowActions({ stagedId, status, initial, disabled }: Props) {
+export function StagedQuoteRowActions({ stagedId, status, initial, caseInit, disabled }: Props) {
   const [pending, startTransition] = useTransition();
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -67,6 +69,7 @@ export function StagedQuoteRowActions({ stagedId, status, initial, disabled }: P
     return (
       <div className="flex gap-1 justify-end items-center">
         <Button size="sm" variant="ghost" disabled={disabled || pending} onClick={() => setEditing(true)}>Edit</Button>
+        <CaseDimsCalculator stagedId={stagedId} init={caseInit} disabled={disabled} />
         <Button size="sm" variant="outline" disabled={disabled || pending} onClick={() => run(() => approveStagedQuote(stagedId))}>
           {pending ? "…" : "Approve"}
         </Button>
@@ -81,6 +84,7 @@ export function StagedQuoteRowActions({ stagedId, status, initial, disabled }: P
       <span className={"text-xs " + (status === "approved" ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground")}>
         {status}
       </span>
+      <CaseDimsCalculator stagedId={stagedId} init={caseInit} disabled={disabled} />
       <Button size="sm" variant="ghost" disabled={disabled || pending} onClick={() => run(() => reopenStagedQuote(stagedId))}>Reopen</Button>
       {err && <span className="text-[10px] text-destructive ml-1">{err}</span>}
     </div>
