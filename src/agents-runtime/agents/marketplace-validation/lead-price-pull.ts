@@ -37,15 +37,8 @@ const DAILY_SOFT_LIMIT = Number(process.env.PRICE_PULL_DAILY_SOFT_LIMIT || 500);
 const CHANGE_THRESHOLD_PCT = 1.0;                 // <1% move treated as unchanged (matches Agent 05's quote-recheck threshold).
 
 // Currency safety net. The reader sometimes reports "USD" (or leaves it blank,
-// which we treat as USD) for a listing that is actually in INR/EUR/etc., so the
-// convert-to-USD step never fires and a raw foreign number gets published as
-// dollars (e.g. ₹149 rendered as $149, ~85x too high). These two signals let us
-// correct or quarantine the clear cases deterministically, independent of the
-// model. Non-obvious foreign-.com cases still rely on the reader's own currency
-// detection (see the price-recheck prompt).
+// which we treat as USD) for a listing that is actually in INR/EUR/etc.
 const CURRENCY_TOKENS: Array<[RegExp, string]> = [
-  // "rs" only counts as rupees when adjacent to a digit (Rs 72 / 72 Rs) to avoid
-  // matching stray letters; ₹/INR/rupees are unambiguous on their own.
   [/₹|\binr\b|rupees?|(?:^|[^a-z])rs\.?\s*\d|\d\s*rs\.?(?:$|[^a-z])/i, "INR"],
   [/€|\beur\b|euros?/i, "EUR"],
   [/£|\bgbp\b/i, "GBP"],
@@ -53,7 +46,6 @@ const CURRENCY_TOKENS: Array<[RegExp, string]> = [
   [/\baud\b/i, "AUD"],
   [/\bcad\b/i, "CAD"],
 ];
-// Hosts that price in their domestic currency even when a "$"/"USD" slips through.
 const DOMESTIC_CURRENCY_HOSTS: RegExp[] = [
   /\.in$/, /\.pk$/, /\.kz$/, /\.cn$/, /\.id$/, /\.vn$/, /\.br$/, /\.lk$/, /\.bd$/,
   /indiamart/, /exportersindia/, /tradeindia/, /flagma/,
@@ -62,6 +54,8 @@ function sniffCurrencyToken(text: string): string | null {
   for (const [re, code] of CURRENCY_TOKENS) if (re.test(text)) return code;
   return null;
 }
+
+const IMPLAUSIBLE_MOVE_FACTOR = 10;
 const INTERVAL_LADDER_DAYS = [1, 2, 4, 7, 14, 30]; // stable_streak → days until next check (capped at 30).
 const HISTORY_DEPTH = 10;                          // capped per-lead price-check history kept in payload.
 // Re-checks are lower-stakes than a first extraction (comparing to a known
@@ -362,6 +356,31 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           result.tiers.map(async (t) => ({ ...t, price: await toUsd(t.price), unit_price: await toUsd(t.unit_price) })),
         );
         result.currency = "USD";
+      }
+    }
+
+    // Catastrophic-move guard. Before trusting a re-check's number, sanity-check it
+    // against the price on file: an order-of-magnitude swing in either direction is
+    // almost certainly a misread (placeholder "$1", MOQ read as price, or a
+    // wrong-page read after search-repair), not a real move. Downgrade to
+    // needs_review and drop the numbers so the good prior price is kept (via the
+    // !gotPrice && isRecheck defer path below) and the lead is re-checked / escalated
+    // rather than silently overwritten.
+    if (
+      isRecheck &&
+      result.classification === "current_price_found" &&
+      typeof result.current_price === "number" &&
+      result.current_price > 0 &&
+      priorPrice != null &&
+      priorPrice > 0
+    ) {
+      const ratio = result.current_price / priorPrice;
+      if (ratio <= 1 / IMPLAUSIBLE_MOVE_FACTOR || ratio >= IMPLAUSIBLE_MOVE_FACTOR) {
+        result.notes = `Implausible price move: $${priorPrice} on file → $${result.current_price} read (${ratio < 1 ? `-${Math.round((1 - ratio) * 100)}%` : `${ratio.toFixed(1)}x`}). Likely a misread/placeholder or wrong-page read; keeping prior price for manual confirmation. ${result.notes ?? ""}`.trim();
+        result.classification = "needs_review";
+        result.current_price = null;
+        result.unit_price = null;
+        result.tiers = [];
       }
     }
 
