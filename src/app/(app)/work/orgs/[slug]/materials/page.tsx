@@ -7,6 +7,7 @@ import { MaterialsPanel } from "@/components/materials-panel";
 import { TdbOverviewSubnav } from "@/components/tdb-overview-subnav";
 import { ListPageHeader } from "@/components/list-page-header";
 import { DensityToggle } from "@/components/density-toggle";
+import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
@@ -39,6 +40,16 @@ export default async function OrgMaterialsPage({ params }: { params: { slug: str
   for (const q of quoteRows ?? []) {
     if (!q.material_id) continue;
     (quotesByMaterial[q.material_id] ??= []).push(q);
+  }
+
+  // Existing saved quotes from the Tenkara DB (production quotes already in the system).
+  let existingByMaterial: Record<string, ExistingQuote[]> = {};
+  if (org.tenkara_org_id) {
+    const existing = await existingQuotesForOrg(org.tenkara_org_id, 500).catch(() => []);
+    for (const q of existing) {
+      if (!q.material_id) continue;
+      (existingByMaterial[q.material_id] ??= []).push(q);
+    }
   }
 
   const [{ data: tagRows }, { data: orgClientRows }] = await Promise.all([
@@ -83,6 +94,7 @@ export default async function OrgMaterialsPage({ params }: { params: { slug: str
         canEdit={canEdit}
         statuses={statuses}
         quotesByMaterial={quotesByMaterial}
+        existingQuotesByMaterial={existingByMaterial}
         sourcingNotes={settingsRow?.sourcing_notes ?? null}
         clientTags={clientTags}
         orgClients={orgClients}

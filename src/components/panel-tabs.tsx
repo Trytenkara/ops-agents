@@ -15,21 +15,21 @@ export function PanelTabs({
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-4 border-b border-border">
+      <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1">
         {tabs.map((t) => (
           <button
             key={t.key}
             type="button"
             onClick={() => setActive(t.key)}
             className={cn(
-              "px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors",
+              "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
               active === t.key
-                ? "border-foreground text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground"
+                ? "bg-card text-foreground shadow-sm ring-1 ring-border"
+                : "text-muted-foreground hover:text-foreground"
             )}
           >
             {t.label}
-            {typeof t.badge === "number" && <span className="ml-1.5 text-xs text-muted-foreground">· {t.badge}</span>}
+            {typeof t.badge === "number" && <span className="ml-1.5 text-xs text-muted-foreground">{t.badge}</span>}
           </button>
         ))}
       </div>

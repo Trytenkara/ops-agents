@@ -207,7 +207,7 @@ export function LeadsTabs({
         {tabBtn("all", "All leads", visibleRows.length)}
         {tabBtn("marketplace", "Marketplace pricing", marketCount)}
         {tabBtn("outreach", "Outreach", trackerCount)}
-        {tabBtn("removed", "Requires human enrichment", enrichmentDisplay.length)}
+        {tabBtn("removed", "Supplier Escalations", enrichmentDisplay.length)}
         {tabBtn("dropped", "Dropped", droppedRows.length)}
       </div>
 
@@ -246,7 +246,7 @@ export function LeadsTabs({
             </div>
           ) : (
             !enrichmentCases && (
-              <p className="text-sm text-muted-foreground py-4">No leads are waiting on human enrichment for this client yet.</p>
+              <p className="text-sm text-muted-foreground py-4">No supplier escalations for this client yet.</p>
             )
           )}
         </div>

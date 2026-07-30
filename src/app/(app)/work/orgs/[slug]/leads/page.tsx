@@ -1,8 +1,6 @@
 import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { relativeTime } from "@/lib/utils";
+
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { ListPageHeader } from "@/components/list-page-header";
@@ -15,7 +13,7 @@ import { computeLeadFlags } from "@/lib/lead-flags";
 import { getClientRequirements } from "@/lib/tenkara-requirements";
 import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
 import { getOrgOperatorPool, pickSupplierOperator, operatorBySupplier, getSupplierAssignments } from "@/lib/operator-assignment";
-import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
+
 import { orgDisplayName } from "@/lib/org-display";
 import { getSupplierProfiles } from "@/lib/supplier-profiles";
 import { CasesSection } from "@/components/cases-section";
@@ -225,14 +223,6 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     hasAnyRole(session, ["admin", "ops_lead", "ops_operator"]) &&
     (seesAllOrgs(session) || (assigned?.includes(org.id) ?? false));
 
-  // Existing saved quotes we already have for this org's materials (Ben's recco)
-  // — context, not new leads. Tenkara is read-only + occasionally slow, so fall
-  // back to an empty list rather than failing the page.
-  let quotes: ExistingQuote[] = [];
-  if (org.tenkara_org_id) {
-    quotes = await existingQuotesForOrg(org.tenkara_org_id).catch(() => []);
-  }
-
   // Per-material outreach funnel (drafts / to whom / QA held / manual / skipped).
   const tracker = await getOutreachTracker(admin, org.id).catch(() => ({
     materials: [],
@@ -255,7 +245,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   const orgClients = (orgClientRows ?? []).map((r: any) => ({ id: r.id as string, name: r.name as string }));
 
   // Supplier-side escalations (bounced/no-contact leads, stale leads) surfaced in
-  // the "Requires human enrichment" tab alongside the leads the fleet stalled on.
+  // the "Supplier Escalations" tab alongside the leads the fleet stalled on.
   const { openRows: caseOpen, resolvedRows: caseResolved } = await loadOrgCases(admin, org.id);
   const supplierCasesOpen = caseOpen.filter((c) => caseCategory(c.type) === "supplier");
   const supplierCasesResolved = caseResolved.filter((c) => caseCategory(c.type) === "supplier");
@@ -317,43 +307,6 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
         </div>
       )}
       <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} enrichmentCases={enrichmentCases} />
-
-      <section className="space-y-2 pt-2">
-        <h2 className="font-serif text-xl tracking-tight">
-          Existing saved quotes <span className="text-muted-foreground text-base">· {quotes.length}</span>
-        </h2>
-        <p className="text-xs text-muted-foreground">
-          Quotes already in the database for {orgName}&apos;s materials — so you can see what&apos;s covered before sourcing more. Re-quoting these is Agent 02&apos;s job, not new outreach.
-        </p>
-        {quotes.length > 0 ? (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Material</TableHead>
-                <TableHead>Supplier</TableHead>
-                <TableHead className="text-right">Price</TableHead>
-                <TableHead>Lead time</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Quoted</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {quotes.map((q) => (
-                <TableRow key={q.quote_id}>
-                  <TableCell className="font-medium">{q.material_name ?? "—"}</TableCell>
-                  <TableCell>{q.supplier_name ?? "—"}</TableCell>
-                  <TableCell className="text-right tabular-nums">{q.price != null ? `$${q.price}${q.uom ? `/${q.uom}` : ""}` : "—"}</TableCell>
-                  <TableCell className="text-muted-foreground">{q.lead_time_days != null ? `${q.lead_time_days}d` : "—"}</TableCell>
-                  <TableCell><Badge variant="secondary">{q.status ?? "—"}</Badge></TableCell>
-                  <TableCell className="text-muted-foreground">{q.quote_date ? relativeTime(q.quote_date) : "—"}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        ) : (
-          <p className="text-sm text-muted-foreground">No saved quotes for this org&apos;s materials yet.</p>
-        )}
-      </section>
     </div>
   );
 }

@@ -17,6 +17,7 @@ import { approveStagedQuote, dismissStagedQuote } from "@/app/actions/staged-quo
 import { saveSourcingNotes } from "@/app/actions/client-settings";
 import { saveClientTag } from "@/app/actions/material-client-tags";
 import { createOrgClient, deleteOrgClient } from "@/app/actions/org-clients";
+import type { ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
 
 function fmtQty(qty: number | null, unit: string | null): string {
   if (qty == null) return "—";
@@ -91,6 +92,7 @@ export function MaterialsPanel({
   canEdit,
   statuses,
   quotesByMaterial,
+  existingQuotesByMaterial,
   sourcingNotes,
   clientTags,
   orgClients: initialOrgClients = [],
@@ -101,6 +103,7 @@ export function MaterialsPanel({
   canEdit: boolean;
   statuses?: Record<string, MaterialSourcingStatus>;
   quotesByMaterial?: Record<string, MaterialQuote[]>;
+  existingQuotesByMaterial?: Record<string, ExistingQuote[]>;
   sourcingNotes?: string | null;
   clientTags?: Record<string, { orgClientId: string | null; isPriority: boolean }>;
   orgClients?: OrgClient[];
@@ -394,6 +397,7 @@ export function MaterialsPanel({
                     run={run}
                     status={m.tenkaraMaterialId ? statuses?.[m.tenkaraMaterialId] : undefined}
                     quotes={m.tenkaraMaterialId ? quotesByMaterial?.[m.tenkaraMaterialId] ?? [] : []}
+                    existingQuotes={m.tenkaraMaterialId ? existingQuotesByMaterial?.[m.tenkaraMaterialId] ?? [] : []}
                     base={`/work/orgs/${slug}`}
                     tag={m.tenkaraMaterialId ? clientTags?.[m.tenkaraMaterialId] : undefined}
                     orgClients={orgClients}
@@ -529,6 +533,7 @@ function MaterialRow({
   run,
   status,
   quotes,
+  existingQuotes,
   base,
   tag,
   orgClients = [],
@@ -540,6 +545,7 @@ function MaterialRow({
   run: (fn: () => Promise<{ ok: boolean; error?: string; parsed?: number }>, okText: string) => void;
   status?: MaterialSourcingStatus;
   quotes: MaterialQuote[];
+  existingQuotes: ExistingQuote[];
   base: string;
   tag?: { orgClientId: string | null; isPriority: boolean };
   orgClients?: OrgClient[];
@@ -553,7 +559,7 @@ function MaterialRow({
   const rec = m.recommendedShelfLifeMonths;
   // Always expandable: even with no orders/quotes there are material details
   // (grade, INCI, brand, need type) worth seeing to sanity-check matching.
-  const detailCount = quotes.length + m.orders.length;
+  const detailCount = quotes.length + existingQuotes.length + m.orders.length;
 
   const currentClientId = tag?.orgClientId ?? null;
   const currentClientName = orgClients.find((c) => c.id === currentClientId)?.name ?? "";
@@ -702,14 +708,22 @@ function MaterialRow({
               </div>
               <div>
                 <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-1">
-                  Quotes <span className="text-foreground">· {quotes.length}</span>
+                  Agent-collected quotes <span className="text-foreground">· {quotes.length}</span>
                 </div>
                 {quotes.length > 0 ? (
                   <QuoteList quotes={quotes} canEdit={canEdit} pending={pending} run={run} />
                 ) : (
-                  <p className="text-xs text-muted-foreground">No collected quotes yet.</p>
+                  <p className="text-xs text-muted-foreground">No agent-collected quotes yet.</p>
                 )}
               </div>
+              {existingQuotes.length > 0 && (
+                <div>
+                  <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-1">
+                    Saved quotes <span className="text-foreground">· {existingQuotes.length}</span>
+                  </div>
+                  <ExistingQuoteList quotes={existingQuotes} />
+                </div>
+              )}
               {m.orders.length > 0 && (
                 <div>
                   <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold mb-1">
@@ -834,6 +848,26 @@ function OrderList({
             </>
             )}
           </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ExistingQuoteList({ quotes }: { quotes: ExistingQuote[] }) {
+  return (
+    <div className="space-y-1">
+      {quotes.map((q) => (
+        <div
+          key={q.quote_id}
+          className="grid grid-cols-[minmax(0,1.4fr)_7rem_5rem_7rem] items-center gap-x-3 text-xs"
+        >
+          <span className="font-medium truncate" title={q.supplier_name ?? undefined}>{q.supplier_name ?? "unknown"}</span>
+          <span className="tabular-nums">
+            {q.price != null ? `$${q.price}${q.uom ? `/${q.uom}` : ""}` : "no price"}
+          </span>
+          <span className="text-muted-foreground">{q.lead_time_days != null ? `${q.lead_time_days}d` : ""}</span>
+          <span className="text-muted-foreground">{q.quote_date ? fmtDate(q.quote_date) : ""}</span>
         </div>
       ))}
     </div>

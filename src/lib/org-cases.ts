@@ -4,7 +4,7 @@ import type { CaseRow } from "@/components/cases-list";
 // Escalations (the `cases` table) are split across three surfaces by what kind
 // of problem they represent, so operators land on them where they already work:
 //   email    → Email Thread Tracker (a supplier reply / form needs a human)
-//   supplier → Agent Supplier Leads "Requires human enrichment" (contact/lead gap)
+//   supplier → Agent Supplier Leads "Supplier Escalations" (contact/lead gap)
 //   quote    → Agent Quotes "Quotes Escalations" (a price couldn't be captured)
 export type CaseCategory = "email" | "supplier" | "quote";
 

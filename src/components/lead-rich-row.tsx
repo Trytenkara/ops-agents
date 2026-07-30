@@ -469,7 +469,7 @@ export function LeadRichRow({
                     ? "Dropped by an operator"
                     : removal.kind === "scrape"
                     ? "Auto-scrape couldn't get a price — an operator must enter it manually"
-                    : "Requires human enrichment before it can continue"
+                    : "Supplier escalation: requires human action to continue"
                 }
               >
                 {removal.kind === "suppressed"
@@ -478,7 +478,7 @@ export function LeadRichRow({
                   ? "Dropped"
                   : removal.kind === "scrape"
                   ? "Unable to scrape"
-                  : "Requires human enrichment"}
+                  : "Supplier Escalation"}
                 : {removal.label}
               </Badge>
             );
