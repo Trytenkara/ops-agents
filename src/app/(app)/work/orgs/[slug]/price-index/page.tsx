@@ -12,6 +12,8 @@ import { MarketplaceFindingsList } from "@/components/marketplace-findings-list"
 import { RequoteList, type RequoteRow } from "@/components/requote-list";
 import { DirectPricesOnFile, type DirectPriceRow } from "@/components/direct-prices-on-file";
 import { PriceIndexTabs } from "@/components/price-index-tabs";
+import { CasesSection } from "@/components/cases-section";
+import { loadOrgCases, caseCategory } from "@/lib/org-cases";
 import { loadMarketplaceCaseDims, fmtCaseDims } from "@/lib/marketplace-case-dims";
 import { cn } from "@/lib/utils";
 
@@ -237,6 +239,10 @@ export default async function OrgPriceIndexPage({
 
   const marketplaceDims = await loadMarketplaceCaseDims(admin);
 
+  const { openRows: caseOpen, resolvedRows: caseResolved } = await loadOrgCases(admin, org.id);
+  const quoteCasesOpen = caseOpen.filter((c) => caseCategory(c.type) === "quote");
+  const quoteCasesResolved = caseResolved.filter((c) => caseCategory(c.type) === "quote");
+
   const base = `/work/orgs/${org.slug}/price-index`;
 
   return (
@@ -265,6 +271,21 @@ export default async function OrgPriceIndexPage({
       <PriceIndexTabs
         marketplaceCount={marketplaceRows.length}
         directCount={requotes.length + directOnFile.length}
+        escalationsCount={quoteCasesOpen.length}
+        escalations={
+          <section className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Quotes the fleet could not price on its own. A marketplace listing whose price could not be auto-pulled (needs a
+              login, a broken link, or no price found on the page) opens here for an operator to pull the price manually.
+            </p>
+            <CasesSection
+              openRows={quoteCasesOpen}
+              resolvedRows={quoteCasesResolved}
+              slug={org.slug}
+              emptyLabel="No quote escalations right now."
+            />
+          </section>
+        }
         marketplace={
           <section className="space-y-3">
             <p className="text-sm text-muted-foreground">

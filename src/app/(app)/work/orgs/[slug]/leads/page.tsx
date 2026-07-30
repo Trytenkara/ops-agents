@@ -18,6 +18,8 @@ import { getOrgOperatorPool, pickSupplierOperator, operatorBySupplier, getSuppli
 import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
 import { orgDisplayName } from "@/lib/org-display";
 import { getSupplierProfiles } from "@/lib/supplier-profiles";
+import { CasesSection } from "@/components/cases-section";
+import { loadOrgCases, caseCategory } from "@/lib/org-cases";
 import { AgentRunsStrip, type RunStat } from "@/components/agent-runs-strip";
 import { RunNowButton } from "@/components/run-now-button";
 import { MaterialFlagsPrompt, type MaterialFlag } from "@/components/material-flags-prompt";
@@ -252,6 +254,25 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   }
   const orgClients = (orgClientRows ?? []).map((r: any) => ({ id: r.id as string, name: r.name as string }));
 
+  // Supplier-side escalations (bounced/no-contact leads, stale leads) surfaced in
+  // the "Requires human enrichment" tab alongside the leads the fleet stalled on.
+  const { openRows: caseOpen, resolvedRows: caseResolved } = await loadOrgCases(admin, org.id);
+  const supplierCasesOpen = caseOpen.filter((c) => caseCategory(c.type) === "supplier");
+  const supplierCasesResolved = caseResolved.filter((c) => caseCategory(c.type) === "supplier");
+  const enrichmentCases =
+    supplierCasesOpen.length > 0 || supplierCasesResolved.length > 0 ? (
+      <section className="space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold text-foreground">Escalations</h3>
+          <p className="text-sm text-muted-foreground">
+            Supplier leads that need a human: a bounced or missing contact to re-enter, or a lead that stalled with no
+            movement. Take the recommended action and resolve.
+          </p>
+        </div>
+        <CasesSection openRows={supplierCasesOpen} resolvedRows={supplierCasesResolved} slug={org.slug} emptyLabel="No supplier escalations right now." />
+      </section>
+    ) : null;
+
   return (
     <div className="space-y-6">
       <ListPageHeader
@@ -295,7 +316,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           </p>
         </div>
       )}
-      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} />
+      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} enrichmentCases={enrichmentCases} />
 
       <section className="space-y-2 pt-2">
         <h2 className="font-serif text-xl tracking-tight">

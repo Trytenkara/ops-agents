@@ -7,6 +7,9 @@ import { resolveSupplierNamesWithFallback, resolveMaterialNames, resolveQuoteRef
 import { correctMaterialSpelling } from "@/lib/material-spelling";
 import { ListPageHeader } from "@/components/list-page-header";
 import { ThreadsList, type ThreadRow, type ThreadKind } from "@/components/threads-list";
+import { PanelTabs } from "@/components/panel-tabs";
+import { CasesSection } from "@/components/cases-section";
+import { loadOrgCases, caseCategory } from "@/lib/org-cases";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +49,10 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
     .eq("org_id", org.id)
     .order("created_at", { ascending: false })
     .limit(200);
+
+  const { openRows: caseOpen, resolvedRows: caseResolved } = await loadOrgCases(admin, org.id);
+  const emailCasesOpen = caseOpen.filter((c) => caseCategory(c.type) === "email");
+  const emailCasesResolved = caseResolved.filter((c) => caseCategory(c.type) === "email");
 
   const rows = drafts ?? [];
   // The fetch is capped, so tell operators exactly which window they're seeing
@@ -108,14 +115,38 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
           </>
         }
       />
-      {rangeNote && (
-        <p className="text-xs text-muted-foreground -mt-3">{rangeNote}</p>
-      )}
-      {threadRows.length === 0 ? (
-        <p className="text-center text-muted-foreground py-8 text-sm">No threads yet. Promote a lead to start outreach.</p>
-      ) : (
-        <ThreadsList rows={threadRows} slug={params.slug} canAct={canAct} />
-      )}
+      <PanelTabs
+        tabs={[
+          {
+            key: "threads",
+            label: "Threads",
+            badge: threadRows.length,
+            content: (
+              <div className="space-y-4">
+                {rangeNote && <p className="text-xs text-muted-foreground">{rangeNote}</p>}
+                {threadRows.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8 text-sm">No threads yet. Promote a lead to start outreach.</p>
+                ) : (
+                  <ThreadsList rows={threadRows} slug={params.slug} canAct={canAct} />
+                )}
+              </div>
+            ),
+          },
+          {
+            key: "escalations",
+            label: "Escalations",
+            badge: emailCasesOpen.length,
+            content: (
+              <CasesSection
+                openRows={emailCasesOpen}
+                resolvedRows={emailCasesResolved}
+                slug={params.slug}
+                emptyLabel="No email escalations right now. Supplier forms to sign and no-reply calling escalations show up here."
+              />
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }

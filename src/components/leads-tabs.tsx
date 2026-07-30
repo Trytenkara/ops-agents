@@ -47,6 +47,7 @@ export function LeadsTabs({
   tagsByMaterialId = {},
   dimsByPack = {},
   supplierProfiles = [],
+  enrichmentCases = null,
 }: {
   rows: any[];
   removedRows?: any[];
@@ -60,6 +61,7 @@ export function LeadsTabs({
   tagsByMaterialId?: Record<string, string>; // tenkara_material_id → org_client_id
   dimsByPack?: Record<string, CaseDims>;
   supplierProfiles?: SupplierProfile[];
+  enrichmentCases?: React.ReactNode;
 }) {
   const [clientFilter, setClientFilter] = useState("all");
 
@@ -232,17 +234,23 @@ export function LeadsTabs({
           forceStage={PIPELINE.find((p) => p.key === tab)!.stage}
         />
       )}
-      {tab === "removed" &&
-        (enrichmentDisplay.length > 0 ? (
-          <>
-            <p className="text-sm text-muted-foreground -mb-1">
-              Leads the fleet could not complete on its own: no contact recovered, deduped, freight/logistics filtered, suppressed before outreach (do-not-contact, excluded country, prior relationship), or a marketplace price the auto-scrape couldn&apos;t get (needs a manual price). Each row shows the reason.
-            </p>
-            <LeadsList rows={enrichmentDisplay} canAct={false} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
-          </>
-        ) : (
-          <p className="text-sm text-muted-foreground py-4">No leads are waiting on human enrichment for this client yet.</p>
-        ))}
+      {tab === "removed" && (
+        <div className="space-y-6">
+          {enrichmentCases}
+          {enrichmentDisplay.length > 0 ? (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground -mb-1">
+                Leads the fleet could not complete on its own: no contact recovered, deduped, freight/logistics filtered, suppressed before outreach (do-not-contact, excluded country, prior relationship), or a marketplace price the auto-scrape couldn&apos;t get (needs a manual price). Each row shows the reason.
+              </p>
+              <LeadsList rows={enrichmentDisplay} canAct={false} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
+            </div>
+          ) : (
+            !enrichmentCases && (
+              <p className="text-sm text-muted-foreground py-4">No leads are waiting on human enrichment for this client yet.</p>
+            )
+          )}
+        </div>
+      )}
       {tab === "dropped" &&
         (droppedRows.length > 0 ? (
           <>
