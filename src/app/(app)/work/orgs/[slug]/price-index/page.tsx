@@ -189,9 +189,14 @@ export default async function OrgPriceIndexPage({
             material_name: correctMaterialSpelling(l.material_name),
             pack_size: t.pack_size ?? null,
             unit_price: t.unit_price ?? null,
-            baseline_price: t.price ?? null,
-            current_price: null,
-            pct_change: null,
+            // On file = prior scrape's price (previous_price); Current = latest price.
+            // Δ = change on-file → current. Lets the row read as last-vs-current.
+            baseline_price: t.previous_price ?? null,
+            current_price: t.price ?? null,
+            pct_change:
+              t.previous_price != null && t.price != null && t.previous_price !== 0
+                ? Math.round(((t.price - t.previous_price) / t.previous_price) * 1000) / 10
+                : null,
             classification: "price_on_file",
             status: "on_file",
             currency: "USD",

@@ -96,13 +96,13 @@ export function MarketplaceFindingHeaders({ showOrg = true }: { showOrg?: boolea
     <TableRow>
       <TableHead>Supplier</TableHead>
       <TableHead>Material</TableHead>
-      <TableHead className="text-right">Old</TableHead>
-      <TableHead className="text-right">New</TableHead>
-      <TableHead className="text-right">Δ%</TableHead>
+      <TableHead className="text-right" title="Price previously on file (the last value we held for this supplier × material)">On file</TableHead>
+      <TableHead className="text-right" title="Current live price — the latest re-check / marketplace scrape">Current</TableHead>
+      <TableHead className="text-right" title="Percent change from the on-file price to the current price">Δ</TableHead>
       <TableHead>Source</TableHead>
       <TableHead>Class</TableHead>
       {showOrg && <TableHead>Org</TableHead>}
-      <TableHead>Checked</TableHead>
+      <TableHead title="When the price was last checked / refreshed">Updated</TableHead>
       <TableHead className="text-right">Action</TableHead>
     </TableRow>
   );
