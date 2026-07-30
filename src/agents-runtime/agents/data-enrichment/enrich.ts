@@ -1,4 +1,5 @@
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
+import { enrichContactViaGetProspect, isGetProspectConfigured } from "@/lib/getprospect";
 import { enrichContactViaZoomInfo, isZoomInfoConfigured } from "@/lib/zoominfo";
 
 // Pre-outreach enrichment building blocks. No LLM, no Missive — those land
@@ -155,9 +156,9 @@ export interface ContactDiscovery {
   phone: string | null;        // best discovered/known phone
   contact_url: string | null;  // contact page / quote-form URL used as a channel
   pages_tried: number;         // how many pages we actually fetched
-  source: "scout" | "discovered" | "path" | "tenkara" | "zoominfo" | null; // where the channel came from
-  poc_name?: string | null;    // contact person name (currently ZoomInfo-only)
-  poc_title?: string | null;   // contact person title (currently ZoomInfo-only)
+  source: "scout" | "discovered" | "path" | "tenkara" | "zoominfo" | "getprospect" | null;
+  poc_name?: string | null;
+  poc_title?: string | null;
 }
 
 export interface SupplierEnrichment {
@@ -825,7 +826,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   let zoomContactTitle: string | null = null;
   if (!email && isZoomInfoConfigured()) {
     const zi = await enrichContactViaZoomInfo({
-      companyName: (payload.supplier_name as string | null) ?? tenkara_supplier?.address ?? null,
+      companyName: lead.supplier_name,
       website,
     }).catch(() => null);
     if (zi?.email && EMAIL_RE.test(zi.email) && !isAggregatorEmail(zi.email) && !isThirdPartyServiceEmail(zi.email)) {
@@ -839,6 +840,22 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
       if (!contactSource) contactSource = "zoominfo";
       zoomContactName = zi.contactName;
       zoomContactTitle = zi.title;
+    }
+  }
+
+  // GetProspect is the final paid-data fallback after ZoomInfo misses. The
+  // provider account has a hard monthly quota and no overage purchase path, so
+  // an exhausted quota simply returns null and leaves the lead for human review.
+  if (!email && isGetProspectConfigured()) {
+    const gp = await enrichContactViaGetProspect({
+      companyName: lead.supplier_name,
+      website,
+    }).catch(() => null);
+    if (gp?.email && EMAIL_RE.test(gp.email) && !isAggregatorEmail(gp.email) && !isThirdPartyServiceEmail(gp.email)) {
+      email = gp.email.toLowerCase();
+      contactSource = "getprospect";
+      zoomContactName = gp.contactName;
+      zoomContactTitle = gp.title;
     }
   }
 
