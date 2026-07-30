@@ -3,8 +3,7 @@ import { tenkaraQuery } from "./tenkara-readonly";
 // Per-client sourcing exclusions, configured by the client in Tenkara's
 // settings (public.user_supplier_settings, keyed by organization_id):
 //   - dnc_suppliers:    jsonb[] of { name, website } — the do-not-contact list.
-//   - excluded_material_countries / excluded_sourcing.countries — countries the
-//     client refuses to source from.
+//   - excluded_material_countries — countries the client refuses to source from.
 // We read these read-only and suppress matching suppliers so neither lead
 // generation (Agent 03) nor cold outreach (Agent 04) ever contacts them.
 //
@@ -55,7 +54,6 @@ interface SettingsRow {
   dnc_suppliers: Array<{ name?: string; website?: string }> | null;
   excluded_material_countries: string[] | null;
   excluded_packaging_countries: string[] | null;
-  excluded_sourcing: { countries?: string[] } | null;
 }
 
 // Fetch the client's sourcing exclusions for one Tenkara org. Returns empty
@@ -65,7 +63,7 @@ interface SettingsRow {
 export async function getSourcingExclusions(orgTenkaraId: string | null | undefined): Promise<SourcingExclusions> {
   if (!orgTenkaraId) return EMPTY;
   const rows = await tenkaraQuery<SettingsRow>(
-    `select dnc_suppliers, excluded_material_countries, excluded_packaging_countries, excluded_sourcing
+    `select dnc_suppliers, excluded_material_countries, excluded_packaging_countries
        from public.user_supplier_settings
       where organization_id = $1::uuid
       limit 1`,
@@ -84,15 +82,10 @@ export async function getSourcingExclusions(orgTenkaraId: string | null | undefi
   }
 
   // Country exclusions: material-sourcing leads, so we honor the material
-  // exclusions plus the general excluded_sourcing list. Packaging-only
-  // exclusions are intentionally left out to avoid over-suppressing material
-  // suppliers.
+  // exclusions only. Packaging-only exclusions are intentionally left out to
+  // avoid over-suppressing material suppliers.
   const excludedCountries = new Set<string>();
   for (const c of row.excluded_material_countries ?? []) {
-    const v = normCountry(c);
-    if (v) excludedCountries.add(v);
-  }
-  for (const c of row.excluded_sourcing?.countries ?? []) {
     const v = normCountry(c);
     if (v) excludedCountries.add(v);
   }
@@ -118,7 +111,7 @@ export async function getSourcingExclusionsDetail(
 ): Promise<SourcingExclusionsDetail> {
   if (!orgTenkaraId) return { companies: [], countries: [] };
   const rows = await tenkaraQuery<SettingsRow>(
-    `select dnc_suppliers, excluded_material_countries, excluded_packaging_countries, excluded_sourcing
+    `select dnc_suppliers, excluded_material_countries, excluded_packaging_countries
        from public.user_supplier_settings
       where organization_id = $1::uuid
       limit 1`,
@@ -131,7 +124,6 @@ export async function getSourcingExclusionsDetail(
     .filter((c) => c.name || c.website);
   const countrySet = new Set<string>();
   for (const c of row.excluded_material_countries ?? []) if (c?.trim()) countrySet.add(c.trim());
-  for (const c of row.excluded_sourcing?.countries ?? []) if (c?.trim()) countrySet.add(c.trim());
   return { companies, countries: Array.from(countrySet) };
 }
 
