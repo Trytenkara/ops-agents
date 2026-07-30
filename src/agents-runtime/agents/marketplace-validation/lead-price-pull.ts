@@ -16,14 +16,24 @@ type Admin = ReturnType<typeof createAdminClient>;
 
 // Per-run throughput is split so a re-check backlog can never starve first pulls
 // of freshly-discovered leads (and vice-versa). Both share the same run deadline.
-const FIRST_PULL_CAP = 20; // brand-new marketplace leads with no price yet (Sonnet+web_search, ~25s each).
-const RECHECK_CAP = 10;    // already-pulled leads that are due for a re-validation (Haiku — see RECHECK_MODEL).
+const FIRST_PULL_CAP = 20; // brand-new marketplace leads with no price yet (Sonnet+web_fetch, ~25s each).
+const RECHECK_CAP = 50;    // already-pulled leads due for re-validation. Raised for FULL mode so the whole pool clears daily across the hourly runs (each run is still bounded by the 800s deadline; leftovers resume next run).
 const CONCURRENCY = 4;
 const MAX_PULL_ATTEMPTS = 3; // needs_review is retried across hourly runs up to this many times before a case is opened, so one flaky web_search result isn't a permanent escalation.
 
-// Adaptive re-validation. Marketplace prices drift, so a pulled lead isn't frozen
-// forever — it's re-checked on a cadence that widens while the price holds steady
-// and snaps back to daily the moment it moves (AIMD backoff).
+// Re-validation mode.
+//  FULL (default): re-verify EVERY marketplace lead DAILY so pricing/info is always
+//    current — next_check_at is always ~1 day out regardless of stability.
+//  ADAPTIVE (env PRICE_PULL_MODE=adaptive): widen the interval per the volatility
+//    ladder below (checks stable leads less often, snaps back to daily on a move).
+// Adaptive stays live behind the flag; flip the env to switch. Intended to kick in
+// once daily check volume gets large (> PRICE_PULL_DAILY_SOFT_LIMIT) — see index.ts.
+const FULL_REFRESH = process.env.PRICE_PULL_MODE !== "adaptive";
+const DAILY_SOFT_LIMIT = Number(process.env.PRICE_PULL_DAILY_SOFT_LIMIT || 500); // above this, notify + consider adaptive
+
+// Volatility ladder used ONLY in adaptive mode. Marketplace prices drift, so a
+// pulled lead isn't frozen — it's re-checked on a cadence that widens while the
+// price holds steady and snaps back to daily the moment it moves (AIMD backoff).
 const CHANGE_THRESHOLD_PCT = 1.0;                 // <1% move treated as unchanged (matches Agent 05's quote-recheck threshold).
 const INTERVAL_LADDER_DAYS = [1, 2, 4, 7, 14, 30]; // stable_streak → days until next check (capped at 30).
 const HISTORY_DEPTH = 10;                          // capped per-lead price-check history kept in payload.
@@ -206,6 +216,18 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   const leads = [...firstLeads, ...recheckLeads];
   if (leads.length === 0) return empty;
 
+  // Volume signal: in FULL (daily re-verify) mode, if the due-recheck pool keeps
+  // maxing out the per-run cap the daily check volume is getting large — the point
+  // at which adaptive (volatility-based) mode should take over. Surfaced as a warn
+  // for ops/health now; the Slack notify + auto-switch to PRICE_PULL_MODE=adaptive
+  // is the follow-up hook.
+  if (FULL_REFRESH && recheckLeads.length >= RECHECK_CAP) {
+    await log(
+      `Full-mode marketplace re-check pool hit the per-run cap (${RECHECK_CAP}). If daily volume exceeds ~${DAILY_SOFT_LIMIT} checks, switch to PRICE_PULL_MODE=adaptive (volatility cadence).`,
+      { level: "warn", step: "mp_volume", data: { recheck_batch: recheckLeads.length, soft_limit: DAILY_SOFT_LIMIT } },
+    );
+  }
+
   // Per-host starting-cadence priors, for seeding brand-new leads' first interval.
   const hostPriors = await computeHostPriors(admin, activeOrgIds);
 
@@ -330,6 +352,10 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         streak = Number(priorPull?.stable_streak ?? 0) + 1;
         intervalDays = INTERVAL_LADDER_DAYS[Math.min(streak, INTERVAL_LADDER_DAYS.length - 1)];
       }
+      // FULL mode (default): re-verify daily regardless of stability. We still track
+      // `streak`/`history`/`changed` above so a later switch to adaptive has the
+      // volatility signal ready — we just override the interval to 1 day here.
+      if (FULL_REFRESH) intervalDays = 1;
       const priorHistory = Array.isArray(priorPull?.history) ? priorPull.history : [];
       const history = [...priorHistory, { at: nowIso, price: result.current_price, changed }].slice(-HISTORY_DEPTH);
       cadence = {
