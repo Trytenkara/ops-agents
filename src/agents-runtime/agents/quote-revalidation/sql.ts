@@ -124,7 +124,8 @@ export async function queryAudit(): Promise<OrgAudit[]> {
       COUNT(DISTINCT m.id) FILTER (
         WHERE EXISTS (
           SELECT 1 FROM material_quotes mq2
-          WHERE mq2.material_id = m.id AND mq2.status = 'active'
+          WHERE mq2.material_id = m.id
+            AND (mq2.status IS NULL OR mq2.status::text = 'active')
         )
       ) AS materials_with_active_quote
     FROM organizations o
