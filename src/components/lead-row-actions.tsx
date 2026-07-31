@@ -2,7 +2,7 @@
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
-import { promoteLead, dropLead } from "@/app/actions/leads";
+import { promoteLead, dropLead, linkLeadToConversation } from "@/app/actions/leads";
 import { DROP_REASONS, type DropReason } from "@/app/actions/lead-drop-reasons";
 
 interface Props {
@@ -16,6 +16,8 @@ interface Props {
 export function LeadRowActions({ leadId, stage, status, hasBlockedReason, disabled }: Props) {
   const [pending, startTransition] = useTransition();
   const [dropping, setDropping] = useState(false);
+  const [linking, setLinking] = useState(false);
+  const [conversationId, setConversationId] = useState("");
   const [reason, setReason] = useState<DropReason>("duplicate");
   const [note, setNote] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -51,6 +53,40 @@ export function LeadRowActions({ leadId, stage, status, hasBlockedReason, disabl
         if (res.warning) setWarn(res.warning);
       }
     });
+  }
+
+  function onLink() {
+    setErr(null);
+    setWarn(null);
+    startTransition(async () => {
+      const res = await linkLeadToConversation(leadId, conversationId);
+      if (!res.ok) setErr(res.error ?? "failed");
+      else {
+        setLinking(false);
+        setConversationId("");
+        setWarn(res.warning ?? null);
+      }
+    });
+  }
+
+  if (linking) {
+    return (
+      <div className="flex flex-col gap-1 items-end">
+        <span className="text-[10px] text-muted-foreground text-right w-48">Links locally only. Tenkara messages, drafts, and assignment stay unchanged.</span>
+        <input
+          value={conversationId}
+          onChange={(e) => setConversationId(e.target.value)}
+          placeholder="Tenkara conversation UUID"
+          className="text-xs border border-border rounded px-2 py-1 bg-background w-48"
+          disabled={pending}
+        />
+        <div className="flex gap-1">
+          <Button size="sm" variant="outline" onClick={onLink} disabled={pending || !conversationId.trim()}>{pending ? "…" : "Link"}</Button>
+          <Button size="sm" variant="ghost" onClick={() => { setLinking(false); setErr(null); }} disabled={pending}>Cancel</Button>
+        </div>
+        {err && <span className="text-[10px] text-destructive">{err}</span>}
+      </div>
+    );
   }
 
   if (dropping) {
@@ -99,6 +135,9 @@ export function LeadRowActions({ leadId, stage, status, hasBlockedReason, disabl
         <Button size="sm" variant="outline" onClick={onPromote} disabled={pending}>
           {pending ? "…" : "Promote"}
         </Button>
+      )}
+      {!disabled && (
+        <Button size="sm" variant="ghost" onClick={() => setLinking(true)} disabled={pending}>Link thread</Button>
       )}
       {canDrop && (
         <Button size="sm" variant="ghost" onClick={() => setDropping(true)} disabled={pending}>

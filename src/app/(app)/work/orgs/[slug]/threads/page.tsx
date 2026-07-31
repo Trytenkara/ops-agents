@@ -107,6 +107,7 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
     assignedEmail: d.users?.email ?? null,
     assignedRole: primaryRole(operatorRoles(d.users)),
     reviewerName: d.reviewer?.display_name ?? null,
+    hiddenLocally: d.metadata?.hidden_locally === true,
   }));
 
   return (

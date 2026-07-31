@@ -371,17 +371,23 @@ export interface TenkaraMessage {
 // /api/external/conversations/{id}) — oldest first, up to 200 messages. Used to
 // give the reply drafter real thread context and to reconstruct outreach/reply
 // state. Returns [] on any error so callers never break on a read miss.
-export async function getTenkaraConversationMessages(conversationId: string): Promise<TenkaraMessage[]> {
+export interface TenkaraConversationDetails {
+  found: boolean;
+  emailAccountId: string | null;
+  hasActiveDraft: boolean;
+  messages: TenkaraMessage[];
+}
+
+export async function getTenkaraConversationDetails(conversationId: string): Promise<TenkaraConversationDetails> {
   const token = process.env.TENKARA_API_TOKEN;
-  if (!token || !conversationId) return [];
+  if (!token || !conversationId) return { found: false, emailAccountId: null, hasActiveDraft: false, messages: [] };
   try {
     const res = await fetch(`${TENKARA_INBOX_BASE}/api/external/conversations/${encodeURIComponent(conversationId)}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) return [];
+    if (!res.ok) return { found: false, emailAccountId: null, hasActiveDraft: false, messages: [] };
     const data = await res.json();
-    const messages = Array.isArray(data?.messages) ? data.messages : [];
-    return messages.map((m: any) => ({
+    const messages = (Array.isArray(data?.messages) ? data.messages : []).map((m: any) => ({
       from_email: m.from_email ?? null,
       from_name: m.from_name ?? null,
       to: m.to ?? null,
@@ -390,9 +396,19 @@ export async function getTenkaraConversationMessages(conversationId: string): Pr
       body_html: m.body_html ?? null,
       sent_at: m.sent_at ?? null,
     }));
+    return {
+      found: true,
+      emailAccountId: data?.email_account_id ?? data?.conversation?.email_account_id ?? null,
+      hasActiveDraft: Boolean(data?.draft ?? data?.active_draft ?? data?.conversation?.draft),
+      messages,
+    };
   } catch {
-    return [];
+    return { found: false, emailAccountId: null, hasActiveDraft: false, messages: [] };
   }
+}
+
+export async function getTenkaraConversationMessages(conversationId: string): Promise<TenkaraMessage[]> {
+  return (await getTenkaraConversationDetails(conversationId)).messages;
 }
 
 // Cold-outbound routing. The migration off Missive is complete: cold outbound

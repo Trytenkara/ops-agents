@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
+import { getTenkaraConversationDetails } from "@/lib/tenkara";
 
 interface ActionResult {
   ok: boolean;
@@ -53,6 +54,55 @@ export async function removeDrafts(
 
   revalidatePath("/work/orgs/[slug]/threads", "page");
   return { ok: true, removed: found.length };
+}
+
+export async function setThreadHidden(draftId: string, hidden: boolean): Promise<ActionResult & { warning?: string }> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" };
+  if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator"])) return { ok: false, error: "forbidden" };
+  const admin = createAdminClient();
+  const { data: draft } = await admin
+    .from("draft_references")
+    .select("id, org_id, thread_id, email_client, status, metadata")
+    .eq("id", draftId)
+    .maybeSingle();
+  if (!draft?.org_id) return { ok: false, error: "thread_not_found" };
+  if (!seesAllOrgs(session)) {
+    const assigned = await getAssignedOrgIds(session);
+    if (assigned !== null && !assigned.includes(draft.org_id)) return { ok: false, error: "forbidden" };
+  }
+  if (hidden) {
+    if (draft.email_client !== "rod_app" || !draft.thread_id) return { ok: false, error: "not_a_tenkara_thread" };
+    if (draft.status !== "linked") return { ok: false, error: "only_linked_empty_conversations_can_be_hidden" };
+    const details = await getTenkaraConversationDetails(draft.thread_id);
+    if (!details.found) return { ok: false, error: "conversation_not_found" };
+    if (details.messages.length > 0 || details.hasActiveDraft) return { ok: false, error: "conversation_not_empty" };
+  }
+
+  const metadata = { ...((draft.metadata as any) ?? {}) };
+  if (hidden) {
+    metadata.hidden_locally = true;
+    metadata.hidden_at = new Date().toISOString();
+    metadata.hidden_by = session.userId;
+  } else {
+    delete metadata.hidden_locally;
+    delete metadata.hidden_at;
+    delete metadata.hidden_by;
+  }
+  const { error } = await admin.from("draft_references").update({ metadata }).eq("id", draft.id);
+  if (error) return { ok: false, error: error.message };
+  await admin.from("audit_log").insert({
+    actor_user_id: session.userId,
+    action: hidden ? "conversation.hidden_locally" : "conversation.unhidden_locally",
+    target_table: "draft_references",
+    target_id: draft.id,
+    diff: { conversation_id: draft.thread_id, upstream_unchanged: true },
+  });
+  revalidatePath("/work/orgs/[slug]/threads", "page");
+  return {
+    ok: true,
+    warning: hidden ? "Hidden in Control Room only. The Tenkara conversation still exists and was not changed." : undefined,
+  };
 }
 
 export async function markDraftReviewed(draftId: string): Promise<ActionResult> {

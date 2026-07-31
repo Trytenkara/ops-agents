@@ -7,7 +7,7 @@ import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { loadMatchCandidates, matchOrderToMaterial } from "@/lib/material-profile";
 import { sanitizeTiers, type PriceTier } from "@/lib/price-tiers";
 import { normalizeCompanyName, hostOf } from "@/lib/tenkara-sourcing-exclusions";
-import { deleteTenkaraDrafts } from "@/lib/tenkara";
+import { deleteTenkaraDrafts, getTenkaraConversationDetails } from "@/lib/tenkara";
 import { isSameCompanyName } from "@/lib/fuzzy";
 
 interface ActionResult {
@@ -232,7 +232,7 @@ async function assertCanActOnLead(leadId: string) {
   const admin = createAdminClient();
   const { data: lead } = await admin
     .from("leads_in_flight")
-    .select("id, stage, status, org_id, payload")
+    .select("id, stage, status, org_id, supplier_id, supplier_name, material_id, material_name, payload")
     .eq("id", leadId)
     .maybeSingle();
   if (!lead) return { error: "lead_not_found" as const };
@@ -248,6 +248,50 @@ async function assertCanActOnLead(leadId: string) {
     }
   }
   return { session, admin, lead };
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export async function linkLeadToConversation(leadId: string, conversationId: string): Promise<ActionResult> {
+  const guard = await assertCanActOnLead(leadId);
+  if ("error" in guard) return { ok: false, error: guard.error };
+  const { session, admin, lead } = guard;
+  const threadId = conversationId.trim();
+  if (!UUID_RE.test(threadId)) return { ok: false, error: "invalid_conversation_id" };
+  if (!lead.org_id) return { ok: false, error: "lead_has_no_org" };
+
+  const { data: org } = await admin
+    .from("orgs")
+    .select("tenkara_email_account_id")
+    .eq("id", lead.org_id)
+    .maybeSingle();
+  if (!org?.tenkara_email_account_id) return { ok: false, error: "org_has_no_tenkara_inbox" };
+
+  const details = await getTenkaraConversationDetails(threadId);
+  if (!details.found) return { ok: false, error: "conversation_not_found" };
+  if (!details.emailAccountId) return { ok: false, error: "conversation_inbox_unverifiable" };
+  if (details.emailAccountId !== org.tenkara_email_account_id) return { ok: false, error: "conversation_belongs_to_other_inbox" };
+
+  const outreach = (lead.payload as any)?.outreach;
+  if (outreach?.conversation_id || outreach?.draft_id) return { ok: false, error: "lead_already_has_outreach" };
+  const { error: linkError } = await admin.rpc("link_lead_conversation", {
+    p_lead_id: lead.id,
+    p_conversation_id: threadId,
+    p_actor_id: session.userId,
+    p_subject: details.messages[details.messages.length - 1]?.subject ?? "Linked Tenkara conversation",
+  });
+  if (linkError) return { ok: false, error: linkError.message };
+
+  await admin.from("audit_log").insert({
+    actor_user_id: session.userId,
+    action: "conversation.linked",
+    target_table: "leads_in_flight",
+    target_id: lead.id,
+    diff: { conversation_id: threadId, local_only: true },
+  });
+  revalidatePath("/work/orgs/[slug]/leads", "page");
+  revalidatePath("/work/orgs/[slug]/threads", "page");
+  return { ok: true, warning: "Linked locally. No draft, assignee, or message was created or changed in Tenkara." };
 }
 
 export async function promoteLead(leadId: string): Promise<ActionResult> {
