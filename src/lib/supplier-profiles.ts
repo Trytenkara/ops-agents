@@ -78,6 +78,29 @@ export async function getSupplierProfile(
   return data as SupplierProfile | null;
 }
 
+// Resolve supplier_id by looking up supplier_name in supplier_profiles for the org.
+// Returns the supplier_id from the profile if found, else null. Used by export/approval
+// workflows to backfill supplier_id on staged quotes when it was extracted as name-only.
+export async function resolveSupplierIdByName(
+  admin: SupabaseClient,
+  orgId: string,
+  supplierName: string | null
+): Promise<string | null> {
+  if (!supplierName) return null;
+  const nameKey = supplierName.trim().toLowerCase();
+  if (!nameKey) return null;
+
+  const { data, error } = await admin
+    .from("supplier_profiles")
+    .select("supplier_id")
+    .eq("org_id", orgId)
+    .ilike("supplier_name", nameKey)
+    .maybeSingle();
+
+  if (error) return null;
+  return data?.supplier_id ?? null;
+}
+
 export async function upsertSupplierProfile(
   admin: SupabaseClient,
   orgId: string,
