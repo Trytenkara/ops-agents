@@ -191,6 +191,17 @@ export function QuoteProfileCard({
           <div className="flex items-center gap-3 flex-wrap">
             <CardTitle className="text-base">{profile.material_name}</CardTitle>
             <span className="text-xs text-muted-foreground">from {profile.supplier_name}</span>
+            {profile.source_url && (
+              <a
+                href={profile.source_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                title={profile.source_url}
+              >
+                Checkout link ↗
+              </a>
+            )}
             <Badge variant={status.variant}>{status.label}</Badge>
             {profile.is_hazardous && <Badge variant="warn">Hazardous</Badge>}
             {profile.is_refrigerated && <Badge variant="info">Refrigerated</Badge>}
@@ -274,6 +285,41 @@ export function QuoteProfileCard({
             </div>
             <Field label="Case Weight" value={profile.case_weight} field="case_weight" editing={editing} onChange={handleNumberChange} type="number" />
             <Field label="Quote Expiry" value={profile.quote_expiry} field="quote_expiry" editing={editing} onChange={handleFieldChange} type="date" />
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Density" value={profile.density} field="density" editing={editing} onChange={handleNumberChange} type="number" />
+              {editing ? (
+                <label className="space-y-0.5 block">
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Density Unit</span>
+                  <select
+                    value={profile.density_unit ?? "g/ml"}
+                    onChange={(e) => handleFieldChange("density_unit", e.target.value)}
+                    className="flex h-7 w-full rounded-md border border-input bg-transparent px-2 text-sm"
+                  >
+                    <option value="g/ml">g/ml</option>
+                    <option value="g/cm3">g/cm3</option>
+                    <option value="kg/L">kg/L</option>
+                    <option value="lb/gal">lb/gal</option>
+                  </select>
+                </label>
+              ) : (
+                <Field label="Density Unit" value={profile.density != null ? profile.density_unit : null} field="density_unit" editing={false} onChange={handleFieldChange} />
+              )}
+            </div>
+            {!editing && profile.density_source && (
+              <div className="text-[10px] text-muted-foreground">
+                Density source:{" "}
+                {/^https?:\/\//.test(profile.density_source) ? (
+                  <a href={profile.density_source} target="_blank" rel="noopener noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline">
+                    {profile.density_source}
+                  </a>
+                ) : (
+                  profile.density_source
+                )}
+              </div>
+            )}
+            {editing && (
+              <Field label="Checkout / Source URL" value={profile.source_url} field="source_url" editing={editing} onChange={handleFieldChange} />
+            )}
           </section>
 
           {/* Lead Time & Inventory */}

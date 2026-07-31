@@ -29,6 +29,10 @@ export interface QuoteProfile {
   protect_from_freezing: boolean;
   material_sku: string | null;
   purchasing_notes: string | null;
+  source_url: string | null;
+  density: number | null;
+  density_unit: string | null;
+  density_source: string | null;
   name_match: boolean;
   inci_match: boolean;
   grades_match: boolean;
@@ -71,6 +75,7 @@ const PROFILE_COLUMNS = `
   min_inventory, min_inventory_unit, max_inventory, max_inventory_unit,
   is_hazardous, is_refrigerated, protect_from_freezing,
   material_sku, purchasing_notes,
+  source_url, density, density_unit, density_source,
   name_match, inci_match, grades_match, grades_match_detail, additional_grades,
   preorder_coa_required, preorder_coa_dealbreaker, preorder_coa_requested, preorder_coa_met,
   preorder_sds_required, preorder_sds_dealbreaker, preorder_sds_requested, preorder_sds_met,
@@ -144,7 +149,7 @@ export async function seedQuoteProfilesFromStaged(
   if (limit <= 0) return 0;
   const { data: staged } = await admin
     .from("staged_quotes")
-    .select("supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, currency, case_type, case_dimensions, lead_time_days, moq_quantity, moq_unit, payment_terms, grade")
+    .select("supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, currency, case_type, case_dimensions, lead_time_days, moq_quantity, moq_unit, payment_terms, grade, source_attachment_url")
     .eq("org_id", orgId)
     .not("status", "eq", "dismissed");
   if (!staged?.length) return 0;
@@ -189,6 +194,7 @@ export async function seedQuoteProfilesFromStaged(
         min_inventory: s.moq_quantity != null ? Number(s.moq_quantity) : null,
         min_inventory_unit: s.moq_unit ?? null,
         additional_grades: s.grade ?? null,
+        source_url: typeof s.source_attachment_url === "string" ? s.source_attachment_url : null,
         generated_notes: generatedNotes || null,
       });
       existingByKey.set(key, {} as QuoteProfile);
@@ -305,7 +311,8 @@ export async function seedQuoteProfilesFromMarketplace(
         lead_time_days: leadTime,
         min_inventory: moq.qty,
         min_inventory_unit: moq.unit,
-        purchasing_notes: `Auto-filled from marketplace listing${pack ? ` (${pack})` : ""}${src ? ` — ${src}` : ""}`,
+        source_url: src,
+        purchasing_notes: `Auto-filled from marketplace listing${pack ? ` (${pack})` : ""}`,
       });
       created++;
       if (created >= limit) break;
