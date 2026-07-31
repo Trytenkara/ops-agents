@@ -16,6 +16,11 @@ export interface RawLead {
   supplier_id: string | null;
   supplier_name: string | null;
   material_name: string | null;
+  // Lead origin (e.g. 'importyeti', 'sourceready', 'ai_discovery'). The material-
+  // relevance backstop below only runs for the customs/directory discovery sources,
+  // which surface suppliers on a loose keyword/shipment match and can drag in
+  // wrong-industry companies. Null when unknown.
+  source?: string | null;
   payload: Record<string, any> | null;
   // Lead-creation confidence (0..1), if scored. Enrichment lowers it by any
   // marketplace-trust penalty so a down-ranked lead sorts to the bottom of the
@@ -215,6 +220,20 @@ export interface MarketplaceTrustCheck {
   signals: string[];                  // human-readable reasons
 }
 
+// Advisory material-relevance backstop for customs/directory discovery leads
+// (source=importyeti/sourceready). Those sources surface suppliers on a loose
+// keyword/shipment match, so a company whose product text has nothing to do with
+// the target material can slip through (fruit farms, a tractor maker, textile
+// traders staged under "Nano Silica"). This is a FLAG, never a filter: we only
+// down-rank + annotate, never drop the lead or block outreach.
+export interface MaterialRelevanceCheck {
+  // False only when there was product text to check AND it shared ZERO meaningful
+  // material tokens. No product text at all → relevant=true (we can't judge).
+  relevant: boolean;
+  matchedTokens: string[];        // material/INCI tokens found in the product text
+  note: string | null;           // human-readable advisory when not relevant, else null
+}
+
 export interface EnrichmentResult {
   website_probe: WebsiteProbe | null;
   email_check: EmailCheck | null;
@@ -222,6 +241,8 @@ export interface EnrichmentResult {
   tenkara_supplier: SupplierEnrichment | null;
   legitimacy_check: LegitimacyCheck | null;
   marketplace_trust: MarketplaceTrustCheck | null;
+  // Non-null only for source=importyeti/sourceready leads (the backstop's scope).
+  material_relevance: MaterialRelevanceCheck | null;
   completeness_score: number; // 0..1
   // The factors that produced completeness_score, in scoring order.
   completeness_factors: CompletenessFactor[];
@@ -720,6 +741,109 @@ export function assessMarketplaceTrust(args: {
   };
 }
 
+// ---------- Material-relevance backstop (advisory) --------------------------
+//
+// Only for source=importyeti/sourceready leads. Tokenizes the target material
+// name + INCI into meaningful keywords and checks for ANY overlap with the
+// supplier's captured product text. Zero overlap (when there IS product text to
+// check) → flag as capability-unverified. This is a first, safe keyword backstop:
+// it catches obviously-off leads (a fruit farm under "Nano Silica") but does NOT
+// judge a company that legitimately ships the material yet is a buyer / wrong
+// side of the trade. See PR notes for the limitation.
+
+// Generic English + commerce/grade words that carry no material identity. Dropped
+// from both sides so they can't manufacture a false "match" (e.g. both a farm and
+// a silica maker say "food grade" / "high quality").
+const RELEVANCE_STOPWORDS = new Set([
+  "and", "the", "for", "with", "from", "our", "your", "all", "new", "top",
+  "grade", "grades", "pure", "purity", "raw", "material", "materials",
+  "product", "products", "high", "quality", "fine", "bulk", "wholesale",
+  "supplier", "suppliers", "supply", "manufacturer", "manufacturers", "factory",
+  "best", "price", "prices", "cheap", "natural", "organic", "industrial",
+  "food", "cosmetic", "cosmetics", "pharma", "pharmaceutical", "technical",
+  "usp", "fcc", "ansi", "cas", "powder", "powdered", "granular", "granule",
+  "liquid", "solution", "anhydrous", "min", "max", "per", "type", "form",
+  "assorted", "various", "trading", "trade", "company", "limited", "inc",
+]);
+
+// Split a free-text string into lowercase alphanumeric tokens, dropping stopwords,
+// tokens shorter than 3 chars, and pure numbers.
+function relevanceTokens(s: string | null | undefined): string[] {
+  if (!s) return [];
+  return s
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3 && !/^\d+$/.test(t) && !RELEVANCE_STOPWORDS.has(t));
+}
+
+// Collect the free-text product/description fields the discovery sources populate
+// into one lowercased blob for overlap checking. Guards each field; several may
+// be arrays (e.g. top_products).
+export function collectProductText(payload: Record<string, any> | null | undefined): string {
+  if (!payload) return "";
+  const values = [
+    payload.top_products,
+    payload.product_description,
+    payload.supplier_background,
+    payload.trade_name,
+    payload.grades_offered,
+    payload.scout_notes,
+    payload.importyeti?.top_products,
+    payload.importyeti?.product_descriptions,
+    payload.sourceready_tags,
+    payload.sourceready?.tags,
+    payload.sourceready?.products,
+  ];
+  const parts: string[] = [];
+  const append = (value: any) => {
+    if (value == null) return;
+    if (Array.isArray(value)) value.forEach(append);
+    else if (typeof value === "object") Object.values(value).forEach(append);
+    else parts.push(String(value));
+  };
+  values.forEach(append);
+  return parts.join(" ").trim();
+}
+
+// Advisory relevance check. `productText` is the supplier's captured product/
+// description blob (see collectProductText). Returns relevant=false ONLY when
+// there was product text AND it shared zero meaningful material tokens.
+export function assessMaterialRelevance(args: {
+  materialName: string | null | undefined;
+  inci: string | null | undefined;
+  productText: string | null | undefined;
+}): MaterialRelevanceCheck {
+  const materialTokens = Array.from(new Set([...relevanceTokens(args.materialName), ...relevanceTokens(args.inci)]));
+  const text = (args.productText ?? "").toLowerCase();
+  const textTokens = new Set(relevanceTokens(args.productText));
+
+  // No material tokens to test against, or no product text captured → can't judge,
+  // so treat as relevant (never flag on absence of information).
+  if (materialTokens.length === 0 || text.trim().length === 0) {
+    return { relevant: true, matchedTokens: [], note: null };
+  }
+
+  // A token matches if the product text contains it as a token or as a substring
+  // (handles plurals / compounds like "silica" in "silicas"/"nanosilica"). Lenient
+  // by design: we only flag on genuinely ZERO overlap.
+  const matchedTokens = materialTokens.filter((t) => textTokens.has(t) || text.includes(t));
+  if (matchedTokens.length > 0) {
+    return { relevant: true, matchedTokens, note: null };
+  }
+
+  const label = (args.materialName || args.inci || "the target material").trim();
+  return {
+    relevant: false,
+    matchedTokens: [],
+    note: `No product-text match to ${label}; verify this supplier actually handles it.`,
+  };
+}
+
+// Advisory completeness penalty applied when a discovery lead's product text has
+// zero overlap with the target material. Soft only: sorts the lead down, never
+// blocks outreach. Kept modest so a false flag doesn't bury an otherwise good lead.
+const RELEVANCE_PENALTY = 0.15;
+
 // Treat scout-captured "via IndiaMART inquiry" / "contact form" strings as a
 // (weak) contact channel rather than a broken email.
 function isContactPath(s: string | null | undefined): boolean {
@@ -894,9 +1018,29 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     emailHost: (email ?? scoutEmail)?.split("@")[1]?.toLowerCase() ?? null,
   });
 
-  const completeness_factors = marketplace_trust
-    ? [...base.factors, ...marketplace_trust.factors]
-    : base.factors;
+  // Material-relevance backstop: advisory, and only for the customs/directory
+  // discovery sources whose loose matching can drag in wrong-industry companies.
+  const isDiscoverySource = lead.source === "importyeti" || lead.source === "sourceready";
+  const material_relevance: MaterialRelevanceCheck | null = isDiscoverySource
+    ? assessMaterialRelevance({
+        materialName: lead.material_name,
+        inci: (payload.inci_name as string | null) ?? null,
+        productText: collectProductText(payload),
+      })
+    : null;
+  // A small negative completeness factor when there's genuinely zero material-token
+  // overlap, so the unverified lead sorts down. Recomputed from scratch each run, so
+  // re-enriching never stacks the penalty (idempotent).
+  const relevanceFactors: CompletenessFactor[] =
+    material_relevance && !material_relevance.relevant
+      ? [{ label: "no product-text match to target material", points: -RELEVANCE_PENALTY }]
+      : [];
+
+  const completeness_factors = [
+    ...base.factors,
+    ...(marketplace_trust ? marketplace_trust.factors : []),
+    ...relevanceFactors,
+  ];
   const completeness_score = Math.max(
     0,
     Math.min(1, Math.round(completeness_factors.reduce((s, f) => s + f.points, 0) * 100) / 100)
@@ -929,6 +1073,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     tenkara_supplier,
     legitimacy_check,
     marketplace_trust,
+    material_relevance,
     completeness_score,
     completeness_factors,
     outreach_ready,

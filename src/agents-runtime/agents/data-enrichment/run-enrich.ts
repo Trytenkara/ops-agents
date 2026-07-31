@@ -55,7 +55,16 @@ export async function enrichAndStageLead(
   // Drop any marker left by an earlier block: a lead that has since become
   // reachable must not be promoted still carrying "held". The block path below
   // re-adds it when this attempt also fails.
-  const { enrichment_blocked_reason: _priorBlock, ...priorPayload } = lead.payload ?? {};
+  //
+  // Also strip any prior material-relevance flag/note. We re-derive it from this
+  // run's assessment below (re-added only when still not relevant), so a lead that
+  // now matches gets its flag cleared and re-runs never double-stamp it.
+  const {
+    enrichment_blocked_reason: _priorBlock,
+    relevance_flag: _priorRelFlag,
+    relevance_note: _priorRelNote,
+    ...priorPayload
+  } = lead.payload ?? {};
 
   // A marketplace-trust penalty (Send-Inquiry / price-range / low-trust-China
   // listing) down-ranks the lead's confidence so it sorts to the bottom of the
@@ -83,9 +92,22 @@ export async function enrichAndStageLead(
     ? `Low confidence result from ${result.marketplace_trust.marketplace_host ?? "marketplace"}`
     : null;
 
+  // Advisory material-relevance flag for importyeti/sourceready leads whose product
+  // text shows zero overlap with the target material. Set exactly the same way as
+  // marketplace_source_note: annotate only, never block or drop. Re-derived every
+  // run (the prior flag was stripped above), so it stays idempotent.
+  const relevancePatch =
+    result.material_relevance && !result.material_relevance.relevant
+      ? {
+          relevance_flag: "material_capability_unverified" as const,
+          relevance_note: result.material_relevance.note,
+        }
+      : {};
+
   const mergedPayload = {
     ...priorPayload,
     ...(marketplaceSourceNote ? { marketplace_source_note: marketplaceSourceNote } : {}),
+    ...relevancePatch,
     enrichment: {
       website_probe: result.website_probe,
       email_check: result.email_check,
@@ -93,6 +115,7 @@ export async function enrichAndStageLead(
       tenkara_supplier: result.tenkara_supplier,
       legitimacy_check: result.legitimacy_check,
       marketplace_trust: result.marketplace_trust,
+      material_relevance: result.material_relevance,
       aggregator_contact_email: result.aggregator_contact_email,
       completeness_score: result.completeness_score,
       completeness_factors: result.completeness_factors,
@@ -109,12 +132,31 @@ export async function enrichAndStageLead(
     completeness_factors: result.completeness_factors,
   };
 
+  // Provider product evidence with zero target-material overlap is a hard stop. This
+  // is narrower than missing evidence: collectProductText returns empty when there is
+  // nothing reliable to judge, and assessMaterialRelevance then remains relevant.
+  if (result.material_relevance && !result.material_relevance.relevant) {
+    const { data, error } = await admin
+      .from("leads_in_flight")
+      .update({
+        stage: "terminal",
+        status: "terminal",
+        drop_reason: "provider_product_mismatch",
+        payload: mergedPayload,
+        last_enrichment_attempt_at: attemptedAt,
+        ...confidencePatch,
+      })
+      .eq("id", lead.id)
+      .eq("stage", "raw")
+      .eq("status", "active")
+      .select("id");
+    if (error) return { status: "error", reason: error.message };
+    return data?.length ? { status: "blocked", reason: "provider_product_mismatch" } : { status: "superseded" };
+  }
+
   // Both writes re-assert the same predicate the batch selected on. The Control Room
-  // can promote or drop a lead (actions/leads.ts, actions/cases.ts,
-  // actions/material-flags.ts) while this probe is in flight; without it the write
-  // lands on top of that newer state. status matters as much as stage: dropLead sets
-  // status='terminal' and leaves stage='raw', so a stage-only guard would resurrect a
-  // dropped lead. Zero rows means someone got there first -- neither promote nor block.
+  // can promote or drop a lead while this probe is in flight. Zero rows means someone
+  // got there first, so this run must not overwrite the newer state.
   if (result.outreach_ready) {
     const { data, error } = await admin
       .from("leads_in_flight")

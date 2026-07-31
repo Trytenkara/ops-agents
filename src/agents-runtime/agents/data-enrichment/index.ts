@@ -2,7 +2,7 @@ import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { loadOrgStatuses, sourcingAllowed } from "@/lib/org-status";
 import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
-import type { RawLead } from "./enrich";
+import { assessMaterialRelevance, collectProductText, type RawLead } from "./enrich";
 import { enrichAndStageLead } from "./run-enrich";
 
 // v1 trim (vs. full spec):
@@ -36,6 +36,51 @@ registerAgent({
       return;
     }
 
+    const { data: historical, error: historicalError } = await admin
+      .from("leads_in_flight")
+      .select("id, material_name, source, payload")
+      .eq("status", "active")
+      .in("stage", ["enriched", "ready_for_outreach"])
+      .in("source", ["importyeti", "sourceready"])
+      .in("org_id", sourcingOrgIds)
+      .is("payload->enrichment->material_relevance", null)
+      .order("created_at", { ascending: true })
+      .limit(MAX_LEADS_PER_RUN);
+    if (historicalError) {
+      await ctx.log(`Historical relevance scan failed: ${historicalError.message}`, { level: "error", step: "relevance_backfill" });
+    } else {
+      for (const lead of historical ?? []) {
+        const payload = (lead.payload as any) ?? {};
+        const productText = collectProductText(payload);
+        if (!productText) continue;
+        const check = assessMaterialRelevance({
+          materialName: lead.material_name,
+          inci: payload.inci_name ?? null,
+          productText,
+        });
+        if (check.relevant) {
+          await admin.from("leads_in_flight").update({
+            payload: {
+              ...payload,
+              enrichment: { ...(payload.enrichment ?? {}), material_relevance: check },
+            },
+          }).eq("id", lead.id).eq("status", "active");
+          continue;
+        }
+        await admin.from("leads_in_flight").update({
+          stage: "terminal",
+          status: "terminal",
+          drop_reason: "provider_product_mismatch",
+          payload: {
+            ...payload,
+            relevance_flag: "material_capability_unverified",
+            relevance_note: check.note,
+            enrichment: { ...(payload.enrichment ?? {}), material_relevance: check },
+          },
+        }).eq("id", lead.id).eq("status", "active").in("stage", ["enriched", "ready_for_outreach"]);
+      }
+    }
+
     // 1. Pull a batch of raw leads: never-attempted first, then whatever was tried
     //    longest ago, with confidence breaking ties inside each group.
     //
@@ -47,7 +92,7 @@ registerAgent({
     //    come back for a retry only after the queue has cycled.
     const { data: leads, error: pullErr } = await admin
       .from("leads_in_flight")
-      .select("id, org_id, supplier_id, supplier_name, material_name, payload, confidence_score")
+      .select("id, org_id, supplier_id, supplier_name, material_name, source, payload, confidence_score")
       .eq("stage", "raw")
       .eq("status", "active")
       .in("org_id", sourcingOrgIds)
@@ -86,13 +131,14 @@ registerAgent({
     const blockedReasons: Record<string, number> = {};
     const startedAt = Date.now();
 
-    type LeadRow = { id: string; supplier_id: string | null; supplier_name: string | null; material_name: string | null; payload: any; confidence_score: number | null };
+    type LeadRow = { id: string; supplier_id: string | null; supplier_name: string | null; material_name: string | null; source: string | null; payload: any; confidence_score: number | null };
     async function processLead(row: LeadRow): Promise<void> {
       const lead: RawLead = {
         id: row.id,
         supplier_id: row.supplier_id,
         supplier_name: row.supplier_name,
         material_name: row.material_name,
+        source: row.source,
         payload: row.payload ?? {},
         confidence_score: row.confidence_score,
       };
