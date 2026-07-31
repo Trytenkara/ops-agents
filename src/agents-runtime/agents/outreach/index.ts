@@ -10,6 +10,7 @@ import { isAggregatorEmail, isAggregatorDomain } from "../data-enrichment/enrich
 import { suppliersWithPriorRelationship } from "@/lib/tenkara-relationships";
 import { getSourcingExclusions, exclusionReason } from "@/lib/tenkara-sourcing-exclusions";
 import { resolveMaterialNames } from "@/lib/tenkara-names";
+import { randomUUID } from "crypto";
 
 // v1 trim (vs. full spec):
 //   - pre-outreach only. Reply tracking + follow-up cadence land with Agent 08.
@@ -555,6 +556,16 @@ registerAgent({
     let phasedHeld = 0; // materials held for a follow-up (not in the first pool)
 
     const emailCandidates = candidatesNoPrior.filter((c) => c.channel === "email");
+    const aliasByOrgEmail = new Map<string, { threadId: string; draftRefId: string | null }>();
+    if (orgIds.length) {
+      const { data: aliases } = await admin
+        .from("supplier_email_aliases")
+        .select("org_id, email, thread_id, draft_ref_id")
+        .in("org_id", orgIds);
+      for (const alias of aliases ?? []) {
+        aliasByOrgEmail.set(`${alias.org_id}:${alias.email}`, { threadId: alias.thread_id, draftRefId: alias.draft_ref_id });
+      }
+    }
 
     // ---- First-contact email drafts (per supplier, small pool) --------------
     // Phased outreach: group each supplier's actionable materials, then send ONE
@@ -657,6 +668,13 @@ registerAgent({
       // to email/domain match (catches cross-source duplicates where a scout lead
       // has supplier_id: null but the same email as an existing graph-lead draft).
       {
+        const alias = group
+          .map((candidate) => candidate.email ? aliasByOrgEmail.get(`${candidate.lead.org_id}:${candidate.email.toLowerCase()}`) : null)
+          .find(Boolean);
+        if (alias) {
+          await holdForFollowup(group, [], alias.draftRefId ?? undefined);
+          continue;
+        }
         const FREE_DOMAINS = new Set([
           "gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com",
           "icloud.com", "me.com", "protonmail.com", "proton.me", "live.com",
@@ -715,6 +733,20 @@ registerAgent({
         p0.site_type === "MS" ||
         p0.enrichment?.tenkara_supplier?.is_marketplace === true;
 
+      const reservationId = randomUUID();
+      const groupEmails = Array.from(new Set(group.map((candidate) => candidate.email?.toLowerCase()).filter(Boolean) as string[]));
+      const { data: reserved, error: reserveError } = await admin.rpc("reserve_supplier_emails", {
+        p_org_id: primary.lead.org_id,
+        p_emails: groupEmails,
+        p_reservation_id: reservationId,
+      });
+      if (reserveError || reserved !== true) {
+        await admin.rpc("release_supplier_email_reservation", { p_org_id: primary.lead.org_id, p_reservation_id: reservationId });
+        const claimedAlias = groupEmails.map((address) => aliasByOrgEmail.get(`${primary.lead.org_id}:${address}`)).find(Boolean);
+        await holdForFollowup(group, [], claimedAlias?.draftRefId ?? undefined);
+        continue;
+      }
+
       const res = await runOutreachForSupplier({
         admin,
         agentId: tackleAgentId,
@@ -734,6 +766,14 @@ registerAgent({
         log: (m, meta) => ctx.log(m, meta),
       });
       if (res.staged) {
+        await admin.from("supplier_email_aliases").update({
+          thread_id: res.conversationId ?? null,
+          draft_ref_id: res.draftRefId ?? null,
+          supplier_id: supplierId,
+          supplier_name: primary.lead.supplier_name,
+          claim_status: "attached",
+          reservation_id: null,
+        }).eq("reservation_id", reservationId).eq("claim_status", "reserved");
         staged++;
         promoted += res.promoted;
         if (retryRequestId) {
@@ -741,6 +781,7 @@ registerAgent({
         }
         if (remainder.length) await holdForFollowup(remainder, poolMaterialIds, res.draftRefId);
       } else {
+        await admin.rpc("release_supplier_email_reservation", { p_org_id: primary.lead.org_id, p_reservation_id: reservationId });
         missiveErrors++;
       }
     }

@@ -14,6 +14,7 @@ import { BulkRewriteBar } from "@/components/bulk-rewrite-bar";
 import { removeDrafts } from "@/app/actions/drafts";
 import { rewriteDrafts } from "@/app/actions/rewrite-draft";
 import { setThreadHidden } from "@/app/actions/drafts";
+import { attachAlternateEmail } from "@/app/actions/supplier-emails";
 import { Button } from "@/components/ui/button";
 import { filenameFor } from "@/lib/csv";
 import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
@@ -30,6 +31,7 @@ export type ThreadRow = {
   materialName: string | null;
   quoteRef: string | null;
   status: string;
+  emailClient: string;
   createdAt: string | null;
   metadata: any;
   assignedName: string | null;
@@ -37,6 +39,7 @@ export type ThreadRow = {
   assignedRole: string | null;
   reviewerName: string | null;
   hiddenLocally: boolean;
+  aliases: { id: string; email: string }[];
 };
 
 const KIND_META: Record<ThreadKind, { label: string; variant: string; title: string }> = {
@@ -52,10 +55,12 @@ const FILTERS: { value: "all" | ThreadKind | "hidden"; label: string }[] = [
   { value: "hidden", label: "Hidden" },
 ];
 
-export function ThreadsList({ rows, slug, canAct = false }: { rows: ThreadRow[]; slug: string; canAct?: boolean }) {
+export function ThreadsList({ rows, slug, orgId, canAct = false }: { rows: ThreadRow[]; slug: string; orgId: string; canAct?: boolean }) {
   const [kind, setKind] = useState<"all" | ThreadKind | "hidden">("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [hiding, setHiding] = useState<string | null>(null);
+  const [attaching, setAttaching] = useState<string | null>(null);
+  const [aliasEmail, setAliasEmail] = useState("");
   const [actionMessage, setActionMessage] = useState<string | null>(null);
 
   const toggleOne = (id: string, checked: boolean) =>
@@ -113,6 +118,18 @@ export function ThreadsList({ rows, slug, canAct = false }: { rows: ThreadRow[];
     setHiding(null);
     setActionMessage(res.ok ? (res.warning ?? "Hidden locally.") : (res.error ?? "Could not hide thread."));
     if (res.ok) window.location.reload();
+  }
+
+  async function attachAlias(row: ThreadRow) {
+    setActionMessage(null);
+    const res = await attachAlternateEmail(orgId, row.id, aliasEmail);
+    if (!res.ok) {
+      setActionMessage(res.error ?? "Could not attach email.");
+      return;
+    }
+    setAttaching(null);
+    setAliasEmail("");
+    window.location.reload();
   }
 
   const csvRows = filtered.map((r) => [
@@ -218,7 +235,25 @@ export function ThreadsList({ rows, slug, canAct = false }: { rows: ThreadRow[];
                 </div>
               </TableCell>
               <TableCell title={d.supplierId ?? undefined}>
-                {d.supplierName ?? (d.supplierId ? <span className="text-xs text-muted-foreground">name unavailable</span> : "—")}
+                <div>{d.supplierName ?? (d.supplierId ? <span className="text-xs text-muted-foreground">name unavailable</span> : "—")}</div>
+                {d.aliases.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {d.aliases.map((alias) => (
+                      <span key={alias.id} className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[10px]">
+                        {alias.email}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {canAct && d.emailClient === "rod_app" && (
+                  attaching === d.id ? (
+                    <div className="mt-1 flex gap-1">
+                      <input value={aliasEmail} onChange={(e) => setAliasEmail(e.target.value)} placeholder="alternate@email.com" className="w-40 rounded border border-border bg-background px-1 py-0.5 text-[10px]" />
+                      <button type="button" className="text-[10px] text-primary" onClick={() => attachAlias(d)}>Add</button>
+                      <button type="button" className="text-[10px] text-muted-foreground" onClick={() => { setAttaching(null); setAliasEmail(""); }}>Cancel</button>
+                    </div>
+                  ) : <button type="button" className="mt-1 text-[10px] text-primary hover:underline" onClick={() => setAttaching(d.id)}>Attach alternate email</button>
+                )}
               </TableCell>
               <TableCell title={d.materialId ?? undefined}>
                 {d.materialName ?? (d.materialId ? <span className="text-xs text-muted-foreground">name unavailable</span> : "—")}

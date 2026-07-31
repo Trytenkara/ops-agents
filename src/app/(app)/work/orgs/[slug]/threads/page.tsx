@@ -46,7 +46,7 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
   const { data: drafts } = await admin
     .from("draft_references")
     .select(
-      "id, subject, supplier_id, material_id, quote_id, status, created_at, metadata, assigned_operator, users:users!draft_references_assigned_operator_fkey(display_name, email, user_roles(role)), reviewer:users!draft_references_reviewer_fkey(display_name), agents(name, slug)"
+      "id, subject, supplier_id, material_id, quote_id, status, email_client, created_at, metadata, assigned_operator, users:users!draft_references_assigned_operator_fkey(display_name, email, user_roles(role)), reviewer:users!draft_references_reviewer_fkey(display_name), agents(name, slug)"
     )
     .eq("org_id", org.id)
     .order("created_at", { ascending: false })
@@ -57,6 +57,17 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
   const emailCasesResolved = caseResolved.filter((c) => caseCategory(c.type) === "email");
 
   const rows = drafts ?? [];
+  const { data: aliasRows } = await admin
+    .from("supplier_email_aliases")
+    .select("id, email, draft_ref_id")
+    .eq("org_id", org.id);
+  const aliasesByDraft = new Map<string, { id: string; email: string }[]>();
+  for (const alias of aliasRows ?? []) {
+    if (!alias.draft_ref_id) continue;
+    const list = aliasesByDraft.get(alias.draft_ref_id) ?? [];
+    list.push({ id: alias.id, email: alias.email });
+    aliasesByDraft.set(alias.draft_ref_id, list);
+  }
   // The fetch is capped, so tell operators exactly which window they're seeing
   // (newest N threads and their date span). Older threads beyond the cap aren't
   // shown; the range makes that explicit instead of silently truncating.
@@ -101,6 +112,7 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
     materialName: correctMaterialSpelling((d.material_id ? materialNames.get(d.material_id) : null) ?? (d.metadata as any)?.material_name ?? null),
     quoteRef: d.quote_id ? quoteRefs.get(d.quote_id) ?? null : null,
     status: d.status,
+    emailClient: d.email_client,
     createdAt: d.created_at ?? null,
     metadata: d.metadata,
     assignedName: d.users?.display_name ?? null,
@@ -108,6 +120,7 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
     assignedRole: primaryRole(operatorRoles(d.users)),
     reviewerName: d.reviewer?.display_name ?? null,
     hiddenLocally: d.metadata?.hidden_locally === true,
+    aliases: aliasesByDraft.get(d.id) ?? [],
   }));
 
   return (
@@ -144,7 +157,7 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
                 {threadRows.length === 0 ? (
                   <p className="text-center text-muted-foreground py-8 text-sm">No threads yet. Promote a lead to start outreach.</p>
                 ) : (
-                  <ThreadsList rows={threadRows} slug={params.slug} canAct={canAct} />
+                  <ThreadsList rows={threadRows} slug={params.slug} orgId={org.id} canAct={canAct} />
                 )}
               </div>
             ),
