@@ -125,6 +125,12 @@ export async function saveCaseDimensions(
   if ("error" in ctx) return { ok: false, error: ctx.error };
   const { admin } = ctx;
 
+  if (input.unitsPerCase == null || !Number.isInteger(input.unitsPerCase) || input.unitsPerCase <= 0) {
+    return { ok: false, error: "Units per case must be a positive whole number." };
+  }
+  if (![input.length, input.width, input.height, input.weight].every((value) => value != null && Number.isFinite(value) && value > 0)) {
+    return { ok: false, error: "Enter positive length, width, height, and weight values." };
+  }
   const axis: StackAxis = STACK_AXES.includes(input.stackAxis) ? input.stackAxis : "height";
   const weightUnit: "kg" | "lb" = input.weightUnit === "lb" ? "lb" : "kg";
   const caseType: CaseType = CASE_TYPES.includes(input.caseType) ? input.caseType : "Box/Bag";
@@ -140,8 +146,8 @@ export async function saveCaseDimensions(
     },
   };
   const res = computeCaseFromUnits(calcInput);
-  if (res.width == null && res.height == null && res.length == null) {
-    return { ok: false, error: "Enter at least one unit dimension to compute case size." };
+  if ([res.width, res.height, res.length, res.weight_kg].some((value) => value == null || !Number.isFinite(value) || value <= 0)) {
+    return { ok: false, error: "The calculated case dimensions and weight must all be positive." };
   }
 
   const { error } = await admin
