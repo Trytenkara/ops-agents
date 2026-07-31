@@ -37,15 +37,8 @@ const DAILY_SOFT_LIMIT = Number(process.env.PRICE_PULL_DAILY_SOFT_LIMIT || 500);
 const CHANGE_THRESHOLD_PCT = 1.0;                 // <1% move treated as unchanged (matches Agent 05's quote-recheck threshold).
 
 // Currency safety net. The reader sometimes reports "USD" (or leaves it blank,
-// which we treat as USD) for a listing that is actually in INR/EUR/etc., so the
-// convert-to-USD step never fires and a raw foreign number gets published as
-// dollars (e.g. ₹149 rendered as $149, ~85x too high). These two signals let us
-// correct or quarantine the clear cases deterministically, independent of the
-// model. Non-obvious foreign-.com cases still rely on the reader's own currency
-// detection (see the price-recheck prompt).
+// which we treat as USD) for a listing that is actually in INR/EUR/etc.
 const CURRENCY_TOKENS: Array<[RegExp, string]> = [
-  // "rs" only counts as rupees when adjacent to a digit (Rs 72 / 72 Rs) to avoid
-  // matching stray letters; ₹/INR/rupees are unambiguous on their own.
   [/₹|\binr\b|rupees?|(?:^|[^a-z])rs\.?\s*\d|\d\s*rs\.?(?:$|[^a-z])/i, "INR"],
   [/€|\beur\b|euros?/i, "EUR"],
   [/£|\bgbp\b/i, "GBP"],
@@ -53,7 +46,6 @@ const CURRENCY_TOKENS: Array<[RegExp, string]> = [
   [/\baud\b/i, "AUD"],
   [/\bcad\b/i, "CAD"],
 ];
-// Hosts that price in their domestic currency even when a "$"/"USD" slips through.
 const DOMESTIC_CURRENCY_HOSTS: RegExp[] = [
   /\.in$/, /\.pk$/, /\.kz$/, /\.cn$/, /\.id$/, /\.vn$/, /\.br$/, /\.lk$/, /\.bd$/,
   /indiamart/, /exportersindia/, /tradeindia/, /flagma/,
@@ -62,6 +54,8 @@ function sniffCurrencyToken(text: string): string | null {
   for (const [re, code] of CURRENCY_TOKENS) if (re.test(text)) return code;
   return null;
 }
+
+const IMPLAUSIBLE_MOVE_FACTOR = 10;
 const INTERVAL_LADDER_DAYS = [1, 2, 4, 7, 14, 30]; // stable_streak → days until next check (capped at 30).
 const HISTORY_DEPTH = 10;                          // capped per-lead price-check history kept in payload.
 // Re-checks are lower-stakes than a first extraction (comparing to a known
@@ -365,6 +359,38 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       }
     }
 
+    if (
+      result.classification === "current_price_found" &&
+      (typeof result.current_price !== "number" || !Number.isFinite(result.current_price) || result.current_price <= 0)
+    ) {
+      result.notes = `Invalid nonpositive marketplace price; not publishing. ${result.notes ?? ""}`.trim();
+      result.classification = "needs_review";
+      result.current_price = null;
+      result.unit_price = null;
+      result.tiers = [];
+    }
+
+    // Catastrophic-move guard. Before trusting a re-check's number, sanity-check it
+    // against the price on file: an order-of-magnitude swing in either direction is
+    // almost certainly a misread, not a real move.
+    if (
+      isRecheck &&
+      result.classification === "current_price_found" &&
+      typeof result.current_price === "number" &&
+      result.current_price > 0 &&
+      priorPrice != null &&
+      priorPrice > 0
+    ) {
+      const ratio = result.current_price / priorPrice;
+      if (ratio <= 1 / IMPLAUSIBLE_MOVE_FACTOR || ratio >= IMPLAUSIBLE_MOVE_FACTOR) {
+        result.notes = `Implausible price move: $${priorPrice} on file → $${result.current_price} read (${ratio < 1 ? `-${Math.round((1 - ratio) * 100)}%` : `${ratio.toFixed(1)}x`}). Likely a misread/placeholder or wrong-page read; keeping prior price for manual confirmation. ${result.notes ?? ""}`.trim();
+        result.classification = "needs_review";
+        result.current_price = null;
+        result.unit_price = null;
+        result.tiers = [];
+      }
+    }
+
     const gotPrice = result.classification === "current_price_found" && result.current_price != null;
     const reason = result.classification; // current_price_found | login_required | link_broken | needs_review
     // login_required / link_broken are actionable and escalate on the first hit.
@@ -428,17 +454,19 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
 
     // A re-check that failed to read a price must NOT destroy the good price we
     // already have on file. Keep the last pull, defer the next check by a day,
-    // and record the miss — a single flaky read (search hiccup, temporary wall)
-    // shouldn't nuke a live price or re-flag an already-priced lead.
+    // and record the miss while still escalating repeated failures.
+    let preservedRecheckPull: any = null;
     if (!gotPrice && isRecheck) {
       const recheckMisses = Number(priorPull?.recheck_misses ?? 0) + 1;
       const deferPull = {
         ...priorPull,
         next_check_at: new Date(Date.now() + 86400000).toISOString(),
         recheck_misses: recheckMisses,
+        attempts,
         last_recheck_reason: reason,
         last_recheck_at: nowIso,
       };
+      preservedRecheckPull = deferPull;
       const { error: upErr } = await admin
         .from("leads_in_flight")
         .update({ payload: { ...(l.payload ?? {}), marketplace_pull: deferPull } })
@@ -447,11 +475,13 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         await log(`Lead payload update failed for ${l.id}: ${upErr.message}`, { level: "error", step: "mp_leads", data: { lead_id: l.id } });
         return null;
       }
-      await log(`Marketplace re-check inconclusive (${reason}) — keeping last price, retrying tomorrow: ${l.supplier_name} × ${l.material_name}`, {
-        step: "mp_recheck_miss",
-        data: { lead_id: l.id, reason, recheck_misses: recheckMisses },
-      });
-      return "pending";
+      if (!escalate) {
+        await log(`Marketplace re-check inconclusive (${reason}) — keeping last price, retrying tomorrow: ${l.supplier_name} × ${l.material_name}`, {
+          step: "mp_recheck_miss",
+          data: { lead_id: l.id, reason, recheck_misses: recheckMisses, attempts },
+        });
+        return "pending";
+      }
     }
 
     const pull = gotPrice
@@ -465,9 +495,9 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           pulled_at: nowIso,
           ...cadence!,
         }
-      : {
+      : preservedRecheckPull ?? {
           status: retry ? ("pending" as const) : ("needs_manual_pull" as const),
-          reason, // login_required | link_broken | needs_review
+          reason,
           attempts,
           source_url: result.source_url ?? url,
           last_notes: result.notes ?? null,
