@@ -137,47 +137,60 @@ export async function updateSupplierProfile(
 // Only creates profiles that don't already exist (by supplier_id).
 export async function seedProfilesFromLeads(
   admin: SupabaseClient,
-  orgId: string
+  orgId: string,
+  limit = Infinity
 ): Promise<number> {
+  if (limit <= 0) return 0;
   const { data: leads } = await admin
     .from("leads_in_flight")
     .select("supplier_id, supplier_name, payload, source")
     .eq("org_id", orgId)
-    .eq("status", "active")
-    .not("supplier_id", "is", null);
+    .eq("status", "active");
   if (!leads?.length) return 0;
 
+  // Most leads carry only a supplier_name (no supplier_id), and the Supplier
+  // Validation view groups by `supplier_id ?? supplier_name`, so we seed on the
+  // same key — otherwise the vast name-only majority never gets a profile.
+  // Dedup is critical for name-only suppliers: upsertSupplierProfile only
+  // dedupes by supplier_id, so a name-only insert would be repeated on every
+  // run. We skip any supplier whose id OR name already has a profile.
   const existing = await getSupplierProfiles(admin, orgId);
   const existingIds = new Set(existing.map((p) => p.supplier_id).filter(Boolean));
+  const existingNames = new Set(
+    existing.map((p) => (p.supplier_name ?? "").trim().toLowerCase()).filter(Boolean)
+  );
 
-  // Group leads by supplier_id, pick best enrichment data
-  const bySupplier = new Map<string, { name: string; payload: any; source: string }>();
+  // Group leads by supplier_id (preferred) or lowercased name, first lead wins.
+  const bySupplier = new Map<string, { supplierId: string | null; name: string; payload: any }>();
   for (const lead of leads) {
-    if (!lead.supplier_id || existingIds.has(lead.supplier_id)) continue;
-    const prev = bySupplier.get(lead.supplier_id);
-    if (!prev) {
-      bySupplier.set(lead.supplier_id, {
-        name: lead.supplier_name ?? "",
-        payload: lead.payload ?? {},
-        source: lead.source ?? "",
-      });
-    }
+    const name = (lead.supplier_name ?? "").trim();
+    const nameKey = name.toLowerCase();
+    const key = lead.supplier_id ?? nameKey;
+    if (!key) continue; // neither id nor name — can't identify a supplier
+    if (lead.supplier_id ? existingIds.has(lead.supplier_id) : existingNames.has(nameKey)) continue;
+    if (bySupplier.has(key)) continue;
+    bySupplier.set(key, { supplierId: lead.supplier_id ?? null, name, payload: lead.payload ?? {} });
   }
 
   let created = 0;
-  for (const [supplierId, info] of bySupplier) {
+  for (const info of bySupplier.values()) {
+    const nameKey = info.name.toLowerCase();
+    // Guard the id-less path once more against names claimed earlier this batch.
+    if (!info.supplierId && existingNames.has(nameKey)) continue;
     const p = info.payload;
     const isMarketplace =
       p.site_type === "M" || p.site_type === "MS" ? "marketplace" : "direct";
     try {
-      await upsertSupplierProfile(admin, orgId, supplierId, info.name, {
+      await upsertSupplierProfile(admin, orgId, info.supplierId, info.name, {
         supplier_type: isMarketplace as "marketplace" | "direct",
         poc_email: p.supplier_contact_email ?? p.contact_email ?? null,
         poc_phone: p.sales_phone ?? null,
         poc_name: p.poc_name ?? null,
         shipping_address: p.hq_address ?? null,
       });
+      if (nameKey) existingNames.add(nameKey);
       created++;
+      if (created >= limit) break;
     } catch {
       // skip duplicates
     }

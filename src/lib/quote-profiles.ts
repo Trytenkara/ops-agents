@@ -134,8 +134,10 @@ export async function insertQuoteProfile(
 // Seed quote profiles from staged_quotes
 export async function seedQuoteProfilesFromStaged(
   admin: SupabaseClient,
-  orgId: string
+  orgId: string,
+  limit = Infinity
 ): Promise<number> {
+  if (limit <= 0) return 0;
   const { data: staged } = await admin
     .from("staged_quotes")
     .select("supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, currency, case_type, case_dimensions, lead_time_days, moq_quantity, moq_unit, payment_terms, grade")
@@ -175,6 +177,7 @@ export async function seedQuoteProfilesFromStaged(
         additional_grades: s.grade ?? null,
       });
       created++;
+      if (created >= limit) break;
     } catch {
       // skip duplicates
     }

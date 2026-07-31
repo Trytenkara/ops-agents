@@ -4,6 +4,8 @@ import { loadOrgStatuses, sourcingAllowed } from "@/lib/org-status";
 import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 import { assessMaterialRelevance, collectProductText, type RawLead } from "./enrich";
 import { enrichAndStageLead } from "./run-enrich";
+import { seedProfilesFromLeads } from "@/lib/supplier-profiles";
+import { seedQuoteProfilesFromStaged } from "@/lib/quote-profiles";
 
 // v1 trim (vs. full spec):
 //   - pre-outreach only. Reply-driven enrichment lands when Agent 08
@@ -27,12 +29,65 @@ registerAgent({
     // pool-building (active or sourcing_only). 'off' orgs are skipped entirely.
     const orgStatuses = await loadOrgStatuses(admin);
     const allSourcingOrgIds = [...orgStatuses.byOaId.entries()].filter(([, s]) => sourcingAllowed(s)).map(([id]) => id);
+
+    // Auto-fill the Supplier/Quote Validation tabs: create an approval profile
+    // row for every active supplier and staged quote so operators never have to
+    // click "Seed"/"Create profile" by hand. Both seeders dedupe on existing
+    // rows, so this is a cheap no-op once a supplier/quote already has a profile.
+    // Runs for all sourcing orgs (not just tier-due ones) and before the raw-lead
+    // early-returns, so profiles keep filling even when there's nothing left to
+    // enrich. Contact basics come from lead payloads; the rest of the validation
+    // fields fill from supplier replies (staged_quotes) or operator entry.
+    //
+    // Each run is capped (a fresh org can have thousands of un-profiled
+    // suppliers; seeding them all in one invocation would blow the function
+    // timeout). The remainder drains over subsequent runs since seeding skips
+    // rows that already have profiles. Real/paying clients seed before internal
+    // test orgs when the shared budget is scarce.
+    const SUPPLIER_SEED_CAP = 200;
+    const QUOTE_SEED_CAP = 200;
+    let supplierBudget = SUPPLIER_SEED_CAP;
+    let quoteBudget = QUOTE_SEED_CAP;
+    let seededSuppliers = 0;
+    let seededQuotes = 0;
+    const { data: orgMeta } = await admin.from("orgs").select("id, is_internal").in("id", allSourcingOrgIds);
+    const isInternalById = new Map((orgMeta ?? []).map((o: any) => [o.id, !!o.is_internal]));
+    const seedOrder = [...allSourcingOrgIds].sort(
+      (a, b) => Number(isInternalById.get(a) ?? false) - Number(isInternalById.get(b) ?? false)
+    );
+    for (const orgId of seedOrder) {
+      if (supplierBudget <= 0 && quoteBudget <= 0) break;
+      try {
+        if (supplierBudget > 0) {
+          const n = await seedProfilesFromLeads(admin, orgId, supplierBudget);
+          seededSuppliers += n;
+          supplierBudget -= n;
+        }
+        if (quoteBudget > 0) {
+          const n = await seedQuoteProfilesFromStaged(admin, orgId, quoteBudget);
+          seededQuotes += n;
+          quoteBudget -= n;
+        }
+      } catch (e: any) {
+        await ctx.log(`Profile seed failed for org ${orgId}: ${e?.message ?? e}`, { level: "warn", step: "seed-profiles" });
+      }
+    }
+    if (seededSuppliers || seededQuotes) {
+      await ctx.log(`Seeded ${seededSuppliers} supplier + ${seededQuotes} quote profiles`, {
+        step: "seed-profiles",
+        data: { supplier_profiles: seededSuppliers, quote_profiles: seededQuotes },
+      });
+    }
+    const seedNote = seededSuppliers || seededQuotes
+      ? ` · seeded ${seededSuppliers} supplier + ${seededQuotes} quote profiles`
+      : "";
+
     const timingMap06 = await loadOrgTimingMap(admin, "agent-06-enrichment", allSourcingOrgIds);
     const sourcingOrgIds = filterDueOrgIds(allSourcingOrgIds, timingMap06, "agent-06-enrichment");
     if (sourcingOrgIds.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary(allSourcingOrgIds.length ? "All orgs throttled by tier — not due yet." : "No orgs are active/sourcing_only — nothing to enrich.");
+      ctx.setSummary((allSourcingOrgIds.length ? "All orgs throttled by tier — not due yet." : "No orgs are active/sourcing_only — nothing to enrich.") + seedNote);
       return;
     }
 
@@ -110,7 +165,7 @@ registerAgent({
     if (!leads || leads.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary("No raw leads to enrich.");
+      ctx.setSummary("No raw leads to enrich." + seedNote);
       return;
     }
 
@@ -178,7 +233,7 @@ registerAgent({
       .map(([k, v]) => `${k}=${v}`)
       .join(", ");
     ctx.setSummary(
-      `Enriched ${promoted}/${leads.length} → stage=enriched · ${blocked} left at raw${reasonStr ? ` (${reasonStr})` : ""}${skipped ? ` · ${skipped} deferred (deadline)` : ""}${superseded ? ` · ${superseded} superseded` : ""}${errored ? ` · ${errored} errors` : ""}`
+      `Enriched ${promoted}/${leads.length} → stage=enriched · ${blocked} left at raw${reasonStr ? ` (${reasonStr})` : ""}${skipped ? ` · ${skipped} deferred (deadline)` : ""}${superseded ? ` · ${superseded} superseded` : ""}${errored ? ` · ${errored} errors` : ""}${seedNote}`
     );
   },
 });
