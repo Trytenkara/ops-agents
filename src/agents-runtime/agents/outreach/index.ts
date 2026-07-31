@@ -101,7 +101,7 @@ registerAgent({
     const internalOrgIds = eligibleOrgIds.filter((id) => isInternalById.get(id));
 
     const leadCols =
-      "id, org_id, supplier_id, assigned_operator_id, supplier_name, material_id, material_name, payload, confidence_score";
+      "id, org_id, supplier_id, assigned_operator_id, supplier_name, material_id, material_name, market_kind, payload, confidence_score, outreach_approved_at";
     const fetchEnriched = (ids: string[], limit: number) => {
       if (!ids.length || limit <= 0) return Promise.resolve({ data: [] as any[], error: null as any });
       let query = admin
@@ -251,6 +251,11 @@ registerAgent({
       }
     }
 
+    const marketplaceFor = (lead: any, payload: any, channelUrl: string | null) => {
+      const host = channelUrl ? channelUrl.replace(/^https?:\/\//, "").split("/")[0].toLowerCase().replace(/^www\./, "") : null;
+      return isAggregatorDomain(host) || payload.site_type === "M" || payload.site_type === "MS" || payload.supplier_role === "Marketplace" || payload.supplier_role === "Reseller" || lead.market_kind === "marketplace";
+    };
+    const approvalFingerprint = (email: string, payload: any) => [email, payload?.supplier_website ?? payload?.source_url ?? "", JSON.stringify(payload?.enrichment?.marketplace_trust ?? {})].join("|");
     const candidates: Candidate[] = [];
     // Per-org switch (orgStatuses loaded above at the fetch): outreach only acts
     // for orgs whose sourcing_status is 'active'. The fetch already excludes
@@ -263,6 +268,7 @@ registerAgent({
     let heldForSpelling = 0;
     let heldForMissingName = 0;
     let heldPhasedCarry = 0; // leads already held for a follow-up from a prior run
+    let heldForMarketplaceReview = 0;
 
     // Suppliers with at least one material blocked this run (spelling flag /
     // missing name). We hold the WHOLE supplier so they get one complete
@@ -362,16 +368,7 @@ registerAgent({
       // lead is flagged there, never filtered. Everything else is filtered out as
       // "no contact recovered" — we no longer open manual-outreach cases here.
       if (!hasEmail) {
-        const host = channelUrl
-          ? channelUrl.replace(/^https?:\/\//, "").split("/")[0].toLowerCase().replace(/^www\./, "")
-          : null;
-        const isMarketplace =
-          isAggregatorDomain(host) ||
-          payload.site_type === "M" ||
-          payload.site_type === "MS" ||
-          payload.supplier_role === "Marketplace" ||
-          payload.supplier_role === "Reseller" ||
-          (lead as any).market_kind === "marketplace";
+        const isMarketplace = marketplaceFor(lead, payload, channelUrl);
         if (isMarketplace) {
           marketplacePricingLeft++;
           continue;
@@ -381,6 +378,29 @@ registerAgent({
           .update({ status: "dropped", drop_reason: "no_contact_recovered", payload: { ...payload, drop_reason: "no_contact_recovered" } })
           .eq("id", lead.id);
         filteredNoContact++;
+        continue;
+      }
+
+      const isMarketplace = marketplaceFor(lead, payload, channelUrl);
+      const emailCheck = payload.enrichment?.email_check;
+      const ownedContact = payload.contact_owned_verified === true || (
+        emailCheck?.domain_matches_website === true && emailCheck?.is_aggregator_domain !== true
+      );
+      const lowTrust = payload.enrichment?.marketplace_trust?.is_low_trust_marketplace === true;
+      const currentFingerprint = approvalFingerprint(email ?? "", payload);
+      const approvedFingerprint = payload.marketplace_outreach_review?.approval_fingerprint;
+      const approvalCurrent = !!(lead as any).outreach_approved_at && approvedFingerprint === currentFingerprint;
+      if (isMarketplace && (lowTrust || !ownedContact) && !approvalCurrent) {
+        const { error: holdError } = await admin
+          .from("leads_in_flight")
+          .update({ stage: "ready_for_approval", outreach_approved_at: null, outreach_approved_by: null, payload: { ...payload, marketplace_outreach_review: { ...(payload.marketplace_outreach_review ?? {}), pending: true, held_at: new Date().toISOString(), reason: lowTrust ? "low_trust_marketplace" : "contact_ownership_unverified" } } })
+          .eq("id", lead.id)
+          .eq("status", "active")
+          .eq("stage", "enriched");
+        if (!holdError) {
+          heldForMarketplaceReview++;
+          blockedSupplierKeys.add(supplierKeyForLead(lead));
+        }
         continue;
       }
 
@@ -413,7 +433,7 @@ registerAgent({
 
     const emailCount = candidates.filter((c) => c.channel === "email").length;
     await ctx.log(
-      `Filtered: ${candidates.length} actionable (${emailCount} email) · filtered out ${filteredNoContact} (no contact recovered), left ${marketplacePricingLeft} marketplace for price-pull, ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${droppedPausedOrg ? `, ${droppedPausedOrg} (org not active)` : ""}${heldForSpelling ? ` · held ${heldForSpelling} (pending spelling review)` : ""}${heldForMissingName ? ` · held ${heldForMissingName} (missing material name)` : ""}${heldPhasedCarry ? ` · skipped ${heldPhasedCarry} (held for follow-up)` : ""}`,
+      `Filtered: ${candidates.length} actionable (${emailCount} email) · filtered out ${filteredNoContact} (no contact recovered), left ${marketplacePricingLeft} marketplace for price-pull, ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${droppedPausedOrg ? `, ${droppedPausedOrg} (org not active)` : ""}${heldForSpelling ? ` · held ${heldForSpelling} (pending spelling review)` : ""}${heldForMissingName ? ` · held ${heldForMissingName} (missing material name)` : ""}${heldPhasedCarry ? ` · skipped ${heldPhasedCarry} (held for follow-up)` : ""}${heldForMarketplaceReview ? ` · held ${heldForMarketplaceReview} (marketplace outreach review)` : ""}`,
       { step: "filter" }
     );
 
@@ -727,11 +747,7 @@ registerAgent({
       const poolMaterialIds = pool.map((c) => c.lead.material_id).filter(Boolean) as string[];
 
       const p0 = (primary.lead.payload ?? {}) as any;
-      const isMarketplace =
-        (primary.lead as any).market_kind === "marketplace" ||
-        p0.site_type === "M" ||
-        p0.site_type === "MS" ||
-        p0.enrichment?.tenkara_supplier?.is_marketplace === true;
+      const isMarketplace = marketplaceFor(primary.lead, p0, primary.channelUrl ?? p0.supplier_website ?? p0.source_url ?? null);
 
       const reservationId = randomUUID();
       const groupEmails = Array.from(new Set(group.map((candidate) => candidate.email?.toLowerCase()).filter(Boolean) as string[]));

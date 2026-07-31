@@ -8,6 +8,7 @@ const TABS = [
   { href: "/work/review", label: "By org", exact: true },
   { href: "/work/review/leads", label: "All leads" },
   { href: "/work/review/marketplace", label: "All price changes" },
+  { href: "/work/review/marketplace-outreach", label: "Marketplace outreach" },
   { href: "/work/review/staged-quotes", label: "Staged quotes" },
   { href: "/work/review/pricing-pipeline", label: "Pricing pipeline" },
   { href: "/work/review/drafts", label: "All drafts" },
