@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import ExcelJS from "exceljs";
+import JSZip from "jszip";
 import type { MissiveAttachment } from "@/lib/missive";
 
 // Extract supplier pricing from email attachments. Pricing frequently arrives
@@ -83,11 +84,12 @@ function extractJson(text: string): any {
   return JSON.parse(candidate.slice(start, end + 1));
 }
 
-const PRICE_EXT = ["pdf", "csv", "png", "jpg", "jpeg", "webp", "gif", "tsv", "txt", "xlsx", "xlsm"];
+const PRICE_EXT = ["pdf", "csv", "png", "jpg", "jpeg", "webp", "gif", "tsv", "txt", "xlsx", "xlsm", "docx"];
 
 // True when this file extension is one we can extract pricing from within the
 // size cap. xlsx/xlsm are converted to CSV text before going to Claude (see
-// workbookToText); legacy binary .xls is unsupported by exceljs and skipped.
+// workbookToText); docx is unzipped to plain text (see docxToText); legacy binary
+// .xls/.doc are unsupported (exceljs can't read .xls; .doc isn't Office-XML) and skipped.
 export function isPricingCandidateExt(ext: string, size: number | null | undefined): boolean {
   return PRICE_EXT.includes(ext.toLowerCase()) && (size ?? 0) <= MAX_BYTES;
 }
@@ -169,6 +171,35 @@ async function workbookToText(buf: Buffer): Promise<string> {
   return sheets.join("\n\n");
 }
 
+// Convert a .docx (Office Open XML) into plain text so Claude can read it the
+// same way it reads a CSV/txt attachment. A .docx is a zip whose main body is
+// word/document.xml; pricing usually arrives as a Word table, so we map table
+// cells to tabs and rows/paragraphs to newlines before stripping the XML tags,
+// which preserves enough layout for the extractor to align material↔price.
+async function docxToText(buf: Buffer): Promise<string> {
+  const zip = await JSZip.loadAsync(buf);
+  const doc = zip.file("word/document.xml");
+  if (!doc) return "";
+  const uncompressedSize = Number((doc as any)?._data?.uncompressedSize ?? 0);
+  if (!Number.isFinite(uncompressedSize) || uncompressedSize <= 0 || uncompressedSize > 2_000_000) return "";
+  const xml = await doc.async("string");
+  const withBreaks = xml
+    .replace(/<w:tab\b[^>]*\/?>/g, "\t")
+    .replace(/<\/w:tc>/g, "\t")
+    .replace(/<\/w:tr>/g, "\n")
+    .replace(/<\/w:p>/g, "\n");
+  return withBreaks
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 // Parse a single Missive attachment into quote lines. Fetches the signed URL,
 // then hands the bytes to the shared parser. Returns [] on any failure.
 export async function parseAttachment(att: MissiveAttachment): Promise<ExtractedQuote[]> {
@@ -207,6 +238,11 @@ export async function parseAttachmentBytes(
       const text = (await workbookToText(buf)).slice(0, 200_000);
       if (!text.trim()) return [];
       contentBlock = { type: "text", text: "Attachment contents (spreadsheet exported to CSV):\n\n" + text };
+    } else if (e === "docx") {
+      // Word — unzip to plain text; Claude can't read the binary natively.
+      const text = (await docxToText(buf)).slice(0, 200_000);
+      if (!text.trim()) return [];
+      contentBlock = { type: "text", text: "Attachment contents (Word document exported to text):\n\n" + text };
     } else {
       // csv / tsv / txt — send as text.
       const text = buf.toString("utf-8").slice(0, 200_000);
