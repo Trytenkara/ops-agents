@@ -101,7 +101,7 @@ registerAgent({
     const internalOrgIds = eligibleOrgIds.filter((id) => isInternalById.get(id));
 
     const leadCols =
-      "id, org_id, supplier_id, assigned_operator_id, supplier_name, material_id, material_name, market_kind, payload, confidence_score, outreach_approved_at";
+      "id, org_id, supplier_id, assigned_operator_id, supplier_name, material_id, material_name, payload, confidence_score, outreach_approved_at";
     const fetchEnriched = (ids: string[], limit: number) => {
       if (!ids.length || limit <= 0) return Promise.resolve({ data: [] as any[], error: null as any });
       let query = admin
@@ -253,7 +253,7 @@ registerAgent({
 
     const marketplaceFor = (lead: any, payload: any, channelUrl: string | null) => {
       const host = channelUrl ? channelUrl.replace(/^https?:\/\//, "").split("/")[0].toLowerCase().replace(/^www\./, "") : null;
-      return isAggregatorDomain(host) || payload.site_type === "M" || payload.site_type === "MS" || payload.supplier_role === "Marketplace" || payload.supplier_role === "Reseller" || lead.market_kind === "marketplace";
+      return isAggregatorDomain(host) || payload.site_type === "M" || payload.site_type === "MS" || payload.supplier_role === "Marketplace" || payload.supplier_role === "Reseller" || payload.enrichment?.tenkara_supplier?.is_marketplace === true;
     };
     const approvalFingerprint = (email: string, payload: any) => [email, payload?.supplier_website ?? payload?.source_url ?? "", JSON.stringify(payload?.enrichment?.marketplace_trust ?? {})].join("|");
     const candidates: Candidate[] = [];
