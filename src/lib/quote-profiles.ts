@@ -170,6 +170,8 @@ export async function seedQuoteProfilesFromStaged(
         case_length: dims.length != null ? Number(dims.length) : null,
         case_weight: dims.packaging_case_weight != null ? Number(dims.packaging_case_weight) : null,
         lead_time_days: s.lead_time_days ?? null,
+        min_inventory: s.moq_quantity != null ? Number(s.moq_quantity) : null,
+        min_inventory_unit: s.moq_unit ?? null,
         additional_grades: s.grade ?? null,
       });
       created++;

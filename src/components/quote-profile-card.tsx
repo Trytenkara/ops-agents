@@ -284,7 +284,9 @@ export function QuoteProfileCard({
             <Field label="Lead Time (days incl. weekends)" value={profile.lead_time_days} field="lead_time_days" editing={editing} onChange={handleNumberChange} type="number" />
             <div className="grid grid-cols-2 gap-2">
               <Field label="Min Inventory" value={profile.min_inventory} field="min_inventory" editing={editing} onChange={handleNumberChange} type="number" />
+              <Field label="Min Inventory Unit" value={profile.min_inventory_unit} field="min_inventory_unit" editing={editing} onChange={handleFieldChange} />
               <Field label="Max Inventory" value={profile.max_inventory} field="max_inventory" editing={editing} onChange={handleNumberChange} type="number" />
+              <Field label="Max Inventory Unit" value={profile.max_inventory_unit} field="max_inventory_unit" editing={editing} onChange={handleFieldChange} />
             </div>
             <div className="border-t pt-2 mt-2 space-y-2">
               <h5 className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Flags</h5>
