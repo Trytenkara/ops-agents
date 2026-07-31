@@ -18,6 +18,16 @@ function fmt(n: number | null): string {
   return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
 }
 
+// Money with an explicit currency indicator. Prices are normalized to USD at
+// ingest, but a foreign quote we couldn't convert is kept in its listed currency
+// and flagged needs_review — it must NOT render as a bare number that reads as
+// dollars. "$" for USD/blank, the ISO code otherwise.
+function fmtMoney(n: number | null, currency: string | null): string {
+  if (n == null) return "—";
+  const cur = (currency ?? "").trim().toUpperCase();
+  return !cur || cur === "USD" ? `$${fmt(n)}` : `${cur} ${fmt(n)}`;
+}
+
 function fmtDims(d: any): string | null {
   if (!d || d.width == null || d.height == null || d.length == null) return null;
   return `${d.width} x ${d.height} x ${d.length} ${d.unit ?? "in"}`;
@@ -71,10 +81,10 @@ export function StagedQuoteRow({
           <span className="text-muted-foreground text-xs">—</span>
         )}
       </TableCell>
-      <TableCell className="text-right align-top">{fmt(r.price)}</TableCell>
+      <TableCell className="text-right align-top">{fmtMoney(r.price, r.currency)}</TableCell>
       <TableCell className="text-right align-top">{fmt(r.case_size)}</TableCell>
       <TableCell className="align-top">{r.unit_of_measurement ?? "—"}</TableCell>
-      <TableCell className="text-right align-top">{fmt(r.unit_price)}</TableCell>
+      <TableCell className="text-right align-top">{fmtMoney(r.unit_price, r.currency)}</TableCell>
       <TableCell className="align-top text-xs">
         {fmtDims(r.case_dimensions) ? (
           <span className="inline-flex flex-col gap-0.5">

@@ -4,6 +4,7 @@ import { stageDraft } from "@/lib/draft-staging";
 import { composeReply } from "@/agents-runtime/agents/email-scanner/reply-drafter";
 import { extractQuotesFromReplyText, type ExtractedQuote, type ReplyQuoteExtraction } from "@/lib/reply-quote-extract";
 import { insertStagedQuotes, type StagedQuoteInput, type StagedQuoteSource } from "@/lib/staged-quotes";
+import { normalizeToUsd } from "@/lib/fx";
 import { classifyDocType, insertSupplierDocuments, type SupplierDocumentInput } from "@/lib/supplier-documents";
 import { extractDocumentFields, isDocExtractableExt } from "@/lib/document-extract";
 import { getTenkaraMessageAttachments, downloadTenkaraAttachment } from "@/lib/tenkara-attachments";
@@ -483,18 +484,36 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       // shows the returned quote, not just a "supplier replied" marker. Lowest
       // per-unit line across body + attachments is the headline; ops refines.
       if (leadId && leadRow) {
-        const priced = captured
-          .filter((c) => c.q.price != null)
-          .map((c) => ({
-            price: c.q.price,
-            case_size: c.q.case_size,
-            unit_price: c.q.price != null && c.q.case_size ? c.q.price / c.q.case_size : c.q.price,
+        // Normalize each captured line to USD before ranking, so the "lowest
+        // per-unit" headline compares like currencies (a raw ₹ line must not win
+        // against a real USD line) and the value mirrored onto the lead is USD,
+        // not an unconverted foreign number. Foreign lines with no reachable rate
+        // keep their listed currency so the Leads tab labels them honestly.
+        const priced: Array<{
+          price: number | null;
+          case_size: number | null;
+          unit_price: number | null;
+          unit_of_measurement: string | null;
+          currency: string | null;
+          grade: string | null;
+          source: string;
+        }> = [];
+        for (const c of captured) {
+          if (c.q.price == null) continue;
+          const norm = await normalizeToUsd(c.q.currency);
+          const price = norm.status === "converted" ? norm.convert(c.q.price) : c.q.price;
+          const case_size = c.q.case_size;
+          priced.push({
+            price,
+            case_size,
+            unit_price: price != null && case_size ? price / case_size : price,
             unit_of_measurement: c.q.unit_of_measurement,
-            currency: c.q.currency,
+            currency: norm.status === "converted" ? "USD" : c.q.currency ?? null,
             grade: c.q.grade,
             source: c.source,
-          }))
-          .sort((a, b) => (a.unit_price ?? Infinity) - (b.unit_price ?? Infinity));
+          });
+        }
+        priced.sort((a, b) => (a.unit_price ?? Infinity) - (b.unit_price ?? Infinity));
         if (priced.length) {
           const best = priced[0];
           // Re-read so we merge onto the supplier_reply marker written above

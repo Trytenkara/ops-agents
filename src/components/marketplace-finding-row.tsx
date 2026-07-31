@@ -25,10 +25,11 @@ export function perUnitPrice(
 
 export function formatPrice(v: number | null, currency: string | null) {
   if (v == null) return <span className="text-muted-foreground">—</span>;
-  const sym = currency === "USD" || !currency ? "$" : "";
+  const cur = (currency ?? "").trim().toUpperCase();
+  const isUsd = !cur || cur === "USD";
   return (
     <span>
-      {sym}
+      {isUsd ? "$" : `${cur} `}
       {Number(v).toFixed(2)}
     </span>
   );

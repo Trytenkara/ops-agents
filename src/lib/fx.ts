@@ -58,3 +58,47 @@ export async function convertToUsd(amount: number | null, currency: string | nul
   const rate = 1 / perUsd; // USD per 1 unit of `cur`
   return { usd: Math.round(amount * rate * 100) / 100, rate: Math.round(rate * 1e6) / 1e6, currency: cur };
 }
+
+export interface UsdNormalization {
+  // "usd": already USD (or blank, treated as USD) — leave the number untouched.
+  // "converted": a rate was found; `convert` restates any amount from the listed
+  //   currency into USD, and `currency` is "USD".
+  // "unconvertible": listed in a foreign currency but no rate is reachable — the
+  //   caller MUST quarantine (flag needs_review) rather than let a raw foreign
+  //   number render as USD. `convert` is identity and `currency` stays foreign.
+  status: "usd" | "converted" | "unconvertible";
+  currency: string;                       // resulting currency label
+  rate: number | null;                    // USD per 1 unit of the listed currency
+  note: string | null;                    // human provenance note (null when USD)
+  convert: (n: number | null) => number | null;
+}
+
+// Resolve one currency-normalization decision for a quoted price so every
+// non-marketplace ingest path (staged-quote writer, supplier-reply capture)
+// applies the SAME policy the marketplace pull uses: convert foreign → USD when
+// a rate exists, and quarantine (not publish) when it doesn't. One rate lookup
+// covers many amounts on the same quote (per-case price, unit price, tiers).
+export async function normalizeToUsd(currency: string | null | undefined): Promise<UsdNormalization> {
+  const cur = (currency ?? "").trim().toUpperCase();
+  if (!cur || cur === "USD") {
+    return { status: "usd", currency: "USD", rate: null, note: null, convert: (n) => n };
+  }
+  const probe = await convertToUsd(1, cur).catch(() => null);
+  if (!probe) {
+    return {
+      status: "unconvertible",
+      currency: cur,
+      rate: null,
+      note: `Listed in ${cur}; USD conversion unavailable — not publishing as USD`,
+      convert: (n) => n,
+    };
+  }
+  const rate = probe.rate; // USD per 1 unit of `cur`
+  return {
+    status: "converted",
+    currency: "USD",
+    rate,
+    note: `Converted from ${cur} to USD @ ${rate}`,
+    convert: (n) => (n == null || !Number.isFinite(n) ? n : Math.round(n * rate * 100) / 100),
+  };
+}

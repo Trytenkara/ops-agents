@@ -56,7 +56,8 @@ Return ONLY a JSON object (no prose):
 }
 
 Rules:
-- price must be numeric or null. Strip "$", "USD", commas.
+- price must be numeric or null. Strip currency symbols and codes, commas.
+- currency: the ISO 4217 code the price is listed in ("USD", "EUR", "GBP", "INR", "CNY", ...). Infer from the symbol/locale (€→EUR, £→GBP, ₹ or "Rs"/"Rs."→INR, ¥→CNY or JPY by supplier, $→USD unless clearly CAD/AUD/etc.). We convert to USD ourselves — report the currency AS LISTED, do NOT convert. CURRENCY IS HIGH-STAKES: a price reported in the wrong currency gets published as a wildly wrong USD number (₹149 shown as $149 is ~85x too high). Do NOT default to USD just because there is no symbol — many suppliers (Indian, Chinese, Pakistani, etc.) list domestic-currency prices. If you cannot positively confirm the currency, return null (better a blank than a wrong currency) and note the ambiguity.
 - grade: only populate if the document EXPLICITLY names a grade/spec for the material (e.g. "USP", "EP", "Food grade", "Industrial", "SCI 80"). NEVER infer or guess a "typical" grade — if it isn't stated, return null.
 - lead_time_days: only when a lead/delivery time is stated. Normalize to days (1 week = 7, "2-3 weeks" = 21 using the upper bound, "1 month" = 30). Keep the exact wording in lead_time_text. Both null if not stated. NEVER guess.
 - moq_quantity / moq_unit: the stated minimum order quantity and its unit. Null if not stated. Do not confuse MOQ with case_size — MOQ is the smallest total order accepted.

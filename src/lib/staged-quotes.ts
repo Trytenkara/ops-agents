@@ -1,5 +1,6 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { computeCaseDimensions } from "@/lib/case-dimensions";
+import { normalizeToUsd } from "@/lib/fx";
 
 // Shared writer for the staged_quotes table (migration 0025). Both the email
 // reply-body extractor and the attachment parser funnel through here so the row
@@ -98,11 +99,34 @@ export async function insertStagedQuotes(
   }
 
   for (const r of rows) {
+    // Currency safety net, same policy as the marketplace pull: convert a listed
+    // foreign price to USD before it is stored (unit_price is a generated column,
+    // so it follows price automatically), and when no rate is reachable, keep the
+    // number in its listed currency but force needs_review rather than let a raw
+    // foreign figure sit in the table as USD. Runs before dedup so the dup key is
+    // computed on the value we actually store.
+    const norm = await normalizeToUsd(r.currency);
+    let price = r.price;
+    let currency = norm.currency;
+    let confidence: StagedQuoteConfidence = r.confidence ?? "needs_review";
+    let extractionNotes = r.extractionNotes ?? null;
+    if (norm.status === "converted" && r.price != null) {
+      price = norm.convert(r.price);
+      extractionNotes = [`${norm.note} (was ${(r.currency ?? "").trim().toUpperCase()} ${r.price}, stored USD ${price}).`, extractionNotes]
+        .filter(Boolean)
+        .join(" ");
+    } else if (norm.status === "unconvertible") {
+      confidence = "needs_review";
+      extractionNotes = [`${norm.note} — confirm currency/price before approving.`, extractionNotes]
+        .filter(Boolean)
+        .join(" ");
+    }
+
     const key = dupKey({
       source_message_id: r.sourceMessageId ?? null,
       source_attachment_name: r.sourceAttachmentName ?? null,
       material_name: r.materialName ?? null,
-      price: r.price,
+      price,
     });
     if (existingKeys.has(key)) {
       result.skippedDuplicates++;
@@ -136,18 +160,18 @@ export async function insertStagedQuotes(
       supplier_name: r.supplierName ?? null,
       material_id: r.materialId ?? null,
       material_name: r.materialName ?? null,
-      price: r.price,
+      price,
       case_size: r.caseSize,
       unit_of_measurement: r.unitOfMeasurement,
-      currency: r.currency ?? "USD",
+      currency,
       grade: r.grade ?? null,
       lead_time_days: r.leadTimeDays ?? null,
       lead_time_text: r.leadTimeText ?? null,
       moq_quantity: r.moqQuantity ?? null,
       moq_unit: r.moqUnit ?? null,
       payment_terms: r.paymentTerms ?? null,
-      confidence: r.confidence ?? "needs_review",
-      extraction_notes: r.extractionNotes ?? null,
+      confidence,
+      extraction_notes: extractionNotes,
       raw_extract: r.rawExtract ?? {},
       case_type: dims?.case_type ?? null,
       case_dimensions: dims?.case_dimensions ?? null,
