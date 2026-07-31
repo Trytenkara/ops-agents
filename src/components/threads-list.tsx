@@ -13,6 +13,8 @@ import { BulkRemoveBar } from "@/components/bulk-remove-bar";
 import { BulkRewriteBar } from "@/components/bulk-rewrite-bar";
 import { removeDrafts } from "@/app/actions/drafts";
 import { rewriteDrafts } from "@/app/actions/rewrite-draft";
+import { setThreadHidden } from "@/app/actions/drafts";
+import { Button } from "@/components/ui/button";
 import { filenameFor } from "@/lib/csv";
 import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
 
@@ -34,6 +36,7 @@ export type ThreadRow = {
   assignedEmail: string | null;
   assignedRole: string | null;
   reviewerName: string | null;
+  hiddenLocally: boolean;
 };
 
 const KIND_META: Record<ThreadKind, { label: string; variant: string; title: string }> = {
@@ -42,15 +45,18 @@ const KIND_META: Record<ThreadKind, { label: string; variant: string; title: str
 };
 
 
-const FILTERS: { value: "all" | ThreadKind; label: string }[] = [
+const FILTERS: { value: "all" | ThreadKind | "hidden"; label: string }[] = [
   { value: "all", label: "All" },
   { value: "outbound", label: "Outbound RFQs" },
   { value: "inbound", label: "Inbound replies" },
+  { value: "hidden", label: "Hidden" },
 ];
 
 export function ThreadsList({ rows, slug, canAct = false }: { rows: ThreadRow[]; slug: string; canAct?: boolean }) {
-  const [kind, setKind] = useState<"all" | ThreadKind>("all");
+  const [kind, setKind] = useState<"all" | ThreadKind | "hidden">("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [hiding, setHiding] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
 
   const toggleOne = (id: string, checked: boolean) =>
     setSelected((prev) => {
@@ -60,10 +66,15 @@ export function ThreadsList({ rows, slug, canAct = false }: { rows: ThreadRow[];
       return next;
     });
 
-  const byKind = useMemo(() => (kind === "all" ? rows : rows.filter((r) => r.kind === kind)), [kind, rows]);
+  const byKind = useMemo(() => {
+    if (kind === "hidden") return rows.filter((r) => r.hiddenLocally);
+    const visible = rows.filter((r) => !r.hiddenLocally);
+    return kind === "all" ? visible : visible.filter((r) => r.kind === kind);
+  }, [kind, rows]);
   const counts = useMemo(() => {
-    const c = { all: rows.length, outbound: 0, inbound: 0 } as Record<string, number>;
-    for (const r of rows) c[r.kind]++;
+    const visible = rows.filter((r) => !r.hiddenLocally);
+    const c = { all: visible.length, outbound: 0, inbound: 0, hidden: rows.length - visible.length } as Record<string, number>;
+    for (const r of visible) c[r.kind]++;
     return c;
   }, [rows]);
 
@@ -94,6 +105,16 @@ export function ThreadsList({ rows, slug, canAct = false }: { rows: ThreadRow[];
       return next;
     });
 
+  async function hideThread(id: string, hidden: boolean) {
+    if (hidden && !window.confirm("Hide this empty conversation in Control Room? The conversation will still exist in Tenkara and will not be changed.")) return;
+    setHiding(id);
+    setActionMessage(null);
+    const res = await setThreadHidden(id, hidden);
+    setHiding(null);
+    setActionMessage(res.ok ? (res.warning ?? "Hidden locally.") : (res.error ?? "Could not hide thread."));
+    if (res.ok) window.location.reload();
+  }
+
   const csvRows = filtered.map((r) => [
     KIND_META[r.kind].label,
     r.subject ?? "",
@@ -121,6 +142,7 @@ export function ThreadsList({ rows, slug, canAct = false }: { rows: ThreadRow[];
         ))}
       </div>
 
+      {actionMessage && <p className="text-xs text-amber-700 dark:text-amber-300">{actionMessage}</p>}
       <div className="flex flex-wrap items-end justify-between gap-3">
         {controls}
         <ListCsvButton
@@ -204,7 +226,16 @@ export function ThreadsList({ rows, slug, canAct = false }: { rows: ThreadRow[];
               <TableCell><OperatorChip name={d.assignedName} email={d.assignedEmail} role={d.assignedRole} /></TableCell>
               <TableCell><DraftStatusBadge status={d.status} reviewerName={d.reviewerName} /></TableCell>
               <TableCell className="text-muted-foreground">{relativeTime(d.createdAt)}</TableCell>
-              <TableCell><Link href={`/work/drafts/${d.id}`} className="text-primary hover:underline text-sm">Open →</Link></TableCell>
+              <TableCell>
+                <div className="flex items-center gap-2">
+                  {d.status !== "linked" && <Link href={`/work/drafts/${d.id}`} className="text-primary hover:underline text-sm">Open →</Link>}
+                  {canAct && d.status === "linked" && (
+                    <Button size="sm" variant="ghost" disabled={hiding === d.id} onClick={() => hideThread(d.id, !d.hiddenLocally)}>
+                      {hiding === d.id ? "…" : d.hiddenLocally ? "Unhide" : "Hide"}
+                    </Button>
+                  )}
+                </div>
+              </TableCell>
             </TableRow>
           ))}
           {filtered.length === 0 && (
