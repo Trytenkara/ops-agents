@@ -30,6 +30,7 @@ alter table public.issue_reports enable row level security;
 -- service role. No direct client access prevents reporter data leaking across orgs.
 drop policy if exists issue_reports_insert on public.issue_reports;
 drop policy if exists issue_reports_select on public.issue_reports;
+revoke all on table public.issue_reports from anon, authenticated;
 
 create or replace function public.create_issue_report(
   p_reporter_id uuid,
