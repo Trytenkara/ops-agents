@@ -1,6 +1,7 @@
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
 import { enrichContactViaGetProspect, isGetProspectConfigured } from "@/lib/getprospect";
 import { enrichContactViaZoomInfo, enrichContactsViaZoomInfo, isZoomInfoConfigured } from "@/lib/zoominfo";
+import { enrichContactViaHunter, enrichContactsViaHunter, isHunterConfigured } from "@/lib/hunter";
 
 // Pre-outreach enrichment building blocks. No LLM, no Missive — those land
 // when Agent 04 (Outreach) and Agent 08 (Email Scanner) ship.
@@ -161,7 +162,7 @@ export interface ContactDiscovery {
   phone: string | null;        // best discovered/known phone
   contact_url: string | null;  // contact page / quote-form URL used as a channel
   pages_tried: number;         // how many pages we actually fetched
-  source: "scout" | "discovered" | "path" | "tenkara" | "zoominfo" | "getprospect" | null;
+  source: "scout" | "discovered" | "path" | "tenkara" | "hunter" | "zoominfo" | "getprospect" | null;
   poc_name?: string | null;
   poc_title?: string | null;
 }
@@ -173,7 +174,7 @@ export interface AdditionalContact {
   email: string;
   name: string | null;
   title: string | null;
-  source: "discovered" | "tenkara" | "zoominfo" | "getprospect";
+  source: "discovered" | "tenkara" | "hunter" | "zoominfo" | "getprospect";
 }
 
 export interface SupplierEnrichment {
@@ -980,14 +981,41 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     }
   }
 
-  // ZoomInfo fallback (#9): the web + Tenkara gave us no direct email. Rather
-  // than drop the lead into the manual "needs human enrichment" queue, ask
-  // ZoomInfo for the supplier's best POC. Fallback-only by design — it never
+  // Names/titles for the resolved primary POC, filled by whichever paid
+  // fallback (Hunter → ZoomInfo → GetProspect) actually lands the email.
+  let zoomContactName: string | null = null;
+  let zoomContactTitle: string | null = null;
+
+  // Hunter.io (primary paid fallback): the web + Tenkara gave us no direct
+  // email. One Domain Search returns the supplier's known POC addresses. Runs
+  // first among the paid providers because it's domain-first (we already have
+  // the website) and the cheapest per lookup; ZoomInfo/GetProspect only fire if
+  // Hunter also misses. Fallback-only — never runs once we have a direct email.
+  if (!email && isHunterConfigured()) {
+    const hz = await enrichContactViaHunter({
+      companyName: lead.supplier_name,
+      website,
+    }).catch(() => null);
+    if (hz?.email && EMAIL_RE.test(hz.email) && !isAggregatorEmail(hz.email) && !isThirdPartyServiceEmail(hz.email)) {
+      email = hz.email.toLowerCase();
+      contactSource = "hunter";
+      zoomContactName = hz.contactName;
+      zoomContactTitle = hz.title;
+      if (!phone && hz.phone) phone = hz.phone;
+    } else if (!phone && hz?.phone) {
+      phone = hz.phone;
+      if (!contactSource) contactSource = "hunter";
+      zoomContactName = hz.contactName;
+      zoomContactTitle = hz.title;
+    }
+  }
+
+  // ZoomInfo fallback (#9): Hunter + the web + Tenkara gave us no direct email.
+  // Rather than drop the lead into the manual "needs human enrichment" queue,
+  // ask ZoomInfo for the supplier's best POC. Fallback-only by design — it never
   // runs when we already resolved a direct email, so credits are spent only on
   // the leads that would otherwise be dead ends. Soft: any miss leaves the lead
   // exactly as it was.
-  let zoomContactName: string | null = null;
-  let zoomContactTitle: string | null = null;
   if (!email && isZoomInfoConfigured()) {
     const zi = await enrichContactViaZoomInfo({
       companyName: lead.supplier_name,
@@ -1036,6 +1064,18 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   if (multiContactOn && tenkara_supplier) {
     addExtraContact(tenkara_supplier.shipping_email, null, null, "tenkara");
     addExtraContact(tenkara_supplier.billing_email, null, null, "tenkara");
+  }
+  if (multiContactOn && isHunterConfigured() && extraContacts.size < extraCap) {
+    const want = extraCap === Infinity ? 5 : Math.min(5, extraCap + 1);
+    const hzs = await enrichContactsViaHunter({ companyName: lead.supplier_name, website }, want).catch(() => [] as Awaited<ReturnType<typeof enrichContactsViaHunter>>);
+    for (const hz of hzs) {
+      if (extraContacts.size >= extraCap) break;
+      if (hz.email) addExtraContact(hz.email, hz.contactName, hz.title, "hunter");
+      if (hz.email && email && hz.email.toLowerCase() === email && !zoomContactName) {
+        zoomContactName = hz.contactName;
+        zoomContactTitle = hz.title;
+      }
+    }
   }
   if (multiContactOn && isZoomInfoConfigured() && extraContacts.size < extraCap) {
     const want = extraCap === Infinity ? 5 : Math.min(5, extraCap + 1);
