@@ -180,6 +180,8 @@ async function docxToText(buf: Buffer): Promise<string> {
   const zip = await JSZip.loadAsync(buf);
   const doc = zip.file("word/document.xml");
   if (!doc) return "";
+  const uncompressedSize = Number((doc as any)?._data?.uncompressedSize ?? 0);
+  if (!Number.isFinite(uncompressedSize) || uncompressedSize <= 0 || uncompressedSize > 2_000_000) return "";
   const xml = await doc.async("string");
   const withBreaks = xml
     .replace(/<w:tab\b[^>]*\/?>/g, "\t")
