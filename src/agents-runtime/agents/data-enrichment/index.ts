@@ -47,8 +47,10 @@ registerAgent({
     // test orgs when the shared budget is scarce.
     const SUPPLIER_SEED_CAP = 200;
     const QUOTE_SEED_CAP = 200;
+    const MARKETPLACE_QUOTE_RESERVE = 50;
     let supplierBudget = SUPPLIER_SEED_CAP;
-    let quoteBudget = QUOTE_SEED_CAP;
+    let stagedQuoteBudget = QUOTE_SEED_CAP - MARKETPLACE_QUOTE_RESERVE;
+    let marketplaceQuoteBudget = MARKETPLACE_QUOTE_RESERVE;
     let seededSuppliers = 0;
     let seededQuotes = 0;
     const { data: orgMeta } = await admin.from("orgs").select("id, is_internal").in("id", allSourcingOrgIds);
@@ -59,7 +61,7 @@ registerAgent({
     // Case-dims cache is org-agnostic; load once and reuse for the marketplace seed.
     const caseDimsMap = allSourcingOrgIds.length ? await loadMarketplaceCaseDims(admin) : {};
     for (const orgId of seedOrder) {
-      if (supplierBudget <= 0 && quoteBudget <= 0) break;
+      if (supplierBudget <= 0 && stagedQuoteBudget <= 0 && marketplaceQuoteBudget <= 0) break;
       try {
         if (supplierBudget > 0) {
           const n = await seedProfilesFromLeads(admin, orgId, supplierBudget);
@@ -68,15 +70,15 @@ registerAgent({
         }
         // Reply-driven staged quotes first (negotiated, highest fidelity), then
         // fill the rest from marketplace listings we already web-fetched.
-        if (quoteBudget > 0) {
-          const n = await seedQuoteProfilesFromStaged(admin, orgId, quoteBudget);
+        if (stagedQuoteBudget > 0) {
+          const n = await seedQuoteProfilesFromStaged(admin, orgId, stagedQuoteBudget);
           seededQuotes += n;
-          quoteBudget -= n;
+          stagedQuoteBudget -= n;
         }
-        if (quoteBudget > 0) {
-          const n = await seedQuoteProfilesFromMarketplace(admin, orgId, caseDimsMap, quoteBudget);
+        if (marketplaceQuoteBudget > 0) {
+          const n = await seedQuoteProfilesFromMarketplace(admin, orgId, caseDimsMap, marketplaceQuoteBudget);
           seededQuotes += n;
-          quoteBudget -= n;
+          marketplaceQuoteBudget -= n;
         }
       } catch (e: any) {
         await ctx.log(`Profile seed failed for org ${orgId}: ${e?.message ?? e}`, { level: "warn", step: "seed-profiles" });

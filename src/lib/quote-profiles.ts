@@ -210,7 +210,7 @@ export async function seedQuoteProfilesFromStaged(
 // Leading "<number> <unit>" of a pack string, e.g. "1.25 Lb" → {size:1.25, unit:"lb"}.
 // Single-letter units (g/l/G) are excluded — "5G" is ambiguous (gram vs gallon).
 const PACK_RE =
-  /(\d+(?:\.\d+)?)\s*(kg|mg|lbs?|pounds?|oz|ounces?|fl\s?oz|ml|kl|gal|gallons?|liters?|litres?|mt|tons?|tonnes?)\b/i;
+  /^\s*(\d+(?:\.\d+)?)\s*(kg|mg|lbs?|pounds?|oz|ounces?|fl\s?oz|ml|kl|gal|gallons?|liters?|litres?|mt|tons?|tonnes?)\b/i;
 export function parsePackSize(pack: string | null | undefined): { size: number | null; unit: string | null } {
   if (!pack) return { size: null, unit: null };
   const m = pack.match(PACK_RE);
@@ -230,16 +230,15 @@ export function parseLeadTimeDays(text: string | null | undefined): number | nul
   return /week|wk/i.test(m[4]) ? hi * 7 : hi;
 }
 
-// "Min. order: 25 kg" → {qty:25, unit:"kg"}; falls back to a bare quantity.
+// "Minimum order: 25 kg" → {qty:25, unit:"kg"}. Never interpret a bare
+// number or range because it may be a shipping threshold, pack count, or price.
 export function parseMoq(text: string | null | undefined): { qty: number | null; unit: string | null } {
   if (!text) return { qty: null, unit: null };
-  const packed = parsePackSize(text);
-  if (packed.size != null) return { qty: packed.size, unit: packed.unit };
-  const m = text.match(/(\d+(?:\.\d+)?)\s*(units?|pieces?|pcs?|each|ea)?\b/i);
+  const m = text.match(/\b(?:minimum\s+order|min\.?\s+order|moq)\s*[:=-]?\s*(\d+(?:\.\d+)?)\s*(kg|mg|lbs?|pounds?|oz|ounces?|fl\s?oz|ml|kl|gal|gallons?|liters?|litres?|mt|tons?|tonnes?|units?|pieces?|pcs?|each|ea)\b/i);
   if (!m) return { qty: null, unit: null };
-  const n = parseFloat(m[1]);
+  const n = Number(m[1]);
   if (!Number.isFinite(n) || n <= 0) return { qty: null, unit: null };
-  return { qty: n, unit: m[2] ? m[2].toLowerCase() : null };
+  return { qty: n, unit: m[2].toLowerCase().replace(/\s+/g, " ") };
 }
 
 // Seed quote profiles for MARKETPLACE leads directly from the price we already
@@ -267,17 +266,20 @@ export async function seedQuoteProfilesFromMarketplace(
   if (!leads?.length) return 0;
 
   const existing = await getQuoteProfiles(admin, orgId);
-  const existingKeys = new Set(
-    existing.map((p) => `${p.supplier_name?.toLowerCase()}|${p.material_name?.toLowerCase()}`)
-  );
+  const profileKey = (value: { supplier_id?: string | null; supplier_name?: string | null; material_id?: string | null; material_name?: string | null }) =>
+    value.supplier_id && value.material_id
+      ? `id:${value.supplier_id}:${value.material_id}`
+      : `name:${(value.supplier_name ?? "").trim().toLowerCase()}|${(value.material_name ?? "").trim().toLowerCase()}`;
+  const existingKeys = new Set(existing.map(profileKey));
 
   let created = 0;
   for (const l of leads as any[]) {
-    const key = `${(l.supplier_name ?? "").toLowerCase()}|${(l.material_name ?? "").toLowerCase()}`;
+    const key = profileKey(l);
     if (existingKeys.has(key)) continue;
     const mp = l.payload?.marketplace_pull ?? {};
     const price = mp.price != null ? Number(mp.price) : null;
-    if (price == null || !Number.isFinite(price)) continue; // no usable price — skip
+    const currency = String(mp.currency ?? "").trim().toUpperCase();
+    if (price == null || !Number.isFinite(price) || price <= 0 || currency !== "USD") continue;
     existingKeys.add(key);
     const pack = typeof mp.pack_size === "string" ? mp.pack_size : null;
     const { size, unit } = parsePackSize(pack);
@@ -294,7 +296,7 @@ export async function seedQuoteProfilesFromMarketplace(
         price,
         case_size: size,
         unit_of_measurement: unit,
-        currency: typeof mp.currency === "string" && mp.currency ? mp.currency : "USD",
+        currency: "USD",
         case_type: dims?.case_type ?? null,
         case_width: dims?.width ?? null,
         case_height: dims?.height ?? null,
