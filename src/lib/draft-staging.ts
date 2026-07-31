@@ -52,6 +52,10 @@ export interface StageDraftInput {
   materialId?: string | null;
   quoteId?: string | null;
   to: { name?: string | null; address: string };
+  // Extra recipients CC'd on the SAME thread (multi-contact outreach). All must
+  // be legitimate supplier addresses — they're added to the anti-fabrication
+  // allowlist just like the To: address.
+  cc?: { name?: string | null; address: string }[];
   subject: string;
   body: string; // plain text; converted to HTML for the email client, sliced for preview
   assignedOperator?: string | null;
@@ -93,9 +97,12 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
 
   // Allowlist for the anti-fabrication guard: per-brand/org approved contact
   // values plus the recipient's own address (echoing that back is legitimate).
+  const ccList = (input.cc ?? []).filter((c) => c.address && c.address.toLowerCase() !== to.address.toLowerCase());
+  const ccString = ccList.map((c) => (c.name ? `${c.name} <${c.address}>` : c.address)).join(", ");
   const approvedContacts = [
     ...approvedContactsFor([callerMeta.ghost_brand as string | undefined, orgId]),
     to.address,
+    ...ccList.map((c) => c.address),
   ];
   const lintMeta = { ...callerMeta, approved_contacts: approvedContacts };
 
@@ -159,6 +166,7 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
           subject,
           bodyHtml: bodyToHtml(body),
           bodyText: body,
+          cc: ccString || undefined,
         });
         draftId = t.id;
         threadId = t.conversationId;
@@ -170,6 +178,7 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
           subject,
           bodyHtml: bodyToHtml(body),
           bodyText: body,
+          cc: ccString || undefined,
           emailAccountId: input.emailAccountId ?? undefined,
           supplierContact: { email: to.address, name: to.name ?? null, company: input.supplierCompany ?? null },
           context: { org_id: orgId, supplier_id: supplierId ?? null, material_id: materialId ?? null, quote_id: quoteId ?? null, ...callerMeta },
@@ -187,6 +196,7 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
         subject,
         body: bodyToHtml(body),
         to_fields: [{ name: to.name ?? "", address: to.address }],
+        cc_fields: ccList.length ? ccList.map((c) => ({ name: c.name ?? "", address: c.address })) : undefined,
         organization: MISSIVE_ORGANIZATION_ID,
         team: MISSIVE_TEAM_ID,
         add_to_team_inbox: true,
@@ -205,6 +215,9 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
     qa_findings: qaFindings,
     qa_linted_at: new Date().toISOString(),
     missive_draft_link: draftLink,
+    // Record who we actually CC'd so the reply/follow-up loop knows which
+    // supplier contacts have already been reached on this thread.
+    ...(ccList.length ? { cc_contacts: ccList.map((c) => c.address) } : {}),
     ...extraMeta,
   };
 

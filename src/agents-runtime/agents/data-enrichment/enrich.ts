@@ -1,6 +1,6 @@
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
 import { enrichContactViaGetProspect, isGetProspectConfigured } from "@/lib/getprospect";
-import { enrichContactViaZoomInfo, isZoomInfoConfigured } from "@/lib/zoominfo";
+import { enrichContactViaZoomInfo, enrichContactsViaZoomInfo, isZoomInfoConfigured } from "@/lib/zoominfo";
 
 // Pre-outreach enrichment building blocks. No LLM, no Missive — those land
 // when Agent 04 (Outreach) and Agent 08 (Email Scanner) ship.
@@ -166,6 +166,16 @@ export interface ContactDiscovery {
   poc_title?: string | null;
 }
 
+// A secondary reachable contact at the same supplier, gathered so outreach can
+// CC additional people on the ONE supplier thread (better odds of a reply than a
+// single recipient). Never includes the primary `ContactDiscovery.email`.
+export interface AdditionalContact {
+  email: string;
+  name: string | null;
+  title: string | null;
+  source: "discovered" | "tenkara" | "zoominfo" | "getprospect";
+}
+
 export interface SupplierEnrichment {
   // From Tenkara `suppliers` — anything we didn't already have in payload.
   address: string | null;
@@ -238,6 +248,9 @@ export interface EnrichmentResult {
   website_probe: WebsiteProbe | null;
   email_check: EmailCheck | null;
   contact: ContactDiscovery;
+  // Extra reachable people at the same supplier, for CC on the outreach thread.
+  // Empty when multi-contact is disabled or nothing else was found.
+  additional_contacts: AdditionalContact[];
   tenkara_supplier: SupplierEnrichment | null;
   legitimacy_check: LegitimacyCheck | null;
   marketplace_trust: MarketplaceTrustCheck | null;
@@ -881,6 +894,22 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // signal detection (Send Inquiry / price range) with no extra network call.
   let listingHtml = "";
 
+  // Extra reachable people at this supplier, deduped by email. Finalized (primary
+  // removed + capped) at the end. Multi-contact can be turned off fleet-wide with
+  // OUTREACH_MULTI_CONTACT=0; the total-contacts cap (incl. primary) is
+  // OUTREACH_MAX_CONTACTS_PER_SUPPLIER (0/unset = unlimited).
+  const multiContactOn = process.env.OUTREACH_MULTI_CONTACT !== "0";
+  const totalCap = Number(process.env.OUTREACH_MAX_CONTACTS_PER_SUPPLIER ?? 0);
+  const extraCap = totalCap > 0 ? Math.max(0, totalCap - 1) : Infinity;
+  const extraContacts = new Map<string, AdditionalContact>();
+  const addExtraContact = (raw: string | null | undefined, name: string | null, title: string | null, source: AdditionalContact["source"]) => {
+    if (!multiContactOn) return;
+    const e = (raw ?? "").trim().toLowerCase();
+    if (!e || !EMAIL_RE.test(e) || isAggregatorEmail(e) || isThirdPartyServiceEmail(e) || isPlaceholderEmail(e)) return;
+    if (extraContacts.has(e)) return;
+    extraContacts.set(e, { email: e, name: name?.trim() || null, title: title?.trim() || null, source });
+  };
+
   // If we're missing a direct email or a phone, go fetch — persistently. This is
   // also the auto-resolve path when the only email we had was a marketplace one.
   let legitimacy_check: LegitimacyCheck | null = null;
@@ -892,6 +921,17 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
       // Run legitimacy analysis on the homepage HTML we already fetched.
       if (d.homepage_html) {
         legitimacy_check = analyzeLegitimacy(d.homepage_html, website, d.homepage_final_url);
+      }
+      // Every owned, domain-matching address we scraped is a candidate CC — the
+      // primary pick is removed from this set when we finalize.
+      if (multiContactOn && d.emails.length) {
+        const siteHost = hostOf(website);
+        for (const e of d.emails) {
+          if (isAggregatorEmail(e) || isThirdPartyServiceEmail(e)) continue;
+          const emailDomain = e.split("@")[1]?.replace(/^www\./, "");
+          const domainOk = !siteHost || (!!emailDomain && (emailDomain === siteHost || siteHost.endsWith(`.${emailDomain}`) || emailDomain.endsWith(`.${siteHost}`)));
+          if (domainOk) addExtraContact(e, null, null, "discovered");
+        }
       }
       if (!email && d.emails.length) {
         // Only accept emails from the supplier's own domain. Emails scraped from
@@ -989,6 +1029,33 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     contactSource = "path";
   }
 
+  // Multi-contact CC candidates from the platform + ZoomInfo. Tenkara
+  // shipping/billing inboxes are free; ZoomInfo costs one credit per person
+  // enriched, so we only spend it when we still want more people than the web
+  // gave us (skipped entirely when we already have enough or the cap is 0).
+  if (multiContactOn && tenkara_supplier) {
+    addExtraContact(tenkara_supplier.shipping_email, null, null, "tenkara");
+    addExtraContact(tenkara_supplier.billing_email, null, null, "tenkara");
+  }
+  if (multiContactOn && isZoomInfoConfigured() && extraContacts.size < extraCap) {
+    const want = extraCap === Infinity ? 5 : Math.min(5, extraCap + 1);
+    const zis = await enrichContactsViaZoomInfo({ companyName: lead.supplier_name, website }, want).catch(() => [] as Awaited<ReturnType<typeof enrichContactsViaZoomInfo>>);
+    for (const zi of zis) {
+      if (extraContacts.size >= extraCap) break;
+      addExtraContact(zi.email, zi.contactName, zi.title, "zoominfo");
+      // Backfill a primary POC name/title if the fallback path didn't set one.
+      if (zi.email && email && zi.email.toLowerCase() === email && !zoomContactName) {
+        zoomContactName = zi.contactName;
+        zoomContactTitle = zi.title;
+      }
+    }
+  }
+
+  // Finalize: drop the primary email (it's the To:, not a CC), then cap.
+  const additional_contacts: AdditionalContact[] = Array.from(extraContacts.values())
+    .filter((c) => !email || c.email !== email.toLowerCase())
+    .slice(0, extraCap === Infinity ? undefined : extraCap);
+
   // Couldn't resolve the supplier's own email and all we had was a marketplace
   // address — keep the lead reachable as a manual-contact case rather than cold-
   // emailing the marketplace. Prefer the supplier site, else the listing URL.
@@ -1070,6 +1137,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     website_probe,
     email_check,
     contact,
+    additional_contacts,
     tenkara_supplier,
     legitimacy_check,
     marketplace_trust,

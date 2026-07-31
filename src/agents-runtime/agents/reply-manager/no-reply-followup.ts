@@ -2,6 +2,60 @@ import { stageDraft } from "@/lib/draft-staging";
 import { followupDelaysMs, callingEscalateAfterMs } from "@/lib/agent-timing";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import type { createAdminClient } from "@/lib/supabase/admin";
+import { randomUUID } from "crypto";
+
+// Feature #2: pull in any supplier contact we haven't reached yet as CC on this
+// nudge (same thread) — a silent primary contact shouldn't be the only shot.
+// Returns the fresh contacts to CC plus the reservation id to attach on success.
+// Best-effort: any failure returns no extra CCs and the nudge still goes out.
+async function findUnreachedContacts(
+  admin: Admin,
+  r: any,
+  toAddress: string
+): Promise<{ cc: { name: string | null; address: string }[]; reservationId: string | null }> {
+  if (!r.supplier_id || !r.thread_id) return { cc: [], reservationId: null };
+  try {
+    const { data: sibLeads } = await admin
+      .from("leads_in_flight")
+      .select("payload")
+      .eq("org_id", r.org_id)
+      .eq("supplier_id", r.supplier_id)
+      .limit(50);
+    const candidates = new Map<string, string | null>();
+    const toLower = toAddress.toLowerCase();
+    for (const sl of (sibLeads ?? []) as any[]) {
+      const acs = (sl.payload as any)?.additional_contacts;
+      if (!Array.isArray(acs)) continue;
+      for (const ac of acs) {
+        const e = String(ac?.email ?? "").trim().toLowerCase();
+        if (e && e !== toLower) candidates.set(e, (ac?.name ?? null) as string | null);
+      }
+    }
+    if (!candidates.size) return { cc: [], reservationId: null };
+    // Drop anyone already attached to a thread (already reached on some thread).
+    const { data: existing } = await admin
+      .from("supplier_email_aliases")
+      .select("email")
+      .eq("org_id", r.org_id)
+      .in("email", Array.from(candidates.keys()));
+    for (const a of (existing ?? []) as any[]) candidates.delete(a.email);
+    if (!candidates.size) return { cc: [], reservationId: null };
+
+    const reservationId = randomUUID();
+    const { data: reserved } = await admin.rpc("reserve_supplier_emails", {
+      p_org_id: r.org_id,
+      p_emails: Array.from(candidates.keys()),
+      p_reservation_id: reservationId,
+    });
+    if (reserved !== true) {
+      await admin.rpc("release_supplier_email_reservation", { p_org_id: r.org_id, p_reservation_id: reservationId });
+      return { cc: [], reservationId: null };
+    }
+    return { cc: Array.from(candidates.entries()).map(([address, name]) => ({ address, name })), reservationId };
+  } catch {
+    return { cc: [], reservationId: null };
+  }
+}
 
 // No-reply follow-ups (part of Agent 15). When a supplier never replies to the
 // initial RFQ, draft up to two gentle nudges — at 4 and 8 days after the RFQ
@@ -169,6 +223,10 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
       n: fu + 1,
     });
 
+    // Feature #2: bring any not-yet-reached supplier contact onto this thread as
+    // a CC, so a silent primary isn't our only shot.
+    const { cc: freshCc, reservationId: ccReservationId } = await findUnreachedContacts(admin, r, to);
+
     const staged = await stageDraft({
       admin,
       agentId: ctx.agentId,
@@ -177,6 +235,7 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
       supplierId: r.supplier_id,
       materialId: r.material_id,
       to: { name: meta.supplier_name ?? null, address: to },
+      cc: freshCc,
       subject: (r.subject ?? "").startsWith("Re:") ? r.subject : `Re: ${r.subject ?? "your quote"}`,
       body,
       assignedOperator: r.assigned_operator ?? null,
@@ -195,13 +254,22 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
 
     if (staged.ok) {
       drafted++;
+      // Attach the freshly-CC'd contacts to this thread so we don't re-CC them.
+      if (ccReservationId) {
+        await admin
+          .from("supplier_email_aliases")
+          .update({ thread_id: r.thread_id ?? null, draft_ref_id: r.id, supplier_id: r.supplier_id ?? null, supplier_name: meta.supplier_name ?? null, claim_status: "attached", reservation_id: null })
+          .eq("reservation_id", ccReservationId)
+          .eq("claim_status", "reserved");
+      }
       await admin
         .from("draft_references")
         .update({ metadata: { ...meta, followup_count: fu + 1, last_followup_at: new Date().toISOString() } })
         .eq("id", r.id);
-      await ctx.log(`No-reply follow-up #${fu + 1} drafted for ${meta.supplier_name ?? to}`, { step: "followup" });
+      await ctx.log(`No-reply follow-up #${fu + 1} drafted for ${meta.supplier_name ?? to}${freshCc.length ? ` (+${freshCc.length} new contact${freshCc.length === 1 ? "" : "s"} CC'd)` : ""}`, { step: "followup" });
     } else {
       skipped++;
+      if (ccReservationId) await admin.rpc("release_supplier_email_reservation", { p_org_id: r.org_id, p_reservation_id: ccReservationId });
       await ctx.log(`Follow-up stage failed for ${to}: ${staged.error}`, { level: "warn", step: "followup" });
     }
   }

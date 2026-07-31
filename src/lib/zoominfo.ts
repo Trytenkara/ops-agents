@@ -124,16 +124,35 @@ function companyMatches(a: string, b: string): boolean {
 // email-required, ranked by accuracy), confirm the match is the same company,
 // then Enrich the top candidate (one credit) for email + phone. Returns null on
 // any miss so the caller keeps whatever channel it already had.
-export async function enrichContactViaZoomInfo(input: {
-  companyName: string | null;
-  website: string | null;
-}): Promise<ZoomInfoContact | null> {
-  if (!isZoomInfoConfigured()) return null;
+// Turn one Enrich record into a ZoomInfoContact, or null if it lacks a usable
+// channel or didn't actually match the person we asked for.
+function recordToContact(rec: any): ZoomInfoContact | null {
+  const attrs = rec?.attributes;
+  if (!attrs) return null;
+  if (rec?.meta?.matchStatus && rec.meta.matchStatus !== "FULL_MATCH" && rec.meta.matchStatus !== "PARTIAL_MATCH") {
+    return null;
+  }
+  const email = typeof attrs.email === "string" && attrs.email.includes("@") ? attrs.email.toLowerCase() : null;
+  const phone = attrs.phone || attrs.mobilePhone || null;
+  const name = [attrs.firstName, attrs.lastName].filter(Boolean).join(" ").trim() || null;
+  if (!email && !phone) return null;
+  return { email, phone: phone || null, contactName: name, title: attrs.jobTitle ?? null, source: "zoominfo" };
+}
+
+// Look up up to `max` POCs for a supplier: Search Contacts by company name
+// (free), keep every candidate whose company actually matches ours, then Enrich
+// them in ONE call (one credit per person, not charged on NO_MATCH). Returned
+// highest-accuracy first, deduped by email. Empty array on any miss.
+export async function enrichContactsViaZoomInfo(
+  input: { companyName: string | null; website: string | null },
+  max = 5
+): Promise<ZoomInfoContact[]> {
+  if (!isZoomInfoConfigured() || max < 1) return [];
   const company = (input.companyName ?? "").trim();
-  if (!company) return null;
+  if (!company) return [];
 
   const token = await getToken();
-  if (!token) return null;
+  if (!token) return [];
 
   // Step 1 — Search (free). Only contacts that have an email, best accuracy first.
   const search = await ziFetch(
@@ -142,28 +161,40 @@ export async function enrichContactViaZoomInfo(input: {
     { data: { type: "ContactSearch", attributes: { companyName: company, requiredFields: "email" } } }
   );
   const candidates: any[] = Array.isArray(search?.data) ? search.data : [];
-  if (!candidates.length) return null;
+  if (!candidates.length) return [];
 
-  // Pick the highest-accuracy candidate whose company actually matches ours.
-  const match = candidates.find((c) => companyMatches(company, c?.attributes?.company?.name));
-  const personId = match?.id ? String(match.id) : null;
-  if (!personId) return null;
+  // Keep the highest-accuracy candidates whose company actually matches ours.
+  const personIds = candidates
+    .filter((c) => companyMatches(company, c?.attributes?.company?.name))
+    .map((c) => (c?.id ? String(c.id) : null))
+    .filter((id): id is string => !!id)
+    .slice(0, max);
+  if (!personIds.length) return [];
 
-  // Step 2 — Enrich (one credit; not charged on NO_MATCH).
+  // Step 2 — Enrich the matched people in one call (one credit each).
   const enrich = await ziFetch("/data/v1/contacts/enrich", token, {
-    data: { type: "ContactEnrich", attributes: { matchPersonInput: [{ personId }], outputFields: OUTPUT_FIELDS } },
+    data: { type: "ContactEnrich", attributes: { matchPersonInput: personIds.map((personId) => ({ personId })), outputFields: OUTPUT_FIELDS } },
   });
-  const rec = Array.isArray(enrich?.data) ? enrich.data[0] : null;
-  const attrs = rec?.attributes;
-  if (!attrs) return null;
-  if (rec?.meta?.matchStatus && rec.meta.matchStatus !== "FULL_MATCH" && rec.meta.matchStatus !== "PARTIAL_MATCH") {
-    return null;
+  const recs: any[] = Array.isArray(enrich?.data) ? enrich.data : [];
+  const out: ZoomInfoContact[] = [];
+  const seen = new Set<string>();
+  for (const rec of recs) {
+    const c = recordToContact(rec);
+    if (!c) continue;
+    const key = c.email ?? `phone:${c.phone}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(c);
   }
+  return out;
+}
 
-  const email = typeof attrs.email === "string" && attrs.email.includes("@") ? attrs.email.toLowerCase() : null;
-  const phone = attrs.phone || attrs.mobilePhone || null;
-  const name = [attrs.firstName, attrs.lastName].filter(Boolean).join(" ").trim() || null;
-  if (!email && !phone) return null;
-
-  return { email, phone: phone || null, contactName: name, title: attrs.jobTitle ?? null, source: "zoominfo" };
+// Single best POC — the original fallback contract. Delegates to the plural
+// lookup and returns the top match (or null).
+export async function enrichContactViaZoomInfo(input: {
+  companyName: string | null;
+  website: string | null;
+}): Promise<ZoomInfoContact | null> {
+  const [best] = await enrichContactsViaZoomInfo(input, 1);
+  return best ?? null;
 }
