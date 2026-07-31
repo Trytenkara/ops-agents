@@ -132,12 +132,31 @@ export async function enrichAndStageLead(
     completeness_factors: result.completeness_factors,
   };
 
+  // Provider product evidence with zero target-material overlap is a hard stop. This
+  // is narrower than missing evidence: collectProductText returns empty when there is
+  // nothing reliable to judge, and assessMaterialRelevance then remains relevant.
+  if (result.material_relevance && !result.material_relevance.relevant) {
+    const { data, error } = await admin
+      .from("leads_in_flight")
+      .update({
+        stage: "terminal",
+        status: "terminal",
+        drop_reason: "provider_product_mismatch",
+        payload: mergedPayload,
+        last_enrichment_attempt_at: attemptedAt,
+        ...confidencePatch,
+      })
+      .eq("id", lead.id)
+      .eq("stage", "raw")
+      .eq("status", "active")
+      .select("id");
+    if (error) return { status: "error", reason: error.message };
+    return data?.length ? { status: "blocked", reason: "provider_product_mismatch" } : { status: "superseded" };
+  }
+
   // Both writes re-assert the same predicate the batch selected on. The Control Room
-  // can promote or drop a lead (actions/leads.ts, actions/cases.ts,
-  // actions/material-flags.ts) while this probe is in flight; without it the write
-  // lands on top of that newer state. status matters as much as stage: dropLead sets
-  // status='terminal' and leaves stage='raw', so a stage-only guard would resurrect a
-  // dropped lead. Zero rows means someone got there first -- neither promote nor block.
+  // can promote or drop a lead while this probe is in flight. Zero rows means someone
+  // got there first, so this run must not overwrite the newer state.
   if (result.outreach_ready) {
     const { data, error } = await admin
       .from("leads_in_flight")

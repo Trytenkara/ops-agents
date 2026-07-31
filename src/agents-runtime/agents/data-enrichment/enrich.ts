@@ -781,17 +781,27 @@ function relevanceTokens(s: string | null | undefined): string[] {
 // be arrays (e.g. top_products).
 export function collectProductText(payload: Record<string, any> | null | undefined): string {
   if (!payload) return "";
-  const fields = ["top_products", "product_description", "supplier_background", "trade_name", "grades_offered", "scout_notes"];
+  const values = [
+    payload.top_products,
+    payload.product_description,
+    payload.supplier_background,
+    payload.trade_name,
+    payload.grades_offered,
+    payload.scout_notes,
+    payload.importyeti?.top_products,
+    payload.importyeti?.product_descriptions,
+    payload.sourceready_tags,
+    payload.sourceready?.tags,
+    payload.sourceready?.products,
+  ];
   const parts: string[] = [];
-  for (const f of fields) {
-    const v = payload[f];
-    if (v == null) continue;
-    if (Array.isArray(v)) {
-      for (const item of v) if (item != null) parts.push(String(item));
-    } else {
-      parts.push(String(v));
-    }
-  }
+  const append = (value: any) => {
+    if (value == null) return;
+    if (Array.isArray(value)) value.forEach(append);
+    else if (typeof value === "object") Object.values(value).forEach(append);
+    else parts.push(String(value));
+  };
+  values.forEach(append);
   return parts.join(" ").trim();
 }
 
