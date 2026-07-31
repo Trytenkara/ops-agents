@@ -120,6 +120,7 @@ export interface CreateTenkaraConversationInput {
   subject: string;
   bodyHtml: string;
   bodyText?: string;
+  cc?: string;                        // RFC5322 address string(s) → cc_addresses
   emailAccountId?: string;            // optional sender; omit → operator picks at review
   supplierContact?: TenkaraSupplierContact; // written to the supplier record
   context?: Record<string, any>;      // free-form; forwarded verbatim on the conversation.agent_created webhook
@@ -145,6 +146,7 @@ export async function createTenkaraConversation(input: CreateTenkaraConversation
     body_html: input.bodyHtml,
   };
   if (input.to.name) payload.to_name = input.to.name;
+  if (input.cc) payload.cc_addresses = input.cc;
   if (input.bodyText) payload.body_text = input.bodyText;
   if (input.emailAccountId) payload.email_account_id = input.emailAccountId;
   if (input.supplierContact) {

@@ -182,6 +182,7 @@ registerAgent({
       email: string | null;
       channelUrl: string | null;
       contactName: string | null;
+      additionalContacts: { email: string; name: string | null }[];
       mode: "active" | "ghost";
       ghostBrand?: string;
       clientOrgName: string;
@@ -410,6 +411,11 @@ registerAgent({
         email,
         channelUrl: null,
         contactName: payload.supplier_contact_name ?? null,
+        additionalContacts: Array.isArray(payload.additional_contacts)
+          ? (payload.additional_contacts as any[])
+              .map((c) => ({ email: String(c?.email ?? "").trim().toLowerCase(), name: (c?.name ?? null) as string | null }))
+              .filter((c) => c.email)
+          : [],
         mode: cls.mode,
         ghostBrand: cls.ghostBrand,
         clientOrgName: org.name,
@@ -749,8 +755,32 @@ registerAgent({
       const p0 = (primary.lead.payload ?? {}) as any;
       const isMarketplace = marketplaceFor(primary.lead, p0, primary.channelUrl ?? p0.supplier_website ?? p0.source_url ?? null);
 
+      // Multi-contact CC: reach every distinct contact for this supplier on the
+      // ONE thread (To: primary, CC: the rest) for better reply odds. Union the
+      // group's other primary emails + each lead's enriched additional_contacts;
+      // drop the To: address and any contact already attached to a thread (an
+      // existing alias — already reached, and reserving it would fail the RPC).
+      const primaryEmail = primary.email!.toLowerCase();
+      const ccMap = new Map<string, string | null>();
+      for (const candidate of group) {
+        if (candidate.email && candidate.email.toLowerCase() !== primaryEmail) {
+          ccMap.set(candidate.email.toLowerCase(), candidate.contactName ?? null);
+        }
+        for (const ac of candidate.additionalContacts) {
+          if (ac.email !== primaryEmail && !ccMap.has(ac.email)) ccMap.set(ac.email, ac.name);
+        }
+      }
+      for (const address of Array.from(ccMap.keys())) {
+        if (aliasByOrgEmail.get(`${primary.lead.org_id}:${address}`)) ccMap.delete(address);
+      }
+      const totalCap = Number(process.env.OUTREACH_MAX_CONTACTS_PER_SUPPLIER ?? 0);
+      let ccContacts = Array.from(ccMap.entries()).map(([email, name]) => ({ email, name }));
+      if (totalCap > 0) ccContacts = ccContacts.slice(0, Math.max(0, totalCap - 1));
+
       const reservationId = randomUUID();
-      const groupEmails = Array.from(new Set(group.map((candidate) => candidate.email?.toLowerCase()).filter(Boolean) as string[]));
+      // Reserve the To: address AND every CC so no other thread cold-emails them;
+      // on success they all attach to this thread as aliases.
+      const groupEmails = Array.from(new Set([primaryEmail, ...ccContacts.map((c) => c.email)]));
       const { data: reserved, error: reserveError } = await admin.rpc("reserve_supplier_emails", {
         p_org_id: primary.lead.org_id,
         p_emails: groupEmails,
@@ -772,6 +802,7 @@ registerAgent({
         supplierName: primary.lead.supplier_name,
         email: primary.email!,
         contactName: primary.contactName,
+        ccContacts,
         mode: primary.mode,
         ghostBrand: primary.ghostBrand,
         clientOrgName: primary.clientOrgName,

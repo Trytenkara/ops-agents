@@ -125,6 +125,8 @@ export async function enrichAndStageLead(
       enrichment_run_id: runId,
     },
     supplier_contact_email: result.contact.email ?? scoutEmailFallback ?? null,
+    // Extra reachable people at this supplier, CC'd on the outreach thread.
+    additional_contacts: result.additional_contacts,
     supplier_phone: result.contact.phone ?? result.tenkara_supplier?.poc_phone ?? lead.payload?.supplier_phone ?? null,
     contact_url: result.contact.contact_url ?? lead.payload?.contact_url ?? null,
     supplier_country: lead.payload?.supplier_country ?? result.tenkara_supplier?.country ?? null,

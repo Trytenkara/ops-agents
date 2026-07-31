@@ -40,6 +40,8 @@ export interface RunOutreachSupplierInput {
   supplierName: string | null;
   email: string;
   contactName: string | null;
+  // Extra supplier contacts CC'd on the SAME thread (multi-contact outreach).
+  ccContacts?: { email: string; name: string | null }[];
   mode: "active" | "ghost";
   ghostBrand?: string;
   clientOrgName: string;
@@ -61,7 +63,8 @@ export interface RunOutreachResult {
 }
 
 export async function runOutreachForSupplier(input: RunOutreachSupplierInput): Promise<RunOutreachResult> {
-  const { admin, agentId, runId, orgId, supplierId, supplierName, email, contactName, mode, ghostBrand, clientOrgName, emailAccountId: configuredEmailAccountId, assignedOperator, isMarketplace, leads } = input;
+  const { admin, agentId, runId, orgId, supplierId, supplierName, email, contactName, ccContacts, mode, ghostBrand, clientOrgName, emailAccountId: configuredEmailAccountId, assignedOperator, isMarketplace, leads } = input;
+  const cc = (ccContacts ?? []).filter((c) => c.email && c.email.toLowerCase() !== email.toLowerCase());
   const log = input.log ?? (async () => {});
 
   // Sort for determinism so the same material set always renders (and hashes)
@@ -130,6 +133,7 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
     supplierId,
     materialId: primary.material_id, // primary line item; full set carried in metadata
     to: { name: contactName, address: email },
+    cc: cc.map((c) => ({ name: c.name, address: c.email })),
     subject: draft.subject,
     body: draft.body,
     assignedOperator,
@@ -148,6 +152,7 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
       // (it reads metadata.supplier_contact_email, not the draft's to-address).
       supplier_contact_email: email,
       supplier_contact_name: contactName ?? null,
+      cc_contacts: cc.map((c) => c.email),
       // Consolidated draft covers several materials — carry the full set so the
       // Materials chip can mark every one as drafted, not just the primary.
       material_name: materialNames[0] ?? null,
