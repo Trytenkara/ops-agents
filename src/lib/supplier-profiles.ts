@@ -196,7 +196,11 @@ export async function seedProfilesFromLeads(
         shippingTerms ? `Shipping terms: ${shippingTerms}.` : null,
       ].filter(Boolean).join(" ");
       if (current) {
-        await admin.from("supplier_profiles").update({ generated_notes: generatedNotes || null }).eq("id", current.id);
+        const { error: updateError } = await admin.from("supplier_profiles").update({
+          generated_notes: generatedNotes || null,
+          ...(shippingTerms && !current.shipping_terms ? { shipping_terms: shippingTerms } : {}),
+        }).eq("id", current.id);
+        if (updateError) throw updateError;
       } else {
         await upsertSupplierProfile(admin, orgId, info.supplierId, info.name, {
           supplier_type: isMarketplace as "marketplace" | "direct",
