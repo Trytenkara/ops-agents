@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import { Bug } from "lucide-react";
 
@@ -15,6 +15,24 @@ export function ReportIssue() {
   const [description, setDescription] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "done" | "error">("idle");
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const openerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+      if (event.key !== "Tab") return;
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled]), input, textarea");
+      if (!focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [open]);
 
   function reset() {
     setTitle("");
@@ -26,6 +44,7 @@ export function ReportIssue() {
   function close() {
     setOpen(false);
     reset();
+    openerRef.current?.focus();
   }
 
   async function submit() {
@@ -55,6 +74,7 @@ export function ReportIssue() {
   return (
     <>
       <button
+        ref={openerRef}
         type="button"
         onClick={() => setOpen(true)}
         title="Report an issue"
@@ -70,6 +90,10 @@ export function ReportIssue() {
           onClick={close}
         >
           <div
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="report-issue-title"
             className="w-full max-w-lg rounded-lg border border-border bg-background p-5 shadow-lg"
             onClick={(e) => e.stopPropagation()}
           >
@@ -77,9 +101,7 @@ export function ReportIssue() {
               <div className="space-y-3">
                 <div className="text-sm font-medium">Thanks — the agent is on it.</div>
                 <p className="text-xs text-muted-foreground">
-                  Small UI fixes go live automatically; anything deeper comes back as a PR for
-                  review. Watch <span className="font-medium">#control-room-feedback</span> for
-                  updates.
+                  The report was added to the operator triage queue. Watch <span className="font-medium">#control-room-feedback</span> for updates.
                 </p>
                 <div className="flex justify-end">
                   <button
@@ -94,20 +116,24 @@ export function ReportIssue() {
             ) : (
               <div className="space-y-3">
                 <div>
-                  <div className="text-sm font-semibold">Report an issue</div>
+                  <div id="report-issue-title" className="text-sm font-semibold">Report an issue</div>
                   <p className="text-xs text-muted-foreground">
                     For bugs and small fixes on this page — not large feature requests. The agent
                     triages it in real time.
                   </p>
                 </div>
+                <label htmlFor="report-issue-summary" className="sr-only">Issue summary</label>
                 <input
+                  id="report-issue-summary"
                   autoFocus
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="What's wrong? (short summary)"
                   className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                 />
+                <label htmlFor="report-issue-description" className="sr-only">Issue details</label>
                 <textarea
+                  id="report-issue-description"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   rows={4}

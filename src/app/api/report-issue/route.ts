@@ -4,15 +4,17 @@ import { getSession } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { postSlackMessage, deepLink } from "@/lib/slack";
 
-// #control-room-feedback. The agent's operator-feedback Slack trigger listens
-// here, so posting a structured report to this channel is what kicks off triage.
-const FEEDBACK_CHANNEL_ID = process.env.SLACK_FEEDBACK_CHANNEL_ID ?? "C0BATUWBHC7";
+const FEEDBACK_CHANNEL_ID = "C0BATUWBHC7";
+
+function slackSafe(value: string): string {
+  return value.replace(/```/g, "''' ").replace(/[<>]/g, "").trim();
+}
 
 const schema = z.object({
   title: z.string().min(3).max(140),
   description: z.string().min(1).max(4000),
-  page_path: z.string().max(512).optional(),
-  org_slug: z.string().max(200).optional(),
+  page_path: z.string().max(512).regex(/^\/[A-Za-z0-9/_-]*$/).optional(),
+  org_slug: z.string().max(200).regex(/^[A-Za-z0-9_-]+$/).optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -27,35 +29,31 @@ export async function POST(request: NextRequest) {
   const { title, description, page_path, org_slug } = parsed.data;
 
   const admin = createAdminClient();
-  const { data: report, error } = await admin
-    .from("issue_reports")
-    .insert({
-      reporter_id: session.userId,
-      reporter_email: session.email,
-      title,
-      description,
-      page_path: page_path ?? null,
-      org_slug: org_slug ?? null,
-    })
-    .select("id")
-    .single();
-
-  if (error || !report) {
-    return NextResponse.json({ error: "insert_failed" }, { status: 500 });
+  const { data: reportId, error } = await admin.rpc("create_issue_report", {
+    p_reporter_id: session.userId,
+    p_reporter_email: session.email,
+    p_title: title,
+    p_description: description,
+    p_page_path: page_path ?? null,
+    p_org_slug: org_slug ?? null,
+  });
+  if (error?.message?.includes("issue_report_rate_limited")) {
+    return NextResponse.json({ error: "rate_limited" }, { status: 429 });
   }
+  if (error || !reportId) return NextResponse.json({ error: "insert_failed" }, { status: 500 });
 
   // Structured, machine-parseable message so the triage agent can pick up the
   // report id, the exact page, and who to reply to. Keep the ISSUE REPORT marker
   // and the fenced field block stable — the triage skill parses them.
   const text = [
-    `🐞 *ISSUE REPORT* \`${report.id}\``,
+    `*ISSUE REPORT* \`${reportId}\``,
     "```",
-    `title: ${title}`,
-    `reporter: ${session.displayName ?? session.email} <${session.email}>`,
-    page_path ? `page: ${page_path}` : null,
-    org_slug ? `org: ${org_slug}` : null,
+    `title: ${slackSafe(title)}`,
+    `reporter: ${slackSafe(session.displayName ?? session.email)} (${slackSafe(session.email)})`,
+    page_path ? `page: ${slackSafe(page_path)}` : null,
+    org_slug ? `org: ${slackSafe(org_slug)}` : null,
     "---",
-    description,
+    slackSafe(description),
     "```",
     page_path ? `→ <${deepLink(page_path)}|Open the page>` : null,
   ]
@@ -64,8 +62,8 @@ export async function POST(request: NextRequest) {
 
   const slack = await postSlackMessage({ channel: FEEDBACK_CHANNEL_ID, text });
   if (slack.ok && slack.ts) {
-    await admin.from("issue_reports").update({ slack_message_ts: slack.ts }).eq("id", report.id);
+    await admin.from("issue_reports").update({ slack_message_ts: slack.ts }).eq("id", reportId);
   }
 
-  return NextResponse.json({ ok: true, id: report.id });
+  return NextResponse.json({ ok: true, id: reportId });
 }
