@@ -120,11 +120,12 @@ export function QuoteValidationView({
   const csvHeaders = [
     "Supplier", "Material", "Price", "Case Size", "Units", "Unit Price", "Currency",
     "Case Type", "Case Width", "Case Height", "Case Length", "Case Weight",
+    "Density", "Density Unit", "Density Source",
     "Quote Expiry", "Lead Time Days",
     "Hazardous", "Refrigerated", "Protect From Freezing",
     "Name Match", "INCI Match", "Grades Match", "Additional Grades",
     "Pre-Order COA Met", "Pre-Order SDS Met", "Pre-Order TDS Met", "Pre-Order Sample Met",
-    "Status", "Completeness %", "Purchasing Notes", "Operator Notes", "Generated Notes",
+    "Status", "Completeness %", "Checkout Link", "Purchasing Notes", "Operator Notes", "Generated Notes",
   ];
   const csvRows = profiles.map((q) => {
     const up = q.price != null && q.case_size && q.case_size > 0 ? (q.price / q.case_size).toFixed(4) : "";
@@ -132,13 +133,14 @@ export function QuoteValidationView({
       q.supplier_name, q.material_name,
       q.price ?? "", q.case_size ?? "", q.unit_of_measurement ?? "", up, q.currency,
       q.case_type ?? "", q.case_width ?? "", q.case_height ?? "", q.case_length ?? "", q.case_weight ?? "",
+      q.density ?? "", q.density != null ? (q.density_unit ?? "") : "", q.density_source ?? "",
       q.quote_expiry ?? "", q.lead_time_days ?? "",
       q.is_hazardous ? "Yes" : "No", q.is_refrigerated ? "Yes" : "No", q.protect_from_freezing ? "Yes" : "No",
       q.name_match ? "Yes" : "No", q.inci_match ? "Yes" : "No", q.grades_match ? "Yes" : "No", q.additional_grades ?? "",
       q.preorder_coa_met ? "Yes" : "No", q.preorder_sds_met ? "Yes" : "No",
       q.preorder_tds_met ? "Yes" : "No", q.preorder_sample_met ? "Yes" : "No",
       q.approval_status, quoteCompleteness(q).pct,
-      q.purchasing_notes ?? "", q.notes ?? "", q.generated_notes ?? "",
+      q.source_url ?? "", q.purchasing_notes ?? "", q.notes ?? "", q.generated_notes ?? "",
     ];
   });
 

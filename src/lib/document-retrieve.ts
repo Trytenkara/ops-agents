@@ -1,0 +1,188 @@
+import crypto from "crypto";
+import type { createAdminClient } from "@/lib/supabase/admin";
+import { classifyDocType, insertSupplierDocuments, type SupplierDocumentInput } from "@/lib/supplier-documents";
+import { extractDocumentFields, isDocExtractableExt } from "@/lib/document-extract";
+
+// Retrieve supplier qualification documents (SDS / CoA / TDS / spec / cert) from
+// a PRODUCT or SUPPLIER page URL, parse them with the same extractor the inbound
+// email path uses, and store them in supplier_documents. This closes the gap the
+// email pipeline left: documentation published on a product page (not emailed as
+// an attachment) never reached the "bench". Read-only against the web, OA-only
+// writer. Never blocks: any per-doc failure is skipped, not thrown.
+
+type Admin = ReturnType<typeof createAdminClient>;
+
+// A link is a candidate document only if BOTH its file type is one we can parse
+// (pdf/txt/csv/image — same set as the email extractor) AND its href or link
+// text signals a qualification doc. The hint gate keeps us from vacuuming every
+// PDF on a page (catalogs, brochures, invoices) — only SDS/CoA/TDS-shaped links.
+const DOC_HINT_RE =
+  /\b(m?sds|coa|c\.?o\.?a|tds|coo|certificate|cert|analysis|technical\s*data|data\s*sheet|datasheet|spec(?:ification)?\s*sheet|safety\s*data|safety\s*sheet)\b/i;
+
+const FETCH_TIMEOUT_MS = 20_000;
+const UA =
+  "Mozilla/5.0 (compatible; TenkaraOpsBot/1.0; +https://ops-agents-vu4o.vercel.app)";
+
+export interface DocRetrieveTarget {
+  orgId: string;
+  pageUrl: string;
+  supplierId?: string | null;
+  supplierName?: string | null;
+  materialId?: string | null;
+}
+
+export interface DocRetrieveResult {
+  pageUrl: string;
+  candidates: number;
+  inserted: number;
+  skippedDuplicates: number;
+  errors: number;
+  docs: { url: string; docType: string; expiresOn: string | null }[];
+  note?: string;
+}
+
+function extOf(u: string): string {
+  try {
+    const p = new URL(u).pathname;
+    const dot = p.lastIndexOf(".");
+    return dot >= 0 ? p.slice(dot + 1).toLowerCase() : "";
+  } catch {
+    return "";
+  }
+}
+
+function fileNameOf(u: string): string {
+  try {
+    const p = new URL(u).pathname;
+    return decodeURIComponent(p.split("/").filter(Boolean).pop() ?? "") || "document";
+  } catch {
+    return "document";
+  }
+}
+
+async function fetchWithTimeout(url: string, accept: string): Promise<Response> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { signal: ctrl.signal, redirect: "follow", headers: { "User-Agent": UA, Accept: accept } });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// Pull candidate document links out of raw HTML. Resolves relative hrefs against
+// the page URL and de-dupes. Text is used both for the hint match and as a
+// fallback filename when the href has no extension in its path.
+export function extractDocLinks(html: string, baseUrl: string): { url: string; text: string }[] {
+  const out: { url: string; text: string }[] = [];
+  const seen = new Set<string>();
+  const re = /<a\b[^>]*?href=["']([^"'#]+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    let abs: string;
+    try {
+      abs = new URL(m[1], baseUrl).toString();
+    } catch {
+      continue;
+    }
+    const text = m[2].replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+    const ext = extOf(abs);
+    const hinted = DOC_HINT_RE.test(abs) || DOC_HINT_RE.test(text);
+    if (!hinted) continue;
+    if (!isDocExtractableExt(ext)) continue; // only types the extractor can read
+    if (seen.has(abs)) continue;
+    seen.add(abs);
+    out.push({ url: abs, text });
+  }
+  return out;
+}
+
+// Stable synthetic message id so re-runs of the same page dedupe in
+// insertSupplierDocuments (which keys on source_message_id + file + doc_type).
+function syntheticMessageId(pageUrl: string): string {
+  return "url:" + crypto.createHash("sha1").update(pageUrl).digest("hex").slice(0, 24);
+}
+
+export async function retrieveDocumentsFromUrl(
+  admin: Admin,
+  target: DocRetrieveTarget,
+  opts: { maxDocs?: number } = {}
+): Promise<DocRetrieveResult> {
+  const maxDocs = opts.maxDocs ?? 10;
+  const result: DocRetrieveResult = {
+    pageUrl: target.pageUrl,
+    candidates: 0,
+    inserted: 0,
+    skippedDuplicates: 0,
+    errors: 0,
+    docs: [],
+  };
+
+  let links: { url: string; text: string }[] = [];
+  try {
+    const res = await fetchWithTimeout(target.pageUrl, "text/html,application/pdf,*/*");
+    if (!res.ok) {
+      result.note = `page fetch ${res.status}`;
+      return result;
+    }
+    const ct = (res.headers.get("content-type") ?? "").toLowerCase();
+    if (ct.includes("application/pdf") || extOf(target.pageUrl) === "pdf") {
+      // The URL itself is a document (e.g. source_url points straight at an SDS).
+      links = [{ url: target.pageUrl, text: fileNameOf(target.pageUrl) }];
+    } else {
+      const html = await res.text();
+      links = extractDocLinks(html, target.pageUrl);
+    }
+  } catch (e: any) {
+    result.note = `page error: ${String(e?.message ?? e).slice(0, 120)}`;
+    return result;
+  }
+
+  links = links.slice(0, maxDocs);
+  result.candidates = links.length;
+  if (!links.length) {
+    result.note = "no document links found";
+    return result;
+  }
+
+  const messageId = syntheticMessageId(target.pageUrl);
+  const rows: SupplierDocumentInput[] = [];
+  for (const link of links) {
+    try {
+      const res = await fetchWithTimeout(link.url, "application/pdf,image/*,text/*,*/*");
+      if (!res.ok) {
+        result.errors++;
+        continue;
+      }
+      const contentType = (res.headers.get("content-type") ?? "").toLowerCase();
+      const buf = Buffer.from(await res.arrayBuffer());
+      const ext = extOf(link.url) || (contentType.includes("pdf") ? "pdf" : "");
+      const fileName = fileNameOf(link.url);
+      const docType = classifyDocType(`${fileName} ${link.text}`, contentType);
+      const extracted = await extractDocumentFields(buf, docType, ext);
+      rows.push({
+        orgId: target.orgId,
+        supplierId: target.supplierId ?? null,
+        supplierName: target.supplierName ?? null,
+        materialId: target.materialId ?? null,
+        docType,
+        fileName,
+        contentType: contentType || null,
+        sizeBytes: buf.byteLength,
+        sourceMessageId: messageId,
+        sourceUrl: link.url,
+        extracted: extracted?.fields ?? null,
+        expiresOn: extracted?.expires_on ?? null,
+      });
+      result.docs.push({ url: link.url, docType, expiresOn: extracted?.expires_on ?? null });
+    } catch {
+      result.errors++;
+    }
+  }
+
+  const ins = await insertSupplierDocuments(admin, rows);
+  result.inserted = ins.inserted;
+  result.skippedDuplicates = ins.skippedDuplicates;
+  result.errors += ins.errors;
+  return result;
+}
