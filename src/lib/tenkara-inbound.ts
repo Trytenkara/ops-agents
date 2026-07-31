@@ -136,6 +136,36 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     ref = data;
   }
 
+  // Operator-attached alternate email: resolve directly to the existing supplier
+  // thread before domain/address fallbacks, including generic personal domains.
+  let aliasAddressMatch = false;
+  if (!ref && inboundOrg) {
+    const fromAddr = parseFrom(msg.from).address.toLowerCase();
+    if (fromAddr) {
+      const { data: alias, error: aliasError } = await admin
+        .from("supplier_email_aliases")
+        .select("draft_ref_id, thread_id")
+        .eq("org_id", inboundOrg.orgId)
+        .eq("email", fromAddr)
+        .eq("claim_status", "attached")
+        .maybeSingle();
+      if (aliasError) return { status: 503, body: { error: "alias_match_failed", detail: aliasError.message } };
+      if (alias) {
+        let aliasRefQuery = admin
+          .from("draft_references")
+          .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata")
+          .eq("org_id", inboundOrg.orgId)
+          .eq("email_client", "rod_app");
+        aliasRefQuery = alias.draft_ref_id ? aliasRefQuery.eq("id", alias.draft_ref_id) : aliasRefQuery.eq("thread_id", alias.thread_id);
+        const { data: aliasRef } = await aliasRefQuery.order("created_at", { ascending: false }).limit(1).maybeSingle();
+        if (aliasRef) {
+          ref = aliasRef;
+          aliasAddressMatch = true;
+        }
+      }
+    }
+  }
+
   // Fallback: sender-domain matching for new-contact / thread-split scenarios.
   // A supplier sometimes redirects us to a colleague who opens a FRESH email with
   // a new subject — a brand-new Tenkara thread. Neither draft_id nor thread_id
@@ -289,6 +319,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     // Set when we matched on the exact full sender address (e.g. a supplier replying
     // from the same gmail/personal address we emailed). Audit flag only.
     exact_address_match: exactAddressMatch || undefined,
+    alias_address_match: aliasAddressMatch || undefined,
   };
   await admin
     .from("draft_references")
@@ -821,7 +852,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     })
     .eq("id", ref.id);
 
-  return { status: 200, body: { drafted: true, draft_ref_id: staged.draftRefId, draft_id: staged.draftId, quotes_staged: quotesStaged, introduced_materials: introducedMaterialIds.length, domain_match_fallback: domainMatchFallback || undefined, exact_address_match: exactAddressMatch || undefined } };
+  return { status: 200, body: { drafted: true, draft_ref_id: staged.draftRefId, draft_id: staged.draftId, quotes_staged: quotesStaged, introduced_materials: introducedMaterialIds.length, domain_match_fallback: domainMatchFallback || undefined, exact_address_match: exactAddressMatch || undefined, alias_address_match: aliasAddressMatch || undefined } };
 }
 
 async function recordUnmatchedInbound(

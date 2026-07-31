@@ -56,6 +56,7 @@ export interface RunOutreachResult {
   staged: boolean;
   reason?: string;
   draftRefId?: string;
+  conversationId?: string;
   promoted: number; // leads promoted to ready_for_outreach
 }
 
@@ -199,5 +200,5 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
     step: "outreach",
     data: { supplier_id: supplierId, draft_ref_id: staged.draftRefId, materials: materialNames.length, qa_findings: staged.qaFindings?.length ?? 0 },
   });
-  return { staged: true, draftRefId: staged.draftRefId, promoted };
+  return { staged: true, draftRefId: staged.draftRefId, conversationId: staged.conversationId ?? undefined, promoted };
 }
