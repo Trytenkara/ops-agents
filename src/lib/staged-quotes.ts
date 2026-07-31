@@ -116,8 +116,9 @@ export async function insertStagedQuotes(
         .filter(Boolean)
         .join(" ");
     } else if (norm.status === "unconvertible") {
+      price = null;
       confidence = "needs_review";
-      extractionNotes = [`${norm.note} — confirm currency/price before approving.`, extractionNotes]
+      extractionNotes = [`${norm.note}. Original extracted value: ${r.currency ?? "unknown currency"} ${r.price ?? "unknown"}. Confirm currency and price before approving.`, extractionNotes]
         .filter(Boolean)
         .join(" ");
     }

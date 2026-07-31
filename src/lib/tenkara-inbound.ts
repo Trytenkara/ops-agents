@@ -501,14 +501,16 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
         for (const c of captured) {
           if (c.q.price == null) continue;
           const norm = await normalizeToUsd(c.q.currency);
+          if (norm.status === "unconvertible") continue;
           const price = norm.status === "converted" ? norm.convert(c.q.price) : c.q.price;
+          if (price == null || !Number.isFinite(price) || price <= 0) continue;
           const case_size = c.q.case_size;
           priced.push({
             price,
             case_size,
             unit_price: price != null && case_size ? price / case_size : price,
             unit_of_measurement: c.q.unit_of_measurement,
-            currency: norm.status === "converted" ? "USD" : c.q.currency ?? null,
+            currency: "USD",
             grade: c.q.grade,
             source: c.source,
           });

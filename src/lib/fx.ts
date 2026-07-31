@@ -60,7 +60,7 @@ export async function convertToUsd(amount: number | null, currency: string | nul
 }
 
 export interface UsdNormalization {
-  // "usd": already USD (or blank, treated as USD) — leave the number untouched.
+  // "usd": explicitly USD — leave the number untouched.
   // "converted": a rate was found; `convert` restates any amount from the listed
   //   currency into USD, and `currency` is "USD".
   // "unconvertible": listed in a foreign currency but no rate is reachable — the
@@ -80,7 +80,16 @@ export interface UsdNormalization {
 // covers many amounts on the same quote (per-case price, unit price, tiers).
 export async function normalizeToUsd(currency: string | null | undefined): Promise<UsdNormalization> {
   const cur = (currency ?? "").trim().toUpperCase();
-  if (!cur || cur === "USD") {
+  if (!cur) {
+    return {
+      status: "unconvertible",
+      currency: "UNKNOWN",
+      rate: null,
+      note: "Currency could not be confirmed — not publishing a numeric price",
+      convert: () => null,
+    };
+  }
+  if (cur === "USD") {
     return { status: "usd", currency: "USD", rate: null, note: null, convert: (n) => n };
   }
   const probe = await convertToUsd(1, cur).catch(() => null);
@@ -89,8 +98,8 @@ export async function normalizeToUsd(currency: string | null | undefined): Promi
       status: "unconvertible",
       currency: cur,
       rate: null,
-      note: `Listed in ${cur}; USD conversion unavailable — not publishing as USD`,
-      convert: (n) => n,
+      note: `Listed in ${cur}; USD conversion unavailable — not publishing a numeric price`,
+      convert: () => null,
     };
   }
   const rate = probe.rate; // USD per 1 unit of `cur`
