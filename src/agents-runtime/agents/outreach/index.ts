@@ -63,7 +63,8 @@ registerAgent({
     "Composes outreach emails for enriched leads, stages them as Missive drafts (never sends), and promotes leads to stage=ready_for_outreach.",
   async run(ctx) {
     const admin = createAdminClient();
-    const maxDrafts = envMaxDrafts();
+    const retryRequestId = typeof ctx.input?.retryRequestId === "string" ? ctx.input.retryRequestId : null;
+    const maxDrafts = retryRequestId ? 1 : envMaxDrafts();
 
     if (!process.env.MISSIVE_API_TOKEN) {
       await ctx.log("MISSIVE_API_TOKEN not configured — cannot stage drafts", { level: "error", step: "config" });
@@ -100,17 +101,18 @@ registerAgent({
 
     const leadCols =
       "id, org_id, supplier_id, assigned_operator_id, supplier_name, material_id, material_name, payload, confidence_score";
-    const fetchEnriched = (ids: string[], limit: number) =>
-      ids.length && limit > 0
-        ? admin
-            .from("leads_in_flight")
-            .select(leadCols)
-            .eq("stage", "enriched")
-            .eq("status", "active")
-            .in("org_id", ids)
-            .order("created_at", { ascending: false })
-            .limit(limit)
-        : Promise.resolve({ data: [] as any[], error: null as any });
+    const fetchEnriched = (ids: string[], limit: number) => {
+      if (!ids.length || limit <= 0) return Promise.resolve({ data: [] as any[], error: null as any });
+      let query = admin
+        .from("leads_in_flight")
+        .select(leadCols)
+        .eq("stage", "enriched")
+        .eq("status", "active")
+        .in("org_id", ids);
+      if (retryRequestId) query = query.eq("payload->outreach_retry->>request_id", retryRequestId);
+      else query = query.is("payload->outreach_retry", null);
+      return query.order("created_at", { ascending: false }).limit(retryRequestId ? 1000 : limit);
+    };
 
     const cap = maxDrafts * 4; // over-fetch to allow filtering before capping
     const realRes = await fetchEnriched(realOrgIds, cap);
@@ -451,7 +453,7 @@ registerAgent({
     // for leads that were suppressed before but are now eligible again.
     const suppressionUpdates: { id: string; payload: any }[] = [];
     for (const [orgId, group] of byOrg) {
-      if (!dueOrgIds04.has(orgId)) {
+      if (!retryRequestId && !dueOrgIds04.has(orgId)) {
         await ctx.log(`Org ${orgsById.get(orgId)?.name ?? orgId} throttled by tier — skipping ${group.length} candidate(s)`, { step: "tier_throttle" });
         continue;
       }
@@ -665,7 +667,7 @@ registerAgent({
             .from("draft_references")
             .select("id")
             .eq("org_id", primary.lead.org_id)
-            .in("status", ["staged", "reviewed", "sent"])
+            .in("status", ["staged", "reviewed", "sent", "linked"])
             .eq("supplier_id", supplierId)
             .limit(1);
           existing = data ?? [];
@@ -677,7 +679,7 @@ registerAgent({
             .from("draft_references")
             .select("id")
             .eq("org_id", primary.lead.org_id)
-            .in("status", ["staged", "reviewed", "sent"])
+            .in("status", ["staged", "reviewed", "sent", "linked"])
             .limit(1);
           if (domain && !FREE_DOMAINS.has(domain)) {
             q = q.or(`metadata->>supplier_contact_email.ilike.${emailAddr},metadata->>supplier_contact_email.ilike.%@${domain}`);
@@ -734,6 +736,9 @@ registerAgent({
       if (res.staged) {
         staged++;
         promoted += res.promoted;
+        if (retryRequestId) {
+          await admin.rpc("clear_outreach_retry", { p_request_id: retryRequestId });
+        }
         if (remainder.length) await holdForFollowup(remainder, poolMaterialIds, res.draftRefId);
       } else {
         missiveErrors++;

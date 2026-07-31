@@ -9,11 +9,13 @@ import { sanitizeTiers, type PriceTier } from "@/lib/price-tiers";
 import { normalizeCompanyName, hostOf } from "@/lib/tenkara-sourcing-exclusions";
 import { deleteTenkaraDrafts, getTenkaraConversationDetails } from "@/lib/tenkara";
 import { isSameCompanyName } from "@/lib/fuzzy";
+import { randomUUID } from "crypto";
 
 interface ActionResult {
   ok: boolean;
   error?: string;
   warning?: string;
+  retryRequestId?: string;
 }
 
 export interface CsvUploadResult {
@@ -248,6 +250,83 @@ async function assertCanActOnLead(leadId: string) {
     }
   }
   return { session, admin, lead };
+}
+
+export async function cancelOutreachRetry(requestId: string): Promise<ActionResult> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" };
+  if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator"])) return { ok: false, error: "forbidden" };
+  if (!UUID_RE.test(requestId)) return { ok: false, error: "invalid_retry_request" };
+  const admin = createAdminClient();
+  const { data: rows } = await admin
+    .from("leads_in_flight")
+    .select("org_id")
+    .eq("payload->outreach_retry->>request_id", requestId)
+    .limit(1);
+  const orgId = rows?.[0]?.org_id;
+  if (orgId && !seesAllOrgs(session)) {
+    const assigned = await getAssignedOrgIds(session);
+    if (assigned !== null && !assigned.includes(orgId)) return { ok: false, error: "forbidden" };
+  }
+  const { error } = await admin.rpc("clear_outreach_retry", { p_request_id: requestId });
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+export async function requestOutreachRetry(leadId: string): Promise<ActionResult> {
+  const guard = await assertCanActOnLead(leadId);
+  if ("error" in guard) return { ok: false, error: guard.error };
+  const { session, admin, lead } = guard;
+  if (!lead.org_id || lead.status !== "active" || lead.stage !== "enriched") {
+    return { ok: false, error: "lead_not_retryable" };
+  }
+  const payload = (lead.payload as any) ?? {};
+  const email = String(payload.supplier_contact_email ?? "").trim().toLowerCase();
+  if (!lead.supplier_id && !email) return { ok: false, error: "retry_group_unidentifiable" };
+
+  const { data: allCandidates, error: siblingsError } = await admin
+    .from("leads_in_flight")
+    .select("id, supplier_id, payload")
+    .eq("org_id", lead.org_id)
+    .eq("status", "active")
+    .eq("stage", "enriched");
+  if (siblingsError) return { ok: false, error: siblingsError.message };
+  const siblings = (allCandidates ?? []).filter((candidate: any) => {
+    const candidateEmail = String(candidate.payload?.supplier_contact_email ?? "").trim().toLowerCase();
+    return (lead.supplier_id && candidate.supplier_id === lead.supplier_id) || (!!email && candidateEmail === email);
+  });
+  if (!siblings.length) return { ok: false, error: "no_retryable_supplier_leads" };
+
+  const emails = Array.from(new Set(siblings.map((s: any) => String(s.payload?.supplier_contact_email ?? "").trim().toLowerCase()).filter(Boolean)));
+  const { data: activeThreads, error: existingError } = await admin
+    .from("draft_references")
+    .select("supplier_id, metadata")
+    .eq("org_id", lead.org_id)
+    .in("status", ["staged", "reviewed", "sent", "linked"])
+    .limit(5000);
+  if (existingError) return { ok: false, error: existingError.message };
+  const emailSet = new Set(emails);
+  const hasExisting = (activeThreads ?? []).some((thread: any) => {
+    const threadEmail = String(thread.metadata?.supplier_contact_email ?? "").trim().toLowerCase();
+    return (lead.supplier_id && thread.supplier_id === lead.supplier_id) || (!!threadEmail && emailSet.has(threadEmail));
+  });
+  if (hasExisting) return { ok: false, error: "supplier_already_has_live_or_sent_thread" };
+
+  const requestId = randomUUID();
+  const { error: markError } = await admin.rpc("mark_outreach_retry", {
+    p_lead_ids: siblings.map((s) => s.id),
+    p_request_id: requestId,
+    p_actor_id: session.userId,
+  });
+  if (markError) return { ok: false, error: markError.message };
+
+  await admin.from("audit_log").insert({
+    actor_user_id: session.userId,
+    action: "outreach.retry_requested",
+    target_table: "leads_in_flight",
+    target_id: lead.id,
+    diff: { request_id: requestId, lead_ids: siblings.map((s) => s.id) },
+  });
+  return { ok: true, retryRequestId: requestId };
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
