@@ -57,6 +57,7 @@ export interface QuoteProfile {
   postorder_tds_required: boolean;
   postorder_tds_dealbreaker: boolean;
   notes: string | null;
+  generated_notes: string | null;
   approval_status: "draft" | "pending_review" | "ready_for_submission" | "submitted";
   created_at: string;
   updated_at: string;
@@ -78,7 +79,7 @@ const PROFILE_COLUMNS = `
   postorder_coa_required, postorder_coa_dealbreaker,
   postorder_sds_required, postorder_sds_dealbreaker,
   postorder_tds_required, postorder_tds_dealbreaker,
-  notes, approval_status, created_at, updated_at
+  notes, generated_notes, approval_status, created_at, updated_at
 `;
 
 export async function getQuoteProfiles(
@@ -95,8 +96,10 @@ export async function getQuoteProfiles(
 }
 
 export type QuoteProfileUpdate = Partial<
-  Omit<QuoteProfile, "id" | "org_id" | "created_at" | "updated_at">
+  Omit<QuoteProfile, "id" | "org_id" | "generated_notes" | "created_at" | "updated_at">
 >;
+
+type QuoteProfileSeed = QuoteProfileUpdate & { generated_notes?: string | null };
 
 export async function updateQuoteProfile(
   admin: SupabaseClient,
@@ -116,7 +119,7 @@ export async function updateQuoteProfile(
 export async function insertQuoteProfile(
   admin: SupabaseClient,
   orgId: string,
-  fields: QuoteProfileUpdate
+  fields: QuoteProfileSeed
 ): Promise<QuoteProfile> {
   const { data, error } = await admin
     .from("quote_profiles")
@@ -147,17 +150,27 @@ export async function seedQuoteProfilesFromStaged(
   if (!staged?.length) return 0;
 
   const existing = await getQuoteProfiles(admin, orgId);
-  const existingKeys = new Set(
-    existing.map((p) => `${p.supplier_name?.toLowerCase()}|${p.material_name?.toLowerCase()}`)
+  const existingByKey = new Map(
+    existing.map((p) => [`${p.supplier_name?.toLowerCase()}|${p.material_name?.toLowerCase()}`, p])
   );
 
   let created = 0;
   for (const s of staged as any[]) {
     const key = `${(s.supplier_name ?? "").toLowerCase()}|${(s.material_name ?? "").toLowerCase()}`;
-    if (existingKeys.has(key)) continue;
-    existingKeys.add(key);
+    const current = existingByKey.get(key);
     const dims = s.case_dimensions ?? {};
     try {
+      const generatedNotes = [
+        s.price != null ? `Quoted ${s.currency ?? "USD"} ${Number(s.price)}${s.case_size ? ` for case size ${s.case_size} ${s.unit_of_measurement ?? "units"}` : ""}.` : null,
+        s.lead_time_days != null ? `Lead time: ${s.lead_time_days} days.` : null,
+        s.moq_quantity != null ? `MOQ: ${s.moq_quantity}${s.moq_unit ? ` ${s.moq_unit}` : ""}.` : null,
+        s.payment_terms ? `Payment terms: ${s.payment_terms}.` : null,
+        s.grade ? `Grade: ${s.grade}.` : null,
+      ].filter(Boolean).join(" ");
+      if (current) {
+        await admin.from("quote_profiles").update({ generated_notes: generatedNotes || null }).eq("id", current.id);
+        continue;
+      }
       await insertQuoteProfile(admin, orgId, {
         supplier_id: s.supplier_id ?? null,
         supplier_name: s.supplier_name ?? "",
@@ -176,7 +189,9 @@ export async function seedQuoteProfilesFromStaged(
         min_inventory: s.moq_quantity != null ? Number(s.moq_quantity) : null,
         min_inventory_unit: s.moq_unit ?? null,
         additional_grades: s.grade ?? null,
+        generated_notes: generatedNotes || null,
       });
+      existingByKey.set(key, {} as QuoteProfile);
       created++;
       if (created >= limit) break;
     } catch {

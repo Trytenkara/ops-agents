@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
       "",                                      // minimum_order
       "",                                      // minimum_order_unit
       p.supplier_type ?? "",                   // supplier_type
-      p.notes ?? "",                           // purchasing_notes
+      [p.notes ? `Operator: ${p.notes}` : null, p.generated_notes ? `Generated: ${p.generated_notes}` : null].filter(Boolean).join(" | "), // purchasing_notes
       "",                                      // purchasing_thresholds
       p.ddp_min_limit ?? "",                   // ddp_minimum_limit
       p.ddp_max_limit ?? "",                   // ddp_maximum_limit
