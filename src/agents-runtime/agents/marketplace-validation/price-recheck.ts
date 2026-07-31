@@ -38,6 +38,11 @@ export interface RecheckResult {
   pack_size: string | null;            // free-text e.g. "50 lb"
   unit_price: number | null;           // best (lowest) per-unit price seen
   tiers: PriceTier[];                  // every visible pack-size / volume-break tier
+  // Level-2 listing fields — captured verbatim off the page when visible, else
+  // null. Never inferred. Downstream parses these into quote/supplier profiles.
+  moq: string | null;                  // minimum order quantity as printed, e.g. "Min. order: 25 kg"
+  lead_time: string | null;            // lead time / dispatch time as printed, e.g. "Ships in 3-5 business days"
+  shipping: string | null;             // shipping terms as printed, e.g. "Free shipping over $100"
   source_url: string | null;
   source_citations: string[];
   notes: string | null;
@@ -65,6 +70,9 @@ Return ONLY a JSON object (no prose) like:
     {"pack_size": "1 kg", "price": 25.00},
     {"pack_size": "25 kg", "price": 450.00}
   ],
+  "moq": "Min. order: 25 kg",
+  "lead_time": "Ships in 3-5 business days",
+  "shipping": "Free shipping over $100",
   "source_url": "https://supplier.com/...",
   "source_citations": ["https://...", "..."],
   "notes": "one-line summary; mention if pack size differs from baseline"
@@ -83,6 +91,7 @@ Rules:
 - "currency": the ISO 4217 code the listed prices are in — "USD", "EUR", "GBP", "INR", "CNY", etc. Infer from the currency symbol/locale (€→EUR, £→GBP, ₹ or "Rs"/"Rs."/"₹"→INR, ¥→CNY or JPY by site, $→USD unless clearly CAD/AUD/etc.). We convert to USD ourselves — do NOT convert; report the listed currency.
 - CURRENCY IS HIGH-STAKES: a price reported in the wrong currency is published as a wildly wrong USD number (e.g. ₹149 shown as $149 is ~85x too high). Do NOT default to USD just because you see a bare "$" or no symbol. Many suppliers — especially Indian, Chinese, Pakistani, and other non-US firms — list domestic-currency prices (₹/Rs, ¥/RMB) even on ".com" sites and even when a "$" appears. If the page shows ₹ or "Rs"/"Rs." anywhere near the price, it is INR, not USD. Consider the supplier's country, the site locale, and whether the price magnitude makes sense for this material in USD (bulk industrial chemicals are typically low single-digit $/kg — a "per kg" price of $60-$800 is almost always a local-currency figure mislabeled).
 - If you cannot POSITIVELY confirm the currency from the page (symbol, explicit code, or a clear locale/magnitude signal), return "needs_review" with a note explaining the ambiguity — do NOT guess "USD". A blank is better than a wrong currency.
+- "moq" / "lead_time" / "shipping": capture these ONLY if they are explicitly printed on the product page, copied verbatim (e.g. "Minimum order 25 kg", "Usually ships in 2-3 business days", "Free shipping on orders over $100"). If the page does not show it, return null. Never infer a minimum from the smallest pack size, never assume a default lead time, never guess shipping. These are optional and must not affect the classification or price.
 - source_url must be the actual product page you read from, not a search result.
 - Never fabricate, infer, estimate, round, or back-calculate a price. Only report a number that is explicitly printed on the page for that exact pack size. If the price only appears after selecting a size/variant you cannot confirm was rendered, or you are otherwise unsure of the exact figure, return needs_review — a blank is better than a guess.
 - Never fabricate. If a public price isn't visible, return login_required (if it's behind a login) or needs_review, with a note explaining why.`;
@@ -144,6 +153,9 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
       pack_size: null,
       unit_price: null,
       tiers: [],
+      moq: null,
+      lead_time: null,
+      shipping: null,
       source_url: input.product_url,
       source_citations: [],
       notes: `Model returned no JSON: ${text.slice(0, 200)}`,
@@ -195,6 +207,9 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
     pack_size: typeof parsed.pack_size === "string" ? parsed.pack_size : null,
     unit_price: toNum(parsed.unit_price),
     tiers,
+    moq: typeof parsed.moq === "string" && parsed.moq.trim() ? parsed.moq.trim() : null,
+    lead_time: typeof parsed.lead_time === "string" && parsed.lead_time.trim() ? parsed.lead_time.trim() : null,
+    shipping: typeof parsed.shipping === "string" && parsed.shipping.trim() ? parsed.shipping.trim() : null,
     source_url: typeof parsed.source_url === "string" ? parsed.source_url : input.product_url,
     source_citations: Array.isArray(parsed.source_citations)
       ? parsed.source_citations.filter((u: any) => typeof u === "string").slice(0, 8)

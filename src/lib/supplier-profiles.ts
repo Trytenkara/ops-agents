@@ -105,6 +105,7 @@ export async function upsertSupplierProfile(
       poc_phone: seed.poc_phone ?? null,
       poc_name: seed.poc_name ?? null,
       shipping_address: seed.shipping_address ?? null,
+      shipping_terms: seed.shipping_terms ?? null,
       shipping_email: seed.shipping_email ?? null,
       billing_email: seed.billing_email ?? null,
     })
@@ -181,12 +182,16 @@ export async function seedProfilesFromLeads(
     const isMarketplace =
       p.site_type === "M" || p.site_type === "MS" ? "marketplace" : "direct";
     try {
+      const mpShipping = p.marketplace_pull?.shipping;
       await upsertSupplierProfile(admin, orgId, info.supplierId, info.name, {
         supplier_type: isMarketplace as "marketplace" | "direct",
         poc_email: p.supplier_contact_email ?? p.contact_email ?? null,
         poc_phone: p.sales_phone ?? null,
         poc_name: p.poc_name ?? null,
         shipping_address: p.hq_address ?? null,
+        // Marketplace listings often publish shipping terms; capture them so the
+        // supplier profile isn't blank on info that's already on the page.
+        shipping_terms: typeof mpShipping === "string" && mpShipping.trim() ? mpShipping.trim() : null,
       });
       if (nameKey) existingNames.add(nameKey);
       created++;

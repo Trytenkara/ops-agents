@@ -297,7 +297,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         model: isRecheck ? RECHECK_MODEL : undefined,
       });
     } catch (e: any) {
-      result = { classification: "needs_review" as const, current_price: null, currency: null, pack_size: null, unit_price: null, tiers: [], source_url: url, source_citations: [], notes: `pull failed: ${e?.message ?? e}` };
+      result = { classification: "needs_review" as const, current_price: null, currency: null, pack_size: null, unit_price: null, tiers: [], moq: null, lead_time: null, shipping: null, source_url: url, source_citations: [], notes: `pull failed: ${e?.message ?? e}` };
     }
 
     // Currency safety net (runs BEFORE conversion below). Correct a wrong/blank
@@ -491,6 +491,11 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           price: result.current_price,
           pack_size: result.pack_size,
           currency: "USD",
+          // Level-2 listing fields (null unless the page showed them). Consumed by
+          // the marketplace quote/supplier profile seeders.
+          moq: result.moq,
+          lead_time: result.lead_time,
+          shipping: result.shipping,
           source_url: result.source_url ?? url,
           pulled_at: nowIso,
           ...cadence!,

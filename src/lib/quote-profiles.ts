@@ -1,4 +1,5 @@
 import { SupabaseClient } from "@supabase/supabase-js";
+import { resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
 
 export interface QuoteProfile {
   id: string;
@@ -175,6 +176,119 @@ export async function seedQuoteProfilesFromStaged(
         min_inventory: s.moq_quantity != null ? Number(s.moq_quantity) : null,
         min_inventory_unit: s.moq_unit ?? null,
         additional_grades: s.grade ?? null,
+      });
+      created++;
+      if (created >= limit) break;
+    } catch {
+      // skip duplicates
+    }
+  }
+  return created;
+}
+
+// --- Marketplace listing parsers -------------------------------------------
+// These read free-text scraped off a product page (never operator input), so
+// they are deliberately conservative: if the value isn't unambiguous we return
+// null rather than guess. A wrong case_size feeds the freight calc, so a blank
+// is safer than a bad parse.
+
+// Leading "<number> <unit>" of a pack string, e.g. "1.25 Lb" → {size:1.25, unit:"lb"}.
+// Single-letter units (g/l/G) are excluded — "5G" is ambiguous (gram vs gallon).
+const PACK_RE =
+  /(\d+(?:\.\d+)?)\s*(kg|mg|lbs?|pounds?|oz|ounces?|fl\s?oz|ml|kl|gal|gallons?|liters?|litres?|mt|tons?|tonnes?)\b/i;
+export function parsePackSize(pack: string | null | undefined): { size: number | null; unit: string | null } {
+  if (!pack) return { size: null, unit: null };
+  const m = pack.match(PACK_RE);
+  if (!m) return { size: null, unit: null };
+  const n = parseFloat(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return { size: null, unit: null };
+  return { size: n, unit: m[2].toLowerCase().replace(/\s+/g, " ") };
+}
+
+// "Ships in 3-5 business days" → 5 (upper bound of a range); weeks → ×7.
+export function parseLeadTimeDays(text: string | null | undefined): number | null {
+  if (!text) return null;
+  const m = text.match(/(\d+)\s*(?:[-–to]+\s*(\d+))?\s*(business\s+)?(day|days|week|weeks|wk|wks)\b/i);
+  if (!m) return null;
+  const hi = m[2] ? parseInt(m[2], 10) : parseInt(m[1], 10);
+  if (!Number.isFinite(hi)) return null;
+  return /week|wk/i.test(m[4]) ? hi * 7 : hi;
+}
+
+// "Min. order: 25 kg" → {qty:25, unit:"kg"}; falls back to a bare quantity.
+export function parseMoq(text: string | null | undefined): { qty: number | null; unit: string | null } {
+  if (!text) return { qty: null, unit: null };
+  const packed = parsePackSize(text);
+  if (packed.size != null) return { qty: packed.size, unit: packed.unit };
+  const m = text.match(/(\d+(?:\.\d+)?)\s*(units?|pieces?|pcs?|each|ea)?\b/i);
+  if (!m) return { qty: null, unit: null };
+  const n = parseFloat(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return { qty: null, unit: null };
+  return { qty: n, unit: m[2] ? m[2].toLowerCase() : null };
+}
+
+// Seed quote profiles for MARKETPLACE leads directly from the price we already
+// web-fetched (leads_in_flight.payload.marketplace_pull), so marketplace
+// suppliers fill in without waiting for an email reply. Direct suppliers keep
+// the reply-driven staged_quotes path. Create-only: never overwrites a profile
+// that already exists for that supplier+material (a staged/negotiated quote or
+// an operator edit wins). dimsMap resolves the outer-case estimate from the
+// pack size (marketplace_case_dims cache); Level-2 fields (lead time, MOQ) come
+// from the listing when the extractor captured them, else stay null.
+export async function seedQuoteProfilesFromMarketplace(
+  admin: SupabaseClient,
+  orgId: string,
+  dimsMap: Record<string, CaseDims>,
+  limit = Infinity
+): Promise<number> {
+  if (limit <= 0) return 0;
+  const { data: leads } = await admin
+    .from("leads_in_flight")
+    .select("supplier_id, supplier_name, material_id, material_name, payload")
+    .eq("org_id", orgId)
+    .eq("status", "active")
+    .eq("payload->marketplace_pull->>status", "pulled")
+    .or("payload->>site_type.in.(M,MS),payload->>supplier_role.eq.Marketplace");
+  if (!leads?.length) return 0;
+
+  const existing = await getQuoteProfiles(admin, orgId);
+  const existingKeys = new Set(
+    existing.map((p) => `${p.supplier_name?.toLowerCase()}|${p.material_name?.toLowerCase()}`)
+  );
+
+  let created = 0;
+  for (const l of leads as any[]) {
+    const key = `${(l.supplier_name ?? "").toLowerCase()}|${(l.material_name ?? "").toLowerCase()}`;
+    if (existingKeys.has(key)) continue;
+    const mp = l.payload?.marketplace_pull ?? {};
+    const price = mp.price != null ? Number(mp.price) : null;
+    if (price == null || !Number.isFinite(price)) continue; // no usable price — skip
+    existingKeys.add(key);
+    const pack = typeof mp.pack_size === "string" ? mp.pack_size : null;
+    const { size, unit } = parsePackSize(pack);
+    const dims = resolveCaseDims(dimsMap, pack);
+    const leadTime = parseLeadTimeDays(mp.lead_time);
+    const moq = parseMoq(mp.moq);
+    const src = typeof mp.source_url === "string" ? mp.source_url : null;
+    try {
+      await insertQuoteProfile(admin, orgId, {
+        supplier_id: l.supplier_id ?? null,
+        supplier_name: l.supplier_name ?? "",
+        material_id: l.material_id ?? null,
+        material_name: l.material_name ?? "",
+        price,
+        case_size: size,
+        unit_of_measurement: unit,
+        currency: typeof mp.currency === "string" && mp.currency ? mp.currency : "USD",
+        case_type: dims?.case_type ?? null,
+        case_width: dims?.width ?? null,
+        case_height: dims?.height ?? null,
+        case_length: dims?.length ?? null,
+        case_weight: dims?.weight_kg ?? null,
+        lead_time_days: leadTime,
+        min_inventory: moq.qty,
+        min_inventory_unit: moq.unit,
+        purchasing_notes: `Auto-filled from marketplace listing${pack ? ` (${pack})` : ""}${src ? ` — ${src}` : ""}`,
       });
       created++;
       if (created >= limit) break;

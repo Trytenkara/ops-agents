@@ -5,7 +5,8 @@ import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier
 import { assessMaterialRelevance, collectProductText, type RawLead } from "./enrich";
 import { enrichAndStageLead } from "./run-enrich";
 import { seedProfilesFromLeads } from "@/lib/supplier-profiles";
-import { seedQuoteProfilesFromStaged } from "@/lib/quote-profiles";
+import { seedQuoteProfilesFromStaged, seedQuoteProfilesFromMarketplace } from "@/lib/quote-profiles";
+import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
 
 // v1 trim (vs. full spec):
 //   - pre-outreach only. Reply-driven enrichment lands when Agent 08
@@ -55,6 +56,8 @@ registerAgent({
     const seedOrder = [...allSourcingOrgIds].sort(
       (a, b) => Number(isInternalById.get(a) ?? false) - Number(isInternalById.get(b) ?? false)
     );
+    // Case-dims cache is org-agnostic; load once and reuse for the marketplace seed.
+    const caseDimsMap = allSourcingOrgIds.length ? await loadMarketplaceCaseDims(admin) : {};
     for (const orgId of seedOrder) {
       if (supplierBudget <= 0 && quoteBudget <= 0) break;
       try {
@@ -63,8 +66,15 @@ registerAgent({
           seededSuppliers += n;
           supplierBudget -= n;
         }
+        // Reply-driven staged quotes first (negotiated, highest fidelity), then
+        // fill the rest from marketplace listings we already web-fetched.
         if (quoteBudget > 0) {
           const n = await seedQuoteProfilesFromStaged(admin, orgId, quoteBudget);
+          seededQuotes += n;
+          quoteBudget -= n;
+        }
+        if (quoteBudget > 0) {
+          const n = await seedQuoteProfilesFromMarketplace(admin, orgId, caseDimsMap, quoteBudget);
           seededQuotes += n;
           quoteBudget -= n;
         }
