@@ -13,6 +13,8 @@
 //     in the SAME shape Agent 05 (lead-price-pull.ts) writes
 //   - open a case (the human "click the confirm link" task)
 
+import { atRate, toUsdRate } from "./fx.mjs";
+
 const OA_REF = "aiyzpjnvenfmurhyamge";
 const BASE = `https://${OA_REF}.supabase.co/rest/v1`;
 
@@ -159,6 +161,34 @@ export async function writePull(lead, result) {
   const url = lead.url;
   const source = result.source ?? "browserbase_login"; // e.g. "browserbase_agent" for the native-agent tier
   const now = new Date().toISOString();
+  // Every price published here is USD, the same invariant lead-price-pull.ts holds.
+  // The extractor reports the currency AS LISTED, so restate it before anything is
+  // written. Runs before `gotPrice` so an unconvertible listing falls through to the
+  // miss path on its own rather than publishing a foreign number that reads as
+  // dollars — ₹149 as $149 overstates by ~96x.
+  if (result.classification === "current_price_found") {
+    const fx = await toUsdRate(result.currency);
+    if (fx.status === "unconvertible") {
+      result.classification = "needs_review";
+      result.current_price = null;
+      result.unit_price = null;
+      result.tiers = [];
+      result.notes = `Listed in ${fx.currency}; USD conversion unavailable — not publishing an unconverted price. ${result.notes ?? ""}`.trim();
+    } else if (fx.status === "converted") {
+      // The ladder converts with the headline price: leaving tiers in the listed
+      // currency is what made the two disagree on a foreign listing.
+      result.current_price = atRate(result.current_price, fx.rate);
+      result.unit_price = atRate(result.unit_price, fx.rate);
+      result.tiers = (result.tiers ?? []).map((t) => ({
+        ...t,
+        price: atRate(t.price, fx.rate),
+        unit_price: atRate(t.unit_price, fx.rate),
+      }));
+      result.notes = `Converted from ${fx.currency} to USD @ ${fx.rate.toFixed(6)}. ${result.notes ?? ""}`.trim();
+      result.currency = "USD";
+    }
+  }
+
   const gotPrice = result.classification === "current_price_found" && result.current_price != null;
   const prev = lead.payload?.marketplace_pull ?? {};
   const hadPrice = prev.status === "pulled" && prev.price != null;
@@ -175,7 +205,9 @@ export async function writePull(lead, result) {
       unit_price: result.unit_price ?? null,
       price: result.current_price,
       pack_size: result.pack_size ?? null,
-      currency: result.currency ?? "USD",
+      // Literal, not `result.currency`: the block above has already converted or
+      // refused, so a foreign code reaching this object would be a bug, not a value.
+      currency: "USD",
       source_url: result.source_url ?? url,
       source,
       pulled_at: now,
@@ -190,13 +222,25 @@ export async function writePull(lead, result) {
     // Refresh could NOT read a price this run, but we already have a good one.
     // NEVER wipe good pricing on a transient miss — keep the last-known price live
     // and FLAG that today's refresh failed, with the reason WHY, for ops visibility.
-    pull = {
-      ...prev,
-      source,
-      refresh_failed_at: now,
-      refresh_fail_reason: result.classification, // login_required | link_broken | needs_review
-      refresh_fail_notes: result.notes ?? null,
-    };
+    // One exception: a stored price predating the USD invariant. Preserving it would
+    // re-publish a foreign number, so that row is sent for a manual pull instead.
+    pull =
+      (prev.currency ?? "USD") === "USD"
+        ? {
+            ...prev,
+            source,
+            refresh_failed_at: now,
+            refresh_fail_reason: result.classification, // login_required | link_broken | needs_review
+            refresh_fail_notes: result.notes ?? null,
+          }
+        : {
+            status: "needs_manual_pull",
+            reason: "stale_non_usd_price",
+            source,
+            source_url: prev.source_url ?? url,
+            last_notes: `Dropped a stored ${prev.currency} price that predates the USD invariant. ${result.notes ?? ""}`.trim(),
+            at: now,
+          };
   } else {
     // No price now and none before — flag for manual pull WITH the reason why.
     pull = {
