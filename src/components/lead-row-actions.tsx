@@ -2,7 +2,7 @@
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
-import { promoteLead, dropLead, linkLeadToConversation } from "@/app/actions/leads";
+import { promoteLead, dropLead, linkLeadToConversation, requestOutreachRetry, cancelOutreachRetry } from "@/app/actions/leads";
 import { DROP_REASONS, type DropReason } from "@/app/actions/lead-drop-reasons";
 
 interface Props {
@@ -39,6 +39,28 @@ export function LeadRowActions({ leadId, stage, status, hasBlockedReason, disabl
     startTransition(async () => {
       const res = await promoteLead(leadId);
       if (!res.ok) setErr(res.error ?? "failed");
+    });
+  }
+
+  function onRetry() {
+    setErr(null);
+    setWarn(null);
+    startTransition(async () => {
+      const requested = await requestOutreachRetry(leadId);
+      if (!requested.ok || !requested.retryRequestId) {
+        setErr(requested.error ?? "failed");
+        return;
+      }
+      const response = await fetch("/api/agents/run/agent-04-outreach", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input: { retryRequestId: requested.retryRequestId } }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.ok) {
+        await cancelOutreachRetry(requested.retryRequestId);
+        setErr(body.error ?? `HTTP ${response.status}`);
+      } else setWarn("Retry requested for this supplier group.");
     });
   }
 
@@ -134,6 +156,11 @@ export function LeadRowActions({ leadId, stage, status, hasBlockedReason, disabl
       {canPromote && (
         <Button size="sm" variant="outline" onClick={onPromote} disabled={pending}>
           {pending ? "…" : "Promote"}
+        </Button>
+      )}
+      {!disabled && stage === "enriched" && (
+        <Button size="sm" variant="outline" onClick={onRetry} disabled={pending}>
+          {pending ? "…" : "Retry outreach"}
         </Button>
       )}
       {!disabled && (
