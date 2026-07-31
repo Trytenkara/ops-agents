@@ -77,6 +77,23 @@ const AGGREGATOR_DOMAINS = [
   "ingredientsonline.com",
   "chemondis.com",
   "spotchemi.com",
+  // Company-profile / data-provider / business-directory sites. These get
+  // mis-captured by discovery as a supplier's "website" (e.g. a Bloomberg
+  // company-profile URL). Treating them as aggregator domains stops enrichment
+  // from trusting them as the supplier's own domain and rejects any contact on
+  // them — otherwise a domain-search (Hunter/ZoomInfo) against bloomberg.com
+  // returns Bloomberg staff, and multi-contact CCs the whole list.
+  "bloomberg.com",
+  "dnb.com",
+  "crunchbase.com",
+  "pitchbook.com",
+  "zoominfo.com",
+  "apollo.io",
+  "lusha.com",
+  "rocketreach.co",
+  "opencorporates.com",
+  "owler.com",
+  "linkedin.com",
 ];
 
 export function isAggregatorDomain(host: string | null | undefined): boolean {
