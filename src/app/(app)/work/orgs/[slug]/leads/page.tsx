@@ -241,6 +241,15 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   // Supplier profiles for the supplier-centric view (approval tracking)
   const supplierProfiles = await getSupplierProfiles(admin, org.id).catch(() => []);
 
+  // Auto-provisioned marketplace logins (host, credentials, lifecycle status) so
+  // ops can see/copy the account the fleet created to pull gated prices.
+  const { data: marketplaceAccountRows } = await admin
+    .from("marketplace_accounts")
+    .select("id, host, signup_email, password, status, last_error, verified_at, last_login_at, created_at")
+    .eq("org_id", org.id)
+    .order("created_at", { ascending: false });
+  const marketplaceAccounts = marketplaceAccountRows ?? [];
+
   // Client folders — for the client filter on the leads list.
   const [{ data: tagRows }, { data: orgClientRows }] = await Promise.all([
     admin.from("material_client_tags").select("tenkara_material_id, org_client_id").eq("org_id", org.id),
@@ -314,7 +323,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           </p>
         </div>
       )}
-      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} enrichmentCases={enrichmentCases} />
+      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} marketplaceAccounts={marketplaceAccounts} enrichmentCases={enrichmentCases} />
     </div>
   );
 }

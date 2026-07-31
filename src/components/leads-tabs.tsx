@@ -6,6 +6,7 @@ import { LeadsList } from "@/components/leads-list";
 import { MarketplacePricing } from "@/components/marketplace-pricing";
 import { OutreachTrackerPanel } from "@/components/outreach-tracker-panel";
 import { SupplierLeadsView } from "@/components/supplier-leads-view";
+import { MarketplaceLogins, type MarketplaceAccount } from "@/components/marketplace-logins";
 import { leadMarketKind, isOperatorDropped } from "@/components/lead-rich-row";
 import type { OutreachTracker } from "@/lib/outreach-tracker";
 import type { RunStat } from "@/components/agent-runs-strip";
@@ -47,6 +48,7 @@ export function LeadsTabs({
   tagsByMaterialId = {},
   dimsByPack = {},
   supplierProfiles = [],
+  marketplaceAccounts = [],
   enrichmentCases = null,
 }: {
   rows: any[];
@@ -61,6 +63,7 @@ export function LeadsTabs({
   tagsByMaterialId?: Record<string, string>; // tenkara_material_id → org_client_id
   dimsByPack?: Record<string, CaseDims>;
   supplierProfiles?: SupplierProfile[];
+  marketplaceAccounts?: MarketplaceAccount[];
   enrichmentCases?: React.ReactNode;
 }) {
   const [clientFilter, setClientFilter] = useState("all");
@@ -212,14 +215,17 @@ export function LeadsTabs({
       </div>
 
       {tab === "suppliers" && orgId && (
-        <SupplierLeadsView
-          rows={visibleRows}
-          profiles={supplierProfiles}
-          canAct={canAct}
-          slug={slug}
-          orgId={orgId}
-          operatorOptions={operatorOptions}
-        />
+        <div className="space-y-4">
+          <MarketplaceLogins accounts={marketplaceAccounts} />
+          <SupplierLeadsView
+            rows={visibleRows}
+            profiles={supplierProfiles}
+            canAct={canAct}
+            slug={slug}
+            orgId={orgId}
+            operatorOptions={operatorOptions}
+          />
+        </div>
       )}
       {tab === "all" && (
         <LeadsList rows={visibleRows} canAct={canAct} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
