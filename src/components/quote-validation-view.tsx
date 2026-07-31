@@ -124,7 +124,7 @@ export function QuoteValidationView({
     "Hazardous", "Refrigerated", "Protect From Freezing",
     "Name Match", "INCI Match", "Grades Match", "Additional Grades",
     "Pre-Order COA Met", "Pre-Order SDS Met", "Pre-Order TDS Met", "Pre-Order Sample Met",
-    "Status", "Completeness %", "Notes",
+    "Status", "Completeness %", "Purchasing Notes", "Operator Notes", "Generated Notes",
   ];
   const csvRows = profiles.map((q) => {
     const up = q.price != null && q.case_size && q.case_size > 0 ? (q.price / q.case_size).toFixed(4) : "";
@@ -138,7 +138,7 @@ export function QuoteValidationView({
       q.preorder_coa_met ? "Yes" : "No", q.preorder_sds_met ? "Yes" : "No",
       q.preorder_tds_met ? "Yes" : "No", q.preorder_sample_met ? "Yes" : "No",
       q.approval_status, quoteCompleteness(q).pct,
-      q.purchasing_notes ?? q.notes ?? "",
+      q.purchasing_notes ?? "", q.notes ?? "", q.generated_notes ?? "",
     ];
   });
 

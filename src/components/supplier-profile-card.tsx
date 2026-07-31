@@ -305,7 +305,7 @@ export function SupplierProfileCard({
         {/* Notes */}
         {(editing || profile.notes) && (
           <div className="mt-4 border-t pt-3">
-            <h4 className="text-xs uppercase tracking-wider font-semibold text-muted-foreground mb-2">Notes</h4>
+            <h4 className="text-xs uppercase tracking-wider font-semibold text-muted-foreground mb-2">Operator Notes</h4>
             {editing ? (
               <textarea
                 value={profile.notes ?? ""}
@@ -317,6 +317,12 @@ export function SupplierProfileCard({
             ) : (
               <p className="text-sm text-muted-foreground">{profile.notes}</p>
             )}
+          </div>
+        )}
+        {profile.generated_notes && (
+          <div className="mt-4 border-t pt-3">
+            <h4 className="text-xs uppercase tracking-wider font-semibold text-muted-foreground mb-2">Generated Notes</h4>
+            <p className="text-sm text-muted-foreground">{profile.generated_notes}</p>
           </div>
         )}
       </CardContent>

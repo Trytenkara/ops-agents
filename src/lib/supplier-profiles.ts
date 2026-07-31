@@ -33,6 +33,7 @@ export interface SupplierProfile {
   payment_info_verified: boolean;
   payment_terms_confirmed: boolean;
   notes: string | null;
+  generated_notes: string | null;
   approval_status: "draft" | "pending_review" | "ready_for_submission" | "submitted";
   created_at: string;
   updated_at: string;
@@ -48,7 +49,7 @@ const PROFILE_COLUMNS = `
   hazmat_handling_fee, temp_storage_fee, liftgate_fee, special_packaging_fee,
   contact_info_complete, marketplace_type_correct, address_accurate,
   shipping_terms_correct, billing_verified, payment_info_verified, payment_terms_confirmed,
-  notes, approval_status, created_at, updated_at
+  notes, generated_notes, approval_status, created_at, updated_at
 `;
 
 export async function getSupplierProfiles(
@@ -82,7 +83,7 @@ export async function upsertSupplierProfile(
   orgId: string,
   supplierId: string | null,
   supplierName: string,
-  seed: Partial<SupplierProfile> = {}
+  seed: SupplierProfileSeed = {}
 ): Promise<SupplierProfile> {
   if (supplierId) {
     const { data: existing } = await admin
@@ -107,6 +108,7 @@ export async function upsertSupplierProfile(
       shipping_address: seed.shipping_address ?? null,
       shipping_terms: seed.shipping_terms ?? null,
       shipping_email: seed.shipping_email ?? null,
+      generated_notes: seed.generated_notes ?? null,
       billing_email: seed.billing_email ?? null,
     })
     .select(PROFILE_COLUMNS)
@@ -116,8 +118,10 @@ export async function upsertSupplierProfile(
 }
 
 export type SupplierProfileUpdate = Partial<
-  Omit<SupplierProfile, "id" | "org_id" | "created_at" | "updated_at">
+  Omit<SupplierProfile, "id" | "org_id" | "generated_notes" | "created_at" | "updated_at">
 >;
+
+type SupplierProfileSeed = SupplierProfileUpdate & { generated_notes?: string | null };
 
 export async function updateSupplierProfile(
   admin: SupabaseClient,
@@ -162,40 +166,51 @@ export async function seedProfilesFromLeads(
   );
 
   // Group leads by supplier_id (preferred) or lowercased name, first lead wins.
-  const bySupplier = new Map<string, { supplierId: string | null; name: string; payload: any }>();
+  const bySupplier = new Map<string, { supplierId: string | null; name: string; payload: any; source: string | null }>();
   for (const lead of leads) {
     const name = (lead.supplier_name ?? "").trim();
     const nameKey = name.toLowerCase();
     const key = lead.supplier_id ?? nameKey;
     if (!key) continue; // neither id nor name — can't identify a supplier
-    if (lead.supplier_id ? existingIds.has(lead.supplier_id) : existingNames.has(nameKey)) continue;
     if (bySupplier.has(key)) continue;
-    bySupplier.set(key, { supplierId: lead.supplier_id ?? null, name, payload: lead.payload ?? {} });
+    bySupplier.set(key, { supplierId: lead.supplier_id ?? null, name, payload: lead.payload ?? {}, source: lead.source ?? null });
   }
 
+  const existingById = new Map(existing.filter((p) => p.supplier_id).map((p) => [p.supplier_id!, p]));
+  const existingByName = new Map(existing.map((p) => [(p.supplier_name ?? "").trim().toLowerCase(), p]));
   let created = 0;
   for (const info of bySupplier.values()) {
     const nameKey = info.name.toLowerCase();
-    // Guard the id-less path once more against names claimed earlier this batch.
-    if (!info.supplierId && existingNames.has(nameKey)) continue;
+    const current = info.supplierId ? existingById.get(info.supplierId) : existingByName.get(nameKey);
     const p = info.payload;
     const isMarketplace =
       p.site_type === "M" || p.site_type === "MS" ? "marketplace" : "direct";
     try {
       const mpShipping = p.marketplace_pull?.shipping;
-      await upsertSupplierProfile(admin, orgId, info.supplierId, info.name, {
-        supplier_type: isMarketplace as "marketplace" | "direct",
-        poc_email: p.supplier_contact_email ?? p.contact_email ?? null,
-        poc_phone: p.sales_phone ?? null,
-        poc_name: p.poc_name ?? null,
-        shipping_address: p.hq_address ?? null,
-        // Marketplace listings often publish shipping terms; capture them so the
-        // supplier profile isn't blank on info that's already on the page.
-        shipping_terms: typeof mpShipping === "string" && mpShipping.trim() ? mpShipping.trim() : null,
-      });
-      if (nameKey) existingNames.add(nameKey);
-      created++;
-      if (created >= limit) break;
+      const shippingTerms = typeof mpShipping === "string" && mpShipping.trim() ? mpShipping.trim() : null;
+      const generatedNotes = [
+        `Discovered via ${info.source ?? p.discovery_source ?? "supplier lead"}.`,
+        p.supplier_website ? `Website: ${p.supplier_website}.` : null,
+        p.supplier_country ? `Country: ${p.supplier_country}.` : null,
+        p.enrichment?.contact?.source ? `Contact source: ${p.enrichment.contact.source}.` : null,
+        shippingTerms ? `Shipping terms: ${shippingTerms}.` : null,
+      ].filter(Boolean).join(" ");
+      if (current) {
+        await admin.from("supplier_profiles").update({ generated_notes: generatedNotes || null }).eq("id", current.id);
+      } else {
+        await upsertSupplierProfile(admin, orgId, info.supplierId, info.name, {
+          supplier_type: isMarketplace as "marketplace" | "direct",
+          poc_email: p.supplier_contact_email ?? p.contact_email ?? null,
+          poc_phone: p.sales_phone ?? null,
+          poc_name: p.poc_name ?? null,
+          shipping_address: p.hq_address ?? null,
+          shipping_terms: shippingTerms,
+          generated_notes: generatedNotes || null,
+        });
+        if (nameKey) existingNames.add(nameKey);
+        created++;
+        if (created >= limit) break;
+      }
     } catch {
       // skip duplicates
     }

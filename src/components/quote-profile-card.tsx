@@ -405,7 +405,7 @@ export function QuoteProfileCard({
             )}
             {(editing || profile.notes) && (
               <div>
-                <h4 className="text-xs uppercase tracking-wider font-semibold text-muted-foreground mb-1">Notes</h4>
+                <h4 className="text-xs uppercase tracking-wider font-semibold text-muted-foreground mb-1">Operator Notes</h4>
                 {editing ? (
                   <textarea
                     value={profile.notes ?? ""}
@@ -417,6 +417,12 @@ export function QuoteProfileCard({
                 ) : (
                   <p className="text-sm text-muted-foreground">{profile.notes}</p>
                 )}
+              </div>
+            )}
+            {profile.generated_notes && (
+              <div>
+                <h4 className="text-xs uppercase tracking-wider font-semibold text-muted-foreground mb-1">Generated Notes</h4>
+                <p className="text-sm text-muted-foreground">{profile.generated_notes}</p>
               </div>
             )}
           </div>
