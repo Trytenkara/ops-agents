@@ -13,6 +13,19 @@ function nameHash(s: string): string {
   return h.toString(36);
 }
 
+// Unique, deterministic per-outreach reference number (e.g. "SR-20260731-0042").
+// Keyed on the supplier + material set so every supplier thread gets a distinct
+// subject (operators were mixing up identical subjects) and re-renders the same
+// value. Date is stamped once at first draft; re-runs are idempotent per thread,
+// so it stays stable. "SR" = sourcing request (never "RFQ", per house style).
+function outreachReference(seedKey: string, materialNames: string[]): string {
+  const seed = `${seedKey}|${materialNames.map((n) => n.toLowerCase()).join("|")}`;
+  let h = 5381;
+  for (let i = 0; i < seed.length; i++) h = ((h << 5) + h + seed.charCodeAt(i)) >>> 0;
+  const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  return `SR-${date}-${(h % 10000).toString().padStart(4, "0")}`;
+}
+
 // Per-supplier first contact: compose ONE email for the pool of materials passed
 // in (the caller leads with a small pool, not the whole list — ops flow), stage
 // it through the shared draft→QA pipeline, and promote those leads to
@@ -92,6 +105,9 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
   const leadIds = ordered.map((l) => l.id);
   const primary = ordered[0];
 
+  // Unique subject reference so no two supplier threads share a subject.
+  const reference = outreachReference(supplierId ?? email.toLowerCase(), materialNames);
+
   const draft = await composeOutreachDraft({
     mode,
     ghostBrand,
@@ -105,6 +121,7 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
     materials,
     signal: (primary.payload ?? {})?.signal ?? null,
     isMarketplace,
+    reference,
   });
 
   const emailClient = coldOutboundEmailClient("04");
@@ -153,6 +170,7 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
       supplier_contact_email: email,
       supplier_contact_name: contactName ?? null,
       cc_contacts: cc.map((c) => c.email),
+      outreach_reference: reference,
       // Consolidated draft covers several materials — carry the full set so the
       // Materials chip can mark every one as drafted, not just the primary.
       material_name: materialNames[0] ?? null,

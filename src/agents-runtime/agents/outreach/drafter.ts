@@ -36,6 +36,11 @@ export interface DraftInput {
   materials?: DraftMaterial[];
   signal: string | null; // how we found them — kept for telemetry, no longer changes copy
   isMarketplace?: boolean; // marketplace supplier → ask for bulk/wholesale pricing beyond listed retail
+  // Unique per-outreach reference (e.g. "SR-20260731-0042"). Prepended to the
+  // subject so every supplier thread is distinct (operators were seeing
+  // identical subjects across suppliers) and rides through on replies (Re: …),
+  // so suppliers quote it back. Omitted → subject unchanged.
+  reference?: string | null;
 }
 
 export interface ComposedDraft {
@@ -263,6 +268,14 @@ function extractJsonObject(text: string): { subject?: string; body?: string } {
 // Generate the RFQ with the model for varied language. Any failure (missing
 // key, API error, malformed/short output) falls back to the deterministic
 // template so a draft still gets staged.
+// Prepend the unique reference to the subject. Applied after sanitize (the ref
+// has no banned characters), and never doubled if the model already echoed it.
+function withReference(d: ComposedDraft, reference?: string | null): ComposedDraft {
+  const ref = (reference ?? "").trim();
+  if (!ref || d.subject.startsWith(ref)) return d;
+  return { ...d, subject: `${ref}: ${d.subject}` };
+}
+
 export async function composeOutreachDraft(input: DraftInput): Promise<ComposedDraft> {
   try {
     const res = await anthropic().messages.create({
@@ -276,8 +289,8 @@ export async function composeOutreachDraft(input: DraftInput): Promise<ComposedD
     const subject = String(parsed.subject ?? "").trim();
     const body = String(parsed.body ?? "").trim();
     if (!subject || body.length < 50) throw new Error("model returned empty/short subject or body");
-    return sanitizeDraft({ subject, body });
+    return withReference(sanitizeDraft({ subject, body }), input.reference);
   } catch {
-    return composeTemplateDraft(input);
+    return withReference(composeTemplateDraft(input), input.reference);
   }
 }
