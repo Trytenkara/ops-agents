@@ -48,6 +48,26 @@ function formatAddress(r: { name?: string | null; address: string }): string {
   return r.name ? `${r.name} <${r.address}>` : r.address;
 }
 
+// body_text must be PLAIN text (it feeds Tenkara's search index). Callers should
+// pass plain text, but guard against a stray HTML body leaking in (Rod flagged
+// "<p>...</p>" showing literally). No-op when already plain, so normal drafts
+// keep their exact line breaks.
+function toPlainText(s: string): string {
+  if (!/<[^>]+>/.test(s)) return s;
+  return s
+    .replace(/<\s*br\s*\/?>/gi, "\n")
+    .replace(/<\/\s*p\s*>/gi, "\n\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export async function createTenkaraDraft(input: CreateTenkaraDraftInput): Promise<TenkaraDraft> {
   const token = process.env.TENKARA_API_TOKEN;
   if (!token) throw new Error("TENKARA_API_TOKEN not configured");
@@ -64,7 +84,7 @@ export async function createTenkaraDraft(input: CreateTenkaraDraftInput): Promis
   };
   if (input.cc) payload.cc_addresses = input.cc;
   if (input.bcc) payload.bcc_addresses = input.bcc;
-  if (input.bodyText) payload.body_text = input.bodyText;
+  if (input.bodyText) payload.body_text = toPlainText(input.bodyText);
   if (input.emailAccountId) payload.email_account_id = input.emailAccountId;
 
   const res = await fetch(`${TENKARA_INBOX_BASE}/api/drafts`, {
@@ -147,7 +167,7 @@ export async function createTenkaraConversation(input: CreateTenkaraConversation
   };
   if (input.to.name) payload.to_name = input.to.name;
   if (input.cc) payload.cc_addresses = input.cc;
-  if (input.bodyText) payload.body_text = input.bodyText;
+  if (input.bodyText) payload.body_text = toPlainText(input.bodyText);
   if (input.emailAccountId) payload.email_account_id = input.emailAccountId;
   if (input.supplierContact) {
     const sc = input.supplierContact;
