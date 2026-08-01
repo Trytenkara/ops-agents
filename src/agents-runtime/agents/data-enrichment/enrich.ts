@@ -94,6 +94,13 @@ const AGGREGATOR_DOMAINS = [
   "opencorporates.com",
   "owler.com",
   "linkedin.com",
+  // Trade/customs-data providers, directories, and social networks — same class
+  // as the profile sites above (a directory URL captured as the supplier site,
+  // whose domain-search then returns the platform's own staff).
+  "volza.com",
+  "bebee.com",
+  "environmental-expert.com",
+  "taiwantrade.com",
 ];
 
 export function isAggregatorDomain(host: string | null | undefined): boolean {
