@@ -111,6 +111,13 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   } catch (error: any) {
     return { status: 503, body: { error: "inbound_org_lookup_failed", detail: error?.message ?? String(error) } };
   }
+
+  // Marketplace signup-confirmation emails arrive on these same inboxes but are
+  // not supplier replies — detect, click the confirm link, activate the account,
+  // and stop (no reply draft, no triage case). Returns null for everything else.
+  const { maybeConfirmMarketplaceSignup } = await import("@/lib/marketplace-confirm");
+  const confirmed = await maybeConfirmMarketplaceSignup(admin, msg, inboundOrg);
+  if (confirmed) return confirmed;
   // 1. Find the originating draft (the one our agent posted that this replies to).
   let ref: any = null;
   if (msg.in_reply_to_draft_id) {
