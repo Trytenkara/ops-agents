@@ -4,6 +4,7 @@ import { queryRecentMaterials, queryMaterialsByIds, queryMaterialsForOrgs, findC
 import { scoutSuppliersForMaterial, scoreScoutConfidence, describeScoutConfidence, scoutCompleteness, type ScoutSupplier } from "./scout";
 import { toCsv } from "@/lib/csv";
 import { getSourcingExclusions, exclusionReason, normalizeCompanyName, type SourcingExclusions } from "@/lib/tenkara-sourcing-exclusions";
+import { isAggregatorDomain } from "../data-enrichment/enrich";
 import { getNoteDerivedCountryExclusions } from "@/lib/client-sourcing-rules";
 import { uploadCsvAndSign } from "@/lib/storage";
 import { onlyOrgNames } from "@/lib/org-scope";
@@ -15,6 +16,17 @@ import { importYetiEnabled, fireImportYetiDiscovery } from "./importyeti";
 import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 
 const EMPTY_OVERRIDES = new Map<string, string>();
+
+// Discovery sometimes returns a directory / data-provider profile page (e.g. a
+// Bloomberg, Volza, or beBee company URL) as the "website". Storing that as
+// supplier_website makes enrichment domain-search the platform and pull the
+// platform's OWN staff as the supplier's contacts. Drop such URLs at ingest so
+// enrichment falls back to name-based lookup instead.
+function cleanSupplierWebsite(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const host = hostOf(url);
+  return host && isAggregatorDomain(host) ? null : url;
+}
 
 // SourceReady discovery is fired per material (bounded per run) to a Gamut
 // webhook that runs supplier_search_v3 and stages source='sourceready' leads
@@ -717,7 +729,7 @@ registerAgent({
           source: sourceFromSignal(c.signal),
           payload: {
             inci_name: material.inci,
-            supplier_website: c.supplier_website,
+            supplier_website: cleanSupplierWebsite(c.supplier_website),
             supplier_contact_name: c.supplier_poc_name,
             supplier_contact_email: c.supplier_poc_email,
             supplier_country: c.supplier_country,
@@ -855,7 +867,7 @@ registerAgent({
             payload: {
               inci_name: material.inci,
               trade_name: s.trade_name,
-              supplier_website: s.url,
+              supplier_website: cleanSupplierWebsite(s.url),
               supplier_contact_email: s.email,
               supplier_phone: s.phone,
               supplier_country: s.country,
