@@ -13,25 +13,31 @@ let cache = null;
 const RATE_TTL_MS = 12 * 60 * 60 * 1000;
 
 // rates[CUR] = units of CUR per 1 USD, so 1 CUR = 1 / rates[CUR] USD.
+//
+// Single source on purpose. api.exchangerate.host used to serve as a keyless
+// fallback but now answers HTTP 200 with {success:false, missing_access_key}, so
+// it cannot satisfy the shape check below and only implied a redundancy that did
+// not exist. Losing this source is not a correctness risk: no rate means
+// toUsdRate reports "unconvertible", and the caller drops the numbers and flags
+// the lead rather than publishing a foreign price as dollars. Do not add a
+// replacement without confirming it returns rates unauthenticated.
+const RATE_SOURCE = "https://open.er-api.com/v6/latest/USD";
+
 async function loadUsdRates() {
   if (cache && Date.now() - cache.fetchedAt < RATE_TTL_MS) return cache.rates;
-  const sources = [
-    "https://open.er-api.com/v6/latest/USD",
-    "https://api.exchangerate.host/latest?base=USD",
-  ];
-  for (const url of sources) {
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) continue;
-      const json = await res.json();
-      const rates = json?.rates;
-      if (rates && typeof rates === "object" && typeof rates.USD === "number") {
-        cache = { rates, fetchedAt: Date.now() };
-        return rates;
-      }
-    } catch {
-      /* try the next source */
+  try {
+    const res = await fetch(RATE_SOURCE, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const rates = json?.rates;
+    // Shape-checked rather than trusting the status: the retired fallback proved
+    // a 200 can still carry an error body with no rates on it.
+    if (rates && typeof rates === "object" && typeof rates.USD === "number") {
+      cache = { rates, fetchedAt: Date.now() };
+      return rates;
     }
+  } catch {
+    /* unreachable or malformed — treated as no rate available */
   }
   return null;
 }

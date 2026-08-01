@@ -12,17 +12,15 @@
 -- Scoped to 'pulled' rows: that is the only status carrying a price a surface will
 -- render. A needs_manual_pull / pending row has no price, so its currency is moot.
 --
--- Added NOT VALID and validated in the same step: the 34 rows written before the
--- skill was fixed were restated to USD first, so validation passes over the whole
--- table. NOT VALID on its own would still enforce every INSERT and UPDATE -- it
--- only skips re-checking existing rows -- so the two statements can be split if a
--- future environment needs to adopt the constraint ahead of its backfill.
+-- NOT VALID, and validated separately in 0069. Kept apart because ADD CONSTRAINT
+-- takes an ACCESS EXCLUSIVE lock: validating in the same transaction would hold
+-- that lock across the full-table scan, which is the cost NOT VALID exists to
+-- avoid. On its own this already enforces every INSERT and UPDATE -- it only skips
+-- re-checking rows that already exist -- so an environment can adopt it before its
+-- backfill has run and validate afterwards.
 
 alter table public.leads_in_flight
   add constraint leads_in_flight_marketplace_pull_usd check (
     payload -> 'marketplace_pull' ->> 'status' is distinct from 'pulled'
     or coalesce(payload -> 'marketplace_pull' ->> 'currency', 'USD') = 'USD'
   ) not valid;
-
-alter table public.leads_in_flight
-  validate constraint leads_in_flight_marketplace_pull_usd;
