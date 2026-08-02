@@ -136,6 +136,7 @@ export interface LeadPullResult {
   pulled: number;
   flagged: number;
   pending: number;
+  notMarketplace: number;
   stoppedEarly: boolean;
 }
 
@@ -146,7 +147,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   log: (msg: string, meta?: any) => Promise<void> | void;
 }): Promise<LeadPullResult> {
   const { admin, runId, deadline, log } = opts;
-  const empty: LeadPullResult = { processed: 0, pulled: 0, flagged: 0, pending: 0, stoppedEarly: false };
+  const empty: LeadPullResult = { processed: 0, pulled: 0, flagged: 0, pending: 0, notMarketplace: 0, stoppedEarly: false };
   if (Date.now() > deadline) return empty;
 
   // Only pull for orgs that are actively sourcing. Paused ('off') orgs otherwise
@@ -276,9 +277,10 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   let pulled = 0;
   let flagged = 0;
   let pending = 0;
+  let notMarketplace = 0;
   let stoppedEarly = false;
 
-  const processOne = async (l: LeadRow): Promise<"pulled" | "flagged" | "pending" | null> => {
+  const processOne = async (l: LeadRow): Promise<"pulled" | "flagged" | "pending" | "not_marketplace" | null> => {
     const url = listingUrl(l.payload)!;
     const priorPull = l.payload?.marketplace_pull ?? null;
     // A re-check is a lead we've already priced (status 'pulled'); a first pull
@@ -389,6 +391,47 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         result.unit_price = null;
         result.tiers = [];
       }
+    }
+
+    // Checkout is the truest marketplace test (per ops). If the reader positively
+    // determined the listing has a price but NO online checkout — a plain price
+    // listing, a distributor list-price page, or a B2B quote/inquiry listing — it
+    // is not a marketplace. Terminate: never publish a price, drop it from both
+    // re-pull pools (terminal status), and downgrade site_type M/MS→N so it leaves
+    // the live marketplace price index (leadMarketKind reads site_type). No retry,
+    // no manual-pull case: there is no marketplace price for a human to pull either.
+    if (result.classification === "not_marketplace") {
+      const terminalIso = new Date().toISOString();
+      const priorSiteType = l.payload?.site_type ?? null;
+      const nextPayload: any = { ...(l.payload ?? {}) };
+      if (priorSiteType === "M" || priorSiteType === "MS") nextPayload.site_type = "N";
+      nextPayload.marketplace_pull = {
+        status: "not_marketplace" as const,
+        reason: "not_marketplace",
+        source_url: result.source_url ?? url,
+        last_notes: result.notes ?? null,
+        at: terminalIso,
+      };
+      nextPayload.marketplace_checkout = {
+        has_checkout: false,
+        checked_at: terminalIso,
+        source_url: result.source_url ?? url,
+        site_type_corrected_from: (priorSiteType === "M" || priorSiteType === "MS") ? priorSiteType : null,
+        notes: result.notes ?? null,
+      };
+      const { error: upErr } = await admin
+        .from("leads_in_flight")
+        .update({ payload: nextPayload })
+        .eq("id", l.id);
+      if (upErr) {
+        await log(`Lead payload update failed for ${l.id}: ${upErr.message}`, { level: "error", step: "mp_leads", data: { lead_id: l.id } });
+        return null;
+      }
+      await log(`Not a marketplace (price but no checkout) — not publishing, removed from price index: ${l.supplier_name} × ${l.material_name}`, {
+        step: "mp_not_marketplace",
+        data: { lead_id: l.id, site_type_corrected_from: nextPayload.marketplace_checkout.site_type_corrected_from, source_url: nextPayload.marketplace_pull.source_url },
+      });
+      return "not_marketplace";
     }
 
     const gotPrice = result.classification === "current_price_found" && result.current_price != null;
@@ -642,9 +685,10 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       processed++;
       if (o === "pulled") pulled++;
       else if (o === "pending") pending++;
+      else if (o === "not_marketplace") notMarketplace++;
       else flagged++;
     }
   }
 
-  return { processed, pulled, flagged, pending, stoppedEarly };
+  return { processed, pulled, flagged, pending, notMarketplace, stoppedEarly };
 }

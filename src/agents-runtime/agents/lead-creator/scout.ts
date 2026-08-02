@@ -81,10 +81,10 @@ CONTACTABILITY: a supplier we can email is worth far more than one reachable onl
 
 DETAIL IS SECONDARY TO BREADTH. Capture pricing, contact, MOQ, grades, and certifications where they're readily visible, but NEVER drop a legitimate supplier just because its detail is thin. Fill what you find, leave the rest null. Do not fabricate. Do not spend so long extracting detail on one supplier that you fail to cover the rest of the market.
 
-CLASSIFY each supplier's site type:
-- M  (Marketplace)         — online checkout, no signup. e.g. BulkSupplements, Lab Alley, Spectrum Chemical, PureBulk, Nutricost, Ingredi.
-- MS (Marketplace-Signup)  — online checkout after registration. e.g. Knowde, IndiaMART, Alibaba, Made-in-China, Pharmaoffer, Ingredients Online.
-- N  (Non-marketplace)     — quote/RFQ only. e.g. Lonza, Cargill, Brenntag, Univar, Ajinomoto, NuLiv, OmniActive.
+CLASSIFY each supplier's site type. THE DECIDING TEST IS CHECKOUT, NOT A VISIBLE PRICE: a site is only M/MS if you can actually place the order online (add-to-cart / buy-now / online checkout / online order). A page that merely shows a price or price range but has NO way to check out is NOT a marketplace, it is a price listing (classify N). Same for a B2B listing that shows list pricing but routes every order through a quote/inquiry form (classify N). Do not upgrade to M/MS just because a number is printed on the page.
+- M  (Marketplace)         — online checkout, no signup. There is a working add-to-cart / buy-now path. e.g. BulkSupplements, Lab Alley, Spectrum Chemical, PureBulk, Nutricost, Ingredi.
+- MS (Marketplace-Signup)  — online checkout after registration (checkout exists, but only once you sign up / log in). e.g. Knowde, IndiaMART, Alibaba, Made-in-China, Pharmaoffer, Ingredients Online.
+- N  (Non-marketplace)     — no online checkout: quote/RFQ only, OR a plain price listing / B2B listing that shows pricing but has no way to buy online. e.g. Lonza, Cargill, Brenntag, Univar, Ajinomoto, NuLiv, OmniActive.
 
 ROLE — also tag the supplier's role in the chain: "Manufacturer", "Distributor", "Reseller", "Trader", or "Marketplace". Buyers prefer going direct to manufacturers, so this matters independently of site type.
 

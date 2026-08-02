@@ -32,7 +32,7 @@ export interface PriceTier {
 }
 
 export interface RecheckResult {
-  classification: "current_price_found" | "link_broken" | "needs_review" | "login_required";
+  classification: "current_price_found" | "link_broken" | "needs_review" | "login_required" | "not_marketplace";
   current_price: number | null;
   currency: string | null;             // ISO code of current_price/tiers as listed (e.g. "USD","EUR")
   pack_size: string | null;            // free-text e.g. "50 lb"
@@ -55,13 +55,14 @@ You will be given: the supplier name, material name, our baseline price/case_siz
 Use the web_fetch and web_search tools:
 1. web_fetch the product_url and READ the page itself — the current listed price and EVERY visible pack-size / volume-break tier, stock status, and whether pricing is public or gated. (web_fetch reads the real page; do not rely on search snippets when you can fetch.)
 2. If the fetched page does NOT show a public numeric price for THIS material — i.e. it is a dead link, a PDF/datasheet, a contact / RFQ / "request a quote" page, a homepage, a showroom, a category / search-results listing, or the WRONG product — you MUST use web_search to locate the correct DIRECT product page for this supplier + material (queries like "<supplier_name> <material_name> price" and "<material_name> buy <supplier_name>"), then web_fetch that page and read it. Prefer the supplier's own product page over a directory. Do NOT return link_broken or needs_review for a bad on-file URL until you have tried at least one web_search followed by a web_fetch of a better page. Only classify login_required (behind a login / "request price") or needs_review AFTER a genuine product page still yields no public price.
-3. Report the current listed price for the closest matching pack size (the one most similar to our baseline case_size + unit), plus every visible tier.
+3. CHECKOUT IS THE TRUEST TEST OF A MARKETPLACE. A visible price is NOT enough. Before reporting a price, confirm the page has an actual online purchase path for this material — an add-to-cart / "buy now" / online-checkout / place-order control you could click through to buy. If the page shows a price (or price range) but has NO way to check out — it is a plain price listing, a distributor list-price page, or a B2B listing that routes every order through a quote/inquiry form — then it is NOT a marketplace: return classification "not_marketplace". Do not report its number. (A sign-in/registration wall in front of an otherwise real checkout is "login_required", not "not_marketplace".)
+4. Report the current listed price for the closest matching pack size (the one most similar to our baseline case_size + unit), plus every visible tier.
 
 Return ONLY a JSON object (no prose) like:
 
 \`\`\`json
 {
-  "classification": "current_price_found | link_broken | needs_review | login_required",
+  "classification": "current_price_found | link_broken | needs_review | login_required | not_marketplace",
   "current_price": 99.99,
   "currency": "USD",
   "pack_size": "50 lb",
@@ -83,7 +84,8 @@ Rules:
 - "tiers": capture EVERY visible pack-size / quantity / volume-break price on the page as its own entry (e.g. "1 kg $25", "25 kg $450", or an "As low as $18.00 for 100+ kg" break → {"pack_size":"100 kg","price":1800.00}). Empty array if none are visible.
 - "unit_price": the best (lowest) per-unit price you can derive across the tiers (price ÷ quantity, e.g. 450/25 = 18.00 per kg). Numeric or null.
 - "current_price" + "pack_size" stay the single closest match to our baseline pack size (for the change comparison).
-- "login_required" when the price is hidden behind a sign-in / registration / "create an account" / "log in to see price" wall — i.e. it could be read by a human who signs up, but not publicly. Ops will sign up and pull it manually.
+- "not_marketplace" when the page has a price but NO online checkout — a plain price listing, a distributor list-price page, or a B2B listing where every order goes through a quote/inquiry form. There is nothing to add to a cart or check out. This is not a marketplace, so we will not publish its price. Leave current_price/tiers null/empty.
+- "login_required" when the price is hidden behind a sign-in / registration / "create an account" / "log in to see price" wall — i.e. it could be read by a human who signs up, but not publicly. Ops will sign up and pull it manually. (Only when a real checkout sits behind the wall — if there is no checkout at all, use "not_marketplace".)
 - "link_broken" ONLY for hard 404 / product removed / redirect to category page.
 - "needs_review" for other ambiguous cases: multiple SKUs on page, price requires a custom quote/RFQ, page exists but pack size differs significantly.
 - "current_price_found" only when you have a concrete numeric price for an equivalent pack size.
@@ -164,7 +166,7 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
 
   const cls = parsed.classification;
   const validCls =
-    cls === "current_price_found" || cls === "link_broken" || cls === "needs_review" || cls === "login_required"
+    cls === "current_price_found" || cls === "link_broken" || cls === "needs_review" || cls === "login_required" || cls === "not_marketplace"
       ? cls
       : "needs_review";
 
@@ -200,13 +202,18 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
     ? parsed.currency.trim().toUpperCase()
     : null;
 
+  // A listing with a visible price but no checkout is NOT a marketplace price —
+  // never publish its number. Force the price fields empty so nothing downstream
+  // can treat it as a marketplace quote (see the checkout rule in SYSTEM_PROMPT).
+  const isNotMarketplace = validCls === "not_marketplace";
+
   return {
     classification: validCls,
-    current_price: price,
-    currency,
-    pack_size: typeof parsed.pack_size === "string" ? parsed.pack_size : null,
-    unit_price: toNum(parsed.unit_price),
-    tiers,
+    current_price: isNotMarketplace ? null : price,
+    currency: isNotMarketplace ? null : currency,
+    pack_size: isNotMarketplace ? null : (typeof parsed.pack_size === "string" ? parsed.pack_size : null),
+    unit_price: isNotMarketplace ? null : toNum(parsed.unit_price),
+    tiers: isNotMarketplace ? [] : tiers,
     moq: typeof parsed.moq === "string" && parsed.moq.trim() ? parsed.moq.trim() : null,
     lead_time: typeof parsed.lead_time === "string" && parsed.lead_time.trim() ? parsed.lead_time.trim() : null,
     shipping: typeof parsed.shipping === "string" && parsed.shipping.trim() ? parsed.shipping.trim() : null,
