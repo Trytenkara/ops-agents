@@ -34,10 +34,15 @@ const URL_PROBE_TIMEOUT_MS = 5_000;
 // generate 2-3x the rows) ran past a 420s ceiling. Passes are concurrent, so
 // the ceiling only has to leave the 800s route budget room for graph work, URL
 // probing and inserts — not to be divided between passes.
-const MAX_WEB_USES_PER_PASS = 22;
+// Measured across 4 prod configurations: a 22-search pass lands anywhere from
+// 220s to past 600s for the SAME scope on different runs, and lowering
+// concurrency did not fix it (3 concurrent passes still lost 2 to the ceiling).
+// The variance is per-search latency, and it scales with search count, so the
+// fix is a smaller unit of work rather than a higher ceiling: the route's 800s
+// maxDuration caps how long we can ever wait. 12 searches keeps a pass well
+// under the ceiling; rotation covers the whole landscape across runs instead.
+const MAX_WEB_USES_PER_PASS = 12;
 const SCOUT_CALL_TIMEOUT_MS = 600_000;
-// Concurrency costs latency: 5 concurrent passes → 3 finished, 6 → 2 finished.
-// Run a rotating subset per invocation so the passes that run actually complete.
 const PASSES_PER_RUN = 3;
 
 // Each pass owns one slice of the landscape the system prompt defines. Together
@@ -205,7 +210,7 @@ function buildUserMessage(material: MaterialRow, focus: string): string {
   parts.push(`THIS RUN'S SCOPE — search for these suppliers only: ${focus}`);
   parts.push("");
   parts.push(
-    "Other buckets are covered by parallel runs, so do not spend searches on them. Return every supplier you find inside your scope (aim for 30+), applying all classification and field rules from the system prompt."
+    "Other buckets are covered by parallel runs, so do not spend searches on them. Your search budget is small, so make each search wide and harvest every supplier named on the result pages you get (aim for 20+), applying all classification and field rules from the system prompt."
   );
   return parts.join("\n");
 }
