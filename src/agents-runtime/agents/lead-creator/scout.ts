@@ -36,6 +36,9 @@ const URL_PROBE_TIMEOUT_MS = 5_000;
 // probing and inserts — not to be divided between passes.
 const MAX_WEB_USES_PER_PASS = 22;
 const SCOUT_CALL_TIMEOUT_MS = 600_000;
+// Concurrency costs latency: 5 concurrent passes → 3 finished, 6 → 2 finished.
+// Run a rotating subset per invocation so the passes that run actually complete.
+const PASSES_PER_RUN = 3;
 
 // Each pass owns one slice of the landscape the system prompt defines. Together
 // they cover all four buckets; overlap is harmless (merge dedups by host).
@@ -292,23 +295,41 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
     return list;
   }
 
-  const settled = await Promise.allSettled(SCOUT_PASSES.map(runPass));
+  // Run a rotating SLICE of the passes per invocation, not all of them. Measured
+  // in prod: 5 concurrent passes → 3 finished, 6 concurrent → 2 finished, so
+  // per-pass latency degrades with concurrency (shared web_search throughput).
+  // Fewer at a time all complete, and breadth still accumulates across runs
+  // because excludeHosts means each scout only adds hosts we don't already have.
+  // The slice rotates hourly, so successive scouts of a material (6-12h apart)
+  // cover different buckets.
+  const offset =
+    (Array.from(material.id).reduce((a, ch) => a + ch.charCodeAt(0), 0) +
+      Math.floor(Date.now() / 3_600_000)) %
+    SCOUT_PASSES.length;
+  const slice = Array.from(
+    { length: PASSES_PER_RUN },
+    (_, i) => SCOUT_PASSES[(offset + i) % SCOUT_PASSES.length]
+  );
+  await log(`scout: running passes ${slice.map((p) => p.key).join(", ")} for ${matLabel}`, {
+    material_id: material.id,
+  });
+  const settled = await Promise.allSettled(slice.map(runPass));
   const suppliers: ScoutSupplier[] = [];
   const failures: string[] = [];
   settled.forEach((r, i) => {
     if (r.status === "fulfilled") suppliers.push(...r.value);
-    else failures.push(`${SCOUT_PASSES[i].key}: ${r.reason?.message ?? r.reason}`);
+    else failures.push(`${slice[i].key}: ${r.reason?.message ?? r.reason}`);
   });
   if (failures.length) {
-    await log(`scout: ${failures.length}/${SCOUT_PASSES.length} passes failed for ${matLabel} — ${failures.join("; ")}`, {
+    await log(`scout: ${failures.length}/${slice.length} passes failed for ${matLabel} — ${failures.join("; ")}`, {
       material_id: material.id, level: "warn",
     });
   }
   // All passes down means the scout is broken (model/timeout/key), not that the
   // market is empty. Throw so the caller records a hard failure and retries next
   // window instead of banking a "0 new suppliers" result and backing off.
-  if (failures.length === SCOUT_PASSES.length) {
-    throw new Error(`all ${SCOUT_PASSES.length} scout passes failed: ${failures.join("; ")}`);
+  if (failures.length === slice.length) {
+    throw new Error(`all ${slice.length} scout passes failed: ${failures.join("; ")}`);
   }
 
   // Normalize, validate, dedup by host, drop excluded hosts.
