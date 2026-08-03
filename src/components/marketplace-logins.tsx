@@ -2,11 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { cn, relativeTime } from "@/lib/utils";
-import {
-  createMarketplaceAccount,
-  updateMarketplaceAccount,
-  deleteMarketplaceAccount,
-} from "@/app/actions/marketplace-accounts";
+import { assignMarketplaceAccount } from "@/app/actions/marketplace-accounts";
 
 export type MarketplaceAccount = {
   id: string;
@@ -23,7 +19,37 @@ export type MarketplaceAccount = {
   created_at: string;
 };
 
-export type SupplierOption = { id: string; name: string };
+// One login as the validation form edits it. Mirrors a marketplace_accounts row;
+// rows without an id have not been saved yet.
+export type AccountDraft = {
+  key: string;
+  id?: string;
+  host: string;
+  signupEmail: string;
+  password: string;
+  status: string;
+  createdBy: string | null;
+  createdByEmail: string | null;
+  lastError: string | null;
+  lastLoginAt: string | null;
+  verifiedAt: string | null;
+};
+
+export function toAccountDrafts(accounts: MarketplaceAccount[]): AccountDraft[] {
+  return accounts.map((a) => ({
+    key: a.id,
+    id: a.id,
+    host: a.host,
+    signupEmail: a.signup_email ?? "",
+    password: a.password ?? "",
+    status: a.status,
+    createdBy: a.created_by,
+    createdByEmail: a.created_by_email,
+    lastError: a.last_error,
+    lastLoginAt: a.last_login_at,
+    verifiedAt: a.verified_at,
+  }));
+}
 
 // Lifecycle → badge styling + human label. Mirrors the marketplace_accounts
 // status column the provision/pull scripts write.
@@ -55,15 +81,15 @@ function StatusBadge({ status }: { status: string }) {
 
 // Who created the credentials: the fleet, or a named operator. Ops-entered
 // logins are the ones a human can vouch for, so the distinction is worth a chip.
-function OriginBadge({ account }: { account: MarketplaceAccount }) {
-  const byOps = account.created_by === "ops";
+function OriginBadge({ createdBy, createdByEmail }: { createdBy: string | null; createdByEmail: string | null }) {
+  const byOps = createdBy === "ops";
   return (
     <span
       className={cn(
         "inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ring-1",
         byOps ? "bg-violet-500/15 text-violet-600 ring-violet-500/30" : "bg-sky-500/15 text-sky-600 ring-sky-500/30"
       )}
-      title={byOps ? `Added by ${account.created_by_email ?? "an ops operator"}` : "Auto-created by the price-pull agent"}
+      title={byOps ? `Added by ${createdByEmail ?? "an ops operator"}` : "Auto-created by the price-pull agent"}
     >
       {byOps ? "Ops" : "Agent"}
     </span>
@@ -113,373 +139,204 @@ function Secret({ value }: { value: string | null }) {
 const inputCls =
   "h-7 w-full rounded-md border border-input bg-transparent px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
-// Add / edit one login. `supplierOptions` renders a supplier picker (org-wide
-// panel); omit it when the form is already scoped to one supplier's card.
-function AccountForm({
-  orgId,
-  account,
-  supplierProfileId,
-  supplierOptions,
-  onDone,
+let draftSeq = 0;
+
+// Marketplace access as a step of supplier validation: the logins live in the
+// profile form and are saved by the card's own Edit → Save, not a side panel.
+export function MarketplaceAccessFields({
+  rows,
+  editing,
+  defaultHost,
+  onChange,
 }: {
-  orgId: string;
-  account?: MarketplaceAccount;
-  supplierProfileId?: string | null;
-  supplierOptions?: SupplierOption[];
-  onDone: () => void;
+  rows: AccountDraft[];
+  editing: boolean;
+  defaultHost: string;
+  onChange: (rows: AccountDraft[]) => void;
 }) {
-  const [host, setHost] = useState(account?.host ?? "");
-  const [email, setEmail] = useState(account?.signup_email ?? "");
-  const [password, setPassword] = useState(account?.password ?? "");
-  const [status, setStatus] = useState(account?.status ?? "active");
-  const [supplier, setSupplier] = useState(account?.supplier_profile_id ?? supplierProfileId ?? "");
-  const [error, setError] = useState<string | null>(null);
-  const [pending, startTransition] = useTransition();
-
-  function submit() {
-    setError(null);
-    startTransition(async () => {
-      const payload = { host, signupEmail: email, password, status, supplierProfileId: supplier || null };
-      const res = account
-        ? await updateMarketplaceAccount(account.id, orgId, payload)
-        : await createMarketplaceAccount(orgId, payload);
-      if (res.ok) onDone();
-      else setError(res.error ?? "save failed");
-    });
+  function patch(key: string, field: keyof AccountDraft, value: string) {
+    onChange(rows.map((r) => (r.key === key ? { ...r, [field]: value } : r)));
   }
-
-  return (
-    <div className="space-y-2 rounded-lg border border-border bg-secondary/40 p-3">
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-4">
-        <label className="space-y-0.5">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Marketplace site</span>
-          <input className={inputCls} value={host} onChange={(e) => setHost(e.target.value)} placeholder="knowde.com" />
-        </label>
-        <label className="space-y-0.5">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Account email</span>
-          <input className={inputCls} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="purchasing@client.com" />
-        </label>
-        <label className="space-y-0.5">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Password</span>
-          <input className={inputCls} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="account password" />
-        </label>
-        <label className="space-y-0.5">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Status</span>
-          <select className={inputCls} value={status} onChange={(e) => setStatus(e.target.value)}>
-            {OPS_STATUS_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-            {!OPS_STATUS_OPTIONS.some((o) => o.value === status) && (
-              <option value={status}>{STATUS[status]?.label ?? status}</option>
-            )}
-          </select>
-        </label>
-      </div>
-      {supplierOptions && (
-        <label className="block space-y-0.5">
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Supplier (optional)</span>
-          <select className={inputCls} value={supplier} onChange={(e) => setSupplier(e.target.value)}>
-            <option value="">Not linked to a supplier</option>
-            {supplierOptions.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      {error && <p className="text-xs text-destructive">{error}</p>}
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={submit}
-          disabled={pending}
-          className="rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground disabled:opacity-50"
-        >
-          {pending ? "Saving..." : account ? "Save login" : "Add login"}
-        </button>
-        <button
-          type="button"
-          onClick={onDone}
-          className="rounded-md px-2.5 py-1 text-xs text-muted-foreground ring-1 ring-border hover:bg-secondary"
-        >
-          Cancel
-        </button>
-        <span className="text-[11px] text-muted-foreground">
-          Saved credentials are visible to ops and used by the price-pull agent to log in.
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function DeleteButton({ accountId, orgId }: { accountId: string; orgId: string }) {
-  const [confirming, setConfirming] = useState(false);
-  const [pending, startTransition] = useTransition();
-  if (!confirming) {
-    return (
-      <button
-        type="button"
-        onClick={() => setConfirming(true)}
-        className="rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground ring-1 ring-border hover:bg-secondary hover:text-destructive"
-      >
-        Remove
-      </button>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1">
-      <button
-        type="button"
-        disabled={pending}
-        onClick={() => startTransition(async () => { await deleteMarketplaceAccount(accountId, orgId); })}
-        className="rounded px-1.5 py-0.5 text-[10px] font-medium text-destructive ring-1 ring-destructive/40 hover:bg-destructive/10"
-      >
-        {pending ? "..." : "Confirm"}
-      </button>
-      <button
-        type="button"
-        onClick={() => setConfirming(false)}
-        className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground ring-1 ring-border"
-      >
-        No
-      </button>
-    </span>
-  );
-}
-
-// Compact list + add form for a single marketplace supplier, rendered inside its
-// Supplier Validation card.
-export function SupplierMarketplaceLogins({
-  accounts,
-  orgId,
-  supplierProfileId,
-  canAct,
-}: {
-  accounts: MarketplaceAccount[];
-  orgId: string;
-  supplierProfileId: string;
-  canAct: boolean;
-}) {
-  const [adding, setAdding] = useState(false);
-  const [editing, setEditing] = useState<string | null>(null);
 
   return (
     <div className="mt-4 border-t pt-3">
-      <div className="mb-2 flex items-center justify-between">
-        <h4 className="text-xs uppercase tracking-wider font-semibold text-muted-foreground">Marketplace Account Logins</h4>
-        {canAct && !adding && (
+      <div className="mb-2 flex items-baseline gap-2">
+        <h4 className="text-xs uppercase tracking-wider font-semibold text-muted-foreground">Marketplace Access</h4>
+        <span className="text-[11px] text-muted-foreground">
+          Account used to see this marketplace&apos;s gated pricing. Add one per login the team holds.
+        </span>
+      </div>
+
+      {!editing && rows.length === 0 && (
+        <p className="text-sm text-muted-foreground italic">
+          No account on this marketplace yet{" "}
+          <span className="not-italic">— use Edit to record the email and password of one.</span>
+        </p>
+      )}
+
+      {!editing && rows.length > 0 && (
+        <div className="space-y-1.5">
+          {rows.map((r) => (
+            <div key={r.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+              <a href={`https://${r.host}`} target="_blank" rel="noopener noreferrer" className="font-medium hover:underline">
+                {r.host}
+              </a>
+              <span className="inline-flex items-center gap-1.5 text-foreground">
+                {r.signupEmail || "—"}
+                {r.signupEmail && <CopyButton value={r.signupEmail} label="email" />}
+              </span>
+              <Secret value={r.password} />
+              <StatusBadge status={r.status} />
+              <OriginBadge createdBy={r.createdBy} createdByEmail={r.createdByEmail} />
+              {r.createdBy === "ops" && r.createdByEmail && (
+                <span className="text-[11px] text-muted-foreground">{r.createdByEmail}</span>
+              )}
+              <span className="text-[11px] text-muted-foreground">
+                {r.lastLoginAt
+                  ? `last login ${relativeTime(r.lastLoginAt)}`
+                  : r.verifiedAt
+                    ? `confirmed ${relativeTime(r.verifiedAt)}`
+                    : ""}
+              </span>
+              {r.status === "failed" && r.lastError && (
+                <span className="w-full text-[11px] text-muted-foreground">{r.lastError}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {editing && (
+        <div className="space-y-2">
+          {rows.map((r) => (
+            <div key={r.key} className="grid grid-cols-1 items-end gap-2 md:grid-cols-[1fr_1.4fr_1fr_1fr_auto]">
+              <label className="space-y-0.5">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Site</span>
+                <input className={inputCls} value={r.host} onChange={(e) => patch(r.key, "host", e.target.value)} placeholder="knowde.com" />
+              </label>
+              <label className="space-y-0.5">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Account email</span>
+                <input className={inputCls} value={r.signupEmail} onChange={(e) => patch(r.key, "signupEmail", e.target.value)} placeholder="purchasing@client.com" />
+              </label>
+              <label className="space-y-0.5">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Password</span>
+                <input className={inputCls} value={r.password} onChange={(e) => patch(r.key, "password", e.target.value)} placeholder="account password" />
+              </label>
+              <label className="space-y-0.5">
+                <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Status</span>
+                <select className={inputCls} value={r.status} onChange={(e) => patch(r.key, "status", e.target.value)}>
+                  {OPS_STATUS_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                  {!OPS_STATUS_OPTIONS.some((o) => o.value === r.status) && (
+                    <option value={r.status}>{STATUS[r.status]?.label ?? r.status}</option>
+                  )}
+                </select>
+              </label>
+              <div className="flex items-center gap-2 pb-0.5">
+                <OriginBadge createdBy={r.createdBy} createdByEmail={r.createdByEmail} />
+                <button
+                  type="button"
+                  onClick={() => onChange(rows.filter((x) => x.key !== r.key))}
+                  className="rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground ring-1 ring-border hover:bg-secondary hover:text-destructive"
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+          ))}
           <button
             type="button"
-            onClick={() => setAdding(true)}
+            onClick={() =>
+              onChange([
+                ...rows,
+                {
+                  key: `new-${draftSeq++}`,
+                  host: defaultHost,
+                  signupEmail: "",
+                  password: "",
+                  status: "active",
+                  createdBy: "ops",
+                  createdByEmail: null,
+                  lastError: null,
+                  lastLoginAt: null,
+                  verifiedAt: null,
+                },
+              ])
+            }
             className="rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground ring-1 ring-border hover:bg-secondary hover:text-foreground"
           >
             + Add login
           </button>
-        )}
-      </div>
-      {accounts.length === 0 && !adding && (
-        <p className="text-sm text-muted-foreground italic">No account created on this marketplace yet.</p>
-      )}
-      <div className="space-y-2">
-        {accounts.map((a) =>
-          editing === a.id ? (
-            <AccountForm key={a.id} orgId={orgId} account={a} onDone={() => setEditing(null)} />
-          ) : (
-            <div key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-              <a href={`https://${a.host}`} target="_blank" rel="noopener noreferrer" className="font-medium hover:underline">
-                {a.host}
-              </a>
-              <span className="inline-flex items-center gap-1.5 text-foreground">
-                {a.signup_email ?? "—"}
-                {a.signup_email && <CopyButton value={a.signup_email} label="email" />}
-              </span>
-              <Secret value={a.password} />
-              <StatusBadge status={a.status} />
-              <OriginBadge account={a} />
-              {a.created_by === "ops" && a.created_by_email && (
-                <span className="text-[11px] text-muted-foreground">{a.created_by_email}</span>
-              )}
-              {canAct && (
-                <span className="inline-flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setEditing(a.id)}
-                    className="rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground ring-1 ring-border hover:bg-secondary hover:text-foreground"
-                  >
-                    Edit
-                  </button>
-                  <DeleteButton accountId={a.id} orgId={orgId} />
-                </span>
-              )}
-            </div>
-          )
-        )}
-      </div>
-      {adding && (
-        <div className="mt-2">
-          <AccountForm orgId={orgId} supplierProfileId={supplierProfileId} onDone={() => setAdding(false)} />
         </div>
       )}
     </div>
   );
 }
 
-// Org-wide roll-up at the top of the Supplier Validation tab: every login for
-// this client, agent-provisioned or ops-entered, including the ones not tied to
-// a supplier profile.
-export function MarketplaceLogins({
+// Exception strip: agent-provisioned logins whose host matched no supplier in
+// this client's list, so their credentials aren't stranded off-screen. Absent
+// once every login sits on a supplier.
+export function UnlinkedMarketplaceLogins({
   accounts,
   orgId,
-  canAct = false,
-  supplierOptions = [],
+  canAct,
+  supplierOptions,
 }: {
   accounts: MarketplaceAccount[];
-  orgId?: string;
-  canAct?: boolean;
-  supplierOptions?: SupplierOption[];
+  orgId: string;
+  canAct: boolean;
+  supplierOptions: { id: string; name: string }[];
 }) {
-  const [open, setOpen] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [editing, setEditing] = useState<string | null>(null);
-  if (!accounts.length && !canAct) return null;
-
-  const supplierName = new Map(supplierOptions.map((s) => [s.id, s.name]));
-  const active = accounts.filter((a) => a.status === "active").length;
-  const verifying = accounts.filter((a) => a.status === "verifying").length;
-  const cols = canAct && orgId ? 8 : 7;
+  const [pending, startTransition] = useTransition();
+  const [choice, setChoice] = useState<Record<string, string>>({});
+  if (!accounts.length) return null;
 
   return (
-    <div className="rounded-xl border border-border bg-card/50">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
-      >
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-foreground">Marketplace Logins</span>
-          <span className="text-xs text-muted-foreground">
-            {accounts.length} account{accounts.length === 1 ? "" : "s"}
-            {active > 0 && <span className="text-emerald-600"> · {active} active</span>}
-            {verifying > 0 && <span className="text-amber-600"> · {verifying} awaiting confirm</span>}
-          </span>
-        </div>
-        <span className="text-xs text-muted-foreground">{open ? "Hide" : "Show"}</span>
-      </button>
-
-      {open && (
-        <div className="border-t border-border px-4 py-3">
-          <div className="mb-3 flex items-start justify-between gap-3">
-            <p className="text-xs text-muted-foreground">
-              Accounts used to reach pricing on login-gated marketplaces, whether the agent created them or ops did.
-              Where a login shows &quot;Awaiting confirm&quot;, click the confirmation link in the email sent to the
-              purchasing inbox to activate it. Credentials are here so ops can log in manually if needed.
-            </p>
-            {canAct && orgId && !adding && (
+    <div className="rounded-lg border border-amber-300/60 bg-amber-500/10 px-4 py-3 space-y-2">
+      <div className="text-xs uppercase tracking-wider font-semibold text-amber-800 dark:text-amber-300">
+        {accounts.length} marketplace login{accounts.length === 1 ? "" : "s"} not matched to a supplier
+      </div>
+      <p className="text-xs text-muted-foreground">
+        The agent created these to reach gated pricing, but their site doesn&apos;t match any supplier below. Pick the
+        supplier each belongs to and it moves onto that supplier&apos;s validation card.
+      </p>
+      {accounts.map((a) => (
+        <div key={a.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+          <a href={`https://${a.host}`} target="_blank" rel="noopener noreferrer" className="font-medium hover:underline">
+            {a.host}
+          </a>
+          <span className="text-foreground">{a.signup_email ?? "—"}</span>
+          <Secret value={a.password} />
+          <StatusBadge status={a.status} />
+          {canAct && (
+            <span className="inline-flex items-center gap-1.5">
+              <select
+                className="h-7 rounded-md border border-input bg-transparent px-2 text-sm"
+                value={choice[a.id] ?? ""}
+                onChange={(e) => setChoice((c) => ({ ...c, [a.id]: e.target.value }))}
+              >
+                <option value="">Assign to supplier...</option>
+                {supplierOptions.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
               <button
                 type="button"
-                onClick={() => setAdding(true)}
-                className="shrink-0 rounded px-2 py-1 text-[11px] font-medium text-muted-foreground ring-1 ring-border hover:bg-secondary hover:text-foreground"
+                disabled={pending || !choice[a.id]}
+                onClick={() => startTransition(async () => { await assignMarketplaceAccount(a.id, orgId, choice[a.id]); })}
+                className="rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground ring-1 ring-border hover:bg-secondary hover:text-foreground disabled:opacity-40"
               >
-                + Add login
+                Assign
               </button>
-            )}
-          </div>
-          {adding && orgId && (
-            <div className="mb-3">
-              <AccountForm orgId={orgId} supplierOptions={supplierOptions} onDone={() => setAdding(false)} />
-            </div>
-          )}
-          {accounts.length === 0 ? (
-            <p className="text-sm text-muted-foreground italic">No marketplace logins saved for this client yet.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border text-left text-[11px] uppercase tracking-wider text-muted-foreground">
-                    <th className="py-1.5 pr-3 font-medium">Marketplace</th>
-                    <th className="py-1.5 pr-3 font-medium">Supplier</th>
-                    <th className="py-1.5 pr-3 font-medium">Email</th>
-                    <th className="py-1.5 pr-3 font-medium">Password</th>
-                    <th className="py-1.5 pr-3 font-medium">Status</th>
-                    <th className="py-1.5 pr-3 font-medium">Added by</th>
-                    <th className="py-1.5 pr-3 font-medium">Last login</th>
-                    {canAct && orgId && <th className="py-1.5 font-medium" />}
-                  </tr>
-                </thead>
-                <tbody>
-                  {accounts.map((a) =>
-                    editing === a.id && orgId ? (
-                      <tr key={a.id}>
-                        <td colSpan={cols} className="py-2">
-                          <AccountForm orgId={orgId} account={a} supplierOptions={supplierOptions} onDone={() => setEditing(null)} />
-                        </td>
-                      </tr>
-                    ) : (
-                      <tr key={a.id} className="border-b border-border/50 align-top">
-                        <td className="py-2 pr-3">
-                          <a href={`https://${a.host}`} target="_blank" rel="noopener noreferrer" className="font-medium text-foreground hover:underline">
-                            {a.host}
-                          </a>
-                        </td>
-                        <td className="py-2 pr-3 text-xs text-muted-foreground">
-                          {(a.supplier_profile_id && supplierName.get(a.supplier_profile_id)) || "—"}
-                        </td>
-                        <td className="py-2 pr-3">
-                          {a.signup_email ? (
-                            <span className="inline-flex items-center gap-1.5">
-                              <span className="text-foreground">{a.signup_email}</span>
-                              <CopyButton value={a.signup_email} label="email" />
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </td>
-                        <td className="py-2 pr-3">
-                          <Secret value={a.password} />
-                        </td>
-                        <td className="py-2 pr-3">
-                          <StatusBadge status={a.status} />
-                          {a.status === "failed" && a.last_error && (
-                            <div className="mt-1 max-w-[16rem] text-[11px] text-muted-foreground">{a.last_error}</div>
-                          )}
-                        </td>
-                        <td className="py-2 pr-3">
-                          <OriginBadge account={a} />
-                          {a.created_by === "ops" && a.created_by_email && (
-                            <div className="mt-0.5 max-w-[12rem] truncate text-[11px] text-muted-foreground" title={a.created_by_email}>
-                              {a.created_by_email}
-                            </div>
-                          )}
-                        </td>
-                        <td className="py-2 pr-3 text-xs text-muted-foreground">
-                          {a.last_login_at ? relativeTime(a.last_login_at) : a.verified_at ? `confirmed ${relativeTime(a.verified_at)}` : "—"}
-                        </td>
-                        {canAct && orgId && (
-                          <td className="py-2">
-                            <span className="inline-flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => setEditing(a.id)}
-                                className="rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground ring-1 ring-border hover:bg-secondary hover:text-foreground"
-                              >
-                                Edit
-                              </button>
-                              <DeleteButton accountId={a.id} orgId={orgId} />
-                            </span>
-                          </td>
-                        )}
-                      </tr>
-                    )
-                  )}
-                </tbody>
-              </table>
-            </div>
+            </span>
           )}
         </div>
-      )}
+      ))}
     </div>
   );
 }

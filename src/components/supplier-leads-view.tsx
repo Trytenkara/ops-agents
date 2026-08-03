@@ -12,7 +12,8 @@ import { LeadRichRow, LeadRichHeaders, leadRichColSpan, LeadMatchBadge, LeadSour
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
 import { profileCompleteness, type SupplierProfile } from "@/lib/supplier-profiles";
-import type { MarketplaceAccount } from "@/components/marketplace-logins";
+import { UnlinkedMarketplaceLogins, type MarketplaceAccount } from "@/components/marketplace-logins";
+import { normalizeHost } from "@/lib/marketplace-accounts";
 import { deriveMatchTier } from "@/lib/lead-match-tier";
 import { leadMarketKind } from "@/lib/lead-market";
 import { relativeTime } from "@/lib/utils";
@@ -24,6 +25,31 @@ interface SupplierGroup {
   leads: any[];
   marketKind: "marketplace" | "direct" | null;
   latestLead: string | null;
+  accounts: MarketplaceAccount[];
+  marketplaceHost: string;
+}
+
+// Sites this supplier is known by, so an agent-provisioned login (keyed only by
+// host) lands on the right validation card.
+function hostsFor(group: SupplierGroup): string[] {
+  const urls: string[] = [];
+  for (const lead of group.leads) {
+    const p = lead.payload ?? {};
+    urls.push(p.supplier_website, p.source_url, p.marketplace_pull?.source_url, p.enrichment?.contact?.contact_url);
+  }
+  const fromNotes = group.profile?.generated_notes?.match(/https?:\/\/\S+/g) ?? [];
+  urls.push(...fromNotes);
+  const hosts = urls.filter(Boolean).map((u: string) => normalizeHost(u)).filter(Boolean);
+  return Array.from(new Set(hosts));
+}
+
+// Fallback when no lead carried a URL: "scentedexpressions.com" ↔ "Scented
+// Expressions". Long enough to be a real signal, not a two-letter collision.
+function nameMatchesHost(supplierName: string, host: string): boolean {
+  const slug = supplierName.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const root = host.split(".")[0].replace(/[^a-z0-9]/g, "");
+  if (slug.length < 6 || root.length < 6) return slug === root && slug.length > 0;
+  return slug === root || slug.startsWith(root) || root.startsWith(slug);
 }
 
 const SORT_OPTIONS = [
@@ -68,16 +94,6 @@ export function SupplierLeadsView({
   const [seedResult, setSeedResult] = useState<string | null>(null);
   const [showAddSupplier, setShowAddSupplier] = useState(false);
 
-  // Marketplace logins keyed by the supplier profile they were recorded against,
-  // so each marketplace supplier's card shows only its own accounts.
-  const accountsByProfile = new Map<string, MarketplaceAccount[]>();
-  for (const a of marketplaceAccounts) {
-    if (!a.supplier_profile_id) continue;
-    const list = accountsByProfile.get(a.supplier_profile_id) ?? [];
-    list.push(a);
-    accountsByProfile.set(a.supplier_profile_id, list);
-  }
-
   const profileBySupplier = new Map<string, SupplierProfile>();
   const profileByName = new Map<string, SupplierProfile>();
   for (const p of profiles) {
@@ -102,6 +118,8 @@ export function SupplierLeadsView({
         leads: [],
         marketKind: mk === "marketplace" ? "marketplace" : mk === "direct" ? "direct" : null,
         latestLead: null,
+        accounts: [],
+        marketplaceHost: "",
       };
       groupMap.set(key, group);
     }
@@ -122,11 +140,29 @@ export function SupplierLeadsView({
         leads: [],
         marketKind: p.supplier_type,
         latestLead: null,
+        accounts: [],
+        marketplaceHost: "",
       });
     }
   }
 
-  let groups = Array.from(groupMap.values());
+  // Attach each login to its supplier: an explicit link first, then the host it
+  // was created for. Whatever matches nothing surfaces as an exception rather
+  // than disappearing.
+  const allGroups = Array.from(groupMap.values());
+  const hostIndex = allGroups.map((g) => ({ group: g, hosts: hostsFor(g) }));
+  for (const entry of hostIndex) entry.group.marketplaceHost = entry.hosts[0] ?? "";
+  const unlinkedAccounts: MarketplaceAccount[] = [];
+  for (const a of marketplaceAccounts) {
+    const owner =
+      (a.supplier_profile_id && allGroups.find((g) => g.profile?.id === a.supplier_profile_id)) ||
+      hostIndex.find((e) => e.hosts.includes(a.host))?.group ||
+      allGroups.find((g) => nameMatchesHost(g.supplierName, a.host));
+    if (owner) owner.accounts.push(a);
+    else unlinkedAccounts.push(a);
+  }
+
+  let groups = allGroups;
 
   // Filters
   if (search) {
@@ -229,6 +265,15 @@ export function SupplierLeadsView({
 
   return (
     <div className="space-y-4">
+      <UnlinkedMarketplaceLogins
+        accounts={unlinkedAccounts}
+        orgId={orgId}
+        canAct={canAct}
+        supplierOptions={allGroups
+          .filter((g) => g.profile)
+          .map((g) => ({ id: g.profile!.id, name: g.supplierName }))
+          .sort((a, b) => a.name.localeCompare(b.name))}
+      />
       {/* Summary bar */}
       <div className="flex items-center gap-4 text-sm flex-wrap">
         <span className="text-muted-foreground">
@@ -379,7 +424,8 @@ export function SupplierLeadsView({
                       orgId={orgId}
                       leadCount={g.leads.length}
                       canAct={canAct}
-                      marketplaceAccounts={accountsByProfile.get(g.profile.id) ?? []}
+                      marketplaceAccounts={g.accounts}
+                      marketplaceHost={g.marketplaceHost || g.accounts[0]?.host || ""}
                     />
                   ) : (
                     <div className="rounded-lg border border-dashed p-4 text-center space-y-2">

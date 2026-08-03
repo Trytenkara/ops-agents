@@ -6,7 +6,7 @@ import { LeadsList } from "@/components/leads-list";
 import { MarketplacePricing } from "@/components/marketplace-pricing";
 import { OutreachTrackerPanel } from "@/components/outreach-tracker-panel";
 import { SupplierLeadsView } from "@/components/supplier-leads-view";
-import { MarketplaceLogins, type MarketplaceAccount } from "@/components/marketplace-logins";
+import type { MarketplaceAccount } from "@/components/marketplace-logins";
 import { leadMarketKind, isOperatorDropped } from "@/components/lead-rich-row";
 import type { OutreachTracker } from "@/lib/outreach-tracker";
 import type { RunStat } from "@/components/agent-runs-strip";
@@ -216,12 +216,6 @@ export function LeadsTabs({
 
       {tab === "suppliers" && orgId && (
         <div className="space-y-4">
-          <MarketplaceLogins
-            accounts={marketplaceAccounts}
-            orgId={orgId}
-            canAct={canAct}
-            supplierOptions={supplierProfiles.map((p) => ({ id: p.id, name: p.supplier_name }))}
-          />
           <SupplierLeadsView
             rows={visibleRows}
             profiles={supplierProfiles}

@@ -6,105 +6,98 @@ import { normalizeHost, deriveSlug } from "@/lib/marketplace-accounts";
 interface ActionResult {
   ok: boolean;
   error?: string;
-  accountId?: string;
 }
 
-export interface MarketplaceAccountInput {
+export interface MarketplaceAccountDraft {
+  id?: string;
   host: string;
   signupEmail: string;
   password: string;
-  status?: string;
-  supplierProfileId?: string | null;
+  status: string;
 }
 
-export async function createMarketplaceAccount(
+// The Supplier Validation card saves a supplier's whole login set with the rest
+// of the profile, so this takes the desired end state: rows with an id are
+// updated, rows without one are created as ops-entered, and anything already
+// linked to this supplier but absent from the list is removed.
+export async function saveSupplierMarketplaceAccounts(
   orgId: string,
-  input: MarketplaceAccountInput
+  supplierProfileId: string,
+  rows: MarketplaceAccountDraft[]
 ): Promise<ActionResult> {
   const ctx = await assertOrgWriteAccess(orgId);
   if ("error" in ctx) return { ok: false, error: ctx.error };
 
-  const host = normalizeHost(input.host);
-  const signupEmail = input.signupEmail.trim();
-  const password = input.password;
-  if (!host) return { ok: false, error: "marketplace site is required" };
-  if (!signupEmail) return { ok: false, error: "account email is required" };
-  if (!password) return { ok: false, error: "password is required" };
+  const cleaned = rows
+    .map((r) => ({
+      id: r.id,
+      host: normalizeHost(r.host),
+      signup_email: r.signupEmail.trim(),
+      password: r.password,
+      status: r.status,
+    }))
+    .filter((r) => r.host || r.signup_email || r.password);
 
-  const { data, error } = await ctx.admin
+  const incomplete = cleaned.find((r) => !r.host || !r.signup_email || !r.password);
+  if (incomplete) return { ok: false, error: "each login needs a site, an account email, and a password" };
+
+  const { data: existing } = await ctx.admin
     .from("marketplace_accounts")
-    .insert({
-      org_id: orgId,
-      supplier_profile_id: input.supplierProfileId ?? null,
-      host,
-      slug: deriveSlug(host),
-      signup_email: signupEmail,
-      password,
-      // Ops only records a login once it exists and works, so it starts usable
-      // rather than in the agent's signup lifecycle.
-      status: input.status ?? "active",
-      created_by: "ops",
-      created_by_email: ctx.session.email,
-      verified_at: new Date().toISOString(),
-    })
     .select("id")
-    .single();
+    .eq("org_id", orgId)
+    .eq("supplier_profile_id", supplierProfileId);
 
-  if (error) {
-    const dup = error.code === "23505";
-    return { ok: false, error: dup ? `${signupEmail} is already saved for ${host}` : error.message };
+  const keep = new Set(cleaned.map((r) => r.id).filter(Boolean));
+  const removed = (existing ?? []).map((r) => r.id).filter((id) => !keep.has(id));
+  if (removed.length) {
+    const { error } = await ctx.admin.from("marketplace_accounts").delete().in("id", removed).eq("org_id", orgId);
+    if (error) return { ok: false, error: error.message };
   }
-  revalidatePath("/work/orgs");
-  return { ok: true, accountId: data.id };
-}
 
-export async function updateMarketplaceAccount(
-  accountId: string,
-  orgId: string,
-  updates: Partial<MarketplaceAccountInput>
-): Promise<ActionResult> {
-  const ctx = await assertOrgWriteAccess(orgId);
-  if ("error" in ctx) return { ok: false, error: ctx.error };
+  for (const row of cleaned) {
+    const payload = {
+      host: row.host,
+      slug: deriveSlug(row.host),
+      signup_email: row.signup_email,
+      password: row.password,
+      status: row.status,
+      supplier_profile_id: supplierProfileId,
+    };
+    const { error } = row.id
+      ? await ctx.admin
+          .from("marketplace_accounts")
+          .update({ ...payload, updated_at: new Date().toISOString() })
+          .eq("id", row.id)
+          .eq("org_id", orgId)
+      : await ctx.admin.from("marketplace_accounts").insert({
+          ...payload,
+          org_id: orgId,
+          created_by: "ops",
+          created_by_email: ctx.session.email,
+          verified_at: new Date().toISOString(),
+        });
+    if (error) {
+      const dup = error.code === "23505";
+      return { ok: false, error: dup ? `${row.signup_email} is already saved for ${row.host}` : error.message };
+    }
+  }
 
-  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
-  if (updates.host !== undefined) {
-    const host = normalizeHost(updates.host);
-    if (!host) return { ok: false, error: "marketplace site is required" };
-    patch.host = host;
-    patch.slug = deriveSlug(host);
-  }
-  if (updates.signupEmail !== undefined) {
-    if (!updates.signupEmail.trim()) return { ok: false, error: "account email is required" };
-    patch.signup_email = updates.signupEmail.trim();
-  }
-  if (updates.password !== undefined) {
-    if (!updates.password) return { ok: false, error: "password is required" };
-    patch.password = updates.password;
-  }
-  if (updates.status !== undefined) patch.status = updates.status;
-  if (updates.supplierProfileId !== undefined) patch.supplier_profile_id = updates.supplierProfileId;
-
-  const { error } = await ctx.admin
-    .from("marketplace_accounts")
-    .update(patch)
-    .eq("id", accountId)
-    .eq("org_id", orgId);
-
-  if (error) {
-    const dup = error.code === "23505";
-    return { ok: false, error: dup ? "that email is already saved for this marketplace" : error.message };
-  }
   revalidatePath("/work/orgs");
   return { ok: true };
 }
 
-export async function deleteMarketplaceAccount(accountId: string, orgId: string): Promise<ActionResult> {
+// Attach an agent-provisioned login whose host didn't resolve to a supplier.
+export async function assignMarketplaceAccount(
+  accountId: string,
+  orgId: string,
+  supplierProfileId: string
+): Promise<ActionResult> {
   const ctx = await assertOrgWriteAccess(orgId);
   if ("error" in ctx) return { ok: false, error: ctx.error };
 
   const { error } = await ctx.admin
     .from("marketplace_accounts")
-    .delete()
+    .update({ supplier_profile_id: supplierProfileId, updated_at: new Date().toISOString() })
     .eq("id", accountId)
     .eq("org_id", orgId);
 

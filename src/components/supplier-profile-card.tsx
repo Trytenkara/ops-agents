@@ -6,7 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { saveSupplierProfile } from "@/app/actions/supplier-profiles";
-import { SupplierMarketplaceLogins, type MarketplaceAccount } from "@/components/marketplace-logins";
+import { MarketplaceAccessFields, toAccountDrafts, type AccountDraft, type MarketplaceAccount } from "@/components/marketplace-logins";
+import { saveSupplierMarketplaceAccounts } from "@/app/actions/marketplace-accounts";
 import type { SupplierProfile, SupplierProfileUpdate } from "@/lib/supplier-profiles";
 import { profileCompleteness } from "@/lib/supplier-profiles";
 
@@ -101,6 +102,7 @@ export function SupplierProfileCard({
   canAct,
   tenkara,
   marketplaceAccounts = [],
+  marketplaceHost = "",
 }: {
   profile: SupplierProfile;
   orgId: string;
@@ -108,11 +110,14 @@ export function SupplierProfileCard({
   canAct: boolean;
   tenkara?: { approval: string; qualified: boolean } | null;
   marketplaceAccounts?: MarketplaceAccount[];
+  marketplaceHost?: string;
 }) {
   const [profile, setProfile] = useState(initial);
   const [editing, setEditing] = useState(false);
   const [pending, startTransition] = useTransition();
   const [saved, setSaved] = useState(false);
+  const [accounts, setAccounts] = useState<AccountDraft[]>(() => toAccountDrafts(marketplaceAccounts));
+  const [error, setError] = useState<string | null>(null);
 
   const comp = profileCompleteness(profile);
   const status = STATUS_META[profile.approval_status] ?? STATUS_META.draft;
@@ -163,11 +168,25 @@ export function SupplierProfileCard({
         approval_status: profile.approval_status,
       };
       const res = await saveSupplierProfile(profile.id, orgId, updates);
-      if (res.ok) {
-        setEditing(false);
-        setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
+      if (!res.ok) {
+        setError(res.error ?? "save failed");
+        return;
       }
+      if (profile.supplier_type === "marketplace") {
+        const accountsRes = await saveSupplierMarketplaceAccounts(
+          orgId,
+          profile.id,
+          accounts.map((a) => ({ id: a.id, host: a.host, signupEmail: a.signupEmail, password: a.password, status: a.status }))
+        );
+        if (!accountsRes.ok) {
+          setError(accountsRes.error ?? "could not save the marketplace logins");
+          return;
+        }
+      }
+      setError(null);
+      setEditing(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
     });
   }
 
@@ -196,7 +215,7 @@ export function SupplierProfileCard({
             )}
             {editing && (
               <>
-                <Button variant="outline" size="sm" onClick={() => { setProfile(initial); setEditing(false); }}>
+                <Button variant="outline" size="sm" onClick={() => { setProfile(initial); setAccounts(toAccountDrafts(marketplaceAccounts)); setError(null); setEditing(false); }}>
                   Cancel
                 </Button>
                 <Button size="sm" onClick={handleSave} disabled={pending}>
@@ -322,15 +341,15 @@ export function SupplierProfileCard({
             )}
           </div>
         )}
-        {/* Where the supplier is a marketplace, ops needs the account it takes to
-            see gated pricing — several per site is normal (a buyer seat, a
-            reseller login), each tagged with who created it. */}
+        {/* Reaching a marketplace's gated pricing takes an account, so recording
+            it is a step of validating that supplier, not a side task. Several
+            per site is normal (a buyer seat, a reseller login). */}
         {profile.supplier_type === "marketplace" && (
-          <SupplierMarketplaceLogins
-            accounts={marketplaceAccounts}
-            orgId={orgId}
-            supplierProfileId={profile.id}
-            canAct={canAct}
+          <MarketplaceAccessFields
+            rows={accounts}
+            editing={editing}
+            defaultHost={marketplaceHost}
+            onChange={setAccounts}
           />
         )}
         {profile.generated_notes && (
@@ -339,6 +358,7 @@ export function SupplierProfileCard({
             <p className="text-sm text-muted-foreground">{profile.generated_notes}</p>
           </div>
         )}
+        {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
       </CardContent>
     </Card>
   );
