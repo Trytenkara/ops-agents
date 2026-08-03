@@ -221,8 +221,50 @@ function extractJson(text: string): any {
   const candidate = fenced ? fenced[1] : trimmed;
   const start = candidate.indexOf("{");
   const end = candidate.lastIndexOf("}");
-  if (start < 0 || end <= start) throw new Error("no JSON object found in model output");
-  return JSON.parse(candidate.slice(start, end + 1));
+  if (start < 0) throw new Error("no JSON object found in model output");
+  if (end > start) {
+    try {
+      return JSON.parse(candidate.slice(start, end + 1));
+    } catch {
+      // fall through to salvage
+    }
+  }
+  // A pass that runs out of output tokens leaves the array unterminated, which
+  // used to discard every supplier it had already written. Salvage the complete
+  // objects instead: scan for balanced top-level braces inside "suppliers".
+  const arrStart = candidate.indexOf("[", candidate.indexOf("suppliers"));
+  if (arrStart < 0) throw new Error("no JSON object found in model output");
+  const salvaged: any[] = [];
+  let depth = 0;
+  let objStart = -1;
+  let inStr = false;
+  let esc = false;
+  for (let i = arrStart; i < candidate.length; i++) {
+    const ch = candidate[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") {
+      if (depth === 0) objStart = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && objStart >= 0) {
+        try {
+          salvaged.push(JSON.parse(candidate.slice(objStart, i + 1)));
+        } catch {
+          // skip the one malformed object
+        }
+        objStart = -1;
+      }
+    }
+  }
+  if (!salvaged.length) throw new Error("no JSON object found in model output");
+  return { suppliers: salvaged };
 }
 
 function normalizeUrl(raw: string): string | null {
