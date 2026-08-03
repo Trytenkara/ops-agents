@@ -216,10 +216,16 @@ export function LeadsTabs({
 
       {tab === "suppliers" && orgId && (
         <div className="space-y-4">
-          <MarketplaceLogins accounts={marketplaceAccounts} />
+          <MarketplaceLogins
+            accounts={marketplaceAccounts}
+            orgId={orgId}
+            canAct={canAct}
+            supplierOptions={supplierProfiles.map((p) => ({ id: p.id, name: p.supplier_name }))}
+          />
           <SupplierLeadsView
             rows={visibleRows}
             profiles={supplierProfiles}
+            marketplaceAccounts={marketplaceAccounts}
             canAct={canAct}
             slug={slug}
             orgId={orgId}

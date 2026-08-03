@@ -1,5 +1,5 @@
-import type { SessionContext } from "@/lib/auth";
-import { hasAnyRole } from "@/lib/auth";
+import type { SessionContext, AppRole } from "@/lib/auth";
+import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 // Roles that see every org by default (no per-org assignment needed).
@@ -25,4 +25,20 @@ export async function getAssignedOrgIds(session: SessionContext): Promise<string
     .select("org_id")
     .eq("user_id", session.userId);
   return (data ?? []).map((r: any) => r.org_id as string);
+}
+
+const WRITE_ROLES: AppRole[] = ["admin", "ops_lead", "ops_operator"];
+
+// Gate for server actions that write org-scoped data: signed in, holds a write
+// role, and (unless global) is assigned to this org. Returns the session plus a
+// service-role client so callers don't re-create either.
+export async function assertOrgWriteAccess(orgId: string) {
+  const session = await getSession();
+  if (!session) return { error: "unauthenticated" as const };
+  if (!hasAnyRole(session, WRITE_ROLES)) return { error: "forbidden" as const };
+  if (!seesAllOrgs(session)) {
+    const assigned = await getAssignedOrgIds(session);
+    if (assigned !== null && !assigned.includes(orgId)) return { error: "forbidden" as const };
+  }
+  return { session, admin: createAdminClient() };
 }

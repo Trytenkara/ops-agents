@@ -16,6 +16,7 @@ import { getOrgOperatorPool, pickSupplierOperator, operatorBySupplier, getSuppli
 
 import { orgDisplayName } from "@/lib/org-display";
 import { getSupplierProfiles } from "@/lib/supplier-profiles";
+import { getMarketplaceAccounts } from "@/lib/marketplace-accounts";
 import { CasesSection } from "@/components/cases-section";
 import { loadOrgCases, caseCategory } from "@/lib/org-cases";
 import { AgentRunsStrip, type RunStat } from "@/components/agent-runs-strip";
@@ -241,14 +242,10 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   // Supplier profiles for the supplier-centric view (approval tracking)
   const supplierProfiles = await getSupplierProfiles(admin, org.id).catch(() => []);
 
-  // Auto-provisioned marketplace logins (host, credentials, lifecycle status) so
-  // ops can see/copy the account the fleet created to pull gated prices.
-  const { data: marketplaceAccountRows } = await admin
-    .from("marketplace_accounts")
-    .select("id, host, signup_email, password, status, last_error, verified_at, last_login_at, created_at")
-    .eq("org_id", org.id)
-    .order("created_at", { ascending: false });
-  const marketplaceAccounts = marketplaceAccountRows ?? [];
+  // Marketplace logins (host, credentials, lifecycle status, who created them) —
+  // both the accounts the fleet provisioned to pull gated prices and the ones
+  // ops entered by hand in the Supplier Validation tab.
+  const marketplaceAccounts = await getMarketplaceAccounts(admin, org.id).catch(() => []);
 
   // Client folders — for the client filter on the leads list.
   const [{ data: tagRows }, { data: orgClientRows }] = await Promise.all([

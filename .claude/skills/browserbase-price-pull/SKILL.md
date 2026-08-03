@@ -181,7 +181,7 @@ The standalone `--agentic` path (Stagehand act/observe + size-sweep) is supersed
 
 Gated marketplaces hide pricing behind a sign-in wall (Agent 05 returns `login_required`). This flow **creates a per-org account**, then logs in on a schedule and pulls prices for that org's gated leads.
 
-**Data model** — OA table `marketplace_accounts` (migration `0049`): one row per `(org_id, host)` with the client `signup_email`, generated `password`, and a `status` lifecycle: `pending → signing_up → verifying → active → (banned|failed)`. The client's purchasing email lives on `orgs.purchasing_email` (set per org; inbox auto-detection is a follow-up).
+**Data model** — OA table `marketplace_accounts` (migrations `0049`, `0071`): one row per `(org_id, host, signup_email)` with the client `signup_email`, generated `password`, and a `status` lifecycle: `pending → signing_up → verifying → active → (banned|failed)`. The client's purchasing email lives on `orgs.purchasing_email` (set per org; inbox auto-detection is a follow-up). A host can hold several accounts: `created_by` is `agent` (this skill) or `ops` (entered by an operator in the Control Room Supplier Validation tab, with `created_by_email` and an optional `supplier_profile_id` link). `getAccount(orgId, host)` returns the most usable row (active first), and `batch.mjs` logs in with every `active` account, ops-entered ones included.
 
 **Semi-auto verification** — signups use the client's *real* purchasing email, and the confirm-link email lands in the client's mailbox (which we can't read). So `signup.mjs` registers the account and opens a **case** ("click the confirm link"). A human clicks it once; then set the account `active` and `batch.mjs` pulls automatically from then on.
 

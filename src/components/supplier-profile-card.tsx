@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { saveSupplierProfile } from "@/app/actions/supplier-profiles";
+import { SupplierMarketplaceLogins, type MarketplaceAccount } from "@/components/marketplace-logins";
 import type { SupplierProfile, SupplierProfileUpdate } from "@/lib/supplier-profiles";
 import { profileCompleteness } from "@/lib/supplier-profiles";
 
@@ -99,12 +100,14 @@ export function SupplierProfileCard({
   leadCount,
   canAct,
   tenkara,
+  marketplaceAccounts = [],
 }: {
   profile: SupplierProfile;
   orgId: string;
   leadCount: number;
   canAct: boolean;
   tenkara?: { approval: string; qualified: boolean } | null;
+  marketplaceAccounts?: MarketplaceAccount[];
 }) {
   const [profile, setProfile] = useState(initial);
   const [editing, setEditing] = useState(false);
@@ -318,6 +321,17 @@ export function SupplierProfileCard({
               <p className="text-sm text-muted-foreground">{profile.notes}</p>
             )}
           </div>
+        )}
+        {/* Where the supplier is a marketplace, ops needs the account it takes to
+            see gated pricing — several per site is normal (a buyer seat, a
+            reseller login), each tagged with who created it. */}
+        {profile.supplier_type === "marketplace" && (
+          <SupplierMarketplaceLogins
+            accounts={marketplaceAccounts}
+            orgId={orgId}
+            supplierProfileId={profile.id}
+            canAct={canAct}
+          />
         )}
         {profile.generated_notes && (
           <div className="mt-4 border-t pt-3">

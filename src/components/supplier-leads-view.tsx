@@ -12,6 +12,7 @@ import { LeadRichRow, LeadRichHeaders, leadRichColSpan, LeadMatchBadge, LeadSour
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
 import { profileCompleteness, type SupplierProfile } from "@/lib/supplier-profiles";
+import type { MarketplaceAccount } from "@/components/marketplace-logins";
 import { deriveMatchTier } from "@/lib/lead-match-tier";
 import { leadMarketKind } from "@/lib/lead-market";
 import { relativeTime } from "@/lib/utils";
@@ -44,6 +45,7 @@ const STATUS_FILTER = [
 export function SupplierLeadsView({
   rows,
   profiles,
+  marketplaceAccounts = [],
   canAct,
   slug,
   orgId,
@@ -51,6 +53,7 @@ export function SupplierLeadsView({
 }: {
   rows: any[];
   profiles: SupplierProfile[];
+  marketplaceAccounts?: MarketplaceAccount[];
   canAct: boolean;
   slug: string;
   orgId: string;
@@ -64,6 +67,16 @@ export function SupplierLeadsView({
   const [seeding, startSeed] = useTransition();
   const [seedResult, setSeedResult] = useState<string | null>(null);
   const [showAddSupplier, setShowAddSupplier] = useState(false);
+
+  // Marketplace logins keyed by the supplier profile they were recorded against,
+  // so each marketplace supplier's card shows only its own accounts.
+  const accountsByProfile = new Map<string, MarketplaceAccount[]>();
+  for (const a of marketplaceAccounts) {
+    if (!a.supplier_profile_id) continue;
+    const list = accountsByProfile.get(a.supplier_profile_id) ?? [];
+    list.push(a);
+    accountsByProfile.set(a.supplier_profile_id, list);
+  }
 
   const profileBySupplier = new Map<string, SupplierProfile>();
   const profileByName = new Map<string, SupplierProfile>();
@@ -366,6 +379,7 @@ export function SupplierLeadsView({
                       orgId={orgId}
                       leadCount={g.leads.length}
                       canAct={canAct}
+                      marketplaceAccounts={accountsByProfile.get(g.profile.id) ?? []}
                     />
                   ) : (
                     <div className="rounded-lg border border-dashed p-4 text-center space-y-2">

@@ -66,11 +66,20 @@ export async function listActiveOrgs() {
 
 // ---- marketplace_accounts -------------------------------------------------
 
+// A host can now hold several accounts (the agent's, plus any ops entered by
+// hand in the Supplier Validation tab), so return the most usable one rather
+// than an arbitrary row: a working login beats one still mid-signup, which
+// beats a dead one.
+const ACCOUNT_PREFERENCE = ["active", "verifying", "signing_up", "pending", "failed", "banned"];
+
 export async function getAccount(orgId, host) {
-  const rows = await oa(
-    `marketplace_accounts?org_id=eq.${orgId}&host=eq.${encodeURIComponent(host)}&select=*&limit=1`
-  );
-  return rows?.[0] ?? null;
+  const rows =
+    (await oa(`marketplace_accounts?org_id=eq.${orgId}&host=eq.${encodeURIComponent(host)}&select=*`)) ?? [];
+  const rank = (r) => {
+    const i = ACCOUNT_PREFERENCE.indexOf(r.status);
+    return i === -1 ? ACCOUNT_PREFERENCE.length : i;
+  };
+  return rows.sort((a, b) => rank(a) - rank(b))[0] ?? null;
 }
 
 export async function listAccounts({ status } = {}) {
