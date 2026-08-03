@@ -63,7 +63,12 @@ const SCOUT_PASSES: { key: string; focus: string }[] = [
   {
     key: "marketplace",
     focus:
-      "Marketplace and retail listings with published prices. Drill INTO the platform result pages on IndiaMART, Alibaba, Made-in-China and TradeIndia and return AT LEAST 6-8 individual seller companies per platform, each as its own row with its own company name, price/MOQ and contact path. Also cover bulk/retail shops (Bulk Apothecary, MakingCosmetics, Lotioncrafter, Wholesale Supplies Plus) and EU specialty shops (Lerochem, Alexmo, Handymade, Gracefruit).",
+      "B2B marketplace seller listings only. Drill INTO the platform result pages on IndiaMART, Alibaba, Made-in-China and TradeIndia and return AT LEAST 6-8 individual seller companies per platform, each as its own row with its own company name, price/MOQ and contact path. Do not return the platform itself as a row.",
+  },
+  {
+    key: "retail",
+    focus:
+      "Bulk and retail shops with published price ladders only: US shops (Bulk Apothecary, MakingCosmetics, Lotioncrafter, Wholesale Supplies Plus, Lab Alley, PureBulk, Ingredi) and EU specialty cosmetic-ingredient shops (Lerochem, Alexmo, Handymade, Gracefruit), plus anything surfaced by price-per-kg and buy-bulk queries. Capture the full pack-size price ladder for each.",
   },
 ];
 
