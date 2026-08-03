@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { Select } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -238,43 +239,32 @@ export function QuoteProfileCard({
               <div className="text-xs text-muted-foreground">Unit price: ${unitPrice}/{profile.unit_of_measurement ?? "unit"}</div>
             )}
             {editing ? (
-              <label className="space-y-0.5 block">
+              <div className="space-y-0.5">
                 <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Units</span>
-                <select
+                <Select
+                  size="sm"
+                  ariaLabel="Unit of measurement"
+                  placeholder="Select..."
                   value={profile.unit_of_measurement ?? ""}
-                  onChange={(e) => handleFieldChange("unit_of_measurement", e.target.value)}
-                  className="flex h-7 w-full rounded-md border border-input bg-transparent px-2 text-sm"
-                >
-                  <option value="">Select...</option>
-                  <option value="kg">kg</option>
-                  <option value="lb">lb</option>
-                  <option value="g">g</option>
-                  <option value="oz">oz</option>
-                  <option value="gal">gal</option>
-                  <option value="L">L</option>
-                  <option value="unit">unit</option>
-                </select>
-              </label>
+                  onValueChange={(v) => handleFieldChange("unit_of_measurement", v)}
+                  options={["kg", "lb", "g", "oz", "gal", "L", "unit"].map((u) => ({ value: u, label: u }))}
+                />
+              </div>
             ) : (
               <Field label="Units" value={profile.unit_of_measurement} field="unit_of_measurement" editing={false} onChange={handleFieldChange} />
             )}
             {editing ? (
-              <label className="space-y-0.5 block">
+              <div className="space-y-0.5">
                 <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Case Type</span>
-                <select
+                <Select
+                  size="sm"
+                  ariaLabel="Case type"
+                  placeholder="Select..."
                   value={profile.case_type ?? ""}
-                  onChange={(e) => handleFieldChange("case_type", e.target.value)}
-                  className="flex h-7 w-full rounded-md border border-input bg-transparent px-2 text-sm"
-                >
-                  <option value="">Select...</option>
-                  <option value="Box/Bag">Box/Bag</option>
-                  <option value="Drum">Drum</option>
-                  <option value="Tote">Tote</option>
-                  <option value="Pail">Pail</option>
-                  <option value="Bottle">Bottle</option>
-                  <option value="Supersack">Supersack</option>
-                </select>
-              </label>
+                  onValueChange={(v) => handleFieldChange("case_type", v)}
+                  options={["Box/Bag", "Drum", "Tote", "Pail", "Bottle", "Supersack"].map((c) => ({ value: c, label: c }))}
+                />
+              </div>
             ) : (
               <Field label="Case Type" value={profile.case_type} field="case_type" editing={false} onChange={handleFieldChange} />
             )}
@@ -288,19 +278,16 @@ export function QuoteProfileCard({
             <div className="grid grid-cols-2 gap-2">
               <Field label="Density" value={profile.density} field="density" editing={editing} onChange={handleNumberChange} type="number" />
               {editing ? (
-                <label className="space-y-0.5 block">
+                <div className="space-y-0.5">
                   <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Density Unit</span>
-                  <select
+                  <Select
+                    size="sm"
+                    ariaLabel="Density unit"
                     value={profile.density_unit ?? "g/ml"}
-                    onChange={(e) => handleFieldChange("density_unit", e.target.value)}
-                    className="flex h-7 w-full rounded-md border border-input bg-transparent px-2 text-sm"
-                  >
-                    <option value="g/ml">g/ml</option>
-                    <option value="g/cm3">g/cm3</option>
-                    <option value="kg/L">kg/L</option>
-                    <option value="lb/gal">lb/gal</option>
-                  </select>
-                </label>
+                    onValueChange={(v) => handleFieldChange("density_unit", v)}
+                    options={["g/ml", "g/cm3", "kg/L", "lb/gal"].map((u) => ({ value: u, label: u }))}
+                  />
+                </div>
               ) : (
                 <Field label="Density Unit" value={profile.density != null ? profile.density_unit : null} field="density_unit" editing={false} onChange={handleFieldChange} />
               )}
@@ -346,16 +333,18 @@ export function QuoteProfileCard({
             <div className="border-t pt-2 mt-2">
               <h5 className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1">Status</h5>
               {editing ? (
-                <select
+                <Select
+                  size="sm"
+                  ariaLabel="Approval status"
                   value={profile.approval_status}
-                  onChange={(e) => handleFieldChange("approval_status", e.target.value)}
-                  className="flex h-7 w-full rounded-md border border-input bg-transparent px-2 text-sm"
-                >
-                  <option value="draft">Draft</option>
-                  <option value="pending_review">Pending Review</option>
-                  <option value="ready_for_submission">Ready for Submission</option>
-                  <option value="submitted">Submitted</option>
-                </select>
+                  onValueChange={(v) => handleFieldChange("approval_status", v)}
+                  options={[
+                    { value: "draft", label: "Draft" },
+                    { value: "pending_review", label: "Pending Review" },
+                    { value: "ready_for_submission", label: "Ready for Submission" },
+                    { value: "submitted", label: "Submitted" },
+                  ]}
+                />
               ) : (
                 <Badge variant={status.variant}>{status.label}</Badge>
               )}

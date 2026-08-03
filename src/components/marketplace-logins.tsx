@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { Select } from "@/components/ui/select";
 import { cn, relativeTime } from "@/lib/utils";
 import { assignMarketplaceAccount } from "@/app/actions/marketplace-accounts";
 
@@ -137,7 +138,7 @@ function Secret({ value }: { value: string | null }) {
 }
 
 const inputCls =
-  "h-7 w-full rounded-md border border-input bg-transparent px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
+  "h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring";
 
 let draftSeq = 0;
 
@@ -222,19 +223,20 @@ export function MarketplaceAccessFields({
                 <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Password</span>
                 <input className={inputCls} value={r.password} onChange={(e) => patch(r.key, "password", e.target.value)} placeholder="account password" />
               </label>
-              <label className="space-y-0.5">
+              <div className="space-y-0.5">
                 <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Status</span>
-                <select className={inputCls} value={r.status} onChange={(e) => patch(r.key, "status", e.target.value)}>
-                  {OPS_STATUS_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                  {!OPS_STATUS_OPTIONS.some((o) => o.value === r.status) && (
-                    <option value={r.status}>{STATUS[r.status]?.label ?? r.status}</option>
-                  )}
-                </select>
-              </label>
+                <Select
+                  size="sm"
+                  ariaLabel="Login status"
+                  value={r.status}
+                  onValueChange={(v) => patch(r.key, "status", v)}
+                  options={
+                    OPS_STATUS_OPTIONS.some((o) => o.value === r.status)
+                      ? OPS_STATUS_OPTIONS
+                      : [...OPS_STATUS_OPTIONS, { value: r.status, label: STATUS[r.status]?.label ?? r.status }]
+                  }
+                />
+              </div>
               <div className="flex items-center gap-2 pb-0.5">
                 <OriginBadge createdBy={r.createdBy} createdByEmail={r.createdByEmail} />
                 <button
@@ -313,18 +315,15 @@ export function UnlinkedMarketplaceLogins({
           <StatusBadge status={a.status} />
           {canAct && (
             <span className="inline-flex items-center gap-1.5">
-              <select
-                className="h-7 rounded-md border border-input bg-transparent px-2 text-sm"
+              <Select
+                size="sm"
+                className="min-w-[14rem]"
+                ariaLabel="Assign to supplier"
+                placeholder="Assign to supplier..."
                 value={choice[a.id] ?? ""}
-                onChange={(e) => setChoice((c) => ({ ...c, [a.id]: e.target.value }))}
-              >
-                <option value="">Assign to supplier...</option>
-                {supplierOptions.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
+                onValueChange={(v) => setChoice((c) => ({ ...c, [a.id]: v }))}
+                options={supplierOptions.map((s) => ({ value: s.id, label: s.name }))}
+              />
               <button
                 type="button"
                 disabled={pending || !choice[a.id]}

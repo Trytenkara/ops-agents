@@ -289,16 +289,14 @@ export function MaterialsPanel({
           <h3 className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Materials</h3>
           <div className="flex flex-wrap items-center gap-2">
             {orgClients.length > 0 && (
-              <select
+              <Select
+                size="sm"
+                className="w-48"
+                ariaLabel="Filter by client"
                 value={clientFilter}
-                onChange={(e) => setClientFilter(e.target.value)}
-                className="h-7 rounded-md border border-input bg-transparent px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                <option value="all">All clients</option>
-                {orgClients.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
+                onValueChange={setClientFilter}
+                options={[{ value: "all", label: "All clients" }, ...orgClients.map((c) => ({ value: c.id, label: c.name }))]}
+              />
             )}
             <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none">
               <input
@@ -577,9 +575,8 @@ function MaterialRow({
     });
   };
 
-  const handleClientChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    e.stopPropagation();
-    doSaveTag(e.target.value || null, displayPriority);
+  const handleClientChange = (value: string) => {
+    doSaveTag(value || null, displayPriority);
   };
 
   const togglePriority = (e: React.MouseEvent) => {
@@ -611,21 +608,17 @@ function MaterialRow({
               <span className="text-xs text-muted-foreground">{open ? "▾" : "▸"}{detailCount > 0 ? ` ${detailCount}` : ""}</span>
             </div>
             {canEdit && m.tenkaraMaterialId && orgClients.length > 0 ? (
-              <select
-                value={currentClientId ?? ""}
-                onChange={handleClientChange}
-                onClick={(e) => e.stopPropagation()}
-                disabled={tagPending}
-                className={cn(
-                  "text-xs rounded border border-input bg-transparent px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-ring w-36",
-                  currentClientName ? "text-sky-700 dark:text-sky-400 font-medium" : "text-muted-foreground"
-                )}
-              >
-                <option value="">— none —</option>
-                {orgClients.map((c) => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
+              <div onClick={(e) => e.stopPropagation()}>
+                <Select
+                  size="sm"
+                  ariaLabel="Tag client"
+                  disabled={tagPending}
+                  value={currentClientId ?? ""}
+                  onValueChange={(v) => handleClientChange(v)}
+                  options={[{ value: "", label: "— none —" }, ...orgClients.map((c) => ({ value: c.id, label: c.name }))]}
+                  className={cn("w-36", currentClientName ? "text-sky-700 dark:text-sky-400 font-medium" : "text-muted-foreground")}
+                />
+              </div>
             ) : currentClientName ? (
               <span className="text-xs text-sky-700 dark:text-sky-400 font-medium">{currentClientName}</span>
             ) : null}

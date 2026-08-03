@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, Fragment } from "react";
+import { Select } from "@/components/ui/select";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import {
   formatPrice,
@@ -97,16 +98,14 @@ export function MarketplaceFindingsList({
     <div className="space-y-3">
       {orgClients.length > 0 && (
         <div className="flex items-center gap-2">
-          <select
+          <Select
+            size="sm"
+            className="w-48"
+            ariaLabel="Filter by client"
             value={clientFilter}
-            onChange={(e) => setClientFilter(e.target.value)}
-            className="h-7 rounded-md border border-input bg-transparent px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            <option value="all">All clients</option>
-            {orgClients.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
+            onValueChange={setClientFilter}
+            options={[{ value: "all", label: "All clients" }, ...orgClients.map((c) => ({ value: c.id, label: c.name }))]}
+          />
           {clientFilter !== "all" && (
             <span className="text-xs text-muted-foreground">{clientRows.length} of {rows.length} rows</span>
           )}

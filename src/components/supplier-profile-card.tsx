@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { Select } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -240,18 +241,20 @@ export function SupplierProfileCard({
             <Field label="POC Name" value={profile.poc_name} field="poc_name" editing={editing} onChange={handleFieldChange} />
             {editing && (
               <div className="pt-1">
-                <label className="space-y-0.5 block">
+                <div className="space-y-0.5">
                   <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Type</span>
-                  <select
+                  <Select
+                    size="sm"
+                    ariaLabel="Supplier type"
+                    placeholder="Select..."
                     value={profile.supplier_type ?? ""}
-                    onChange={(e) => handleFieldChange("supplier_type", e.target.value)}
-                    className="flex h-7 w-full rounded-md border border-input bg-transparent px-2 text-sm"
-                  >
-                    <option value="">Select...</option>
-                    <option value="marketplace">Marketplace</option>
-                    <option value="direct">Direct</option>
-                  </select>
-                </label>
+                    onValueChange={(v) => handleFieldChange("supplier_type", v)}
+                    options={[
+                      { value: "marketplace", label: "Marketplace" },
+                      { value: "direct", label: "Direct" },
+                    ]}
+                  />
+                </div>
               </div>
             )}
             <Checkbox label="Contact information complete" checked={profile.contact_info_complete} field="contact_info_complete" editing={editing} onChange={handleCheckChange} />
@@ -270,14 +273,16 @@ export function SupplierProfileCard({
               <div className="space-y-0.5">
                 <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">DDP Book</div>
                 {editing ? (
-                  <select
+                  <Select
+                    size="sm"
+                    ariaLabel="DDP can book"
                     value={profile.ddp_can_book ? "yes" : "no"}
-                    onChange={(e) => handleCheckChange("ddp_can_book", e.target.value === "yes")}
-                    className="flex h-7 w-full rounded-md border border-input bg-transparent px-2 text-sm"
-                  >
-                    <option value="no">No</option>
-                    <option value="yes">Yes</option>
-                  </select>
+                    onValueChange={(v) => handleCheckChange("ddp_can_book", v === "yes")}
+                    options={[
+                      { value: "no", label: "No" },
+                      { value: "yes", label: "Yes" },
+                    ]}
+                  />
                 ) : (
                   <div className="text-sm">{profile.ddp_can_book ? "Yes" : "No"}</div>
                 )}

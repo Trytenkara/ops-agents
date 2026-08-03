@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Select } from "@/components/ui/select";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { SavingsExportCsvButton } from "@/components/savings-export-csv-button";
 import { DensityToggle } from "@/components/density-toggle";
@@ -69,16 +70,14 @@ export function SavingsWorksheet({
     <div className="space-y-8">
       {orgClients.length > 0 && (
         <div className="flex items-center gap-2">
-          <select
+          <Select
+            size="sm"
+            className="w-48"
+            ariaLabel="Filter by client"
             value={clientFilter}
-            onChange={(e) => setClientFilter(e.target.value)}
-            className="h-7 rounded-md border border-input bg-transparent px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            <option value="all">All clients</option>
-            {orgClients.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
+            onValueChange={setClientFilter}
+            options={[{ value: "all", label: "All clients" }, ...orgClients.map((c) => ({ value: c.id, label: c.name }))]}
+          />
           {clientFilter !== "all" && (
             <span className="text-xs text-muted-foreground">
               {visibleReportLines.length} of {report.lines.length} materials

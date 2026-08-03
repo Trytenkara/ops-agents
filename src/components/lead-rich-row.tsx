@@ -145,6 +145,7 @@ const CONTACT_SOURCE_BADGE: Record<string, { label: string; variant: BadgeVarian
   path: { label: "Contact form", variant: "outline", title: "Supplier is reachable through a website contact form" },
   tenkara: { label: "Tenkara", variant: "info", title: "Contact pulled from the existing Tenkara supplier record" },
   hunter: { label: "Hunter", variant: "accent", title: "Contact enriched through Hunter.io" },
+  leadmagic: { label: "LeadMagic", variant: "accent", title: "Contact enriched through LeadMagic" },
   zoominfo: { label: "ZoomInfo", variant: "accent", title: "Contact enriched through ZoomInfo" },
   getprospect: { label: "GetProspect", variant: "accent", title: "Contact enriched through GetProspect" },
 };

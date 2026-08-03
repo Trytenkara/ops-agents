@@ -557,14 +557,17 @@ function AddSupplierForm({ orgId, onClose }: { orgId: string; onClose: () => voi
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">Type</span>
-          <select
+          <Select
+            size="sm"
+            className="w-40"
+            ariaLabel="Supplier type"
             value={supplierType}
-            onChange={(e) => setSupplierType(e.target.value as "marketplace" | "direct")}
-            className="flex h-8 rounded-md border border-input bg-transparent px-2 text-sm"
-          >
-            <option value="direct">Direct</option>
-            <option value="marketplace">Marketplace</option>
-          </select>
+            onValueChange={(v) => setSupplierType(v as "marketplace" | "direct")}
+            options={[
+              { value: "direct", label: "Direct" },
+              { value: "marketplace", label: "Marketplace" },
+            ]}
+          />
         </label>
       </div>
       {error && <p className="text-xs text-red-500">{error}</p>}
