@@ -29,11 +29,13 @@ const URL_PROBE_TIMEOUT_MS = 5_000;
 // the landscape instead of all of it. Sized from measurement: ~8s per search
 // plus generation, so a pass must stay small to clear its ceiling reliably —
 // 36-search passes were still hitting a 420s ceiling intermittently.
-// Measured ~10-13s per web search, so 22 searches needs ~250-300s of headroom;
-// the ceiling sits well above that but still leaves the 800s route budget room
-// for graph work, URL probing and inserts, since passes run concurrently.
+// Measured in prod: a 22-search pass lands at 282-308s when its scope is thin
+// (majors, west) but the output-heavy scopes (asia, distributors, marketplace
+// generate 2-3x the rows) ran past a 420s ceiling. Passes are concurrent, so
+// the ceiling only has to leave the 800s route budget room for graph work, URL
+// probing and inserts — not to be divided between passes.
 const MAX_WEB_USES_PER_PASS = 22;
-const SCOUT_CALL_TIMEOUT_MS = 420_000;
+const SCOUT_CALL_TIMEOUT_MS = 600_000;
 
 // Each pass owns one slice of the landscape the system prompt defines. Together
 // they cover all four buckets; overlap is harmless (merge dedups by host).
