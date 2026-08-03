@@ -17,17 +17,53 @@ import { materialLabel } from "@/lib/material-label";
 // we just instruct it on what to look for and ask for a structured response.
 
 const MODEL = "claude-sonnet-5";
-const MAX_WEB_USES = 96;       // breadth budget — covers majors pass + marketplace seller drill-in + regional manufacturers + retail/EU shops
+const EFFORT = "medium";          // measured: same 100-supplier breadth as high, fewer tokens
 const MAX_OUTPUT_TOKENS = 40000;  // room for up to ~100 supplier rows with the full detail schema
 const MAX_SUPPLIERS = 100;
 const URL_PROBE_TIMEOUT_MS = 5_000;
-// Hard ceiling on a single material's web_search call. Sized to let a breadth
-// run finish richly (it streams ~64 searches and can run several minutes) while
-// still landing inside the cron function's 800s maxDuration with room for graph
-// work + URL probing + inserts. An earlier 120s ceiling was too tight and
-// aborted slow materials (Soybean Oil, Coconut Milk, Maltodextrine) before they
-// produced any scout leads, leaving them with only a single catalog match.
-const SCOUT_CALL_TIMEOUT_MS = 480_000;
+// Breadth is split across PASSES that run concurrently, because a single
+// ~96-search call takes 650-820s end-to-end — longer than the cron function's
+// 800s maxDuration, so it could never finish inside a run no matter how high
+// the per-call ceiling went. Narrow scoped passes cover the same landscape in
+// roughly the time of the slowest one, and a pass that fails costs a fifth of
+// the landscape instead of all of it. Sized from measurement: ~8s per search
+// plus generation, so a pass must stay small to clear its ceiling reliably —
+// 36-search passes were still hitting a 420s ceiling intermittently.
+// Measured ~10-13s per web search, so 22 searches needs ~250-300s of headroom;
+// the ceiling sits well above that but still leaves the 800s route budget room
+// for graph work, URL probing and inserts, since passes run concurrently.
+const MAX_WEB_USES_PER_PASS = 22;
+const SCOUT_CALL_TIMEOUT_MS = 420_000;
+
+// Each pass owns one slice of the landscape the system prompt defines. Together
+// they cover all four buckets; overlap is harmless (merge dedups by host).
+const SCOUT_PASSES: { key: string; focus: string }[] = [
+  {
+    key: "majors",
+    focus:
+      "Originator / branded manufacturers only — the trademark owners and the known major producers (BASF, Solvay, Stepan, Croda, Evonik, KLK OLEO, Galaxy Surfactants, Clariant, Innospec, Nouryon, Zschimmer & Schwarz, Jarchem, Pilot Chemical, and the recognised majors for this specific material). Run one query per producer against this material and include every one that actually makes it.",
+  },
+  {
+    key: "distributors",
+    focus:
+      "Distributors and traders only (Univar, Brenntag, Azelis, IMCD, DeWolf, Parchem, Silver Fern, Shay & Company, and regional equivalents), plus the chemical/pharma B2B directories that publish direct sales emails: Chemondis, Knowde, Pharmaoffer, Echemi, ChemicalBook, Molbase, ChemBid, UL Prospector, Chemical Register.",
+  },
+  {
+    key: "asia",
+    focus:
+      "Bulk manufacturers in India and China only. Use the India and China query patterns (bulk wholesale 25kg, exporter, manufacturer) including their pharma-grade variants.",
+  },
+  {
+    key: "west",
+    focus:
+      "Bulk manufacturers in Europe and the USA only, including pharmaceutical/food grade producers (USP/EP manufacturer, DMF holders) and EU-language queries.",
+  },
+  {
+    key: "marketplace",
+    focus:
+      "Marketplace and retail listings with published prices. Drill INTO the platform result pages on IndiaMART, Alibaba, Made-in-China and TradeIndia and return AT LEAST 6-8 individual seller companies per platform, each as its own row with its own company name, price/MOQ and contact path. Also cover bulk/retail shops (Bulk Apothecary, MakingCosmetics, Lotioncrafter, Wholesale Supplies Plus) and EU specialty shops (Lerochem, Alexmo, Handymade, Gracefruit).",
+  },
+];
 
 // Field set mirrors Ben's "Vita Organica – Supplier Sourcing" sheet so a scout
 // lead carries the same actionable columns a human researcher would capture:
@@ -149,14 +185,18 @@ function anthropic(): Anthropic {
   return client;
 }
 
-function buildUserMessage(material: MaterialRow): string {
+function buildUserMessage(material: MaterialRow, focus: string): string {
   const parts: string[] = [];
   parts.push(`Material to source:`);
   if (material.name) parts.push(`  name: ${material.name}`);
   if (material.trade_name) parts.push(`  trade name: ${material.trade_name}`);
   if (material.inci) parts.push(`  INCI: ${material.inci}`);
   parts.push("");
-  parts.push("Run the query patterns from the system prompt and return the JSON.");
+  parts.push(`THIS RUN'S SCOPE — search for these suppliers only: ${focus}`);
+  parts.push("");
+  parts.push(
+    "Other buckets are covered by parallel runs, so do not spend searches on them. Return every supplier you find inside your scope (aim for 30+), applying all classification and field rules from the system prompt."
+  );
   return parts.join("\n");
 }
 
@@ -211,23 +251,23 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
   const log = opts?.log ?? (async () => {});
   const matLabel = materialLabel(material, material.id) as string;
 
-  let raw: string;
-  try {
-    // Stream the response: a breadth run issues up to MAX_WEB_USES server-side
-    // web searches and emits ~16k tokens, which routinely runs past the 6-minute
-    // gateway timeout on a non-streaming request (observed: consistent 524s).
-    // Streaming keeps the connection alive for the full long-running operation.
+  // Stream the response: each pass issues up to MAX_WEB_USES_PER_PASS server-side
+  // web searches, which runs past the 6-minute gateway timeout on a non-streaming
+  // request (observed: consistent 524s). Streaming keeps the connection alive.
+  async function runPass(pass: { key: string; focus: string }): Promise<ScoutSupplier[]> {
+    const startedAt = Date.now();
     const stream = anthropic().messages.stream({
       model: MODEL,
       max_tokens: MAX_OUTPUT_TOKENS,
+      output_config: { effort: EFFORT },
       system: SYSTEM_PROMPT,
       tools: [{
         type: "web_search_20260209",
         name: "web_search",
-        max_uses: MAX_WEB_USES,
+        max_uses: MAX_WEB_USES_PER_PASS,
       } as any],
-      messages: [{ role: "user", content: buildUserMessage(material) }],
-    });
+      messages: [{ role: "user", content: buildUserMessage(material, pass.focus) }],
+    } as any);
     const timer = setTimeout(() => stream.abort(), SCOUT_CALL_TIMEOUT_MS);
     let res;
     try {
@@ -235,26 +275,34 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
     } finally {
       clearTimeout(timer);
     }
-    raw = res.content
-      .map((b: any) => (b.type === "text" ? b.text : ""))
-      .join("");
-  } catch (e: any) {
-    await log(`scout: Anthropic call failed/timed out for ${matLabel}: ${e.message}`, { material_id: material.id });
-    return [];
-  }
-
-  let parsed: { suppliers?: ScoutSupplier[] };
-  try {
-    parsed = extractJson(raw);
-  } catch (e: any) {
-    await log(`scout: failed to parse JSON for ${matLabel}: ${e.message}`, {
-      material_id: material.id,
-      raw_excerpt: raw.slice(0, 300),
+    const raw = res.content.map((b: any) => (b.type === "text" ? b.text : "")).join("");
+    const secs = Math.round((Date.now() - startedAt) / 1000);
+    const found = extractJson(raw).suppliers;
+    const list = Array.isArray(found) ? found : [];
+    await log(`scout: pass ${pass.key} returned ${list.length} for ${matLabel} in ${secs}s`, {
+      material_id: material.id, pass: pass.key, secs, count: list.length,
     });
-    return [];
+    return list;
   }
 
-  const suppliers = Array.isArray(parsed.suppliers) ? parsed.suppliers : [];
+  const settled = await Promise.allSettled(SCOUT_PASSES.map(runPass));
+  const suppliers: ScoutSupplier[] = [];
+  const failures: string[] = [];
+  settled.forEach((r, i) => {
+    if (r.status === "fulfilled") suppliers.push(...r.value);
+    else failures.push(`${SCOUT_PASSES[i].key}: ${r.reason?.message ?? r.reason}`);
+  });
+  if (failures.length) {
+    await log(`scout: ${failures.length}/${SCOUT_PASSES.length} passes failed for ${matLabel} — ${failures.join("; ")}`, {
+      material_id: material.id, level: "warn",
+    });
+  }
+  // All passes down means the scout is broken (model/timeout/key), not that the
+  // market is empty. Throw so the caller records a hard failure and retries next
+  // window instead of banking a "0 new suppliers" result and backing off.
+  if (failures.length === SCOUT_PASSES.length) {
+    throw new Error(`all ${SCOUT_PASSES.length} scout passes failed: ${failures.join("; ")}`);
+  }
 
   // Normalize, validate, dedup by host, drop excluded hosts.
   const seenHosts = new Set<string>();

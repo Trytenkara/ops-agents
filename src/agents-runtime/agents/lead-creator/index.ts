@@ -779,14 +779,36 @@ registerAgent({
       // backlog re-scout (below the richness floor and past its backoff window).
       const isBacklogRescout = underservedIds.has(material.id);
       if (scoutEnabled && leadsCreated < MAX_NEW_LEADS_PER_RUN && (!alreadyScouted.has(material.id) || isBacklogRescout)) {
-        // Record the attempt up-front so a scout that surfaces nothing new still
-        // backs off — it won't be re-run until RESCOUT_BACKOFF elapses. Also track
-        // diminishing returns: compare the current lead count to the count at the
-        // last attempt; if the material grew by fewer than MIN_NEW_PER_CYCLE leads
-        // (across all sources, incl. out-of-band SR/IY that landed since), bump the
-        // dry streak. Once it hits the limit the selector above backs the material
-        // off to a weekly re-check instead of every window.
-        if (isBacklogRescout) {
+        // Exclude hosts we already have for this material (graph hits this run +
+        // existing leads from prior runs) so a re-scout only adds NEW suppliers —
+        // scout leads carry no supplier_id, so the graph dedup can't catch dupes.
+        const excludeHosts = new Set<string>(graphHosts);
+        for (const h of existingHostsByMaterial.get(material.id) ?? []) excludeHosts.add(h);
+        let scoutResults: ScoutSupplier[] = [];
+        let scoutHardFailed = false;
+        try {
+          scoutResults = await scoutSuppliersForMaterial(material, {
+            excludeHosts,
+            log: (msg, meta) => ctx.log(msg, { step: "scout", data: { ...meta, material_id: material.id } }),
+          });
+        } catch (e: any) {
+          scoutHardFailed = true;
+          await ctx.log(`Scout failed for ${matLabel}: ${e.message}`, {
+            level: "warn",
+            step: "scout",
+            data: { material_id: material.id },
+          });
+        }
+        // Record the attempt so a scout that surfaces nothing new still backs off —
+        // it won't be re-run until RESCOUT_BACKOFF elapses. Also track diminishing
+        // returns: compare the current lead count to the count at the last attempt;
+        // if the material grew by fewer than MIN_NEW_PER_CYCLE leads (across all
+        // sources, incl. out-of-band SR/IY that landed since), bump the dry streak.
+        // Once it hits the limit the selector above backs the material off to a
+        // weekly re-check instead of every window. A hard scout failure is NOT an
+        // attempt: banking one silently parked every material for 6-12h during the
+        // 2026-07-27 scout outage, which is how it went a week without being seen.
+        if (isBacklogRescout && !scoutHardFailed) {
           const curCount = leadCount.get(material.id) ?? 0;
           const prevCount = lastAttemptCount.get(material.id);
           const grew = prevCount === undefined || curCount - prevCount >= DISCOVERY_MIN_NEW_PER_CYCLE;
@@ -804,24 +826,6 @@ registerAgent({
             },
             { onConflict: "agent_id,key" }
           );
-        }
-        // Exclude hosts we already have for this material (graph hits this run +
-        // existing leads from prior runs) so a re-scout only adds NEW suppliers —
-        // scout leads carry no supplier_id, so the graph dedup can't catch dupes.
-        const excludeHosts = new Set<string>(graphHosts);
-        for (const h of existingHostsByMaterial.get(material.id) ?? []) excludeHosts.add(h);
-        let scoutResults: ScoutSupplier[] = [];
-        try {
-          scoutResults = await scoutSuppliersForMaterial(material, {
-            excludeHosts,
-            log: (msg, meta) => ctx.log(msg, { step: "scout", data: { ...meta, material_id: material.id } }),
-          });
-        } catch (e: any) {
-          await ctx.log(`Scout failed for ${matLabel}: ${e.message}`, {
-            level: "warn",
-            step: "scout",
-            data: { material_id: material.id },
-          });
         }
 
         const scoutAllowed = keepIfAllowed(scoutResults, (s) => ({
