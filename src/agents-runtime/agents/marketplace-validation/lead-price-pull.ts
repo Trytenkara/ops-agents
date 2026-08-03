@@ -2,6 +2,7 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 import { recheckMarketplaceQuote } from "./price-recheck";
 import { convertToUsd } from "@/lib/fx";
 import { ensureMarketplaceCaseDims } from "@/lib/marketplace-case-dims-fill";
+import { neverMarketplaceHostOf } from "@/lib/marketplace-hosts";
 import { getOrgOperatorPool, getSupplierAssignments, resolveSupplierOperatorId } from "@/lib/operator-assignment";
 
 type Admin = ReturnType<typeof createAdminClient>;
@@ -288,6 +289,18 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     const isRecheck = priorPull?.status === "pulled";
     const priorPrice = isRecheck ? (typeof priorPull?.price === "number" ? priorPull.price : null) : null;
     let result;
+    const directoryHost = neverMarketplaceHostOf(url);
+    if (directoryHost) {
+      // Lead-source directory / RFQ relay — not a marketplace by host, so skip
+      // the read entirely and fall through to the terminal branch below.
+      result = {
+        classification: "not_marketplace" as const,
+        current_price: null, currency: null, pack_size: null, unit_price: null,
+        tiers: [] as any[], moq: null, lead_time: null, shipping: null,
+        source_url: url, source_citations: [] as any[],
+        notes: `${directoryHost} is a lead-source directory (no checkout) — used to find suppliers, never a marketplace price.`,
+      };
+    } else {
     try {
       result = await recheckMarketplaceQuote({
         supplier_name: l.supplier_name ?? "",
@@ -300,6 +313,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       });
     } catch (e: any) {
       result = { classification: "needs_review" as const, current_price: null, currency: null, pack_size: null, unit_price: null, tiers: [], moq: null, lead_time: null, shipping: null, source_url: url, source_citations: [], notes: `pull failed: ${e?.message ?? e}` };
+    }
     }
 
     // Currency safety net (runs BEFORE conversion below). Correct a wrong/blank
@@ -427,7 +441,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         await log(`Lead payload update failed for ${l.id}: ${upErr.message}`, { level: "error", step: "mp_leads", data: { lead_id: l.id } });
         return null;
       }
-      await log(`Not a marketplace (price but no checkout) — not publishing, removed from price index: ${l.supplier_name} × ${l.material_name}`, {
+      await log(`Not a marketplace (no checkout) — not publishing, removed from price index: ${l.supplier_name} × ${l.material_name}`, {
         step: "mp_not_marketplace",
         data: { lead_id: l.id, site_type_corrected_from: nextPayload.marketplace_checkout.site_type_corrected_from, source_url: nextPayload.marketplace_pull.source_url },
       });
