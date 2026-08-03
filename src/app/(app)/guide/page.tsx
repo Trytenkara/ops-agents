@@ -9,80 +9,63 @@ const TABS: { name: string; question: string; does: string; agents: string }[] =
   {
     name: "Overview",
     question: "What needs my attention?",
-    does: "Six metric cards (new leads, drafts to send, quotes to approve, price changes, open cases, pending approvals). Each links to the tab where you act on it.",
-    agents: "—",
+    does: "Six metric cards (new leads, drafts to send, quotes to approve, price changes, open cases, pending approvals), each linking to where you act on it. Open cases is also the only way into this client's Cases list. The Sourcing card holds the client's sourcing status (Active / Sourcing only / Off) and its Tenkara inbox.",
+    agents: "Agent 07 (Escalation) opens the cases",
   },
   {
     name: "Client Profile",
     question: "Who is this client?",
-    does: "Contact (purchasing email, priority contact), supplier rep sheet, an AI-written summary, and a Documents box — upload any PDF/spreadsheet/CSV and it's parsed into the summary.",
+    does: "Contact (purchasing email, priority contact), supplier rep sheet, an AI-written summary, and a Documents box: upload any PDF/spreadsheet/CSV and it's parsed into the summary. Saving settings or uploading a file re-runs the research; your own edits are kept until you regenerate.",
     agents: "Agent 12 (Client Profile)",
   },
   {
-    name: "Materials",
-    question: "What do they buy, and where does each stand?",
-    does: "Every material with a per-material sourcing status. Expand a row for its collected quotes (approve / dismiss inline), uploaded POs, and approvals. Upload POs and add sourcing notes here.",
-    agents: "Agent 08 (Email Scanner) extracts quotes from supplier replies",
+    name: "Platform Data",
+    question: "What do they buy, and who supplies it today?",
+    does: "The client's Tenkara data, in two sub-tabs. Materials: every material with a sourcing chip (Not started → Sourcing → Outreach sent → Quotes in → Sourced / Above client) and a Leads/Drafted/Sent/Quotes funnel; expand a row for collected quotes (approve or dismiss inline), uploaded POs and approvals. Suppliers: their existing suppliers grouped Approved / Pending / Denied, read-only.",
+    agents: "Agent 08 (Email Scanner) extracts quotes from supplier replies; suppliers sync from Tenkara",
   },
   {
-    name: "Suppliers",
-    question: "Who can supply these materials?",
-    does: "The client's Tenkara suppliers grouped by Approved / Pending / Denied — a read-only reference, sortable and filterable.",
-    agents: "— (synced from Tenkara)",
-  },
-  {
-    name: "Leads",
+    name: "Agent Supplier Leads",
     question: "Who else could we source from?",
-    does: "Newly discovered suppliers, tagged Marketplace vs Direct (filterable). Promote good ones to outreach or drop them. Bulk-upload a supplier CSV. The run ↗ link opens the agent log that created each lead.",
-    agents: "Agent 03 (Lead Creator) + Agent 06 (Enrichment)",
+    does: "Newly discovered suppliers. The pipeline row across the top (Raw · Enriched · Ready to send · Held for review) shows where they are; sub-tabs cover Supplier Validation, All leads, Marketplace pricing, Outreach, Supplier Escalations and Dropped. Promote the good ones to outreach or drop them, bulk-upload a supplier CSV, and use the run ↗ link to open the agent log that created a lead.",
+    agents: "Agent 03 (Lead Creator) + Agent 06 (Enrichment) + Agent 04 (Outreach)",
   },
   {
-    name: "Live Price Index",
-    question: "Is their pricing still current?",
-    does: "Marketplace re-checks — public price vs on-file, grouped into per-material tier ladders (cheapest per-unit first). Direct re-quotes — expiring quotes drafted for a fresh price, showing the expiry reason. Approve a refresh or open the re-quote.",
+    name: "Agent Quotes",
+    question: "Is the pricing real, and is it still current?",
+    does: "Quotes Validation for the details behind each collected quote, Marketplace prices for public listings (On file / Current / Δ / Updated, grouped into per-material tier ladders), Direct prices for supplier-quoted numbers, and Quotes Escalations for what needs a human. Approve a refresh or open the re-quote.",
     agents: "Agent 05 (Marketplace Re-check) + Agent 02 (Revalidation)",
   },
   {
-    name: "All Threads",
+    name: "Email Thread Tracker",
     question: "What's the conversation so far?",
-    does: "Every outreach email and supplier reply, filterable by outbound / inbound. Open a draft to review and send. The full back-and-forth is logged here.",
+    does: "Every outreach email and supplier reply, filterable by outbound / inbound. One thread per supplier, with every contact for that supplier CC'd on it. Open a draft to review and send; the full back-and-forth is logged here.",
     agents: "Agent 04 (Outreach) + Agent 08 (Email Scanner) + Agent 15 (Reply Manager)",
   },
   {
-    name: "Savings",
+    name: "Cost Savings and Reports",
     question: "What did we save them?",
-    does: "A Worksheet view for ops and a branded, client-facing Savings report (PDF export, custom-prompt reshaper, optional freight/landed-cost toggle). Materials without a client price benchmark against the market average.",
+    does: "A Worksheet view for ops and a branded, client-facing savings report (PDF export, custom-prompt reshaper, optional freight/landed-cost toggle). Materials without a client price benchmark against the market average.",
     agents: "— (computed from the quote corpus)",
-  },
-  {
-    name: "Cases",
-    question: "What stalled and needs a human?",
-    does: "Stale leads escalated after >14 days of no movement. Take the recommended action and resolve.",
-    agents: "Agent 07 (Escalation)",
-  },
-  {
-    name: "Platform Extraction (DEV)",
-    question: "What have we pulled from suppliers, and is each vendor qualified?",
-    does: "Dev-only surface (violet tab). Quote board: every field extracted from supplier replies/attachments (price, grade, lead time, MOQ, payment terms) with copy-to-Tenkara and CSV, plus a per-supplier Docs column. The bench: the client's Tenkara Sourcing Rules (CoA/SDS/certs, Requested/Dealbreaker), a by-supplier qualified/blocked view, and received documents with parsed fields (assay, cert validity, expiry). Read-only; nothing is blocked.",
-    agents: "Agent 15 (Reply Manager) asks for docs; the inbound webhook captures + extracts them",
   },
 ];
 
 const AGENTS: { id: string; name: string; does: string; feeds: string }[] = [
-  { id: "01", name: "Ping", does: "Infrastructure heartbeat — verifies the pipeline is alive.", feeds: "—" },
-  { id: "02", name: "Quote Revalidation", does: "Drafts re-quote emails for expiring/expired quotes.", feeds: "Live Price Index" },
-  { id: "03", name: "Lead Creator", does: "Finds candidate suppliers (existing graph + web Scout discovery).", feeds: "Leads" },
-  { id: "05", name: "Marketplace Re-check", does: "Re-checks public marketplace prices vs what's on file.", feeds: "Live Price Index" },
-  { id: "06", name: "Enrichment", does: "Fills in lead contact/website before outreach.", feeds: "Leads" },
-  { id: "04", name: "Outreach", does: "Composes outreach RFQ emails (staged, never auto-sent).", feeds: "All Threads" },
-  { id: "07", name: "Escalation", does: "Opens cases for leads stale >14 days.", feeds: "Cases" },
-  { id: "08", name: "Email Scanner", does: "Detects supplier replies, extracts prices into staged quotes.", feeds: "Materials / All Threads" },
-  { id: "10", name: "Draft QA", does: "Lints staged drafts for placeholders / broken templates.", feeds: "All Threads (quality)" },
-  { id: "11", name: "Lead Scanner CSV Push", does: "Daily per-supplier CSV handoff of dropped leads.", feeds: "Exports (paused)" },
-  { id: "12", name: "Client Profile", does: "Researches and maintains the client summary.", feeds: "Client Profile" },
-  { id: "13", name: "Inbox Context", does: "Reads thread state so re-quotes use a follow-up tone.", feeds: "All Threads (context)" },
-  { id: "14", name: "QA Watchdog", does: "Data-integrity sweep; flags anomalies to Slack.", feeds: "— (alerts)" },
-  { id: "15", name: "Reply Manager", does: "Owns the supplier conversation after a reply is detected.", feeds: "All Threads" },
+  { id: "01", name: "Ping", does: "Infrastructure heartbeat: verifies the fleet is alive.", feeds: "—" },
+  { id: "02", name: "Quote Revalidation", does: "Drafts re-quote emails for expiring and expired quotes, one per supplier.", feeds: "Agent Quotes · Direct prices" },
+  { id: "03", name: "Lead Creator", does: "Finds candidate suppliers: the existing supplier graph, a rotating web scout, ImportYeti and SourceReady.", feeds: "Agent Supplier Leads · Raw" },
+  { id: "06", name: "Enrichment", does: "Works the contact waterfall (site scrape → Tenkara → paid providers) and seeds the validation profiles.", feeds: "Agent Supplier Leads · Enriched" },
+  { id: "04", name: "Outreach", does: "Composes the first sourcing email per supplier, CC'ing every contact on one thread. Staged, never auto-sent.", feeds: "Email Thread Tracker" },
+  { id: "05", name: "Marketplace Re-check", does: "Reads the live product page for current pricing and tier ladders; flags anything it cannot read rather than guessing.", feeds: "Agent Quotes · Marketplace prices" },
+  { id: "07", name: "Escalation", does: "Opens cases for leads stale >14 days and nudges Slack about work waiting on you.", feeds: "Overview · Open cases" },
+  { id: "08", name: "Email Scanner", does: "Handles inbound supplier replies from the Tenkara webhook: extracts prices, files documents, stages a response.", feeds: "Platform Data · Materials / Email Thread Tracker" },
+  { id: "10", name: "Draft QA", does: "Lints every draft as it is staged; hard-blocks a draft with fabricated contact details.", feeds: "Email Thread Tracker (quality)" },
+  { id: "11", name: "Lead Scanner CSV Push", does: "Per-supplier CSV handoff of dropped leads. Built, currently kill-switched.", feeds: "Exports (paused)" },
+  { id: "12", name: "Client Profile", does: "Researches and maintains the client summary and rep sheet.", feeds: "Client Profile" },
+  { id: "13", name: "Inbox Context", does: "Built for the old Missive inbox; dormant since the Tenkara cutover.", feeds: "— (paused)" },
+  { id: "14", name: "QA Watchdog", does: "Data-integrity sweep; flags what fell through the cracks to Slack.", feeds: "— (alerts)" },
+  { id: "15", name: "Reply Manager", does: "Owns the conversation after the first email: nudges silence, answers replies, chases the price.", feeds: "Email Thread Tracker" },
+  { id: "—", name: "Fleet Summary", does: "Daily digest of how every agent ran.", feeds: "— (Slack)" },
 ];
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -115,9 +98,9 @@ export default function OperatorsGuidePage() {
         </p>
         <div className="grid gap-3 sm:grid-cols-3">
           {[
-            { h: "Understand the client", t: "Profile → Materials → Suppliers", d: "Who they are, what they buy, who supplies it." },
-            { h: "Do the sourcing work", t: "Leads → Price Index → Threads", d: "Find suppliers, keep pricing current, run the conversation." },
-            { h: "Outcomes & cleanup", t: "Savings → Cases", d: "Report the wins; handle what stalled." },
+            { h: "Understand the client", t: "Client Profile → Platform Data", d: "Who they are, what they buy, who supplies it today." },
+            { h: "Do the sourcing work", t: "Agent Supplier Leads → Agent Quotes → Email Thread Tracker", d: "Vet suppliers, keep pricing current, run the conversation." },
+            { h: "Outcomes & cleanup", t: "Cost Savings and Reports → Cases", d: "Report the wins; handle what stalled." },
           ].map((c) => (
             <div key={c.h} className="rounded-lg border border-border p-4">
               <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">{c.h}</div>
@@ -166,8 +149,10 @@ export default function OperatorsGuidePage() {
       {/* 3. The agent fleet */}
       <Section title="The agent fleet">
         <p className="text-sm text-muted-foreground">
-          Fourteen background agents do the collecting. They run on a schedule and <strong>never write back to Tenkara</strong> —
-          everything funnels to review queues where an operator makes the call.
+          These agents do the collecting. They run on a schedule and <strong>never write back to Tenkara</strong>: everything
+          funnels to review queues where an operator makes the call. They also never invent data, so an unreadable price or an
+          unverifiable contact comes back flagged with its reason instead of a plausible-looking number. Which agents touch a
+          client depends on that client&apos;s sourcing status, set on its Overview tab.
         </p>
         <div className="overflow-hidden rounded-lg border border-border">
           <table className="w-full text-sm">

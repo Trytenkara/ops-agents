@@ -12,9 +12,9 @@ type Msg = { role: "user" | "assistant"; content: string };
 
 const EXAMPLES = [
   "What's waiting for me right now?",
-  "Do I have any stalled exercises?",
+  "Which leads are ready to send?",
   "Where do I export a CSV?",
-  "What does “Ready for client review” mean?",
+  "Why can't I promote this lead?",
 ];
 
 export function RunbookAssistant() {
