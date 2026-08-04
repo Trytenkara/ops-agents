@@ -18,8 +18,13 @@ import { MARKET_KIND_LABEL, MARKET_KIND_TITLE, MARKET_KIND_VARIANT, type MarketK
 interface SupplierQuoteGroup {
   supplierName: string;
   supplierId: string | null;
+  operatorName: string | null;
   quotes: QuoteProfile[];
 }
+
+// Owning operator per supplier, keyed "id:<supplier_id>" / "name:<lowercased>",
+// the same two-key shape as SupplierTypeMap, because a quote may carry only a name.
+export type SupplierOperatorMap = Record<string, string>;
 
 // A quote carries no market kind of its own, so read it off the listing it came
 // from (an aggregator host is decisive: the price is an indicative ask) and fall
@@ -43,6 +48,7 @@ const TYPE_FILTER: { value: string; label: string }[] = [
 const SORT_OPTIONS = [
   { value: "quotes", label: "Most quotes" },
   { value: "name", label: "Supplier (A-Z)" },
+  { value: "operator", label: "Operator (A-Z)" },
   { value: "completeness", label: "Avg completeness" },
   { value: "newest", label: "Newest" },
 ];
@@ -61,12 +67,14 @@ export function QuoteValidationView({
   slug,
   orgId,
   supplierTypes = {},
+  supplierOperators = {},
 }: {
   profiles: QuoteProfile[];
   canAct: boolean;
   slug: string;
   orgId: string;
   supplierTypes?: SupplierTypeMap;
+  supplierOperators?: SupplierOperatorMap;
 }) {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("quotes");
@@ -78,13 +86,18 @@ export function QuoteValidationView({
   const kindOf = (q: QuoteProfile): MarketKind | "unclassified" =>
     quoteMarketKind(q, supplierTypes) ?? "unclassified";
 
+  const operatorFor = (q: QuoteProfile): string | null =>
+    (q.supplier_id ? supplierOperators[`id:${q.supplier_id}`] : undefined) ??
+    supplierOperators[`name:${q.supplier_name.toLowerCase()}`] ??
+    null;
+
   // Group quotes by supplier
   const groupMap = new Map<string, SupplierQuoteGroup>();
   for (const q of profiles) {
     const key = q.supplier_id ?? q.supplier_name.toLowerCase();
     let group = groupMap.get(key);
     if (!group) {
-      group = { supplierName: q.supplier_name, supplierId: q.supplier_id, quotes: [] };
+      group = { supplierName: q.supplier_name, supplierId: q.supplier_id, operatorName: operatorFor(q), quotes: [] };
       groupMap.set(key, group);
     }
     group.quotes.push(q);
@@ -101,7 +114,7 @@ export function QuoteValidationView({
   if (search) {
     const q = search.toLowerCase();
     groups = groups.filter((g) => {
-      const hay = `${g.supplierName} ${g.quotes.map((qq) => qq.material_name).join(" ")}`.toLowerCase();
+      const hay = `${g.supplierName} ${g.operatorName ?? ""} ${g.quotes.map((qq) => qq.material_name).join(" ")}`.toLowerCase();
       return hay.includes(q);
     });
   }
@@ -133,6 +146,13 @@ export function QuoteValidationView({
     switch (sort) {
       case "name":
         return a.supplierName.localeCompare(b.supplierName);
+      case "operator": {
+        // Unassigned suppliers sort last, so the pile nobody owns is easy to find.
+        const aOp = a.operatorName ?? "";
+        const bOp = b.operatorName ?? "";
+        if (!aOp !== !bOp) return aOp ? -1 : 1;
+        return aOp.localeCompare(bOp) || a.supplierName.localeCompare(b.supplierName);
+      }
       case "completeness": {
         const aAvg = a.quotes.length ? a.quotes.reduce((s, q) => s + quoteCompleteness(q).pct, 0) / a.quotes.length : 0;
         const bAvg = b.quotes.length ? b.quotes.reduce((s, q) => s + quoteCompleteness(q).pct, 0) / b.quotes.length : 0;
@@ -156,7 +176,7 @@ export function QuoteValidationView({
 
   // CSV export
   const csvHeaders = [
-    "Supplier", "Type", "Material", "Price", "Case Size", "Units", "Unit Price", "Currency",
+    "Supplier", "Type", "Operator", "Material", "Price", "Case Size", "Units", "Unit Price", "Currency",
     "Case Type", "Case Width", "Case Height", "Case Length", "Case Weight",
     "Density", "Density Unit", "Density Source",
     "Quote Expiry", "Lead Time Days",
@@ -170,7 +190,7 @@ export function QuoteValidationView({
     const up = q.price != null && q.case_size && q.case_size > 0 ? (q.price / q.case_size).toFixed(4) : "";
     const qa = qaQuoteProfile(q);
     return [
-      q.supplier_name, kindOf(q), q.material_name,
+      q.supplier_name, kindOf(q), operatorFor(q) ?? "", q.material_name,
       q.price ?? "", q.case_size ?? "", q.unit_of_measurement ?? "", up, q.currency,
       q.case_type ?? "", q.case_width ?? "", q.case_height ?? "", q.case_length ?? "", q.case_weight ?? "",
       q.density ?? "", q.density != null ? (q.density_unit ?? "") : "", q.density_source ?? "",
@@ -274,6 +294,16 @@ export function QuoteValidationView({
                   {statuses.submitted > 0 && <Badge variant="success">{statuses.submitted} submitted</Badge>}
                 </div>
                 <div className="flex items-center gap-4 shrink-0">
+                  <span
+                    className="text-xs text-muted-foreground truncate max-w-[14ch]"
+                    title={
+                      g.operatorName
+                        ? `Operator who owns this supplier for this client: ${g.operatorName}`
+                        : "No operator owns this supplier yet"
+                    }
+                  >
+                    {g.operatorName ?? <span className="italic">Unassigned</span>}
+                  </span>
                   <span className="text-xs text-muted-foreground">
                     {g.quotes.length} quote{g.quotes.length !== 1 ? "s" : ""}
                   </span>

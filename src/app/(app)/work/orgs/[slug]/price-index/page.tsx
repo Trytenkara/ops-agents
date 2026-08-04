@@ -14,6 +14,7 @@ import { DirectPricesOnFile, type DirectPriceRow } from "@/components/direct-pri
 import { PriceIndexTabs } from "@/components/price-index-tabs";
 import { QuoteValidationView } from "@/components/quote-validation-view";
 import { getQuoteProfiles } from "@/lib/quote-profiles";
+import { getOrgOperatorPool, getSupplierAssignments, resolveSupplierOperatorId } from "@/lib/operator-assignment";
 import { getSupplierProfiles } from "@/lib/supplier-profiles";
 import { CasesSection } from "@/components/cases-section";
 import { loadOrgCases, caseCategory } from "@/lib/org-cases";
@@ -283,6 +284,27 @@ export default async function OrgPriceIndexPage({
     supplierTypes[`name:${p.supplier_name.toLowerCase()}`] = p.supplier_type;
   }
 
+  // Owning operator per supplier, so an operator can sort the validation queue
+  // down to their own book. Same resolution as the Suppliers and Leads tabs: a
+  // manual claim wins, else the sticky auto owner.
+  const operatorPool = await getOrgOperatorPool(admin, org.id);
+  const supplierAssignments = await getSupplierAssignments(admin, org.id).catch(() => new Map<string, string>());
+  const operatorNameById = new Map(operatorPool.map((op) => [op.id, op.name]));
+  const supplierNameById = new Map<string, string>();
+  for (const l of (leadsRes.data ?? []) as any[]) {
+    if (l.supplier_id && l.supplier_name) supplierNameById.set(l.supplier_id, l.supplier_name);
+  }
+  const supplierOperators: Record<string, string> = {};
+  for (const sid of new Set(quoteProfiles.map((q) => q.supplier_id).filter(Boolean) as string[])) {
+    const opId = resolveSupplierOperatorId(supplierAssignments, operatorPool, sid);
+    const name = opId ? operatorNameById.get(opId) : null;
+    if (!name) continue;
+    supplierOperators[`id:${sid}`] = name;
+    // Quotes staged before their supplier was linked carry only a name.
+    const sname = supplierNameById.get(sid);
+    if (sname) supplierOperators[`name:${sname.toLowerCase()}`] = name;
+  }
+
   const marketplaceDims = await loadMarketplaceCaseDims(admin);
   // Cross-org by design: density is a physical property with a public citation,
   // so a value sourced for one client is valid for every client's same material.
@@ -330,6 +352,7 @@ export default async function OrgPriceIndexPage({
             slug={org.slug}
             orgId={org.id}
             supplierTypes={supplierTypes}
+            supplierOperators={supplierOperators}
           />
         }
         escalations={

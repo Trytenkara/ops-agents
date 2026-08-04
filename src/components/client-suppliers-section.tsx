@@ -3,7 +3,7 @@
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Select } from "@/components/ui/select";
-import { useListFilter, byString } from "@/components/use-list-filter";
+import { useListFilter, byString, byStringBlankLast } from "@/components/use-list-filter";
 import { useState } from "react";
 import type { ClientSuppliers, ClientSupplier, SupplierApproval } from "@/lib/client-suppliers";
 import { SupplierOperatorAssign } from "@/components/supplier-operator-assign";
@@ -57,12 +57,23 @@ export function ClientSuppliersSection({
   const [status, setStatus] = useState<string>("all");
   const statusRows = status === "all" ? all : all.filter((s) => s.approval === status);
 
+  // The name shown in the Operator column: a manual claim wins, else the auto owner.
+  const operatorNameOf = (s: ClientSupplier): string | null => {
+    const claimed = assignments?.[s.id];
+    return (claimed ? operatorNames?.[claimed] ?? null : null) ?? autoNames?.[s.id] ?? null;
+  };
+
   const { filtered, controls } = useListFilter(statusRows, {
-    searchText: (r) => `${r.name ?? ""} ${r.poc_email ?? ""} ${r.poc_name ?? ""}`,
-    searchPlaceholder: "supplier or email…",
+    searchText: (r) => `${r.name ?? ""} ${r.poc_email ?? ""} ${r.poc_name ?? ""} ${operatorNameOf(r) ?? ""}`,
+    searchPlaceholder: "supplier, email or operator…",
     sorts: [
       { value: "status", label: "Status", compare: (a, b) => STATUS_ORDER[a.approval] - STATUS_ORDER[b.approval] || (a.name ?? "").localeCompare(b.name ?? "") },
       { value: "name", label: "Supplier (A–Z)", compare: byString((r: ClientSupplier) => r.name) },
+      {
+        value: "operator",
+        label: "Operator (A–Z)",
+        compare: (a, b) => byStringBlankLast(operatorNameOf)(a, b) || (a.name ?? "").localeCompare(b.name ?? ""),
+      },
     ],
     defaultSort: "status",
   });
