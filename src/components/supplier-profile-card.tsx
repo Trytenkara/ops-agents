@@ -32,7 +32,7 @@ const REPLY_ONLY_FIELDS = new Set([
 function emptyReason(field: string, sources: Record<string, string> | null | undefined): string {
   const source = sources?.[field];
   if (source === "not_published") {
-    return REPLY_ONLY_FIELDS.has(field) ? "Not public — awaiting supplier reply" : "Not published by supplier";
+    return REPLY_ONLY_FIELDS.has(field) ? "Not public, awaiting supplier reply" : "Not published by supplier";
   }
   if (sources?.web_checked_at) {
     return REPLY_ONLY_FIELDS.has(field) ? "Awaiting supplier reply" : "Not found";

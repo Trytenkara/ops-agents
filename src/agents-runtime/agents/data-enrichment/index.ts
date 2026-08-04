@@ -23,6 +23,7 @@ const MAX_LEADS_PER_RUN = 25;
 // take before the rest of the agent's work starts.
 const WEB_FILL_CAP = 12;
 const WEB_FILL_BUDGET_MS = 120_000;
+const KNOWN_FILL_BUDGET_MS = 150_000;
 
 registerAgent({
   slug: "agent-06-enrichment",
@@ -109,9 +110,11 @@ registerAgent({
         ?.map((o: any) => [o.id, o.tenkara_org_id as string | null]) ?? []
     );
     let filledFields = 0;
+    const fillDeadline = Date.now() + KNOWN_FILL_BUDGET_MS;
     for (const orgId of seedOrder) {
+      if (Date.now() >= fillDeadline) break;
       try {
-        const s = await fillProfilesFromKnownSources(admin, orgId, tenkaraOrgIdByOa.get(orgId) ?? null);
+        const s = await fillProfilesFromKnownSources(admin, orgId, tenkaraOrgIdByOa.get(orgId) ?? null, fillDeadline);
         filledFields += s.fieldsFilled;
         if (s.fieldsFilled) {
           await ctx.log(`Filled ${s.fieldsFilled} profile fields across ${s.profilesUpdated} suppliers`, {
@@ -136,10 +139,13 @@ registerAgent({
         webBudget -= s.attempted;
         webFilled += s.fieldsFilled;
         if (s.attempted) {
-          await ctx.log(`Web-filled ${s.fieldsFilled} fields over ${s.attempted} suppliers (${s.exhausted} fields not published)`, {
-            step: "web-fill-profiles",
-            data: { org_id: orgId, ...s },
-          });
+          await ctx.log(
+            `Web-filled ${s.fieldsFilled} fields over ${s.attempted} suppliers (${s.exhausted} fields not published, ${s.unreachable} sites unreachable, will retry)`,
+            {
+              step: "web-fill-profiles",
+              data: { org_id: orgId, ...s },
+            }
+          );
         }
       } catch (e: any) {
         await ctx.log(`Profile web fill failed for org ${orgId}: ${e?.message ?? e}`, { level: "warn", step: "web-fill-profiles" });
@@ -152,7 +158,7 @@ registerAgent({
     if (sourcingOrgIds.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary((allSourcingOrgIds.length ? "All orgs throttled by tier — not due yet." : "No orgs are active/sourcing_only — nothing to enrich.") + seedNote + fillNote);
+      ctx.setSummary((allSourcingOrgIds.length ? "All orgs throttled by tier, not due yet." : "No orgs are active/sourcing_only, nothing to enrich.") + seedNote + fillNote);
       return;
     }
 
@@ -285,7 +291,7 @@ registerAgent({
     for (let i = 0; i < leads.length; i += CONCURRENCY) {
       if (Date.now() - startedAt > DEADLINE_MS) {
         skipped = leads.length - i;
-        await ctx.log(`Deadline reached — leaving ${skipped} leads at raw for the next run`, { step: "deadline" });
+        await ctx.log(`Deadline reached, leaving ${skipped} leads at raw for the next run`, { step: "deadline" });
         break;
       }
       await Promise.all(leads.slice(i, i + CONCURRENCY).map(processLead));

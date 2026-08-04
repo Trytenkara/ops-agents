@@ -35,6 +35,7 @@ export interface WebFillResult {
   payment_net_days: number | null;
   payment_completion: string | null;
   payment_credit_line: string | null;
+  site_found: boolean;
   source_url: string | null;
   notes: string | null;
 }
@@ -60,7 +61,8 @@ Return ONLY a JSON object:
   "payment_net_days": number|null,   // only if the site states net terms, e.g. "Net 30" -> 30
   "payment_completion": string|null, // balance/completion terms, verbatim
   "payment_credit_line": string|null,// credit line / credit application terms, verbatim
-  "source_url": string|null,         // the page you took most of this from
+  "site_found": boolean,             // true only if you actually read at least one page belonging to THIS supplier, even if it stated none of the fields
+  "source_url": string|null,         // the page you read, even when it yielded nothing
   "notes": string|null               // one short line on what you could not find and why
 }
 
@@ -69,6 +71,7 @@ Rules:
 - A field that is not explicitly printed on a page you actually read must be null. A blank is always better than a plausible invention.
 - Reject aggregator contact details (@alibaba.com, @indiamart.com, @tradeindia.com, @thomasnet.com, helpdesk@, inquiry-form addresses). Those are not the supplier's own contact.
 - Negotiated terms are usually NOT public. Returning all nulls for the payment fields is a normal, correct outcome. Do not stretch to fill them.
+- site_found is about reach, not yield: true when you got a page of theirs open, false when the supplier has no findable site or every fetch failed. A false here means we try again later rather than recording their fields as unpublished.
 - Take each value verbatim from the page. Do not translate, normalize, or reformat, other than converting "Net 30" style text to the number 30 for payment_net_days.`;
 
 let client: Anthropic | null = null;
@@ -112,7 +115,7 @@ const cleanNum = (v: any, max: number): number | null => {
 export async function webFillSupplierProfile(input: WebFillInput): Promise<WebFillResult> {
   const lines = [
     `Supplier: ${input.supplier_name}`,
-    `Website on file: ${input.website ?? "unknown — find it"}`,
+    `Website on file: ${input.website ?? "unknown, find it"}`,
     input.known_email ? `Known contact email: ${input.known_email}` : null,
     `Fields still missing: ${input.missing.join(", ")}`,
     "",
@@ -140,7 +143,7 @@ export async function webFillSupplierProfile(input: WebFillInput): Promise<WebFi
       poc_email: null, poc_phone: null, poc_name: null, shipping_address: null,
       shipping_terms: null, shipping_email: null, billing_email: null, billing_poc_name: null,
       payment_upfront_pct: null, payment_net_days: null, payment_completion: null, payment_credit_line: null,
-      source_url: null, notes: `Model returned no JSON: ${text.slice(0, 160)}`,
+      site_found: false, source_url: null, notes: `Model returned no JSON: ${text.slice(0, 160)}`,
     };
   }
 
@@ -157,6 +160,7 @@ export async function webFillSupplierProfile(input: WebFillInput): Promise<WebFi
     payment_net_days: cleanNum(parsed.payment_net_days, 365),
     payment_completion: cleanText(parsed.payment_completion),
     payment_credit_line: cleanText(parsed.payment_credit_line),
+    site_found: parsed.site_found === true || !!cleanText(parsed.source_url),
     source_url: cleanText(parsed.source_url),
     notes: cleanText(parsed.notes),
   };

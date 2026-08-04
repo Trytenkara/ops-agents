@@ -126,7 +126,8 @@ export interface FillStats {
 export async function fillProfilesFromKnownSources(
   admin: SupabaseClient,
   orgId: string,
-  tenkaraOrgId: string | null
+  tenkaraOrgId: string | null,
+  deadline?: number
 ): Promise<FillStats> {
   const stats: FillStats = { profilesUpdated: 0, fieldsFilled: 0, bySource: {} };
   const profiles = await getSupplierProfiles(admin, orgId);
@@ -182,6 +183,9 @@ export async function fillProfilesFromKnownSources(
   }
 
   for (const p of profiles) {
+    // A first pass over a large backlog is thousands of writes; stop at the
+    // budget and let the next cycle continue, since the sweep is idempotent.
+    if (deadline && Date.now() > deadline) break;
     const nameKey = norm(p.supplier_name);
     const updates: Record<string, any> = {};
     const sources: Record<string, FieldSource> = {};
