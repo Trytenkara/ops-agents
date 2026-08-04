@@ -78,6 +78,17 @@ function normalizeDate(v: any): string | null {
   return m ? v.trim() : null;
 }
 
+// An SDS carries no expiry, only a revision date, so asking for "the single most
+// relevant validity date" invites the revision date back as expires_on. Observed
+// live: a Lab Alley glycerin SDS revised 2026-06-09 came back expiring 2026-06-09,
+// which badges a current SDS as expired on the bench. Same trap on a TDS.
+function validExpiry(expiry: string | null, docType: DocType, fields: Record<string, any>): string | null {
+  if (!expiry) return null;
+  if (docType !== "sds" && docType !== "tds") return expiry;
+  const revision = typeof fields.revision_date === "string" ? fields.revision_date : null;
+  return expiry === revision ? null : expiry;
+}
+
 // Parse the document bytes into structured fields. Returns null on any failure
 // (missing key, unsupported type, API/parse error) — content extraction must
 // never break inbound handling.
@@ -126,10 +137,8 @@ Rules:
     const text = msg.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("\n");
     const parsed = extractJson(text);
     if (!parsed || typeof parsed !== "object") return null;
-    return {
-      expires_on: normalizeDate(parsed.expires_on),
-      fields: parsed.fields && typeof parsed.fields === "object" ? parsed.fields : {},
-    };
+    const fields = parsed.fields && typeof parsed.fields === "object" ? parsed.fields : {};
+    return { expires_on: validExpiry(normalizeDate(parsed.expires_on), docType, fields), fields };
   } catch {
     return null;
   }
