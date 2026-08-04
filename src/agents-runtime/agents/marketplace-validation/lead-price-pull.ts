@@ -3,6 +3,7 @@ import { recheckMarketplaceQuote, type AggregatorSeller } from "./price-recheck"
 import { convertToUsd } from "@/lib/fx";
 import { ensureMarketplaceCaseDims } from "@/lib/marketplace-case-dims-fill";
 import { neverMarketplaceHostOf } from "@/lib/marketplace-hosts";
+import { screenClonedListings } from "@/lib/clone-ring";
 import { aggregatorNameOf, isAggregatorIndexUrl, isAggregatorPlatformName } from "@/lib/aggregator-hosts";
 import { getOrgOperatorPool, getSupplierAssignments, resolveSupplierOperatorId } from "@/lib/operator-assignment";
 
@@ -145,8 +146,15 @@ export async function expandAggregatorIndexPage(opts: {
   indexUrl: string;
   sellers: AggregatorSeller[];
 }): Promise<number> {
-  const { admin, log, runId, lead: l, indexUrl, sellers } = opts;
+  const { admin, log, runId, lead: l, indexUrl, sellers: read } = opts;
   const aggregator = aggregatorNameOf(indexUrl);
+  const { kept: sellers, screened } = screenClonedListings(read);
+  if (screened.length) {
+    await log(
+      `Screened ${screened.length} cloned listing${screened.length === 1 ? "" : "s"} off ${aggregator ?? "an aggregator"} index page (same listing under ${new Set(screened.map((s) => s.supplier_name)).size} invented seller names): ${l.material_name}`,
+      { level: "warn", step: "mp_aggregator_split", data: { lead_id: l.id, index_url: indexUrl, screened: screened.map((s) => ({ supplier_name: s.supplier_name, product_url: s.product_url })) } },
+    );
+  }
     // Don't re-stage sellers already on file for this material (a re-read of the
     // same index page, or a seller the scout found directly).
     const urls = sellers.map((s) => s.product_url);
@@ -219,14 +227,15 @@ export async function expandAggregatorIndexPage(opts: {
           aggregator_split: {
             at: new Date().toISOString(),
             index_url: indexUrl,
-            sellers_found: sellers.length,
+            sellers_found: read.length,
             sellers_staged: fresh.length,
+            sellers_screened: screened.length || undefined,
           },
         },
       })
       .eq("id", l.id);
     await log(
-      `Aggregator index page split into ${fresh.length} seller lead${fresh.length === 1 ? "" : "s"} (${sellers.length} read${sellers.length - fresh.length ? `, ${sellers.length - fresh.length} already on file` : ""}): ${l.supplier_name} × ${l.material_name}`,
+      `Aggregator index page split into ${fresh.length} seller lead${fresh.length === 1 ? "" : "s"} (${read.length} read${sellers.length - fresh.length ? `, ${sellers.length - fresh.length} already on file` : ""}${screened.length ? `, ${screened.length} cloned listings screened` : ""}): ${l.supplier_name} × ${l.material_name}`,
       { step: "mp_aggregator_split", data: { lead_id: l.id, index_url: indexUrl, staged: fresh.length } },
     );
     return fresh.length;
