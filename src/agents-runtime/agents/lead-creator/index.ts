@@ -32,12 +32,51 @@ function cleanSupplierWebsite(url: string | null | undefined): string | null {
 // webhook that runs supplier_search_v3 and stages source='sourceready' leads
 // out-of-band. Inert unless SOURCEREADY_WEBHOOK_URL + _SECRET are set.
 const SOURCEREADY_MAX_MATERIALS_PER_RUN = envInt("SOURCEREADY_MAX_MATERIALS_PER_RUN", 25);
-// Suppliers requested per discovery fire; also the page stride. Each pass sends
-// page = floor(existing source leads for this material / size) + 1 so repeated
-// runs walk deeper (page 1, 2, 3, …) instead of re-fetching the same top results.
+// Suppliers requested per discovery fire; also the page stride.
 const SOURCEREADY_PAGE_SIZE = envInt("SOURCEREADY_PAGE_SIZE", 25);
 const IMPORTYETI_PAGE_SIZE = envInt("IMPORTYETI_PAGE_SIZE", 10);
+// Seed only, for materials with no cursor yet: where the old count-derived
+// paging would have been, so they resume mid-corpus instead of restarting.
 const pageFor = (count: number, size: number) => Math.floor(Math.max(0, count) / Math.max(1, size)) + 1;
+
+// Pagination cursor for the SourceReady / ImportYeti discovery fires.
+//
+// The page to request CANNOT be derived from the ingested lead count. Ingestion
+// is lossy — host/name dedup, aggregator-platform filtering, the customs
+// relevance filter and the dead-URL probe drop 30-45% of a returned page — so
+// floor(count/size)+1 sticks one step short of the stride and re-requests the
+// SAME page forever, making the deeper corpus unreachable. Measured 2026-08-04:
+// Cetearyl Alcohol had ingested 54 active leads of a 100-supplier page 1, so it
+// re-fired page 1 on every pass while page 2 held 92 suppliers we had never
+// seen. ImportYeti was worse — its yield per material (1-44) never reaches a
+// stride of 50, so every material fleet-wide was pinned to page 1.
+//
+// So the cursor is explicit: advance exactly one page per fire regardless of how
+// much of the previous page survived ingestion. Wrap back to page 1 only after
+// DISCOVERY_MAX_DRY_PAGES consecutive pages land nothing new — that means the
+// corpus is exhausted, and wrapping (rather than stopping) lets genuinely new
+// listings get picked up on a later pass.
+const DISCOVERY_MIN_NEW_PER_PAGE = envInt("DISCOVERY_MIN_NEW_PER_PAGE", 2);
+const DISCOVERY_MAX_DRY_PAGES = envInt("DISCOVERY_MAX_DRY_PAGES", 3);
+const PAGE_CURSOR_KEY = (source: string, materialId: string) => `discovery_page:${source}:${materialId}`;
+type PageCursor = { page: number; count: number; dry: number };
+
+function advancePageCursor(
+  cursor: PageCursor | undefined,
+  curCount: number,
+  countKnown: boolean,
+  size: number
+): PageCursor {
+  const prevPage = cursor?.page ?? pageFor(curCount, size);
+  let dry = cursor?.dry ?? 0;
+  // Growth is only meaningful when this run actually counted leads (a targeted
+  // single-material run skips the bulk count), and only against a real cursor.
+  if (countKnown && cursor) {
+    dry = curCount - cursor.count >= DISCOVERY_MIN_NEW_PER_PAGE ? 0 : dry + 1;
+  }
+  if (dry >= DISCOVERY_MAX_DRY_PAGES) return { page: 1, count: curCount, dry: 0 };
+  return { page: prevPage + 1, count: curCount, dry };
+}
 // ImportYeti discovery mirrors SourceReady: fired per material (bounded per run)
 // to a Gamut webhook that pulls US-customs suppliers and stages source='importyeti'
 // leads out-of-band. Inert unless IMPORTYETI_WEBHOOK_URL + _SECRET are set.
@@ -293,6 +332,29 @@ registerAgent({
     // the lead count recorded at the last attempt, per material.
     const dryStreak = new Map<string, number>();
     const lastAttemptCount = new Map<string, number>();
+    // Discovery page cursors, keyed `${source}:${materialId}`. Loaded
+    // unconditionally — a targeted single-material run must page deeper too,
+    // otherwise every manual re-run re-fetches page 1.
+    const pageCursors = new Map<string, PageCursor>();
+    for (let from = 0; ; from += 1000) {
+      const { data: rows } = await admin
+        .from("agent_state")
+        .select("key, value")
+        .eq("agent_id", ctx.agentId)
+        .like("key", "discovery_page:%")
+        .range(from, from + 999);
+      const batch = (rows ?? []) as { key: string; value: any }[];
+      for (const r of batch) {
+        const page = Number(r.value?.page);
+        if (!Number.isFinite(page) || page < 1) continue;
+        pageCursors.set(r.key.slice("discovery_page:".length), {
+          page,
+          count: Number(r.value?.count) || 0,
+          dry: Number(r.value?.dry) || 0,
+        });
+      }
+      if (batch.length < 1000) break;
+    }
     if (!onlyMaterialId) {
       const targetTenkaraOrgIds = Array.from(sourcingTenkaraOrgIds);
       try {
@@ -938,7 +1000,13 @@ registerAgent({
       ) {
         const excludeHosts = new Set<string>(graphHosts);
         for (const h of existingHostsByMaterial.get(material.id) ?? []) excludeHosts.add(h);
-        const srPage = pageFor(srLeadCount.get(material.id) ?? 0, SOURCEREADY_PAGE_SIZE);
+        const srCursor = advancePageCursor(
+          pageCursors.get(`sourceready:${material.id}`),
+          srLeadCount.get(material.id) ?? 0,
+          !onlyMaterialId,
+          SOURCEREADY_PAGE_SIZE
+        );
+        const srPage = srCursor.page;
         const ok = await fireSourceReadyDiscovery({
           oaOrgId,
           materialId: material.id,
@@ -950,10 +1018,20 @@ registerAgent({
           size: SOURCEREADY_PAGE_SIZE,
           page: srPage,
         });
-        if (ok) sourceReadyFired++;
+        if (ok) {
+          sourceReadyFired++;
+          await admin.from("agent_state").upsert(
+            {
+              agent_id: ctx.agentId,
+              key: PAGE_CURSOR_KEY("sourceready", material.id),
+              value: { ...srCursor, at: new Date().toISOString() },
+            },
+            { onConflict: "agent_id,key" }
+          );
+        }
         await ctx.log(
           ok ? `Fired SourceReady discovery for ${matLabel} (page ${srPage})` : `SourceReady discovery request failed for ${matLabel}`,
-          { step: "sourceready", level: ok ? "info" : "warn", data: { material_id: material.id, page: srPage } }
+          { step: "sourceready", level: ok ? "info" : "warn", data: { material_id: material.id, page: srPage, dry_pages: srCursor.dry } }
         );
       }
 
@@ -967,7 +1045,13 @@ registerAgent({
         importYetiFired < IMPORTYETI_MAX_MATERIALS_PER_RUN &&
         (!alreadyScouted.has(material.id) || srBacklog)
       ) {
-        const iyPage = pageFor(iyLeadCount.get(material.id) ?? 0, IMPORTYETI_PAGE_SIZE);
+        const iyCursor = advancePageCursor(
+          pageCursors.get(`importyeti:${material.id}`),
+          iyLeadCount.get(material.id) ?? 0,
+          !onlyMaterialId,
+          IMPORTYETI_PAGE_SIZE
+        );
+        const iyPage = iyCursor.page;
         const ok = await fireImportYetiDiscovery({
           oaOrgId,
           materialId: material.id,
@@ -978,10 +1062,20 @@ registerAgent({
           size: IMPORTYETI_PAGE_SIZE,
           page: iyPage,
         });
-        if (ok) importYetiFired++;
+        if (ok) {
+          importYetiFired++;
+          await admin.from("agent_state").upsert(
+            {
+              agent_id: ctx.agentId,
+              key: PAGE_CURSOR_KEY("importyeti", material.id),
+              value: { ...iyCursor, at: new Date().toISOString() },
+            },
+            { onConflict: "agent_id,key" }
+          );
+        }
         await ctx.log(
           ok ? `Fired ImportYeti discovery for ${matLabel} (page ${iyPage})` : `ImportYeti discovery request failed for ${matLabel}`,
-          { step: "importyeti", level: ok ? "info" : "warn", data: { material_id: material.id, page: iyPage } }
+          { step: "importyeti", level: ok ? "info" : "warn", data: { material_id: material.id, page: iyPage, dry_pages: iyCursor.dry } }
         );
       }
 
