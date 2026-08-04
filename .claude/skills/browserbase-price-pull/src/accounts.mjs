@@ -13,7 +13,7 @@
 //     in the SAME shape Agent 05 (lead-price-pull.ts) writes
 //   - open a case (the human "click the confirm link" task)
 
-import { atRate, toUsdRate } from "./fx.mjs";
+import { normalizeResultToUsd } from "./fx.mjs";
 
 const OA_REF = "aiyzpjnvenfmurhyamge";
 const BASE = `https://${OA_REF}.supabase.co/rest/v1`;
@@ -43,12 +43,19 @@ async function oa(path, { method = "GET", body, prefer } = {}) {
 
 // ---- orgs -----------------------------------------------------------------
 
-// Resolve an org by uuid or slug. Returns {id, name, slug, purchasing_email}.
+// Resolve an org by uuid or slug. Returns {id, name, slug, purchasing_email,
+// tenkara_email_address, signup_email}. signup_email is the address marketplace
+// signups should register with: the explicit purchasing_email if set, else the
+// org's Tenkara-managed outreach address (Control Room field) — which is ALSO
+// the inbox our message.received webhook reads, so confirmation emails
+// auto-click without a human.
 export async function getOrg(orgRef) {
   const isUuid = /^[0-9a-f-]{36}$/i.test(orgRef);
   const filter = isUuid ? `id=eq.${orgRef}` : `slug=eq.${encodeURIComponent(orgRef)}`;
-  const rows = await oa(`orgs?${filter}&select=id,name,slug,purchasing_email&limit=1`);
-  return rows?.[0] ?? null;
+  const rows = await oa(`orgs?${filter}&select=id,name,slug,purchasing_email,tenkara_email_address&limit=1`);
+  const org = rows?.[0] ?? null;
+  if (org) org.signup_email = org.purchasing_email || org.tenkara_email_address || null;
+  return org;
 }
 
 // Orgs currently in a sourcing state (the fleet's org gate) — BOTH `active` and
@@ -164,40 +171,46 @@ export async function listLoginRequiredLeads(orgId, { host, reasons = ["login_re
     .filter((l) => l.url && (!host || hostOf(l.url) === host));
 }
 
+// A `0` (or negative) price is never real — it's a variant that hasn't loaded, a
+// placeholder in a feed, or a DOM read that fired before hydration. Publishing it
+// would show a supplier as free. Drop those tiers; if that leaves no price, the
+// lead falls back to needs_review rather than a fake number.
+function dropZeroPrices(result) {
+  const bad = (p) => p == null || !Number.isFinite(Number(p)) || Number(p) <= 0;
+  const tiers = (result.tiers ?? []).filter((t) => !bad(t.price));
+  const dropped = (result.tiers ?? []).length - tiers.length;
+  if (!dropped && !bad(result.current_price)) return result;
+
+  const out = { ...result, tiers };
+  if (bad(out.current_price)) {
+    // Promote a surviving tier if there is one; otherwise this pull found nothing.
+    if (tiers.length) {
+      out.current_price = tiers[0].price;
+      out.pack_size = tiers[0].pack_size ?? out.pack_size ?? null;
+    } else {
+      out.classification = "needs_review";
+      out.current_price = null;
+      out.unit_price = null;
+    }
+  }
+  const note = dropped
+    ? `${dropped} zero-price variant(s) discarded as unhydrated/placeholder reads.`
+    : "zero price discarded as an unhydrated/placeholder read.";
+  out.notes = out.notes ? `${out.notes} ${note}` : note;
+  return out;
+}
+
 // Write a pulled price back in the same shape lead-price-pull.ts uses, so the
 // Marketplace-pricing tab and downstream tiering read it identically.
-export async function writePull(lead, result) {
+export async function writePull(lead, rawResult) {
+  rawResult = dropZeroPrices(rawResult);
+  // Foreign-currency prices are converted to USD (or quarantined when no rate is
+  // reachable) BEFORE they can reach the DB — the OA check constraint rejects a
+  // `pulled` row whose currency isn't USD.
+  const result = await normalizeResultToUsd(rawResult);
   const url = lead.url;
   const source = result.source ?? "browserbase_login"; // e.g. "browserbase_agent" for the native-agent tier
   const now = new Date().toISOString();
-  // Every price published here is USD, the same invariant lead-price-pull.ts holds.
-  // The extractor reports the currency AS LISTED, so restate it before anything is
-  // written. Runs before `gotPrice` so an unconvertible listing falls through to the
-  // miss path on its own rather than publishing a foreign number that reads as
-  // dollars — ₹149 as $149 overstates by ~96x.
-  if (result.classification === "current_price_found") {
-    const fx = await toUsdRate(result.currency);
-    if (fx.status === "unconvertible") {
-      result.classification = "needs_review";
-      result.current_price = null;
-      result.unit_price = null;
-      result.tiers = [];
-      result.notes = `Listed in ${fx.currency}; USD conversion unavailable — not publishing an unconverted price. ${result.notes ?? ""}`.trim();
-    } else if (fx.status === "converted") {
-      // The ladder converts with the headline price: leaving tiers in the listed
-      // currency is what made the two disagree on a foreign listing.
-      result.current_price = atRate(result.current_price, fx.rate);
-      result.unit_price = atRate(result.unit_price, fx.rate);
-      result.tiers = (result.tiers ?? []).map((t) => ({
-        ...t,
-        price: atRate(t.price, fx.rate),
-        unit_price: atRate(t.unit_price, fx.rate),
-      }));
-      result.notes = `Converted from ${fx.currency} to USD @ ${fx.rate.toFixed(6)}. ${result.notes ?? ""}`.trim();
-      result.currency = "USD";
-    }
-  }
-
   const gotPrice = result.classification === "current_price_found" && result.current_price != null;
   const prev = lead.payload?.marketplace_pull ?? {};
   const hadPrice = prev.status === "pulled" && prev.price != null;
@@ -214,12 +227,11 @@ export async function writePull(lead, result) {
       unit_price: result.unit_price ?? null,
       price: result.current_price,
       pack_size: result.pack_size ?? null,
-      // Literal, not `result.currency`: the block above has already converted or
-      // refused, so a foreign code reaching this object would be a bug, not a value.
-      currency: "USD",
+      currency: result.currency ?? "USD",
       source_url: result.source_url ?? url,
       source,
       pulled_at: now,
+      ...(result.original_currency ? { original_currency: result.original_currency, fx_rate: result.fx_rate } : {}),
       ...(priceChanged ? { previous_price: prev.price, price_changed_at: now } : {}),
     };
     const tiers = (result.tiers ?? []).length
@@ -231,25 +243,13 @@ export async function writePull(lead, result) {
     // Refresh could NOT read a price this run, but we already have a good one.
     // NEVER wipe good pricing on a transient miss — keep the last-known price live
     // and FLAG that today's refresh failed, with the reason WHY, for ops visibility.
-    // One exception: a stored price predating the USD invariant. Preserving it would
-    // re-publish a foreign number, so that row is sent for a manual pull instead.
-    pull =
-      (prev.currency ?? "USD") === "USD"
-        ? {
-            ...prev,
-            source,
-            refresh_failed_at: now,
-            refresh_fail_reason: result.classification, // login_required | link_broken | needs_review
-            refresh_fail_notes: result.notes ?? null,
-          }
-        : {
-            status: "needs_manual_pull",
-            reason: "stale_non_usd_price",
-            source,
-            source_url: prev.source_url ?? url,
-            last_notes: `Dropped a stored ${prev.currency} price that predates the USD invariant. ${result.notes ?? ""}`.trim(),
-            at: now,
-          };
+    pull = {
+      ...prev,
+      source,
+      refresh_failed_at: now,
+      refresh_fail_reason: result.classification, // login_required | link_broken | needs_review
+      refresh_fail_notes: result.notes ?? null,
+    };
   } else {
     // No price now and none before — flag for manual pull WITH the reason why.
     pull = {

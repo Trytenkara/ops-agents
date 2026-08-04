@@ -16,6 +16,7 @@
 
 import { withRotatingSession, BanError } from "./src/session.mjs";
 import { adapterForHost, generatePassword, signupIdentity } from "./src/adapters.mjs";
+import { isRfqWall, runSignup } from "./src/login.mjs";
 import { getOrg, getAccount, createAccount, updateAccount, openCase } from "./src/accounts.mjs";
 
 function arg(name, def = null) {
@@ -32,13 +33,22 @@ async function main() {
   const dryRun = !!arg("dry-run");
   if (!orgRef) throw new Error("--org <slug|uuid> required");
 
+  // RFQ / quote-wall / directory hosts never expose a list price even logged in,
+  // so provisioning an account there is wasted — refuse up front.
+  if (isRfqWall(host)) {
+    console.log(JSON.stringify({ ok: false, skipped: true, reason: `${host} is an RFQ/quote wall — login yields no list price, not worth provisioning` }, null, 2));
+    return;
+  }
+
+  // A per-host adapter is now OPTIONAL: with one we use its tuned selectors, and
+  // without one we fall back to the generic Stagehand-driven signup (works on any
+  // self-serve marketplace). So no adapter is no longer a hard stop.
   const adapter = adapterForHost(host);
-  if (!adapter?.signup) throw new Error(`no signup adapter for ${host} (add one in src/adapters.mjs)`);
 
   const org = await getOrg(orgRef);
   if (!org) throw new Error(`org not found: ${orgRef}`);
 
-  const email = emailOverride || org.purchasing_email;
+  const email = emailOverride || org.signup_email;
   if (!email) {
     throw new Error(
       `no purchasing email for org "${org.slug}". Set orgs.purchasing_email or pass --email. ` +
@@ -67,12 +77,18 @@ async function main() {
 
   let result;
   try {
-    result = await withRotatingSession(async ({ page, viewUrl }) => {
-      const r = await adapter.signup(page, { email, password, ...identity });
-      r.viewUrl = viewUrl;
-      if (r.outcome === "blocked") throw new BanError(r.notes); // rotate to a fresh IP
-      return r;
-    });
+    if (adapter?.signup) {
+      // Tuned per-host adapter (raw Playwright over a rotating session).
+      result = await withRotatingSession(async ({ page, viewUrl }) => {
+        const r = await adapter.signup(page, { email, password, ...identity });
+        r.viewUrl = viewUrl;
+        if (r.outcome === "blocked") throw new BanError(r.notes); // rotate to a fresh IP
+        return r;
+      });
+    } else {
+      // Generic Stagehand signup — works on any self-serve marketplace, no adapter.
+      result = await runSignup({ email, password, host, signupUrl: adapter?.signupUrl ?? null, ...identity });
+    }
   } catch (e) {
     await updateAccount(account.id, { status: "failed", last_error: String(e?.message ?? e) });
     console.log(JSON.stringify({ ok: false, error: String(e?.message ?? e), account_id: account.id }, null, 2));

@@ -21,6 +21,8 @@ import { adapterForHost } from "./src/adapters.mjs";
 import { extractPricing } from "./src/extract.mjs";
 import { agenticPull } from "./src/agentic.mjs";
 import { startRun, pollRun, toMarketplacePull } from "./src/bbagent.mjs";
+import { shopifyPull } from "./src/shopify.mjs";
+import { isRfqWall } from "./src/login.mjs";
 import { listAccounts, getOrg, listActiveOrgs, listLoginRequiredLeads, writePull, updateAccount, stampAgentRun, listPendingAgentRunLeads } from "./src/accounts.mjs";
 
 // Tier-2 escalation: the native Browserbase Agent, run only on leads the cheap
@@ -189,6 +191,58 @@ function hostOf(u) {
   try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return "?"; }
 }
 
+function leadHasPrice(lead) {
+  const mp = lead.payload?.marketplace_pull;
+  return mp?.status === "pulled" && mp.price != null;
+}
+
+// RFQ walls (knowde, alibaba, tradeindia, globalsources…) show no list price even
+// logged in, but they were still getting a full browser session each, every run —
+// 365 of 1257 leads, 29% of the pool, for 31 prices ever. Skip the ones that have
+// never yielded a price; keep refreshing the handful that did, so we lose nothing.
+function partitionRfqWalls(leads) {
+  const keep = [];
+  const skipped = [];
+  for (const l of leads) {
+    if (isRfqWall(hostOf(l.url)) && !leadHasPrice(l)) skipped.push(l);
+    else keep.push(l);
+  }
+  return { keep, skipped };
+}
+
+// TIER A½ — deterministic Shopify feed read, before any browser session is opened.
+// Plain fetch, no LLM, no proxy: a Shopify store publishes exact per-variant prices
+// at /products/<handle>.js in the base currency from /meta.json. Leads it prices are
+// written and removed from the browser worklist; everything else falls through
+// untouched (a null result never writes, so it can't downgrade an existing price).
+async function shopifyPrepass(leads, { dryRun, concurrency = 16 } = {}) {
+  const resolved = new Set();
+  if (!leads.length) return { resolved, pulled: 0, tried: 0 };
+  if (dryRun) return { resolved, pulled: 0, tried: leads.length, note: `would try Shopify feed on ${leads.length} lead(s)` };
+
+  let pulled = 0;
+  let i = 0;
+  async function worker() {
+    while (i < leads.length) {
+      const lead = leads[i++];
+      try {
+        const result = await shopifyPull({ url: lead.url, material: lead.material_name, supplier: lead.supplier_name });
+        if (!result) continue;
+        result.source = "shopify_feed";
+        if (await writePull(lead, result)) {
+          resolved.add(lead.id);
+          pulled++;
+          console.log(`  ⚡ ${lead.supplier_name} × ${lead.material_name} → ${result.currency} ${result.current_price} (${result.tiers.length} tier${result.tiers.length > 1 ? "s" : ""}) [shopify feed]`);
+        }
+      } catch (e) {
+        console.log(`  · shopify feed error for ${lead.supplier_name}: ${String(e?.message ?? e).slice(0, 80)}`);
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, leads.length) }, worker));
+  return { resolved, pulled, tried: leads.length };
+}
+
 // Per-host semaphore: even with distinct residential IPs, firing many leads at ONE
 // host at once triggers that host's rate-limiter (the 429s). Cap concurrent
 // in-flight sessions per host; a slot is handed straight to a waiter on release
@@ -233,8 +287,8 @@ function withTimeout(promise, ms) {
 // org drains in ~one lead's wall-time (~2.4 min) instead of leads×2.4 min. Same
 // total browser-minutes, just parallel. A per-host cap keeps us from hammering one
 // domain, and a per-lead timeout keeps a hung lead from holding a slot.
-async function pullLeadsParallel(leads, { concurrency = 50, dryRun, deadline = 0, hostCap = 4, leadTimeoutMs = 220000, maxAttempts = 3 } = {}) {
-  if (dryRun) return { pulled: 0, failed: 0, note: `would parallel-pull ${leads.length} lead(s) @concurrency=${concurrency} host-cap=${hostCap}` };
+async function pullLeadsParallel(leads, { concurrency = 50, dryRun, deadline = 0, hostCap = 4, leadTimeoutMs = 220000, maxAttempts = 3, credentialsFor = null, sourceLabel = "browserbase_stagehand" } = {}) {
+  if (dryRun) return { pulled: 0, failed: 0, note: `would parallel-pull ${leads.length} lead(s) @concurrency=${concurrency} host-cap=${hostCap}${credentialsFor ? " (with login)" : ""}` };
   let pulled = 0;
   let failed = 0;
   let stoppedForTime = false;
@@ -258,10 +312,11 @@ async function pullLeadsParallel(leads, { concurrency = 50, dryRun, deadline = 0
         // exception we retry on is the timeout itself.
         let result = null;
         let lastErr = null;
+        const credentials = credentialsFor ? credentialsFor(lead) : null;
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
           try {
             result = await withTimeout(
-              agenticPull({ url: lead.url, supplier: lead.supplier_name, material: lead.material_name }),
+              agenticPull({ url: lead.url, supplier: lead.supplier_name, material: lead.material_name, credentials }),
               leadTimeoutMs,
             );
             break;
@@ -275,7 +330,7 @@ async function pullLeadsParallel(leads, { concurrency = 50, dryRun, deadline = 0
           }
         }
         if (result) {
-          result.source = "browserbase_stagehand";
+          result.source = sourceLabel;
           const gotPrice = await writePull(lead, result);
           if (gotPrice) {
             pulled++;
@@ -286,7 +341,7 @@ async function pullLeadsParallel(leads, { concurrency = 50, dryRun, deadline = 0
           }
         } else {
           const note = lastErr?.timedOut ? `timed out after ${maxAttempts}×${Math.round(leadTimeoutMs / 1000)}s` : `stagehand error: ${String(lastErr?.message ?? lastErr).slice(0, 180)}`;
-          await writePull(lead, { classification: "needs_review", notes: note, source: "browserbase_stagehand" });
+          await writePull(lead, { classification: "needs_review", notes: note, source: sourceLabel });
           failed++;
           console.log(`  · ${lead.supplier_name} × ${lead.material_name} → needs_review (${note.slice(0, 80)})`);
         }
@@ -425,12 +480,24 @@ async function harvestAgentRuns(org, { dryRun } = {}) {
   return { harvested: leads.length, pulled };
 }
 
-async function pullForAccount(account, org, leads, { dryRun }) {
+async function pullForAccount(account, org, leads, { dryRun, concurrency = 4, hostCap = 2, leadTimeoutMs = 240000 }) {
+  // Generic Stagehand login (no per-host adapter needed): each lead's session
+  // authenticates with this account's credentials, then reads the now-visible
+  // gated price. An optional per-host adapter still supplies a known loginUrl.
   const adapter = adapterForHost(account.host);
-  if (!adapter?.login) return { pulled: 0, failed: 0, note: `no login adapter for ${account.host}` };
-  const r = await pullLeads(leads, {
-    login: (page) => adapter.login(page, { email: account.signup_email, password: account.password }),
+  const credentials = {
+    email: account.signup_email,
+    password: account.password,
+    host: account.host,
+    loginUrl: adapter?.loginUrl ?? null,
+  };
+  const r = await pullLeadsParallel(leads, {
     dryRun,
+    concurrency,
+    hostCap,
+    leadTimeoutMs,
+    credentialsFor: () => credentials,
+    sourceLabel: "browserbase_login",
   });
   if (!dryRun) await updateAccount(account.id, { last_login_at: new Date().toISOString() });
   return r;
@@ -462,6 +529,13 @@ async function main() {
   // daily prices stay current; writePull reflects changes and keeps the last-known
   // price (flagging the WHY) when a refresh can't read one.
   const refreshAll = !!arg("refresh-all");
+  // Tier A½ (Shopify canonical feed) and the RFQ-wall skip are both ON by default —
+  // they make the run cheaper and more accurate. Opt out per run when debugging.
+  const useShopify = !arg("no-shopify");
+  const skipWalls = !arg("include-rfq-walls");
+  // Run ONLY the free Shopify feed tier and stop — no Browserbase sessions. Useful
+  // as a fast standalone sweep and for verifying the tier without spending browser time.
+  const shopifyOnly = !!arg("shopify-only");
   // Per-host concurrency cap + per-lead wall-clock timeout for the parallel pass.
   const hostCap = Number(arg("host-cap")) || 4;
   const leadTimeoutMs = (Number(arg("lead-timeout")) || 220) * 1000;
@@ -482,7 +556,7 @@ async function main() {
   // false-positive case where the price is actually public (Agent 05 over-flags
   // generic "sign in" nav as a paywall). Ignores marketplace_accounts.
   // Scope: --org <slug>, or --all-active (every sourcing_status=active org).
-  if (noLogin || agentic || harvest) {
+  if (noLogin || agentic || harvest || shopifyOnly) {
     const skipInternal = !!arg("skip-internal");
     let orgs;
     if (allActive) orgs = await listActiveOrgs();
@@ -506,21 +580,43 @@ async function main() {
 
         // Tier 1 passive pull (skip when this is a harvest-only run).
         let r = { pulled: 0, failed: 0, leads: 0 };
-        if (noLogin || agentic) {
+        if (noLogin || agentic || shopifyOnly) {
           let leads = await listLoginRequiredLeads(org.id, {
             reasons,
             all: refreshAll,
             ...(hostFilter ? { host: hostFilter.replace(/^www\./, "") } : {}),
           });
+          // Drop unpullable RFQ walls BEFORE the cap, so --limit is spent on leads
+          // that can actually yield a price.
+          let wallSkipped = 0;
+          if (skipWalls) {
+            const part = partitionRfqWalls(leads);
+            wallSkipped = part.skipped.length;
+            leads = part.keep;
+            if (wallSkipped) console.log(`  ⊘ ${org.slug}: skipping ${wallSkipped} never-priced RFQ-wall lead(s) (--include-rfq-walls to pull them anyway)`);
+          }
           leads = leads.slice(0, limit);
           console.log(`\n[${org.slug}] ${agentic ? "agentic" : "no-login"}${refreshAll ? " REFRESH-ALL" : ""} pull of up to ${leads.length} lead(s)${concurrency > 1 ? ` @concurrency=${concurrency}` : ""}${maxMinutes ? ` (≤${maxMinutes} min budget)` : ""}${dryRun ? " (dry-run)" : ""}`);
+          // Cheapest tier first: the Shopify feed resolves what it can with a plain
+          // fetch, and only the residue reaches Browserbase.
+          let shop = null;
+          if (useShopify && leads.length) {
+            shop = await shopifyPrepass(leads, { dryRun });
+            if (shop.pulled) {
+              leads = leads.filter((l) => !shop.resolved.has(l.id));
+              console.log(`  ⚡ shopify feed priced ${shop.pulled}/${shop.tried} — ${leads.length} lead(s) left for the browser tiers`);
+            }
+          }
+          r.shopify = shop ? { tried: shop.tried, pulled: shop.pulled } : null;
+          r.rfq_walls_skipped = wallSkipped;
+          if (shopifyOnly) leads = [];
           if (leads.length) {
             const run = agentic
               ? await pullLeadsAgentic(leads, { dryRun })
               : concurrency > 1
                 ? await pullLeadsParallel(leads, { concurrency, dryRun, deadline, hostCap, leadTimeoutMs })
                 : await pullLeads(leads, { dryRun, deadline });
-            r = { leads: leads.length, ...run };
+            r = { ...r, leads: leads.length, ...run };
           }
         }
 

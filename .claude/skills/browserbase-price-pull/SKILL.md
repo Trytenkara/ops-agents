@@ -39,6 +39,69 @@ Prove IP rotation:
 node check-rotation.mjs 3      # opens 3 proxied sessions, prints each exit IP
 ```
 
+## Generic auto-login + auto-provisioning (no per-site adapter)
+
+Tier D (account login) no longer needs a hand-written adapter per host. `src/login.mjs` drives login and signup generically with Stagehand, deterministic selectors first, agent fallback second:
+
+- **`genericLogin(page, {email,password,host,loginUrl,stagehand})`** — reaches the auth form (explicit URL → common paths → agent opens the "Sign in" modal), fills email+password, submits, and heuristically confirms success. Wired into `agenticPull({credentials})`: when a lead's host has an `active` marketplace account, the Stagehand session **logs in first**, then reads the now-visible gated price. `batch.mjs`'s active-account path (`pullForAccount`) uses this via `pullLeadsParallel({credentialsFor, sourceLabel:"browserbase_login"})`.
+- **`genericSignup` / `runSignup`** — reaches a registration form (platform-aware paths: Shopify `/account/register`, Magento `/customer/account/create/`, BigCommerce `/login.php?action=create_account`, WooCommerce `/my-account/`, PrestaShop `controller=authentication`, plus generic ones), fills fields deterministically (the "auto" model-router agent burns its step budget navigating and rarely completes multi-field forms), ticks required consent checkboxes, submits, and classifies. Never fills on the homepage (avoids the header sign-IN widget). Returns `verification_pending | already_exists | blocked | no_form | unknown`.
+- **`isRfqWall(host)` / `RFQ_WALL_HOSTS`** — knowde, tridge, alibaba, indiamart, made-in-china, azelis, thomasnet, etc. Login there yields only a "Request a Quote" form, no list price, so provisioning + login SKIP these.
+
+### Auto-provision accounts — `provision.mjs`
+```bash
+node provision.mjs --all-active --skip-internal          # real clients, every gated host, RFQ walls skipped
+node provision.mjs --org california-chemicals            # one org
+node provision.mjs --org tenkara --host bulkfoods.com    # one host
+node provision.mjs --all-active --limit-hosts 10         # cap hosts/org this run
+node provision.mjs --verify-existing                     # re-probe accounts stuck in `verifying`
+node provision.mjs --all-active --dry-run                # plan only, no browser/DB
+```
+For each org (real clients first), collects the DISTINCT hosts of its `login_required` leads, drops RFQ walls + already-provisioned, and runs signup on each with the org's `purchasing_email` + a generated password. Writes a `marketplace_accounts` row (lifecycle `signing_up → active | verifying | failed`) and stores the password.
+
+**ACTIVATION = LOGIN PROBE, NOT EMAIL (2026-08-04).** After signup, `runSignup` calls `verifyByLogin`, which checks whether the session is already authenticated and, if not, logs in explicitly with the new credentials; either way it finishes with `probeAuthenticated(page, host)` — navigate to an account-only path (`/account`, `/my-account`, `/customer/account`, …) and require an authenticated marker (`sign out`, `my orders`, `account details`) with NO visible password field. Pass → status `active`, `confirmed_via = login_probe:<signup_session|login>`. This is the whole point: storefronts sign you in on registration and only need email confirmation to *order*, while we only need to *read prices*, so no mailbox is involved anywhere in the path. `probeAuthenticated` is deliberately stricter than `looksLoggedIn` (which returns true merely because the password field disappeared — that false-positives on a "check your email" page and on an agent that wandered off into a search results page).
+
+Registered-but-not-authenticated lands in `verifying` with the probe reason in `last_error`; `--verify-existing` re-runs the probe over those rows later and flips any that now authenticate. Nothing waits on a human.
+
+**Proven end-to-end 2026-08-04:** `nutricargo.com` (org `tenkara`) signed up → auto-authenticated → `active` via `login_probe:signup_session`, then `node batch.mjs --host nutricargo.com` priced 4/4 gated leads with full ladders (Paprika $20.17/4 tiers, Cayenne $16.46/4, Black Pepper $9.81, Thyme Leaf $22.41/4).
+
+**Signup email — zero setup (`accounts.mjs` `getOrg`):** the signup address is `org.signup_email = purchasing_email ?? tenkara_email_address`. Every sourcing org already has a Tenkara-managed outreach address in the Control Room, so provisioning works with NO extra config (California = `ccprocurement@californiachemical.com`). Crucially that inbox is the SAME one our `message.received` webhook reads → confirmations auto-click (below).
+
+**Auto-confirm loop — NO LONGER ON THE CRITICAL PATH (superseded by the login probe above; still deployed, harmless, and it never fired because Rod's email app only webhooks replies to agent-originated threads, so cold confirmation mail never reaches us).** `ops-agents/src/lib/marketplace-confirm.ts`: signups register with the org's Tenkara inbox, so the "confirm your email" message arrives via the `message.received` webhook. `maybeConfirmMarketplaceSignup` runs at the TOP of `handleInboundReply` (before supplier-reply matching): detects a confirmation email (subject/body context), matches it to a `verifying`/`signing_up` account (sender-domain or link-host == account host, AND `to_email == signup_email`), extracts the best confirm link (confirm/verify/token keywords, skips unsubscribe/social), and **clicks it server-side**; on success flips the account `active` + resolves the case (`confirmed_via = webhook_fetch`). If the click 403s (host blocks Vercel's datacenter IP — common), it stores `confirm_url` and leaves `verifying` for the browser fallback. Migration `0068` adds `confirm_url` / `confirmed_via`. VERIFIED end-to-end via a signed synthetic webhook (detect→match→extract→click→store).
+
+**Browser confirm fallback — `confirm.mjs`:** drains `verifying` accounts that have a stored `confirm_url` (the ones the server fetch 403'd) by opening the link in a proxied Browserbase session (residential IP) and flipping `active` (`confirmed_via = browserbase_click`). Run `node confirm.mjs` after a provision batch.
+
+**Signup-yield fixes shipped 2026-08-04 (all found by working California's gated leads):**
+- **Register-form scoping (`registerFormPrefix` + `REGISTER_FORM_SEL`)** — combined login/register pages (WooCommerce `form.woocommerce-form-register`, which has no id) were both missed by the id/action-only shell check AND, once found, filled unscoped: `EMAIL_SELECTORS` includes `input[name=username]`, which belongs to the LOGIN form and comes FIRST in the DOM. Every fill and the submit are now prefixed with the register form's selector.
+- **Checkbox ticking actually works now** — the Stagehand locator wrapper exposes no `.check()`/`.isChecked()`, and the old code swallowed both in `.catch()`, so `acceptRequiredCheckboxes` had been silently ticking NOTHING and every consent-gated form failed validation invisibly. It now clicks the boxes inside `page.evaluate`.
+- **`selectCountry`** — a required country `<select>` is usually select2-enhanced, so the real element is hidden and `selectOption()` cannot reach it. Submitting with it empty fails HTML5 validation with no visible error and no navigation (silent dead end). Set through the DOM + a bubbling `change` + a jQuery `.trigger('change')`.
+- **`awaitCaptchaToken`** — Browserbase solves reCAPTCHA in the background; submitting before the token lands posts an empty `g-recaptcha-response` and the site rejects you as a bot. `submitRegistration` now waits (up to 60s) for a token when a captcha is present.
+- **Classifier no longer reads rejection as success** — `\bcaptcha\b` never matched "reCAPTCHA" (word boundary), so a hard "verification failed" die-page fell through to the URL heuristic, matched `/my-account/`, and was recorded as `verification_pending`. Captcha matching is now `/re?captcha/` + `not a human`, and the URL heuristic is ignored when the page shows an error.
+- **Passwords are no longer rotated on retry (`provision.mjs`)** — each retry used to generate a fresh password and overwrite the row BEFORE attempting signup. If an earlier attempt had actually created the account, that threw away the only credentials able to open it (reset needs a mailbox we don't read). This burned chemnovatic twice. A retry now reuses the stored password when the email is unchanged.
+- **`--email <addr>` override** — register under a plus-alias when the org's base address is already burned on that host. Requires `--host`.
+
+**Playwright-only selector syntax does NOT work here (fixed 2026-08-04, found by the vehgroshop end-to-end test).** The Stagehand page wrapper's locator engine compiles plain CSS. Two Playwright pseudo-classes were in heavy use and BOTH silently matched nothing, which is the single largest cause of the old low signup yield:
+- `:visible` → always counted 0, so every "is a password field on screen?" check was blind. It aborted good signups ("no registration form reached") and false-passed the login probe ("no login form, must be authenticated"). Replaced with `countRendered()`, which measures bounding box + computed style in the DOM.
+- `button:has-text("…")` → threw ElementNotFound on buttons plainly on the page, so consent dismissal, register submit, and login submit CLICKED NOTHING while the form sat there correctly filled. Replaced with `clickInPage()` (DOM click by selector, then by visible label, then `form.requestSubmit()`), scoped to the register form or to the form that owns the password field so we never press the newsletter button.
+
+**Two more classifier/probe traps fixed at the same time:**
+- Invisible reCAPTCHA v3 prints "This form is protected by reCAPTCHA" as static boilerplate on forms that submit fine. The old regex condemned those as a bot wall. Only a challenge or an explicit failure counts as `blocked` now.
+- `probeAuthenticated` tested `document.body`, and site-wide nav/footers carry "My orders" / "Sign out" links for anonymous visitors, so ANY page passed, including the soft 404 that most Magento stores return for `/account` (the status guard doesn't save you: the Stagehand `goto` wrapper often returns no response object). It now rejects 404 text and login redirects, and the primary positive signal is an actual `href` containing logout/signout.
+- `provision.mjs --retry` re-drives a row stuck in `signing_up` (what a crashed run leaves behind) without hand-editing the DB.
+
+**Proof it works end to end (2026-08-04):** `vehgroshop.com` (Magento, price hidden until login) → `provision.mjs --org tenkara --host vehgroshop.com` created and login-verified the account → `batch.mjs --host vehgroshop.com --limit 1` pulled Onion Powder Organic at EUR 4.19/100 g, converted to USD 4.82 with a 4-tier ladder (100 g / 1 kg / 5 kg / 25 kg) written to `marketplace_pull` with `source: browserbase_login`.
+
+**Signup-yield workarounds (Browserbase):**
+- **Register-URL discovery (`discoverRegisterUrl`)** — reads the site's OWN links (homepage + sign-in page) for register-ish anchors on the marketplace's domain, then follows the best candidates until one renders a form. Fixes nonstandard/JS-decorated register URLs (found bulkfoods/PrestaShop's `?controller=registration` this way).
+- **JS-hydration polling (`onRegistrationForm`)** — polls up to ~8s for the password field and recognizes form SHELLS (`#customer-form`, `input[name=submitCreate]`, `form[action*=regist]`) that hydrate their inputs late.
+- **Deterministic fill + required-checkbox ticking**, then a **two-stage agent fallback** (`dom` → `hybrid`/vision coordinate clicks) only when selectors can't find the fields.
+- Still honest: unreachable/uncompletable forms return `no_form`/`blocked`/`unknown`, never a fabricated account.
+
+**Where the login probe does NOT rescue you (California, 2026-08-04, all 5 gated leads worked to a verdict):** two failure classes are terminal for this model. (1) *Confirmation-gated login* — the site registers you, then refuses login until a mailbox link is clicked (`chemnovatic.com`: "thank you, confirm your email", login returns "Wrong information"). (2) *Unsolvable bot wall on account routes only* — product pages serve fine but `/sign-in` and `/registration` sit behind a custom image captcha (`beer-co.us`: adm.tools SVG captcha with a text input, which Browserbase's `solveCaptchas` does not handle). Two more classes are not login problems at all and should be reclassified rather than provisioned: distributor portals with no published price and access by existing-customer request (`explore.azelis.com`, only "Request a quote / Request a sample" — not a marketplace under the checkout rule), and leads whose URL points at the wrong supplier's site (needs link repair). Record the verdict on the lead so it stops reading as "price pull pending".
+
+**Caveats:**
+- Autonomous signup **completion** still varies by platform. Standard Shopify/Magento/BigCommerce/Woo forms fill cleanly; fussy validations (PrestaShop consent gating, captcha, phone codes, business-verification) can still stop at `unknown`/`blocked` — inspect the printed Browserbase `viewUrl`, add a per-host adapter, or let the `hybrid` agent retry.
+- **Ops visibility:** provisioned accounts (host, email, password reveal/copy, status, last login) render on the client's **Supplier Validation → Marketplace Logins** panel in the Control Room (`marketplace-logins.tsx`).
+
 ## Adding a marketplace
 
 Edit `src/adapters.mjs` — add an entry keyed by bare hostname (no `www.`) with a `slug`, `loginUrl`, and a `login(page, {email,password})` routine (Playwright selectors). Then add `<SLUG>_EMAIL`/`<SLUG>_PASSWORD` secrets. Domains with **no** adapter are still fetched directly (no login) and extracted — useful when a "login_required" was a false positive and the price is actually public.
@@ -56,6 +119,15 @@ Top login_required marketplaces by volume (candidates to add first): knowde.com,
 - `src/extract.mjs` — Claude-based price/tier extraction from rendered page text.
 - `src/agentic.mjs` — Stagehand agentic pull (popup-close + on-site search + variants + product-page navigation), then `extractPricing`.
 - `check-rotation.mjs` — exit-IP rotation proof.
+- `webtier.mjs` — Tier A glue: `orgs` / `worklist` / `write` / `coverage` against OA Supabase.
+- `tierA.py` — Tier A runner: concurrent Anthropic `web_fetch` + `web_search` per lead. Canonical, no Workflow tool.
+- `webfetch-workflow.js` — the Workflow-tool variant of Tier A. Interactive use only; prompts.
+- `src/shopify.mjs` — Tier A½ Shopify canonical feed (`/products.json`), free and browserless.
+- `src/login.mjs` — generic Stagehand login/signup (`genericLogin`, `genericSignup`, `isRfqWall`), no per-site adapter.
+- `src/fx.mjs` — listed currency → USD (`normalizeResultToUsd`), quarantines when no rate is reachable.
+- `src/accounts.mjs` — OA reads/writes: `getOrg`, `getAccount`, lead selection, `writePull` keep-best merge.
+- `batch.mjs` — Tier B/C driver: no-login pass, parallel Stagehand, `--escalate`, `--harvest`.
+- `signup.mjs` / `provision.mjs` / `confirm.mjs` — marketplace account provisioning and activation.
 
 ## Agentic pull (Stagehand) — the interactive path
 
@@ -157,6 +229,31 @@ Tier A must never be silently skipped. If it is interrupted or produces fewer re
 **Measured cost and yield (16-lead sample, 2026-08-04, `claude-sonnet-5`).** About $0.25/lead, roughly 108k input tokens per lead, almost all of it fetched page content. Yield tracks URL quality, not model quality: 3/5 on retail shops that print prices (full pack ladders, e.g. 8 tiers from 16 oz to a 2755 lb tote), 1/5 on Alibaba storefront homepages, 0/6 on B2B quote directories (EC21 "name your price", Knowde "request sample", ThomasNet register-wall). The gated ones are correctly `login_required`, which is exactly the residue Tier B attacks. Override the model with `TIERA_MODEL`; input dominates, so cost scales about linearly with the model's input rate.
 
 `webfetch-workflow.js` (the Workflow-tool variant) remains for interactive use, but it triggers the multi-agent usage warning; prefer `tierA.py` for prompt-free and cron runs. `--mode residue` remains available for manual post-Browserbase diagnostics, but the daily Tier A pass always uses `--mode all`. Tier B extraction uses the Gamut proxy; `ANTHROPIC_API_KEY_NEW` is the funded direct key.
+
+## Tier A½ — Shopify canonical feed (`src/shopify.mjs`)
+
+A Shopify store publishes its own product JSON at `/products/<handle>.js` (every variant, price as an integer in the minor unit) and its BASE currency at `/meta.json`. Reading those beats rendering the page: no browser, no LLM, no proxy, ~0.1s/lead, and the ladder is exact rather than whatever the DOM happened to show. **110 of our 455 non-wall marketplace hosts are Shopify.** Measured read-only across the unpriced Shopify-host pool: **100 of 136 leads priced (74%), 87 with a multi-size ladder, 13 non-USD, in 10 seconds.**
+
+It runs automatically as a prepass inside `batch.mjs` before any browser session opens. Leads it prices are written (`source: "shopify_feed"`) and removed from the browser worklist; everything else falls through untouched.
+
+How it stays honest:
+- `/meta.json` gives the shop's **base** currency, not the geo-localized display currency, so a EUR store is never published as a USD number. Conversion still runs through `normalizeResultToUsd` in `writePull`.
+- A `$0` variant is a feed placeholder, not a price — dropped.
+- A `"Default Title"` variant means the product has no pack size; `pack_size` is reported `null` rather than substituting the product name.
+- If the lead URL isn't a product page, it uses the store's own `/search/suggest.json`, and only accepts a hit whose title shares a real word with the material. Material typos are corrected first via ops-agents' single curated list (`src/lib/material-spelling.ts`) — "Cayanne Pepper" returns nothing where "Cayenne Pepper" returns the product.
+- No match, no positive price, or not Shopify → returns `null`, which never writes. It can't downgrade an existing price.
+
+## RFQ-wall skip (default on)
+
+`isRfqWall` already existed but was only consulted by signup/provisioning, so the price pull was still opening a full browser session for every knowde/alibaba/indiamart lead — **365 of 1257 leads (29% of the pool) for 31 prices ever.** `batch.mjs` now drops wall leads that have NEVER yielded a price, *before* `--limit` is applied, so the cap is spent on leads that can actually resolve. Wall leads that DID once price are still refreshed, so nothing is lost. `--include-rfq-walls` restores the old behavior.
+
+## Flags added with these tiers
+
+```bash
+node batch.mjs --shopify-only --org california-chemicals    # feed prepass only, no browser at all
+node batch.mjs --no-login --no-shopify ...                  # skip the prepass (A/B comparison)
+node batch.mjs --no-login --include-rfq-walls ...           # pull RFQ-wall leads anyway
+```
 
 ### Legacy tier table (Browserbase-only view)
 

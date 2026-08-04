@@ -1,35 +1,31 @@
-// Listed-currency → USD for marketplace prices, holding the same policy as the
-// fleet's src/lib/fx.ts: convert when a rate exists, and refuse to publish when
-// one doesn't. The two implementations are separate because this skill runs as
-// plain Node outside the Next app and cannot import its TypeScript modules; the
-// invariant they both serve is enforced in the database
-// (leads_in_flight_marketplace_pull_usd), so a drift between them fails loudly
-// rather than publishing a foreign number labeled USD.
-//
-// Same keyless, ECB-backed sources as fx.ts, so both paths resolve the same rate
-// for the same day. No new dependency; plain fetch.
+// Live FX → USD for marketplace prices listed in other currencies. Mirrors the
+// policy in ops-agents `src/lib/fx.ts`: convert foreign → USD when a rate is
+// reachable, and QUARANTINE (never publish) when it isn't. The OA table also
+// enforces this with a check constraint (leads_in_flight_marketplace_pull_usd),
+// so an unconverted foreign price is rejected at write time.
 
 let cache = null;
 const RATE_TTL_MS = 12 * 60 * 60 * 1000;
 
-// rates[CUR] = units of CUR per 1 USD, so 1 CUR = 1 / rates[CUR] USD.
+// rates[CUR] = units of CUR per 1 USD (so 1 CUR = 1 / rates[CUR] USD).
 //
 // Single source on purpose. api.exchangerate.host used to serve as a keyless
 // fallback but now answers HTTP 200 with {success:false, missing_access_key}, so
 // it cannot satisfy the shape check below and only implied a redundancy that did
-// not exist. Losing this source is not a correctness risk: no rate means
-// toUsdRate reports "unconvertible", and the caller drops the numbers and flags
-// the lead rather than publishing a foreign price as dollars. Do not add a
-// replacement without confirming it returns rates unauthenticated.
+// not exist. Losing this source is not a correctness risk: no rate means the
+// caller quarantines the price rather than publishing a foreign number as
+// dollars. Do not add a replacement without confirming it returns rates
+// unauthenticated.
 const RATE_SOURCE = "https://open.er-api.com/v6/latest/USD";
 
 async function loadUsdRates() {
-  if (cache && Date.now() - cache.fetchedAt < RATE_TTL_MS) return cache.rates;
+  const t = Date.now();
+  if (cache && t - cache.fetchedAt < RATE_TTL_MS) return cache.rates;
   try {
     const res = await fetch(RATE_SOURCE, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) return null;
-    const json = await res.json();
-    const rates = json?.rates;
+    const j = await res.json();
+    const rates = j?.rates;
     // Shape-checked rather than trusting the status: the retired fallback proved
     // a 200 can still carry an error body with no rates on it.
     if (rates && typeof rates === "object" && typeof rates.USD === "number") {
@@ -42,29 +38,49 @@ async function loadUsdRates() {
   return null;
 }
 
-/**
- * One rate decision for a whole pull, so a listing with a tier ladder costs a
- * single lookup and every number on it converts at the same rate.
- *
- * "usd"           — already USD, or unlabeled (treated as USD): leave untouched.
- * "converted"     — `rate` is USD per 1 unit of the listed currency.
- * "unconvertible" — foreign with no reachable rate. The caller MUST drop the
- *                   numbers; a raw foreign value rendered as "$" overstates by
- *                   the rate (₹149 as $149 is ~96x).
- */
-export async function toUsdRate(currency) {
+export async function usdRateFor(currency) {
   const cur = (currency ?? "").trim().toUpperCase();
-  if (!cur || cur === "USD") return { status: "usd", currency: "USD", rate: 1 };
+  if (!cur || cur === "USD") return null;
   const rates = await loadUsdRates();
   const perUsd = rates?.[cur];
-  if (typeof perUsd !== "number" || perUsd <= 0) {
-    return { status: "unconvertible", currency: cur, rate: null };
-  }
-  return { status: "converted", currency: cur, rate: 1 / perUsd };
+  if (typeof perUsd !== "number" || perUsd <= 0) return null;
+  return Math.round((1 / perUsd) * 1e6) / 1e6;
 }
 
-/** Restate one amount at a resolved rate, or pass through a null/non-finite. */
-export function atRate(amount, rate) {
-  if (amount == null || !Number.isFinite(amount)) return amount;
-  return Math.round(amount * rate * 100) / 100;
+// Restate a pull result in USD. Returns the result unchanged when it is already
+// USD or carries no price. When the listed currency has no reachable rate the
+// result is downgraded to needs_review with the reason WHY, so the caller keeps
+// any last-known good price instead of publishing a raw foreign number.
+export async function normalizeResultToUsd(result) {
+  const cur = (result.currency ?? "").trim().toUpperCase();
+  if (result.current_price == null || !cur || cur === "USD") return result;
+
+  const rate = await usdRateFor(cur);
+  const conv = (n) => (n == null ? null : Math.round(n * rate * 100) / 100);
+
+  if (rate == null) {
+    return {
+      ...result,
+      classification: "needs_review",
+      current_price: null,
+      unit_price: null,
+      tiers: [],
+      notes: `listed in ${cur}; no USD rate reachable, quarantined rather than published unconverted. ${result.notes ?? ""}`.trim(),
+    };
+  }
+
+  return {
+    ...result,
+    current_price: conv(result.current_price),
+    unit_price: conv(result.unit_price ?? null),
+    tiers: (result.tiers ?? []).map((t) => ({
+      ...t,
+      price: conv(t.price ?? null),
+      unit_price: conv(t.unit_price ?? null),
+    })),
+    currency: "USD",
+    original_currency: cur,
+    fx_rate: rate,
+    notes: `converted from ${cur} at 1 ${cur} = ${rate} USD. ${result.notes ?? ""}`.trim(),
+  };
 }

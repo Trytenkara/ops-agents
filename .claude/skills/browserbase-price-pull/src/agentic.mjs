@@ -15,6 +15,7 @@
 import { Stagehand } from "@browserbasehq/stagehand";
 import { z } from "zod";
 import { extractPricing } from "./extract.mjs";
+import { genericLogin } from "./login.mjs";
 
 // Navigation model for the Stagehand agent. "auto" = Browserbase Model Router
 // (billed on BROWSERBASE_API_KEY, no provider key, cheapest per call).
@@ -263,8 +264,11 @@ async function clickThroughToProduct(stagehand, page, { material, variants, onSt
   return moved;
 }
 
-// One attempt in one fresh proxied Stagehand session.
-async function attempt({ url, material, supplier, maxSteps, onSession, onStep }) {
+// One attempt in one fresh proxied Stagehand session. When `credentials`
+// ({email, password, host, loginUrl}) is passed, the session authenticates
+// FIRST (generic Stagehand login), so the subsequent product-page read sees the
+// logged-in, price-visible page — this is the gated-marketplace path.
+async function attempt({ url, material, supplier, maxSteps, credentials = null, onSession, onStep }) {
   const variants = materialVariants(material);
   const stagehand = new Stagehand({
     env: "BROWSERBASE",
@@ -297,6 +301,15 @@ async function attempt({ url, material, supplier, maxSteps, onSession, onStep })
   if (onSession) onSession({ viewUrl, sessionId });
   try {
     const page = stagehand.context.pages()[0] ?? (await stagehand.context.newPage());
+
+    // Gated path: authenticate first so the product page renders its price.
+    // A failed login is non-fatal — we still try to read the page (many
+    // "login_required" flags are false positives and the price is public).
+    if (credentials?.email && credentials?.password) {
+      const li = await genericLogin(page, { ...credentials, stagehand, onStep }).catch((e) => ({ ok: false, notes: String(e?.message ?? e).slice(0, 120) }));
+      if (onStep) onStep({ step: "login", action: `${li.ok ? "logged in" : "login not confirmed"}: ${li.notes ?? ""}`.slice(0, 120) });
+    }
+
     let resp;
     try {
       resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
@@ -412,11 +425,11 @@ async function backoff(i) {
 // Public entry: agentic pull with retry. A 403/429/503, a model-router 429/rate
 // limit, a blank/failed nav, or a dead session gets a fresh Stagehand session
 // (new residential IP), up to maxAttempts. Rate-limit retries back off (jittered).
-export async function agenticPull({ url, material, supplier, maxSteps = 15, maxAttempts = 4, onSession, onStep } = {}) {
+export async function agenticPull({ url, material, supplier, maxSteps = 15, maxAttempts = 4, credentials = null, onSession, onStep } = {}) {
   let lastErr;
   for (let i = 0; i < maxAttempts; i++) {
     try {
-      return await attempt({ url, material, supplier, maxSteps, onSession, onStep });
+      return await attempt({ url, material, supplier, maxSteps, credentials, onSession, onStep });
     } catch (e) {
       lastErr = e;
       const msg = String(e?.message ?? e);
