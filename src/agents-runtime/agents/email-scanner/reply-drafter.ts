@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { sanitizeDraft } from "@/lib/email-style";
 import {
   buildCompletenessAsk,
   completenessFollowupEnabled,
@@ -27,6 +28,11 @@ export interface ReplyInput {
   supplierName: string | null;
   supplierContactName: string | null;
   materialName: string | null;
+  // The grade(s) the client specified for this material in Tenkara, comma-joined
+  // (`all`), and the subset flagged as a dealbreaker (`required`). A required
+  // grade is a hard spec: the reply holds it instead of accepting whatever
+  // variant the supplier happens to offer.
+  materialGrade?: { all: string; required: string | null } | null;
   originalSubject: string | null; // our outreach subject
   theirSubject: string | null;    // their reply subject
   theirPreview: string | null;    // snippet of their message
@@ -66,6 +72,7 @@ const SYSTEM = `You draft short, professional replies to suppliers on behalf of 
 - Acknowledge their message and keep the sourcing conversation moving (e.g. confirm interest, ask for the next concrete thing: pricing for a stated quantity, MOQ, lead time, a sample, or a spec/COA).
 - MATERIAL SCOPE — stay on the material(s) we asked for. Only pursue the material named as "Material being sourced" (plus any listed under "Other materials we also source from this supplier"). If the supplier says they cannot supply our material and instead pitches DIFFERENT materials we never requested (e.g. we asked for Sulfuric Acid and they offer Hydrochloric Acid / Nitric Acid / Hydrogen Peroxide), do NOT ask for pricing, MOQ, samples, or terms on those substitutes. Politely acknowledge, thank them, and treat this as a decline. Never open a new sourcing ask for an unrequested material.
 - MATERIAL IDENTITY — a materially different product is NOT our material even if the name is similar (e.g. "paprika colorant / oleoresin" is not "paprika powder"; a technical grade is not a food grade if we asked for food grade). If what they offer is a different product than we requested, do not proceed as if it matches — ask a clarifying question or treat as a decline; do not request pricing on the wrong product.
+- GRADE SPEC — when the input gives a "Required grade", that grade is a client dealbreaker, not a preference. Anything else is the wrong product, however close it sounds (palm-derived MCT oil is not coconut-derived MCT oil; a technical grade is not a food grade). Never say we are open to, exploring, considering, or also interested in another grade, source, or derivation, and never widen the ask to "both" options. If the supplier offers a different grade or source, do not request pricing, MOQ, or terms on it: ask whether they can supply the required grade, and if they have already said they cannot, thank them and treat it as a decline. Ask about the required grade only, never invite them to propose alternatives. When only a "Target grade" is given it is a preference, so name it but you may ask what else they carry.
 - SHIPPING TERMS — when you ask for pricing, also cover shipping: tell them we can arrange our own shipping and prefer EXW (Ex Works) terms. If they can't do EXW that's fine, but still ask for their EXW price so we can compare. Fold this into the pricing ask naturally (EXW price for the stated quantity, plus MOQ and lead time).
 - PAYMENT TERMS — when asking for pricing, also request payment terms (net-30, net-60, etc.) if the supplier hasn't already provided them. Fold this naturally into the pricing ask alongside MOQ and lead time.
 - ASK ONLY WHAT'S RELEVANT — do NOT ask for hazmat / DOT / dangerous-goods / special-handling details unless the material is actually hazardous or the supplier themselves raised it. For a non-hazardous material, never request hazmat classification. Do not hard-block or withhold a pricing ask because details are missing.
@@ -99,6 +106,16 @@ function extractJson(text: string): ComposedReply {
   };
 }
 
+function gradeLines(spec: ReplyInput["materialGrade"]): string[] {
+  if (!spec) return [];
+  const required = spec.required?.trim();
+  if (required) {
+    return [`Required grade (client dealbreaker, hold this spec, do not accept or offer an alternative): ${required}`];
+  }
+  const all = spec.all?.trim();
+  return all ? [`Target grade (preference, not a dealbreaker): ${all}`] : [];
+}
+
 export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
   const signoff = input.mode === "ghost" ? `${input.ghostBrand ?? "Sourcing"} Sourcing` : `${input.clientOrgName} Purchasing Team`;
   const held = (input.heldMaterialNames ?? []).filter((n) => n && n.trim());
@@ -114,6 +131,7 @@ export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
     `Supplier company: ${input.supplierName ?? "(unknown)"}`,
     `Supplier contact: ${input.supplierContactName ?? "(unknown)"}`,
     `Material being sourced: ${input.materialName ?? "(unspecified)"}`,
+    ...gradeLines(input.materialGrade),
     `Our original outreach subject: ${input.originalSubject ?? "(none)"}`,
     `Their reply subject: ${input.theirSubject ?? "(none)"}`,
     `Their message (snippet): ${input.theirPreview ?? "(not available)"}`,
@@ -162,7 +180,9 @@ export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
     const ask = buildCompletenessAsk(missing);
     if (ask && !draft.body.includes(ask)) draft.body = insertBeforeSignoff(draft.body, ask, signoff);
   }
-  return draft;
+  // House style (no em dashes, no "RFQ") is enforced on outbound copy; replies
+  // were the one drafted path skipping it.
+  return { ...draft, ...sanitizeDraft({ subject: draft.subject, body: draft.body }) };
 }
 
 // Insert `ask` as its own paragraph just before the sign-off block, or append it

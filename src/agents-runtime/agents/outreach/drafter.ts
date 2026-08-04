@@ -20,6 +20,10 @@ export interface DraftMaterial {
   // after, but still ask which grades the supplier carries — we never present it
   // as a fixed hard requirement, and never invent one when it's absent.
   grade?: string | null;
+  // The subset of `grade` the client flagged as a dealbreaker. These are
+  // qualification requirements, so we name exactly these and stop there: no
+  // wider "what else do you carry" ask that invites a grade we can't buy.
+  requiredGrade?: string | null;
 }
 
 export interface DraftInput {
@@ -102,22 +106,47 @@ function labelFor(m: DraftMaterial): string {
   return m.inciName ? `${m.name} (INCI: ${m.inciName})` : m.name;
 }
 
-// The grade ask. We always ask which grades the supplier can supply; when we
-// know the grade(s) the client wants, we name them too — framed as what we're
-// looking for, not a hard requirement, so a supplier carrying a nearby grade
-// still replies. Returns null only if there are no materials (never happens).
+// The grade ask. A dealbreaker grade is a qualification requirement, so we name
+// it and ask them to confirm it, with no "which grades do you carry" invitation
+// attached: a nearby grade is not buyable and quoting one wastes both sides'
+// turns. Only where nothing is flagged as a dealbreaker do we stay soft and ask
+// what they carry. Returns null only if there are no materials (never happens).
 function gradeAsk(mats: DraftMaterial[]): string | null {
   if (!mats.length) return null;
   const multi = mats.length > 1;
-  const withGrade = mats.filter((m) => m.grade && m.grade.trim());
-  if (!withGrade.length) {
+  const required = mats.filter((m) => m.requiredGrade && m.requiredGrade.trim());
+  const target = mats.filter((m) => !(m.requiredGrade && m.requiredGrade.trim()) && m.grade && m.grade.trim());
+  const unspecified = mats.filter((m) => !(m.requiredGrade && m.requiredGrade.trim()) && !(m.grade && m.grade.trim()));
+  if (!required.length && !target.length) {
     return `Also, which grades do you supply${multi ? " for these" : ""}?`;
   }
-  if (!multi) {
-    return `We're looking for ${withGrade[0].grade!.trim()} specifically, and would like to know which grades you can supply.`;
+  const parts: string[] = [];
+  if (required.length) {
+    parts.push(
+      required.length === 1 && !multi
+        ? `We need ${required[0].requiredGrade!.trim()} specifically, so please confirm that is what you would be quoting.`
+        : `On grades, we need ${required.map((m) => `${m.name} (${m.requiredGrade!.trim()})`).join(", ")}. Please confirm you can supply those.`
+    );
   }
-  const specifics = withGrade.map((m) => `${m.name} (${m.grade!.trim()})`).join(", ");
-  return `On grades, we're looking for ${specifics}. Please also let us know which grades you can supply.`;
+  if (target.length) {
+    parts.push(
+      target.length === 1 && !multi
+        ? `We're looking for ${target[0].grade!.trim()}, and would like to know which grades you can supply.`
+        : `On grades, we're looking for ${target.map((m) => `${m.name} (${m.grade!.trim()})`).join(", ")}. Please also let us know which grades you can supply.`
+    );
+  }
+  if (unspecified.length) {
+    parts.push(`For ${unspecified.map((m) => m.name).join(", ")}, please let us know which grades you supply.`);
+  }
+  return parts.join(" ");
+}
+
+function gradeNote(m: DraftMaterial): string {
+  if (m.requiredGrade && m.requiredGrade.trim()) {
+    return ` (REQUIRED grade, dealbreaker: ${m.requiredGrade.trim()} — ask only for this grade, do not invite alternatives)`;
+  }
+  if (m.grade && m.grade.trim()) return ` (target grade: ${m.grade.trim()})`;
+  return " (no target grade — just ask which grades they supply)";
 }
 
 function pickSubject(input: DraftInput): string {
@@ -227,7 +256,7 @@ WHAT THE EMAIL MUST DO:
 - Say we're sourcing the listed material(s) at {sender org}.
 - Ask whether they supply it/them and request current pricing, estimated lead times, and MOQs.
 - SHIPPING TERMS: note that we can arrange our own freight and prefer EXW (Ex Works) terms, and ask for their EXW price. Keep this to one short, natural sentence folded into the pricing ask — do not turn it into a demand or a separate paragraph.
-- GRADE: always ask which grade(s) the supplier can supply. When a "target grade" is given for a material, name it as what we're looking for, but keep it soft (we still want to hear what they carry), never a rigid hard requirement. When no target grade is given, just ask which grades they supply. NEVER invent, assume, or expand a grade that wasn't provided.
+- GRADE: when a "REQUIRED grade" is given for a material, that grade is a client dealbreaker. Name it as what we need and ask them to confirm they can supply it. Do NOT also ask which other grades they carry, do NOT invite an alternative, substitute, or nearby grade, and do NOT ask about a different source or derivation of the material. When only a "target grade" is given, name it as what we're looking for but keep it soft and also ask which grades they carry. When neither is given, just ask which grades they supply. NEVER invent, assume, or expand a grade that wasn't provided.
 - Ask for a product catalog or line card, noting we evaluate suppliers across multiple raw materials.
 - One material: write it inline as a sentence. Two or more: a short intro line, then a clean bullet list (one material per line), then the ask.
 - MARKETPLACE supplier: they already publish retail pricing, so instead ask for their bulk/wholesale rates and volume price breaks (larger pack sizes, pallet/ton quantities) beyond the listing.
@@ -248,7 +277,7 @@ function buildUserMessage(input: DraftInput): string {
     `Supplier contact name: ${input.supplierContactName ?? "(unknown)"}`,
     `Marketplace supplier: ${input.isMarketplace ? "yes — ask for bulk/wholesale beyond listed retail" : "no"}`,
     `Materials we are sourcing (${mats.length}):`,
-    ...mats.map((m) => `  - ${labelFor(m)}${m.grade && m.grade.trim() ? ` (target grade: ${m.grade.trim()})` : " (no target grade — just ask which grades they supply)"}`),
+    ...mats.map((m) => `  - ${labelFor(m)}${gradeNote(m)}`),
     "",
     "Write the RFQ email.",
   ];

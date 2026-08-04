@@ -35,22 +35,40 @@ export async function resolveMaterialNames(ids: string[]): Promise<Map<string, s
   return out;
 }
 
-// Resolve material grades (materials.grade is a JSON array of {grade_name}).
-// Returns a comma-joined grade string per material id, for surfacing grade on
-// rows that only carry a material_id (e.g. staged quotes).
-export async function resolveMaterialGrades(ids: string[]): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
+// Resolve material grades (materials.grade is a JSON array of
+// {grade_name, isDealbreaker}).
+export interface MaterialGradeSpec {
+  // Every grade named on the material, comma-joined.
+  all: string;
+  // Only the grades the client flagged isDealbreaker. A supplier who can't meet
+  // these can't win the business, so we ask for exactly these and nothing wider
+  // instead of inviting the supplier to propose a nearby grade.
+  required: string | null;
+}
+
+export async function resolveMaterialGradeSpecs(ids: string[]): Promise<Map<string, MaterialGradeSpec>> {
+  const out = new Map<string, MaterialGradeSpec>();
   const unique = Array.from(new Set(ids.filter((x): x is string => !!x)));
   if (unique.length === 0) return out;
-  const rows = await tenkaraQuery<{ id: string; grade: string | null }>(
+  const rows = await tenkaraQuery<{ id: string; grade: string | null; required: string | null }>(
     `select id::text as id,
             (select string_agg(g->>'grade_name', ', ')
-               from jsonb_array_elements(coalesce(grade, '[]'::jsonb)) g) as grade
+               from jsonb_array_elements(coalesce(grade, '[]'::jsonb)) g) as grade,
+            (select string_agg(g->>'grade_name', ', ')
+               from jsonb_array_elements(coalesce(grade, '[]'::jsonb)) g
+              where g->>'isDealbreaker' = 'true') as required
        from materials where id = any($1::uuid[])`,
     [unique]
   );
-  for (const r of rows) if (r.grade) out.set(r.id, r.grade);
+  for (const r of rows) if (r.grade) out.set(r.id, { all: r.grade, required: r.required });
   return out;
+}
+
+// Display-only variant: every grade, comma-joined, for rows that just show the
+// grade next to a material (the dealbreaker split only matters to the drafters).
+export async function resolveMaterialGrades(ids: string[]): Promise<Map<string, string>> {
+  const specs = await resolveMaterialGradeSpecs(ids);
+  return new Map(Array.from(specs, ([id, s]) => [id, s.all]));
 }
 
 // Resolve supplier names, falling back to the name we stored on the lead when

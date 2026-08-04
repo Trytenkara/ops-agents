@@ -2,7 +2,7 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 import { composeOutreachDraft, type DraftMaterial } from "./drafter";
 import { stageDraft } from "@/lib/draft-staging";
 import { coldOutboundEmailClient, tenkaraEmailAccountIdFor } from "@/lib/tenkara";
-import { resolveMaterialGrades } from "@/lib/tenkara-names";
+import { resolveMaterialGradeSpecs, type MaterialGradeSpec } from "@/lib/tenkara-names";
 
 // Short stable hash so a corrected/changed material set yields a NEW Tenkara
 // externalId (Tenkara is idempotent on externalId — reusing it would return the
@@ -87,9 +87,9 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
   // The grade(s) each material is specified at in Tenkara, so the RFQ can name
   // what we're after. Best-effort: a resolve failure just omits grade, leaving
   // the generic "which grades do you supply?" ask.
-  let gradesById = new Map<string, string>();
+  let gradesById = new Map<string, MaterialGradeSpec>();
   try {
-    gradesById = await resolveMaterialGrades(materialIds);
+    gradesById = await resolveMaterialGradeSpecs(materialIds);
   } catch (e: any) {
     await log(`Grade resolve failed: ${e?.message ?? e}`, { level: "warn", step: "material_grades" });
   }
@@ -98,7 +98,8 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
     return {
       name: l.material_name ?? "the material",
       inciName: p.inci_name ?? p.inci ?? null,
-      grade: l.material_id ? gradesById.get(l.material_id) ?? null : null,
+      grade: l.material_id ? gradesById.get(l.material_id)?.all ?? null : null,
+      requiredGrade: l.material_id ? gradesById.get(l.material_id)?.required ?? null : null,
     };
   });
   const materialNames = ordered.map((l) => l.material_name ?? "").filter(Boolean);

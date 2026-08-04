@@ -13,6 +13,7 @@ import { getTenkaraConversationMessages } from "@/lib/tenkara";
 import { postAgentAlert } from "@/lib/slack-alert";
 import { upsertSupplierProfile } from "@/lib/supplier-profiles";
 import { getClientShipTo } from "@/lib/tenkara-client-settings";
+import { resolveMaterialGradeSpecs } from "@/lib/tenkara-names";
 import {
   completenessFollowupEnabled,
   computeMissingApprovalFields,
@@ -753,6 +754,18 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     return { status: 200, body: { reply_detected: true, drafted: false, reason: "max_reply_turns" } };
   }
 
+  // The grade the client specified for this material, so the reply holds a
+  // dealbreaker spec instead of accepting whatever variant the supplier offers.
+  // Best-effort: a resolve failure just leaves the reply grade-blind as before.
+  let materialGrade: { all: string; required: string | null } | null = null;
+  if (ref.material_id) {
+    try {
+      materialGrade = (await resolveMaterialGradeSpecs([ref.material_id])).get(ref.material_id) ?? null;
+    } catch {
+      materialGrade = null;
+    }
+  }
+
   const reply = await composeReply({
     mode,
     clientOrgName: orgName,
@@ -760,6 +773,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     supplierName: leadRow?.supplier_name ?? null,
     supplierContactName: (leadRow?.payload as any)?.supplier_contact_name ?? from.name,
     materialName: leadRow?.material_name ?? null,
+    materialGrade,
     originalSubject: ref.subject,
     theirSubject: msg.subject ?? null,
     theirPreview: msg.body_text ?? null,
