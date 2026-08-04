@@ -4,7 +4,7 @@ import { ListPageHeader } from "@/components/list-page-header";
 import { ClientSuppliersSection } from "@/components/client-suppliers-section";
 import { TdbOverviewSubnav } from "@/components/tdb-overview-subnav";
 import { getClientSuppliers } from "@/lib/client-suppliers";
-import { getOrgOperatorPool, operatorBySupplier, getSupplierAssignments } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, autoOperatorBySupplier } from "@/lib/operator-assignment";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { orgDisplayName } from "@/lib/org-display";
 
@@ -19,21 +19,21 @@ export default async function OrgSuppliersPage({ params }: { params: { slug: str
   const suppliers = await getClientSuppliers(org.tenkara_org_id ?? null);
 
   // Sticky-random default owner per supplier (shown as the "Auto" fallback).
-  const pool = await getOrgOperatorPool(admin, org.id);
+  // Empty for an org on manual mode, or for suppliers outside its auto scope.
+  const ctx = await getOrgAssignmentContext(admin, org.id);
   const allIds = [...suppliers.approved, ...suppliers.pending_review, ...suppliers.denied, ...suppliers.draft].map((s) => s.id);
-  const owners = operatorBySupplier(pool, allIds);
+  const owners = autoOperatorBySupplier(ctx, allIds);
   const autoNames: Record<string, string> = {};
   for (const [sid, op] of Object.entries(owners)) autoNames[sid] = op.name;
 
   // Manual claims (override the default) and the names to display them with.
-  const assignmentMap = await getSupplierAssignments(admin, org.id).catch(() => new Map<string, string>());
   const assignments: Record<string, string> = {};
-  for (const [sid, opId] of assignmentMap) assignments[sid] = opId;
+  for (const [sid, opId] of ctx.manual) assignments[sid] = opId;
   const operatorNames: Record<string, string> = {};
-  for (const op of pool) operatorNames[op.id] = op.name;
+  for (const op of ctx.pool) operatorNames[op.id] = op.name;
 
   const canAct = hasAnyRole(session, ["admin", "ops_lead", "ops_operator"]);
-  const operatorOptions = pool.map((op) => ({ id: op.id, name: op.name }));
+  const operatorOptions = ctx.pool.map((op) => ({ id: op.id, name: op.name }));
 
   return (
     <div className="space-y-6">
@@ -51,6 +51,7 @@ export default async function OrgSuppliersPage({ params }: { params: { slug: str
         operatorOptions={operatorOptions}
         operatorNames={operatorNames}
         canAct={canAct}
+        claimsIgnored={ctx.config.mode === "auto_all"}
       />
     </div>
   );

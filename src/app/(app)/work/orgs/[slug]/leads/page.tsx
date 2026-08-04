@@ -12,7 +12,7 @@ import { leadMarketKind } from "@/lib/lead-market";
 import { computeLeadFlags } from "@/lib/lead-flags";
 import { getClientRequirements } from "@/lib/tenkara-requirements";
 import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
-import { getOrgOperatorPool, pickSupplierOperator, operatorBySupplier, getSupplierAssignments } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, autoOperator } from "@/lib/operator-assignment";
 
 import { orgDisplayName } from "@/lib/org-display";
 import { getSupplierProfiles } from "@/lib/supplier-profiles";
@@ -113,12 +113,11 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   // A lead's operator is the SAME as its supplier's operator — assigning here
   // writes the supplier assignment, so lead ownership and supplier ownership stay
   // in lockstep. autoName = sticky-random default; assignedId = a manual claim.
-  const operatorPool = await getOrgOperatorPool(admin, org.id);
+  const assignmentCtx = await getOrgAssignmentContext(admin, org.id);
   const supplierIds = leads.map((r) => r.supplier_id).filter(Boolean) as string[];
-  const autoOwners = operatorBySupplier(operatorPool, supplierIds);
-  const supplierAssignments = await getSupplierAssignments(admin, org.id).catch(() => new Map<string, string>());
-  const operatorOptions = operatorPool.map((op) => ({ id: op.id, name: op.name }));
-  const operatorNameById = new Map(operatorPool.map((op) => [op.id, op.name]));
+  const supplierAssignments = assignmentCtx.manual;
+  const operatorOptions = assignmentCtx.pool.map((op) => ({ id: op.id, name: op.name }));
+  const operatorNameById = new Map(assignmentCtx.pool.map((op) => [op.id, op.name]));
 
   // Tenkara inbox assignee: who the outreach agent actually assigned the Tenkara
   // conversation to (from draft_references.assigned_operator). This may differ from
@@ -175,12 +174,14 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     const operator_assigned_id = r.supplier_id
       ? supplierAssignments.get(r.supplier_id) ?? null
       : r.assigned_operator_id ?? null;
-    const operator_auto_name = r.supplier_id
-      ? autoOwners[r.supplier_id]?.name ?? null
-      : pickSupplierOperator(operatorPool, scoutAutoKey)?.name ?? null;
-    // Static label (rows without an assign control): a manual claim wins, else auto.
+    // Empty when the client runs manual assignment, or when this lead's market
+    // kind sits outside the client's auto scope.
+    const operator_auto_name = autoOperator(assignmentCtx, r.supplier_id ?? scoutAutoKey, market_kind)?.name ?? null;
+    // Static label (rows without an assign control): a manual claim wins, except
+    // under "auto, reassign all", where the auto owner is who agents route to.
+    const claimedName = operator_assigned_id ? operatorNameById.get(operator_assigned_id) ?? null : null;
     const operator_name =
-      (operator_assigned_id ? operatorNameById.get(operator_assigned_id) ?? null : null) ?? operator_auto_name;
+      assignmentCtx.config.mode === "auto_all" ? operator_auto_name ?? claimedName : claimedName ?? operator_auto_name;
     const resolvedName = correctMaterialSpelling(
       (r.material_name && r.material_name.trim()) ||
         (r.material_id ? leadNames.get(r.material_id) ?? null : null)

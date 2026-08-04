@@ -5,6 +5,8 @@ import { notFound } from "next/navigation";
 import { getSession, hasAnyRole, type AppRole } from "@/lib/auth";
 import { operatorRoles, primaryRole } from "@/lib/operator";
 import { OrgOperatorsEditor } from "@/components/org-operators-editor";
+import { OrgAssignmentSettings } from "@/components/org-assignment-settings";
+import { ALL_SUPPLIER_TYPES } from "@/lib/operator-assignment";
 import { OrgSourcingToggle } from "@/components/org-sourcing-toggle";
 import { OrgTenkaraInbox } from "@/components/org-tenkara-inbox";
 import { OrgBounceAlert } from "@/components/org-bounce-alert";
@@ -18,12 +20,12 @@ export default async function OrgOverview({ params }: { params: { slug: string }
   const admin = createAdminClient();
   const { data: org } = await admin
     .from("orgs")
-    .select("id, slug, name, display_name, tenkara_org_id, is_internal, sourcing_status, bounce_alert_status, tenkara_email_account_id, tenkara_email_address")
+    .select("id, slug, name, display_name, tenkara_org_id, is_internal, sourcing_status, bounce_alert_status, tenkara_email_account_id, tenkara_email_address, assignment_mode, assignment_supplier_types")
     .eq("slug", params.slug)
     .maybeSingle();
   if (!org) notFound();
 
-  const [draftsRes, casesRes, approvalsRes, quotesRes, opsRes, candidatesRes] = await Promise.all([
+  const [draftsRes, casesRes, approvalsRes, quotesRes, opsRes, candidatesRes, membersRes] = await Promise.all([
     admin.from("draft_references").select("id, status").eq("org_id", org.id),
     admin.from("cases").select("id, status").eq("org_id", org.id).eq("status", "open"),
     admin.from("pending_approvals").select("id").eq("org_id", org.id).eq("status", "pending"),
@@ -44,6 +46,13 @@ export default async function OrgOverview({ params }: { params: { slug: string }
       .select("id, display_name, email, status, deactivated_at, user_roles(role)")
       .is("deactivated_at", null)
       .order("display_name", { nullsFirst: false }),
+    // Org members for the auto-loop include/exclude list. Unlike the assignment
+    // pool this keeps out-of-office people visible, so an ops lead can see the
+    // whole membership they're toggling.
+    admin
+      .from("user_org_assignments")
+      .select("auto_assignable, users:users!user_org_assignments_user_id_fkey(id, display_name, email, status, deactivated_at, user_roles(role))")
+      .eq("org_id", org.id),
   ]);
 
   const drafts = draftsRes.data ?? [];
@@ -89,6 +98,23 @@ export default async function OrgOverview({ params }: { params: { slug: string }
     : null;
   const canEditAssignment = hasAnyRole(session, ["admin", "ops_lead"]);
 
+  const assignmentOperators = (membersRes.data ?? [])
+    .map((m: any) => {
+      const u = m.users;
+      if (!u || u.deactivated_at) return null;
+      const role = primaryRole(operatorRoles(u));
+      if (role !== "ops_operator" && role !== "ops_lead") return null;
+      return {
+        id: u.id as string,
+        name: (u.display_name ?? u.email ?? "-") as string,
+        email: (u.email ?? null) as string | null,
+        role,
+        autoAssignable: m.auto_assignable !== false,
+      };
+    })
+    .filter((m): m is NonNullable<typeof m> => !!m)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
@@ -133,7 +159,7 @@ export default async function OrgOverview({ params }: { params: { slug: string }
         <CardHeader>
           <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Operator assignment</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-6">
           <OrgOperatorsEditor
             orgId={org.id}
             orgName={orgDisplayName(org)}
@@ -142,6 +168,17 @@ export default async function OrgOverview({ params }: { params: { slug: string }
             candidates={candidates as any}
             canEdit={canEditAssignment}
           />
+          <div className="border-t pt-5">
+            <OrgAssignmentSettings
+              orgId={org.id}
+              orgSlug={org.slug}
+              orgName={orgDisplayName(org)}
+              initialMode={((org as any).assignment_mode ?? "auto_new") as any}
+              initialSupplierTypes={(((org as any).assignment_supplier_types ?? ALL_SUPPLIER_TYPES) as any)}
+              operators={assignmentOperators}
+              canEdit={canEditAssignment}
+            />
+          </div>
         </CardContent>
       </Card>
     </div>

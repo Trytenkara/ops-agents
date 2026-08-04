@@ -14,7 +14,7 @@ import { DirectPricesOnFile, type DirectPriceRow } from "@/components/direct-pri
 import { PriceIndexTabs } from "@/components/price-index-tabs";
 import { QuoteValidationView } from "@/components/quote-validation-view";
 import { getQuoteProfiles } from "@/lib/quote-profiles";
-import { getOrgOperatorPool, getSupplierAssignments, resolveSupplierOperatorId } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, resolveOperatorId } from "@/lib/operator-assignment";
 import { getSupplierProfiles } from "@/lib/supplier-profiles";
 import { CasesSection } from "@/components/cases-section";
 import { loadOrgCases, caseCategory } from "@/lib/org-cases";
@@ -287,16 +287,15 @@ export default async function OrgPriceIndexPage({
   // Owning operator per supplier, so an operator can sort the validation queue
   // down to their own book. Same resolution as the Suppliers and Leads tabs: a
   // manual claim wins, else the sticky auto owner.
-  const operatorPool = await getOrgOperatorPool(admin, org.id);
-  const supplierAssignments = await getSupplierAssignments(admin, org.id).catch(() => new Map<string, string>());
-  const operatorNameById = new Map(operatorPool.map((op) => [op.id, op.name]));
+  const assignmentCtx = await getOrgAssignmentContext(admin, org.id);
+  const operatorNameById = new Map(assignmentCtx.pool.map((op) => [op.id, op.name]));
   const supplierNameById = new Map<string, string>();
   for (const l of (leadsRes.data ?? []) as any[]) {
     if (l.supplier_id && l.supplier_name) supplierNameById.set(l.supplier_id, l.supplier_name);
   }
   const supplierOperators: Record<string, string> = {};
   for (const sid of new Set(quoteProfiles.map((q) => q.supplier_id).filter(Boolean) as string[])) {
-    const opId = resolveSupplierOperatorId(supplierAssignments, operatorPool, sid);
+    const opId = resolveOperatorId(assignmentCtx, sid, (supplierTypes[`id:${sid}`] as MarketKind | undefined) ?? null);
     const name = opId ? operatorNameById.get(opId) : null;
     if (!name) continue;
     supplierOperators[`id:${sid}`] = name;

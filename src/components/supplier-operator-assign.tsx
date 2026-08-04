@@ -14,12 +14,16 @@ export function SupplierOperatorAssign({
   assignedId,
   autoName,
   options,
+  claimsIgnored,
 }: {
   orgId: string;
   supplierId: string;
   assignedId: string | null;
   autoName: string | null;
   options: { id: string; name: string }[];
+  // Org is on "auto, reassign all": the claim is kept but dormant. Say so
+  // instead of showing a picked name that agents are not actually routing to.
+  claimsIgnored?: boolean;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -50,6 +54,9 @@ export function SupplierOperatorAssign({
         options={opts}
         disabled={pending}
       />
+      {claimsIgnored && assignedId && (
+        <span className="text-[11px] text-muted-foreground">Overridden by auto mode</span>
+      )}
       {err && <span className="text-[11px] text-red-600 dark:text-red-400">{err}</span>}
     </div>
   );
