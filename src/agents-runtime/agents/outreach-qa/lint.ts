@@ -19,6 +19,22 @@ type Rule = (d: DraftToLint) => Finding[];
 
 const PLACEHOLDER_RE = /\{\{[^}]+\}\}|\{[A-Z_][A-Z0-9_]*\}|<<[^>]+>>|TBD|TODO|XXX/g;
 
+const GRADE_WIDENING_RE = new RegExp(
+  [
+    // "which grades do you carry", "any other grades you supply"
+    String.raw`\b(?:other|another|any|which|what|different|additional|alternative|alternate)\s+grades?\b[^.?!]{0,60}?\b(?:you|your)\s*(?:'?d)?\s*(?:carry|offer|supply|stock|have|provide|recommend|range|line|portfolio|catalog)`,
+    // "do you carry any other grades"
+    String.raw`\b(?:carry|offer|supply|stock|provide|recommend)\b[^.?!]{0,40}?\b(?:other|any|different|additional|alternative)\s+grades?\b`,
+    // "we're exploring both", "open to either"
+    String.raw`\b(?:exploring|open to|considering|evaluating|also interested in|would consider)\s+(?:both|either|other|another|alternate|alternative)\b`,
+    // "both coconut and palm sources"
+    String.raw`\bboth\s+[\w-]+(?:\s+and\s+|\s*/\s*)[\w-]+\s+(?:grades?|sources?|derivations?|variants?|options?)\b`,
+    // "we're flexible on the source"
+    String.raw`\bwe(?:'re| are)\s+(?:also\s+)?(?:open|flexible)\s+(?:to|on)\b[^.?!]{0,30}\b(?:grade|source|derivation)\b`,
+  ].join("|"),
+  "i"
+);
+
 const CLIENT_NAMES = ["Aurora", "Bobber", "Vita Organica", "McGinley", "Nutripro", "PharmaLab", "Sphere", "Ulo", "Tenkara", "Rove"];
 
 export const RULES: Record<string, Rule> = {
@@ -74,6 +90,27 @@ export const RULES: Record<string, Rule> = {
       severity: "error",
       code: "fabricated_contact_info",
       message: `Draft states contact info not on the approved allowlist — likely fabricated: ${detail}. Defer to a human or add the real value to BRAND_CONTACTS.`,
+    }];
+  },
+  // Steadfast grade guard, the sibling of the contact guard above. When the
+  // client flagged a grade isDealbreaker, the drafters are told to ask for that
+  // grade and nothing wider, but a prompt instruction alone isn't steadfast.
+  // This catches the copy that invites the supplier to propose a different
+  // grade ("which grades do you carry", "exploring both palm and coconut"),
+  // which burns supplier turns on a grade the client cannot buy. Asking the
+  // supplier to confirm which grade their OWN quote covers stays legitimate,
+  // so the patterns are anchored on what the supplier carries/recommends.
+  // Only armed when metadata.required_grade is set — a material with no
+  // dealbreaker may legitimately ask what the supplier stocks.
+  grade_ask_widened: ({ body_preview, metadata }) => {
+    const required = typeof metadata?.required_grade === "string" ? metadata.required_grade.trim() : "";
+    if (!required || !body_preview) return [];
+    const match = body_preview.match(GRADE_WIDENING_RE);
+    if (!match) return [];
+    return [{
+      severity: "error",
+      code: "grade_ask_widened",
+      message: `Draft widens the ask past the client's dealbreaker grade (${required}): "${match[0].trim()}". Ask for the required grade only, never invite the supplier to propose another.`,
     }];
   },
   likely_misspelling: ({ subject, body_preview }) => {

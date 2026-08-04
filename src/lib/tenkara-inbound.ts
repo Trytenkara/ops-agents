@@ -817,6 +817,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       material_name: leadRow?.material_name ?? null,
       material_ids: replyMaterialIds,
       introduced_material_ids: introducedMaterialIds,
+      required_grade: materialGrade?.required ?? null,
       draft_kind: introduceHeld ? "inbound_reply_with_followup" : "inbound_reply",
       in_reply_to_draft_ref: ref.id,
       in_reply_to_message_id: msg.message_id,

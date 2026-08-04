@@ -177,6 +177,9 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
       material_name: materialNames[0] ?? null,
       material_ids: materialIds,
       material_names: materialNames,
+      // Arms the grade_ask_widened QA block: with a dealbreaker grade on the
+      // thread, copy that invites another grade is held, not staged.
+      required_grade: Array.from(new Set(materials.map((m) => m.requiredGrade).filter(Boolean))).join(", ") || null,
     },
   });
 

@@ -18,6 +18,10 @@ import { postAgentAlert } from "@/lib/slack-alert";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
+// QA findings that hold the draft instead of merely flagging it. Everything
+// else is advisory and surfaces as a pill in the Control Room.
+const BLOCKING_CODES = new Set(["fabricated_contact_info", "grade_ask_widened"]);
+
 // Auto-assign a Tenkara conversation to the operator the draft is assigned to in
 // the Control Room, mirroring the assignment onto the email app at creation time
 // (previously only a manual Control Room assign pushed the assignee). Best-effort:
@@ -114,11 +118,12 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
     metadata: lintMeta,
   });
 
-  // Steadfast hard block: if the draft states a shipping address / phone / email
-  // that isn't approved, it was almost certainly fabricated. Do NOT create a
-  // provider draft (that would leave un-deletable junk in Tenkara and a
-  // manually-sendable draft) — record a blocked row and alert ops to research it.
-  const fabrication = qaFindings.find((f) => f.code === "fabricated_contact_info");
+  // Steadfast hard blocks. Do NOT create a provider draft for these (that would
+  // leave un-deletable junk in Tenkara and a manually-sendable draft) — record a
+  // blocked row and alert ops. Two cases: contact info that isn't on the
+  // approved allowlist (almost certainly fabricated), and copy that widens the
+  // ask past the client's dealbreaker grade.
+  const fabrication = qaFindings.find((f) => BLOCKING_CODES.has(f.code));
   if (fabrication) {
     const { data, error } = await admin
       .from("draft_references")
@@ -143,7 +148,7 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
 
     const brand = (callerMeta.ghost_brand as string | undefined) ?? (callerMeta.supplier_name as string | undefined) ?? "a supplier draft";
     await postAgentAlert(
-      `:no_entry: Blocked a supplier draft with unverified contact info (possible fabrication). ${fabrication.message} — brand: ${brand}, supplier: ${callerMeta.supplier_name ?? "?"}, draft_ref: ${data?.id ?? "?"}. Held (status=blocked); not sent. Research the real value and add it to BRAND_CONTACTS if legitimate.`,
+      `:no_entry: Blocked a supplier draft (${fabrication.code}). ${fabrication.message} Brand: ${brand}, supplier: ${callerMeta.supplier_name ?? "?"}, draft_ref: ${data?.id ?? "?"}. Held (status=blocked), not sent.`,
       { channel: process.env.SLACK_CONTACT_GUARD_CHANNEL_ID ?? "C0B5M1QCE9E" },
     );
 
