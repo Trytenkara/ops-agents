@@ -592,8 +592,33 @@ registerAgent({
         .from("supplier_email_aliases")
         .select("org_id, email, thread_id, draft_ref_id")
         .in("org_id", orgIds);
+      // An alias means "a thread with this supplier already exists", which shelves
+      // the lead for the reply loop. Nothing prunes the table when a draft dies,
+      // so a blocked/discarded draft used to shelve that supplier FOREVER waiting
+      // on an email that was never sent (128 blocked drafts left 219 such ghosts
+      // on 2026-08-03). Only honour an alias whose draft is still live. An alias
+      // we cannot resolve is kept: re-cold-emailing a supplier we did contact is
+      // worse than holding one we didn't.
+      const refIds = [...new Set((aliases ?? []).map((a: any) => a.draft_ref_id).filter(Boolean))];
+      const liveRefIds = new Set<string>();
+      if (refIds.length) {
+        const { data: liveDrafts } = await admin
+          .from("draft_references")
+          .select("id")
+          .in("id", refIds)
+          .in("status", ["staged", "reviewed", "sent", "linked"]);
+        for (const d of liveDrafts ?? []) liveRefIds.add(d.id);
+      }
+      let staleAliases = 0;
       for (const alias of aliases ?? []) {
+        if (alias.draft_ref_id && !liveRefIds.has(alias.draft_ref_id)) {
+          staleAliases++;
+          continue;
+        }
         aliasByOrgEmail.set(`${alias.org_id}:${alias.email}`, { threadId: alias.thread_id, draftRefId: alias.draft_ref_id });
+      }
+      if (staleAliases) {
+        await ctx.log(`Ignored ${staleAliases} supplier alias(es) whose draft is no longer live`, { step: "alias" });
       }
     }
 
