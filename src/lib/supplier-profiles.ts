@@ -227,19 +227,31 @@ export async function seedProfilesFromLeads(
         p.enrichment?.contact?.source ? `Contact source: ${p.enrichment.contact.source}.` : null,
         shippingTerms ? `Shipping terms: ${shippingTerms}.` : null,
       ].filter(Boolean).join(" ");
+      // Contact enrichment writes under payload.enrichment.contact; the top-level
+      // keys only exist on leads that arrived with contacts attached.
+      const contact = p.enrichment?.contact ?? {};
+      const pocEmail = p.supplier_contact_email ?? p.contact_email ?? contact.email ?? null;
+      const pocPhone = p.sales_phone ?? contact.phone ?? null;
+      const pocName = p.poc_name ?? contact.poc_name ?? null;
+      const shippingAddress = p.hq_address ?? null;
       if (current) {
         const { error: updateError } = await admin.from("supplier_profiles").update({
           generated_notes: generatedNotes || null,
           ...(shippingTerms && !current.shipping_terms ? { shipping_terms: shippingTerms } : {}),
+          // Fill-only: an operator's entry always wins over enrichment.
+          ...(pocEmail && !current.poc_email ? { poc_email: pocEmail } : {}),
+          ...(pocPhone && !current.poc_phone ? { poc_phone: pocPhone } : {}),
+          ...(pocName && !current.poc_name ? { poc_name: pocName } : {}),
+          ...(shippingAddress && !current.shipping_address ? { shipping_address: shippingAddress } : {}),
         }).eq("id", current.id);
         if (updateError) throw updateError;
       } else {
         await upsertSupplierProfile(admin, orgId, info.supplierId, info.name, {
           supplier_type: marketKind,
-          poc_email: p.supplier_contact_email ?? p.contact_email ?? null,
-          poc_phone: p.sales_phone ?? null,
-          poc_name: p.poc_name ?? null,
-          shipping_address: p.hq_address ?? null,
+          poc_email: pocEmail,
+          poc_phone: pocPhone,
+          poc_name: pocName,
+          shipping_address: shippingAddress,
           shipping_terms: shippingTerms,
           generated_notes: generatedNotes || null,
         });
