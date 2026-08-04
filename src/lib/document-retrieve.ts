@@ -19,30 +19,43 @@ type Admin = ReturnType<typeof createAdminClient>;
 const DOC_HINT_RE =
   /\b(m?sds|coa|c\.?o\.?a|tds|coo|certificate|cert|analysis|technical\s*data|data\s*sheet|datasheet|spec(?:ification)?\s*sheet|safety\s*data|safety\s*sheet)\b/i;
 
-// Storefront and CDN hosts that serve a supplier's OWN files under someone
+// Storefront, CDN, and PIM hosts that serve a supplier's OWN files under someone
 // else's domain. Without this list a Shopify seller's own SDS on cdn.shopify.com
-// reads as third-party, which is the opposite of the truth. Anything not here
-// and not on the page's own host is treated as a reference copy (e.g. a
-// substance SDS from chemicalbook.com), which is real chemistry but does not
-// qualify the supplier.
+// reads as third-party, which is the opposite of the truth.
 const STOREFRONT_CDN_RE =
-  /(^|\.)(shopify|shopifycdn|myshopify|bigcommerce|squarespace-cdn|wixstatic|demandware\.net|shoplightspeed|volusion|3dcart|woocommerce)\.(com|net)$|(^|\.)(cloudfront\.net|amazonaws\.com|rocketcdn\.me|akamaized\.net|cdn77\.org|b-cdn\.net)$/i;
+  /(^|\.)(shopify|shopifycdn|myshopify|bigcommerce|squarespace-cdn|wixstatic|demandware\.net|shoplightspeed|volusion|3dcart|woocommerce|plytix|salsify|syndigo|akeneo|contentful)\.(com|net|io)$|(^|\.)(cloudfront\.net|amazonaws\.com|rocketcdn\.me|akamaized\.net|cdn77\.org|b-cdn\.net|blob\.core\.windows\.net|storage\.googleapis\.com)$/i;
+
+// Third-party chemical reference databases. A substance SDS from one of these is
+// real chemistry but it is not this vendor issuing a document, so it must not
+// satisfy a client's pre-order requirement. This is the list that decides
+// supplier_issued=false; everything unrecognised stays null.
+const REFERENCE_DB_RE =
+  /(^|\.)(chemicalbook|sigmaaldrich|merckmillipore|fishersci|thermofisher|guidechem|echemi|chemnet|lookchem|molbase|chemspider|pubchem|nih\.gov|cdc\.gov|osha\.gov|epa\.gov|ilo\.org|inchem\.org|chemblink|chemicalsafety|msdsonline|verisk3e|ehs\.com)\.(com|cn|net|org|gov|de)?$/i;
 
 function registrableRoot(host: string): string {
   const parts = host.toLowerCase().replace(/^www\./, "").split(".");
   return parts.length > 2 ? parts.slice(-2).join(".") : parts.join(".");
 }
 
-// True when the document plausibly comes from the supplier themselves: same
-// site as the product page, or that site's storefront CDN.
-export function isSupplierIssued(docUrl: string, pageUrl: string): boolean {
+// Who issued this document: true for the supplier themselves, false for a
+// third-party reference database, null when the host says neither.
+//
+// Null rather than false is the important part. The first version treated any
+// off-site host as third-party, which flagged Wholesale Supplies Plus's own SDS
+// files on their PIM host and would have quietly stopped them counting. The
+// vendors that host a supplier's files are a long tail; the reference databases
+// are a short list. So only that short list produces a false, and an unknown
+// host is left for a human, since null still counts.
+export function classifyDocOrigin(docUrl: string, pageUrl: string): boolean | null {
   try {
     const dh = new URL(docUrl).host;
     const ph = new URL(pageUrl).host;
     if (registrableRoot(dh) === registrableRoot(ph)) return true;
-    return STOREFRONT_CDN_RE.test(dh);
+    if (STOREFRONT_CDN_RE.test(dh)) return true;
+    if (REFERENCE_DB_RE.test(dh)) return false;
+    return null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -63,6 +76,8 @@ export interface DocRetrieveResult {
   candidates: number;
   inserted: number;
   skippedDuplicates: number;
+  // Rows that already existed link-only and just got their stored bytes.
+  healed: number;
   errors: number;
   // Documents fetched and stored, but whose fields could not be parsed.
   extractFailures: number;
@@ -143,6 +158,7 @@ export async function retrieveDocumentsFromUrl(
     candidates: 0,
     inserted: 0,
     skippedDuplicates: 0,
+    healed: 0,
     errors: 0,
     extractFailures: 0,
     docs: [],
@@ -214,7 +230,7 @@ export async function retrieveDocumentsFromUrl(
         expiresOn: extracted?.expires_on ?? null,
         bytes: buf,
         sourceKind: "web",
-        supplierIssued: isSupplierIssued(link.url, target.pageUrl),
+        supplierIssued: classifyDocOrigin(link.url, target.pageUrl),
       });
       result.docs.push({ url: link.url, docType, expiresOn: extracted?.expires_on ?? null });
     } catch {
@@ -225,6 +241,7 @@ export async function retrieveDocumentsFromUrl(
   const ins = await insertSupplierDocuments(admin, rows);
   result.inserted = ins.inserted;
   result.skippedDuplicates = ins.skippedDuplicates;
+  result.healed = ins.healed;
   result.errors += ins.errors;
   return result;
 }

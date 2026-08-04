@@ -151,6 +151,7 @@ registerAgent({
 
     let pagesScanned = 0;
     let docsStored = 0;
+    let docsHealed = 0;
     let pagesWithDocs = 0;
     let blocked = 0;
     let docErrors = 0;
@@ -177,6 +178,7 @@ registerAgent({
           candidates: 0,
           inserted: 0,
           skippedDuplicates: 0,
+          healed: 0,
           errors: 1,
           extractFailures: 0,
           docs: [],
@@ -188,12 +190,15 @@ registerAgent({
       // no links unless the reason is recorded, which is exactly how the first
       // live run hid a bug behind 21 blank rows.
       if (!res.note && res.candidates > 0 && res.inserted === 0) {
-        res.note = `found ${res.candidates} link(s), stored 0 (${res.errors} fetch/insert error(s))`;
+        res.note =
+          `found ${res.candidates} link(s), stored 0` +
+          ` (${res.skippedDuplicates} already held, ${res.errors} fetch/insert error(s))`;
       }
 
       pagesScanned++;
       docsStored += res.inserted;
-      if (res.inserted) pagesWithDocs++;
+      docsHealed += res.healed;
+      if (res.inserted || res.healed) pagesWithDocs++;
       if (/\b(403|429)\b/.test(res.note ?? "")) blocked++;
       docErrors += res.errors;
       extractFailures += res.extractFailures;
@@ -213,14 +218,14 @@ registerAgent({
           supplier_name: t.supplierName,
           last_scanned_at: new Date().toISOString(),
           scan_count: ((prior as any)?.scan_count ?? 0) + 1,
-          docs_found: res.inserted,
+          docs_found: res.inserted + res.healed,
           note: res.note ?? null,
         },
         { onConflict: "page_hash" }
       );
 
-      if (res.inserted) {
-        await ctx.log(`${t.supplierName ?? "unknown"}: ${res.inserted} document(s) [${res.docs.map((d) => d.docType).join(", ")}]`, {
+      if (res.inserted || res.healed) {
+        await ctx.log(`${t.supplierName ?? "unknown"}: ${res.inserted} new + ${res.healed} backfilled document(s) [${res.docs.map((d) => d.docType).join(", ")}]`, {
           step: "retrieve",
           data: { pageUrl: t.pageUrl },
         });
@@ -243,6 +248,7 @@ registerAgent({
       pages_scanned: pagesScanned,
       pages_with_docs: pagesWithDocs,
       docs_stored: docsStored,
+      docs_healed: docsHealed,
       blocked,
       doc_errors: docErrors,
       extract_failures: extractFailures,
@@ -250,8 +256,9 @@ registerAgent({
     });
     ctx.setSummary(
       `${docsStored} document(s) from ${pagesWithDocs}/${pagesScanned} page(s)` +
+        (docsHealed ? `; ${docsHealed} existing record(s) given their file` : "") +
         (blocked ? `; ${blocked} page(s) blocked (403/429)` : "")
     );
-    ctx.setStatus(docsStored > 0 || pagesScanned > 0 ? "success" : "partial");
+    ctx.setStatus(docsStored > 0 || docsHealed > 0 || pagesScanned > 0 ? "success" : "partial");
   },
 });

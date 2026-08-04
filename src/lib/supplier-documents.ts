@@ -86,51 +86,84 @@ function dupKey(r: { source_message_id: string | null; file_name: string | null;
 export interface InsertDocsResult {
   inserted: number;
   skippedDuplicates: number;
+  // Rows that already existed but held no file, now given their bytes.
+  healed: number;
   errors: number;
+}
+
+// Store the file before the row, so a row never claims a storage_path that
+// isn't there. An upload failure degrades to the old behaviour (metadata +
+// source URL only) rather than losing the document record entirely.
+async function storeBytes(r: SupplierDocumentInput): Promise<{ storagePath: string | null; sha: string | null }> {
+  if (!r.bytes?.byteLength) return { storagePath: null, sha: null };
+  const sha = crypto.createHash("sha256").update(r.bytes).digest("hex");
+  const path = storagePathFor(r.orgId, sha, r.fileName);
+  try {
+    await uploadBinaryFile({
+      bucket: DOC_BUCKET,
+      path,
+      content: r.bytes,
+      contentType: r.contentType || "application/octet-stream",
+    });
+    return { storagePath: path, sha };
+  } catch {
+    return { storagePath: null, sha: null };
+  }
 }
 
 // Insert captured documents, skipping ones already recorded for the same
 // message + filename + type (re-runs of the same inbound shouldn't double-store).
 export async function insertSupplierDocuments(admin: Admin, rows: SupplierDocumentInput[]): Promise<InsertDocsResult> {
-  const result: InsertDocsResult = { inserted: 0, skippedDuplicates: 0, errors: 0 };
+  const result: InsertDocsResult = { inserted: 0, skippedDuplicates: 0, healed: 0, errors: 0 };
   if (!rows.length) return result;
 
   const messageIds = Array.from(new Set(rows.map((r) => r.sourceMessageId).filter((x): x is string => !!x)));
-  const existing = new Set<string>();
+  const existing = new Map<string, { id: string; storage_path: string | null }>();
   if (messageIds.length) {
     const { data } = await admin
       .from("supplier_documents")
-      .select("source_message_id, file_name, doc_type")
+      .select("id, source_message_id, file_name, doc_type, storage_path")
       .in("source_message_id", messageIds);
-    for (const r of (data ?? []) as any[]) existing.add(dupKey(r));
+    for (const r of (data ?? []) as any[]) existing.set(dupKey(r), { id: r.id, storage_path: r.storage_path });
   }
 
   for (const r of rows) {
     const key = dupKey({ source_message_id: r.sourceMessageId ?? null, file_name: r.fileName ?? null, doc_type: r.docType });
-    if (existing.has(key)) {
-      result.skippedDuplicates++;
+    const prior = existing.get(key);
+    if (prior) {
+      // Every row written before migration 0078 recorded a link and no file. The
+      // dedupe was correctly refusing to duplicate them, which also meant a
+      // rescan could never give them their bytes. Attach instead of skipping,
+      // so the backlog heals itself as pages come round again.
+      if (prior.storage_path || !r.bytes?.byteLength) {
+        result.skippedDuplicates++;
+        continue;
+      }
+      const { storagePath, sha } = await storeBytes(r);
+      if (!storagePath) {
+        result.skippedDuplicates++;
+        continue;
+      }
+      const { error } = await admin
+        .from("supplier_documents")
+        .update({
+          storage_path: storagePath,
+          content_sha256: sha,
+          retrieved_at: new Date().toISOString(),
+          source_kind: r.sourceKind ?? "email",
+          supplier_issued: r.supplierIssued ?? null,
+        })
+        .eq("id", prior.id);
+      if (error) {
+        result.errors++;
+        continue;
+      }
+      existing.set(key, { id: prior.id, storage_path: storagePath });
+      result.healed++;
       continue;
     }
-    // Store the file before the row, so a row never claims a storage_path that
-    // isn't there. An upload failure degrades to the old behaviour (metadata +
-    // source URL only) rather than losing the document record entirely.
-    let storagePath: string | null = null;
-    let sha: string | null = null;
-    if (r.bytes?.byteLength) {
-      sha = crypto.createHash("sha256").update(r.bytes).digest("hex");
-      const path = storagePathFor(r.orgId, sha, r.fileName);
-      try {
-        await uploadBinaryFile({
-          bucket: DOC_BUCKET,
-          path,
-          content: r.bytes,
-          contentType: r.contentType || "application/octet-stream",
-        });
-        storagePath = path;
-      } catch {
-        storagePath = null;
-      }
-    }
+
+    const { storagePath, sha } = await storeBytes(r);
 
     const { error } = await admin.from("supplier_documents").insert({
       org_id: r.orgId,
@@ -156,7 +189,7 @@ export async function insertSupplierDocuments(admin: Admin, rows: SupplierDocume
       result.errors++;
       continue;
     }
-    existing.add(key);
+    existing.set(key, { id: "", storage_path: storagePath });
     result.inserted++;
   }
   return result;

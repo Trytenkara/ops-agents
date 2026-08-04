@@ -9,3 +9,7 @@ node_modules
 .turbo
 next-env.d.ts
 tsconfig.tsbuildinfo
+
+# Coredumps (a 2.4GB one was committed by accident)
+core
+core.*
