@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { QuoteProfileCard } from "@/components/quote-profile-card";
-import { seedQuoteProfiles, createQuoteProfile } from "@/app/actions/quote-profiles";
+import { createQuoteProfile } from "@/app/actions/quote-profiles";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
 import { quoteCompleteness, type QuoteProfile } from "@/lib/quote-profiles";
@@ -47,8 +47,6 @@ export function QuoteValidationView({
   const [sort, setSort] = useState("quotes");
   const [statusFilter, setStatusFilter] = useState("all");
   const [expandedSupplier, setExpandedSupplier] = useState<string | null>(null);
-  const [seeding, startSeed] = useTransition();
-  const [seedResult, setSeedResult] = useState<string | null>(null);
   const [showAddQuote, setShowAddQuote] = useState(false);
 
   // Group quotes by supplier
@@ -106,16 +104,6 @@ export function QuoteValidationView({
     : 0;
   const totalSuppliers = groupMap.size;
 
-  function handleSeed() {
-    startSeed(async () => {
-      const res = await seedQuoteProfiles(orgId);
-      if (res.ok) {
-        setSeedResult(`Seeded ${res.count ?? 0} new quote profiles`);
-        setTimeout(() => setSeedResult(null), 3000);
-      }
-    });
-  }
-
   // CSV export
   const csvHeaders = [
     "Supplier", "Material", "Price", "Case Size", "Units", "Unit Price", "Currency",
@@ -152,16 +140,10 @@ export function QuoteValidationView({
         <span className="text-muted-foreground">{totalQuotes} quote{totalQuotes !== 1 ? "s" : ""}</span>
         <span className="text-muted-foreground">Avg completeness: {avgCompleteness}%</span>
         {canAct && (
-          <>
-            <Button variant="outline" size="sm" onClick={handleSeed} disabled={seeding}>
-              {seeding ? "Seeding..." : "Seed from staged quotes"}
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setShowAddQuote(true)}>
-              Add quote
-            </Button>
-          </>
+          <Button variant="outline" size="sm" onClick={() => setShowAddQuote(true)}>
+            Add quote
+          </Button>
         )}
-        {seedResult && <span className="text-xs text-green-600">{seedResult}</span>}
       </div>
 
       {/* Add quote form */}
@@ -269,7 +251,7 @@ export function QuoteValidationView({
         {groups.length === 0 && (
           <div className="rounded-lg border border-dashed p-6 text-center space-y-2">
             <p className="text-sm text-muted-foreground">
-              No quote profiles yet. Click "Seed from staged quotes" to create profiles from existing pricing data, or "Add quote" to create one manually.
+              No quote profiles yet. Agent 06 builds them automatically from staged quotes and marketplace listings, or add one manually.
             </p>
           </div>
         )}

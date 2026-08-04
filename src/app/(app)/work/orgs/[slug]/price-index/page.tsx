@@ -18,6 +18,8 @@ import { CasesSection } from "@/components/cases-section";
 import { loadOrgCases, caseCategory } from "@/lib/org-cases";
 import { loadMarketplaceCaseDims, fmtCaseDims } from "@/lib/marketplace-case-dims";
 import { cn } from "@/lib/utils";
+import { aggregatorNameFromPayload, aggregatorNameOf } from "@/lib/aggregator-hosts";
+import { leadMarketKind } from "@/lib/lead-market";
 
 export const dynamic = "force-dynamic";
 
@@ -183,7 +185,10 @@ export default async function OrgPriceIndexPage({
           if (!tiers.length) return [];
           if (findingPairs.has(findingPairKey(l.supplier_name, l.material_name))) return [];
           const src = (l.payload?.source_url ?? l.payload?.supplier_website ?? null) as string | null;
+          const aggregator =
+            leadMarketKind(l.payload?.site_type) === "aggregator" ? aggregatorNameFromPayload(l.payload) : null;
           return tiers.map((t: any, i: number) => ({
+            aggregator,
             id: `lead-${l.id}-${i}`,
             supplier_name: l.supplier_name ?? null,
             material_name: correctMaterialSpelling(l.material_name),
@@ -206,7 +211,16 @@ export default async function OrgPriceIndexPage({
             kind: "on_file" as const,
           }));
         });
-  const marketplaceRows = [...findings, ...marketplaceOnFile];
+  // Aggregator listings (Alibaba, IndiaMART, ...) are prices too, but they are
+  // indicative asks off a multi-seller inquiry platform rather than something you
+  // can check out on, so they get their own tab instead of being read as a
+  // marketplace price. Findings carry no site_type, so classify them by host.
+  const allPriceRows = [...findings, ...marketplaceOnFile].map((r: any) => ({
+    ...r,
+    aggregator: r.aggregator ?? aggregatorNameOf(r.source_url),
+  }));
+  const marketplaceRows = allPriceRows.filter((r: any) => !r.aggregator);
+  const aggregatorRows = allPriceRows.filter((r: any) => r.aggregator);
 
   // Direct-supplier prices on file (staged_quotes) that aren't tied to an open
   // re-quote draft — these are the current non-marketplace prices we hold.
@@ -285,6 +299,7 @@ export default async function OrgPriceIndexPage({
 
       <PriceIndexTabs
         marketplaceCount={marketplaceRows.length}
+        aggregatorCount={aggregatorRows.length}
         directCount={requotes.length + directOnFile.length}
         escalationsCount={quoteCasesOpen.length}
         validationCount={quoteProfiles.length}
@@ -336,6 +351,20 @@ export default async function OrgPriceIndexPage({
               </p>
             ) : (
               <MarketplaceFindingsList rows={marketplaceRows} canAct={canAct} slug={org.slug} orgClients={orgClients} tagsByMaterialName={tagsByMaterialName} dimsByPack={marketplaceDims} />
+            )}
+          </section>
+        }
+        aggregator={
+          <section className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Prices pulled from aggregators (multi-seller platforms such as Alibaba, IndiaMART, or Made-in-China). Every row
+              names the platform it came from. Ordering there goes through a Send Inquiry form, not a checkout, so treat these
+              as indicative asks to confirm with the seller rather than prices you can transact at.
+            </p>
+            {aggregatorRows.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-4">No aggregator prices yet.</p>
+            ) : (
+              <MarketplaceFindingsList rows={aggregatorRows} canAct={canAct} slug={org.slug} orgClients={orgClients} tagsByMaterialName={tagsByMaterialName} dimsByPack={marketplaceDims} />
             )}
           </section>
         }

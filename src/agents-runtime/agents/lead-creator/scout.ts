@@ -90,7 +90,7 @@ export interface ScoutSupplier {
   url: string;
   country: string | null;
   role: string | null;                  // Manufacturer | Distributor | Reseller | Trader | Marketplace
-  site_type: "M" | "MS" | "N" | null;   // Marketplace / Marketplace-Signup / Non-marketplace
+  site_type: "M" | "MS" | "A" | "N" | null;   // Marketplace / Marketplace-Signup / Aggregator / Non-marketplace
   pack_sizes_pricing: string | null;    // published pack sizes + prices / FOB ranges
   email: string | null;                 // direct email OR contact path ("via IndiaMART inquiry")
   phone: string | null;                 // direct phone OR contact path
@@ -134,8 +134,9 @@ DETAIL IS SECONDARY TO BREADTH. Capture pricing, contact, MOQ, grades, and certi
 
 CLASSIFY each supplier's site type. THE DECIDING TEST IS CHECKOUT, NOT A VISIBLE PRICE: a site is only M/MS if you can actually place the order online (add-to-cart / buy-now / online checkout / online order). A page that merely shows a price or price range but has NO way to check out is NOT a marketplace, it is a price listing (classify N). Same for a B2B listing that shows list pricing but routes every order through a quote/inquiry form (classify N). Do not upgrade to M/MS just because a number is printed on the page.
 - M  (Marketplace)         — online checkout, no signup. There is a working add-to-cart / buy-now path. e.g. BulkSupplements, Lab Alley, Spectrum Chemical, PureBulk, Nutricost, Ingredi.
-- MS (Marketplace-Signup)  — online checkout after registration (checkout exists, but only once you sign up / log in). e.g. Knowde, IndiaMART, Alibaba, Made-in-China, Pharmaoffer, Ingredients Online.
-- N  (Non-marketplace)     — no online checkout: quote/RFQ only, OR a plain price listing / B2B listing that shows pricing but has no way to buy online. e.g. Lonza, Cargill, Brenntag, Univar, Ajinomoto, NuLiv, OmniActive.
+- MS (Marketplace-Signup)  — online checkout after registration (checkout exists, but only once you sign up / log in). e.g. Pharmaoffer, Ingredients Online.
+- A  (Aggregator)          — a MULTI-SELLER platform listing many third-party sellers, where ordering goes through a "Send Inquiry" / "Contact Supplier" form rather than a checkout. Numbers are printed but they are indicative asks, not transactable prices. e.g. Alibaba, IndiaMART, Made-in-China, DHgate, 1688, Global Sources, TradeIndia, ExportersIndia, EC21, TradeKey. Use A even when a price or price range is shown — the missing checkout plus the multi-seller relay is what makes it an aggregator.
+- N  (Non-marketplace)     — no online checkout and NOT a multi-seller platform: a single company's own site that is quote/RFQ only, or a plain price listing / B2B listing that shows pricing but has no way to buy online. e.g. Lonza, Cargill, Brenntag, Univar, Ajinomoto, NuLiv, OmniActive.
 
 ROLE — also tag the supplier's role in the chain: "Manufacturer", "Distributor", "Reseller", "Trader", or "Marketplace". Buyers prefer going direct to manufacturers, so this matters independently of site type.
 
@@ -166,7 +167,7 @@ Return ONLY a JSON code block (no prose around it) with this exact shape:
       "url":                "https://...",
       "country":            "string or null",
       "role":               "Manufacturer | Distributor | Reseller | Trader | Marketplace",
-      "site_type":          "M | MS | N",
+      "site_type":          "M | MS | A | N",
       "pack_sizes_pricing": "string or null",
       "email":              "sales@... or 'via X inquiry' or null",
       "phone":              "+.. or 'via X inquiry' or null",
@@ -424,7 +425,7 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
       url,
       country: str((s as any).country),
       role: str((s as any).role),
-      site_type: site_type === "M" || site_type === "MS" || site_type === "N" ? site_type : null,
+      site_type: site_type === "M" || site_type === "MS" || site_type === "A" || site_type === "N" ? site_type : null,
       pack_sizes_pricing: str((s as any).pack_sizes_pricing),
       email: str((s as any).email),
       phone: str((s as any).phone),

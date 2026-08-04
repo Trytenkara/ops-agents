@@ -75,7 +75,7 @@ export async function getOutreachTracker(admin: Admin, orgId: string): Promise<O
       .from("leads_in_flight")
       .select("stage, status, drop_reason, payload")
       .eq("org_id", orgId)
-      .or("payload->>site_type.in.(M,MS),payload->>supplier_role.eq.Marketplace"),
+      .or("payload->>site_type.in.(M,MS,A),payload->>supplier_role.eq.Marketplace"),
   ]);
 
   const byKey = new Map<string, OutreachTrackerMaterial>();

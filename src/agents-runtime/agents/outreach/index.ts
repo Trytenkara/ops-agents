@@ -258,7 +258,7 @@ registerAgent({
 
     const marketplaceFor = (lead: any, payload: any, channelUrl: string | null) => {
       const host = channelUrl ? channelUrl.replace(/^https?:\/\//, "").split("/")[0].toLowerCase().replace(/^www\./, "") : null;
-      return isAggregatorDomain(host) || payload.site_type === "M" || payload.site_type === "MS" || payload.supplier_role === "Marketplace" || payload.supplier_role === "Reseller" || payload.enrichment?.tenkara_supplier?.is_marketplace === true;
+      return isAggregatorDomain(host) || payload.site_type === "M" || payload.site_type === "MS" || payload.site_type === "A" || payload.supplier_role === "Marketplace" || payload.supplier_role === "Reseller" || payload.enrichment?.tenkara_supplier?.is_marketplace === true;
     };
     const approvalFingerprint = (email: string, payload: any) => [email, payload?.supplier_website ?? payload?.source_url ?? "", JSON.stringify(payload?.enrichment?.marketplace_trust ?? {})].join("|");
     const candidates: Candidate[] = [];

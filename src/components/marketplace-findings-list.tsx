@@ -15,6 +15,7 @@ import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
 import { fmtCaseDims, resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
 import { relativeTime } from "@/lib/utils";
+import { aggregatorNameOf } from "@/lib/aggregator-hosts";
 
 const COLS = 10;
 
@@ -84,6 +85,7 @@ export function MarketplaceFindingsList({
 
   const csvRows = filtered.map((r: any) => [
     r.supplier_name ?? "",
+    r.aggregator ?? aggregatorNameOf(r.source_url) ?? "",
     r.material_name ?? "",
     r.pack_size ?? "",
     fmtCaseDims(resolveCaseDims(dimsByPack, r.pack_size)) ?? "",
@@ -115,7 +117,7 @@ export function MarketplaceFindingsList({
         {controls}
         <ListCsvButton
           filename={filenameFor(slug, "price-changes")}
-          headers={["Supplier", "Material", "Pack / tier", "Case dims", "Per-unit", "On file", "Current", "Change", "Updated"]}
+          headers={["Supplier", "Aggregator", "Material", "Pack / tier", "Case dims", "Per-unit", "On file", "Current", "Change", "Updated"]}
           rows={csvRows}
         />
       </div>
@@ -190,6 +192,14 @@ export function MarketplaceFindingsList({
                       <TableCell className="text-right align-top tabular-nums"><PctBadge pct={r.pct_change} /></TableCell>
                       <TableCell className="align-top">
                         <div className="font-medium">{r.supplier_name ?? "—"}</div>
+                        {(r.aggregator ?? aggregatorNameOf(r.source_url)) && (
+                          <div
+                            className="text-[11px] text-amber-700 dark:text-amber-400"
+                            title="Aggregator this price was pulled from. Multi-seller inquiry platform, so the number is an indicative ask, not a checkout price."
+                          >
+                            via {r.aggregator ?? aggregatorNameOf(r.source_url)}
+                          </div>
+                        )}
                         {r.source_url ? (
                           <a
                             href={r.source_url}

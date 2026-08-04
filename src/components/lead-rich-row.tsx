@@ -7,7 +7,15 @@ import { LeadRowActions } from "@/components/lead-row-actions";
 import { SupplierOperatorAssign } from "@/components/supplier-operator-assign";
 import { LeadOperatorAssign } from "@/components/lead-operator-assign";
 import { deriveMatchTier } from "@/lib/lead-match-tier";
-import { leadMarketKind, leadRichColSpan } from "@/lib/lead-market";
+import {
+  leadMarketKind,
+  leadRichColSpan,
+  MARKET_KIND_LABEL,
+  MARKET_KIND_TITLE,
+  MARKET_KIND_VARIANT,
+  type MarketKind,
+} from "@/lib/lead-market";
+import { aggregatorNameFromPayload } from "@/lib/aggregator-hosts";
 import { updateLeadEmail, updateLeadPhone } from "@/app/actions/leads";
 
 export { leadMarketKind, leadRichColSpan };
@@ -433,7 +441,7 @@ export function LeadRichHeaders({
   );
 }
 
-// Marketplace vs direct (non-marketplace), derived from the scanner's site_type.
+// Marketplace vs aggregator vs direct, derived from the scanner's site_type.
 // M = marketplace (no signup), MS = marketplace (after registration), N = direct
 // quote/RFQ only. Returns null when the lead isn't classified.
 // Turn the raw signal enum into a readable label (e.g. quoted_same_material →
@@ -470,8 +478,9 @@ export function LeadRichRow({
   const signal = r.payload?.signal as string | undefined;
   const signalCount = r.payload?.signal_count as number | undefined;
   const sourceUrl = (r.payload?.source_url ?? r.payload?.supplier_website) as string | undefined;
-  const siteType = r.payload?.site_type as "M" | "MS" | "N" | undefined;
-  const marketKind = (r.market_kind as "marketplace" | "direct" | null | undefined) ?? leadMarketKind(siteType);
+  const siteType = r.payload?.site_type as "M" | "MS" | "A" | "N" | undefined;
+  const marketKind = (r.market_kind as MarketKind | null | undefined) ?? leadMarketKind(siteType);
+  const aggregatorName = marketKind === "aggregator" ? aggregatorNameFromPayload(r.payload) : null;
   const completeness = r.payload?.completeness_score != null ? Number(r.payload.completeness_score) : null;
   const completenessFactors = Array.isArray(r.payload?.completeness_factors) ? r.payload.completeness_factors : [];
   // "% ready" only means something once Agent 06 enrichment has actually scored
@@ -713,18 +722,25 @@ export function LeadRichRow({
       </TableCell>
       <TableCell className="align-top">
         {marketKind ? (
-          <Badge
-            variant={marketKind === "marketplace" ? "accent" : "secondary"}
-            title={
-              siteType === "M"
-                ? "Marketplace — online checkout, no signup"
-                : siteType === "MS"
-                ? "Marketplace — checkout after registration"
-                : "Direct supplier — quote / RFQ only"
-            }
-          >
-            {marketKind === "marketplace" ? "Marketplace" : "Direct"}
-          </Badge>
+          <div className="flex flex-col items-start gap-0.5">
+            <Badge
+              variant={MARKET_KIND_VARIANT[marketKind]}
+              title={
+                siteType === "M"
+                  ? "Marketplace — online checkout, no signup"
+                  : siteType === "MS"
+                  ? "Marketplace — checkout after registration"
+                  : MARKET_KIND_TITLE[marketKind]
+              }
+            >
+              {MARKET_KIND_LABEL[marketKind]}
+            </Badge>
+            {aggregatorName && (
+              <span className="text-[10px] text-muted-foreground" title="Platform this listing was pulled from">
+                via {aggregatorName}
+              </span>
+            )}
+          </div>
         ) : (
           <span className="text-muted-foreground">—</span>
         )}

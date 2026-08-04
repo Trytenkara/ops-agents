@@ -76,6 +76,7 @@ async function recompose(
   const isMarketplace =
     payload.site_type === "M" ||
     payload.site_type === "MS" ||
+    payload.site_type === "A" ||
     payload.supplier_role === "Marketplace" ||
     payload.enrichment?.tenkara_supplier?.is_marketplace === true;
 

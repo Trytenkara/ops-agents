@@ -14,7 +14,7 @@ import type { RunStat } from "@/components/agent-runs-strip";
 import type { CaseDims } from "@/lib/marketplace-case-dims";
 import type { SupplierProfile } from "@/lib/supplier-profiles";
 
-type Tab = "all" | "raw" | "enriched" | "ready" | "held" | "marketplace" | "outreach" | "removed" | "dropped" | "suppliers";
+type Tab = "all" | "raw" | "enriched" | "ready" | "held" | "marketplace" | "aggregator" | "outreach" | "removed" | "dropped" | "suppliers";
 
 // The sourcing pipeline as a live funnel: each stage is the output of one agent,
 // so surfacing raw -> enriched -> ready-to-send -> held (with counts + the
@@ -87,17 +87,17 @@ export function LeadsTabs({
   // lost among filled rows. Deduped against the removed set (a lead later dropped
   // shows under its drop reason instead).
   const removedIds = new Set(removedRows.map((r: any) => r.id));
+  const kindOf = (r: any) => r.market_kind ?? leadMarketKind(r.payload?.site_type);
   const needsPriceInput = visibleRows.filter(
     (r: any) =>
       !removedIds.has(r.id) &&
-      (r.market_kind ?? leadMarketKind(r.payload?.site_type)) === "marketplace" &&
+      (kindOf(r) === "marketplace" || kindOf(r) === "aggregator") &&
       r.payload?.marketplace_pull?.status === "needs_manual_pull"
   );
   const enrichmentDisplay = [...enrichmentRows, ...needsPriceInput];
 
-  const marketCount = visibleRows.filter(
-    (r) => (r.market_kind ?? leadMarketKind(r.payload?.site_type)) === "marketplace"
-  ).length;
+  const marketCount = visibleRows.filter((r) => kindOf(r) === "marketplace").length;
+  const aggregatorCount = visibleRows.filter((r) => kindOf(r) === "aggregator").length;
   const trackerCount = tracker.materials.length;
   const runByLabel = new Map(runs.map((r) => [r.label, r]));
 
@@ -208,6 +208,7 @@ export function LeadsTabs({
         {tabBtn("suppliers", "Supplier Validation", supplierCount)}
         {tabBtn("all", "All leads", visibleRows.length)}
         {tabBtn("marketplace", "Marketplace pricing", marketCount)}
+        {tabBtn("aggregator", "Aggregator pricing", aggregatorCount)}
         {tabBtn("outreach", "Outreach", trackerCount)}
         {tabBtn("removed", "Supplier Escalations", enrichmentDisplay.length)}
         {tabBtn("dropped", "Dropped", droppedRows.length)}
@@ -267,7 +268,12 @@ export function LeadsTabs({
         ) : (
           <p className="text-sm text-muted-foreground py-4">No leads have been manually dropped for this client yet.</p>
         ))}
-      {tab === "marketplace" && <MarketplacePricing rows={visibleRows} canAct={canAct} slug={slug} dimsByPack={dimsByPack} />}
+      {tab === "marketplace" && (
+        <MarketplacePricing rows={visibleRows} canAct={canAct} slug={slug} dimsByPack={dimsByPack} kind="marketplace" />
+      )}
+      {tab === "aggregator" && (
+        <MarketplacePricing rows={visibleRows} canAct={canAct} slug={slug} dimsByPack={dimsByPack} kind="aggregator" />
+      )}
       {tab === "outreach" &&
         (trackerCount > 0 ? (
           <OutreachTrackerPanel tracker={tracker} slug={slug} />

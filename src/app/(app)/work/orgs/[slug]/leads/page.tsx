@@ -106,7 +106,9 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     // Tenkara unreachable — fall back to payload grade / site_type in the row.
   }
   // market_kind: prefer the supplier's is_marketplace flag (covers platform-DB
-  // leads), fall back to the scanner's site_type for scout leads.
+  // leads), fall back to the scanner's site_type for scout leads. Aggregators are
+  // the exception: the flag is a marketplace/direct boolean with no way to express
+  // one, so a site_type of A wins over it.
   // Owning operator per lead, sticky by supplier within the org.
   // A lead's operator is the SAME as its supplier's operator — assigning here
   // writes the supplier assignment, so lead ownership and supplier ownership stay
@@ -156,8 +158,9 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
 
   leads = leads.map((r) => {
     const flag = r.supplier_id ? leadMarketplace.get(r.supplier_id) : undefined;
+    const siteKind = leadMarketKind(r.payload?.site_type);
     const market_kind =
-      flag === true ? "marketplace" : flag === false ? "direct" : leadMarketKind(r.payload?.site_type);
+      siteKind === "aggregator" ? "aggregator" : flag === true ? "marketplace" : flag === false ? "direct" : siteKind;
     // A supplier-backed lead's owner syncs with its supplier (supplier_assignment);
     // a Scout lead (no supplier_id) uses its own lead-level manual claim. In both
     // cases the auto default is sticky-random over the pool — keyed by supplier_id

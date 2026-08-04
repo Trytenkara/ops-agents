@@ -882,7 +882,7 @@ registerAgent({
               grades_offered: s.grades_offered,
               certifications: s.certifications,
               moq: s.moq,
-              site_type: s.site_type,            // M / MS / N — surfaced in UI
+              site_type: s.site_type,            // M / MS / A / N — surfaced in UI
               confidence_hint: s.confidence_hint,
               confidence_reason: describeScoutConfidence(s.confidence_hint),
               relevance_tier: s.confidence_hint === "strong" ? "Confirmed" : "Potential",

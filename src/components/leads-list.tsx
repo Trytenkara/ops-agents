@@ -3,6 +3,7 @@
 import { useState, useTransition, useRef } from "react";
 import { Table, TableHeader, TableBody, TableRow, TableCell } from "@/components/ui/table";
 import { LeadRichRow, LeadRichHeaders, leadRichColSpan, leadMarketKind, humanizeSignal } from "@/components/lead-rich-row";
+import { aggregatorNameFromPayload } from "@/lib/aggregator-hosts";
 import { deriveMatchTier, matchTierRank } from "@/lib/lead-match-tier";
 import { useListFilter, byString, byDateDesc, usePersistedState } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
@@ -15,6 +16,7 @@ import { leadPackBreakdown } from "@/lib/price-tiers";
 const TYPE_OPTIONS = [
   { value: "all", label: "All types" },
   { value: "marketplace", label: "Marketplace" },
+  { value: "aggregator", label: "Aggregator" },
   { value: "direct", label: "Direct" },
 ];
 
@@ -166,7 +168,7 @@ export function LeadsList({
   // (returned price, operator). All leads are loaded client-side, so this is
   // complete — no separate server download needed.
   const csvHeaders = [
-    "Material", "INCI name", "Trade name", "Supplier", "Role", "Type", "Country",
+    "Material", "INCI name", "Trade name", "Supplier", "Role", "Type", "Aggregator", "Country",
     "Website", "Pack sizes / pricing", "Size", "Unit", "Case type", "Email", "Phone", "HQ address",
     "Supplier background", "Grades offered", "Certifications", "MOQ",
     "Returned price", "Operator", "Signal", "Source", "Match", "Stage", "Status",
@@ -184,6 +186,7 @@ export function LeadsList({
       r.supplier_name ?? "",
       p.supplier_role ?? "",
       r.market_kind ?? leadMarketKind(p.site_type) ?? "",
+      (r.market_kind ?? leadMarketKind(p.site_type)) === "aggregator" ? aggregatorNameFromPayload(p) ?? "" : "",
       countryOf(r),
       p.supplier_website ?? p.source_url ?? "",
       p.pack_sizes_pricing ?? "",

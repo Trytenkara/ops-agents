@@ -6,9 +6,13 @@
 // cart). Decided host-side rather than per page so it costs no fetch and cannot
 // be re-litigated by a reader that mistakes a registration wall for a checkout.
 //
-// Transactional B2B marketplaces (alibaba, made-in-china, indiamart, dhgate,
-// chemondis, ...) are deliberately NOT here: some listings there really do check
-// out, so they stay subject to the per-page checkout test in price-recheck.
+// Two classes of host are deliberately NOT here:
+//  - Transactional B2B marketplaces (chemondis, ingredientsonline, ...) — some
+//    listings there really do check out, so they stay subject to the per-page
+//    checkout test in price-recheck.
+//  - Aggregators (alibaba, indiamart, made-in-china, dhgate, tradeindia, ...) —
+//    inquiry-only multi-seller platforms whose printed numbers we DO keep, in
+//    their own low-trust market kind. See lib/aggregator-hosts.ts.
 const NEVER_MARKETPLACE_HOSTS = [
   // Chemical/ingredient lead-gen directories — every "price" routes to an inquiry.
   "knowde.com",
@@ -21,12 +25,6 @@ const NEVER_MARKETPLACE_HOSTS = [
   "thomasnet.com",
   "kompass.com",
   "europages.com",
-  "globalsources.com",
-  "ec21.com",
-  "tradekey.com",
-  "go4worldbusiness.com",
-  "exportersindia.com",
-  "tradeindia.com",
   "taiwantrade.com",
   "environmental-expert.com",
   // Company-profile / data / customs-data providers.

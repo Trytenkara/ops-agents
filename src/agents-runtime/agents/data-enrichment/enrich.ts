@@ -2,6 +2,8 @@ import { tenkaraQuery } from "@/lib/tenkara-readonly";
 import { enrichContactViaGetProspect, isGetProspectConfigured } from "@/lib/getprospect";
 import { enrichContactViaZoomInfo, enrichContactsViaZoomInfo, isZoomInfoConfigured } from "@/lib/zoominfo";
 import { enrichContactViaHunter, enrichContactsViaHunter, isHunterConfigured } from "@/lib/hunter";
+import { enrichContactViaLeadMagic, enrichContactsViaLeadMagic, isLeadMagicConfigured } from "@/lib/leadmagic";
+import { AGGREGATOR_HOSTS } from "@/lib/aggregator-hosts";
 
 // Pre-outreach enrichment building blocks. No LLM, no Missive — those land
 // when Agent 04 (Outreach) and Agent 08 (Email Scanner) ship.
@@ -115,23 +117,11 @@ export function isAggregatorEmail(email: string | null | undefined): boolean {
 }
 
 // Low-trust B2B marketplaces (subset of AGGREGATOR_DOMAINS). These are RFQ-relay
-// directories with thin supplier vetting, where a firm purchasable price is the
+// platforms with thin supplier vetting, where a firm purchasable price is the
 // exception and "Send Inquiry" / wide price ranges are the norm. Used only to
-// *down-rank* a marketplace lead's confidence — never to drop it.
-const LOW_TRUST_MARKETPLACE_DOMAINS = [
-  "alibaba.com",
-  "aliexpress.com",
-  "1688.com",
-  "made-in-china.com",
-  "dhgate.com",
-  "indiamart.com",
-  "tradeindia.com",
-  "exportersindia.com",
-  "ec21.com",
-  "tradekey.com",
-  "globalsources.com",
-  "go4worldbusiness.com",
-];
+// *down-rank* a marketplace lead's confidence — never to drop it. Same list that
+// drives the "aggregator" market kind, so both stay in step.
+const LOW_TRUST_MARKETPLACE_DOMAINS = AGGREGATOR_HOSTS;
 
 // China-only supplier platforms: every listing is a mainland-China supplier, so
 // the host alone establishes China origin without any other signal.
@@ -186,7 +176,7 @@ export interface ContactDiscovery {
   phone: string | null;        // best discovered/known phone
   contact_url: string | null;  // contact page / quote-form URL used as a channel
   pages_tried: number;         // how many pages we actually fetched
-  source: "scout" | "discovered" | "path" | "tenkara" | "hunter" | "zoominfo" | "getprospect" | null;
+  source: "scout" | "discovered" | "path" | "tenkara" | "hunter" | "leadmagic" | "zoominfo" | "getprospect" | null;
   poc_name?: string | null;
   poc_title?: string | null;
 }
@@ -198,7 +188,7 @@ export interface AdditionalContact {
   email: string;
   name: string | null;
   title: string | null;
-  source: "discovered" | "tenkara" | "hunter" | "zoominfo" | "getprospect";
+  source: "discovered" | "tenkara" | "hunter" | "leadmagic" | "zoominfo" | "getprospect";
 }
 
 export interface SupplierEnrichment {
@@ -1034,12 +1024,29 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     }
   }
 
-  // ZoomInfo fallback (#9): Hunter + the web + Tenkara gave us no direct email.
-  // Rather than drop the lead into the manual "needs human enrichment" queue,
-  // ask ZoomInfo for the supplier's best POC. Fallback-only by design — it never
-  // runs when we already resolved a direct email, so credits are spent only on
-  // the leads that would otherwise be dead ends. Soft: any miss leaves the lead
-  // exactly as it was.
+  // LeadMagic fallback: Hunter also missed. Role Finder maps the domain to a
+  // sourcing POC, then Email Finder validates their address. Pay-per-result
+  // (no charge on a miss), so it's cheap to try on the hard leads before we
+  // reach for ZoomInfo. Fallback-only; soft-fails to leave the lead untouched.
+  if (!email && isLeadMagicConfigured()) {
+    const lm = await enrichContactViaLeadMagic({
+      companyName: lead.supplier_name,
+      website,
+    }).catch(() => null);
+    if (lm?.email && EMAIL_RE.test(lm.email) && !isAggregatorEmail(lm.email) && !isThirdPartyServiceEmail(lm.email)) {
+      email = lm.email.toLowerCase();
+      contactSource = "leadmagic";
+      zoomContactName = lm.contactName;
+      zoomContactTitle = lm.title;
+    }
+  }
+
+  // ZoomInfo fallback (#9): Hunter + LeadMagic + the web + Tenkara gave us no
+  // direct email. Rather than drop the lead into the manual "needs human
+  // enrichment" queue, ask ZoomInfo for the supplier's best POC. Fallback-only
+  // by design — it never runs when we already resolved a direct email, so
+  // credits are spent only on the leads that would otherwise be dead ends.
+  // Soft: any miss leaves the lead exactly as it was.
   if (!email && isZoomInfoConfigured()) {
     const zi = await enrichContactViaZoomInfo({
       companyName: lead.supplier_name,
@@ -1098,6 +1105,18 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
       if (hz.email && email && hz.email.toLowerCase() === email && !zoomContactName) {
         zoomContactName = hz.contactName;
         zoomContactTitle = hz.title;
+      }
+    }
+  }
+  if (multiContactOn && isLeadMagicConfigured() && extraContacts.size < extraCap) {
+    const want = extraCap === Infinity ? 5 : Math.min(5, extraCap + 1);
+    const lms = await enrichContactsViaLeadMagic({ companyName: lead.supplier_name, website }, want).catch(() => [] as Awaited<ReturnType<typeof enrichContactsViaLeadMagic>>);
+    for (const lm of lms) {
+      if (extraContacts.size >= extraCap) break;
+      if (lm.email) addExtraContact(lm.email, lm.contactName, lm.title, "leadmagic");
+      if (lm.email && email && lm.email.toLowerCase() === email && !zoomContactName) {
+        zoomContactName = lm.contactName;
+        zoomContactTitle = lm.title;
       }
     }
   }

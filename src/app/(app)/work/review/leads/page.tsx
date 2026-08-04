@@ -27,6 +27,7 @@ const CHANNELS = [
   { value: "N", label: "Non-marketplace" },
   { value: "MS", label: "Marketplace (signup)" },
   { value: "M", label: "Marketplace/retail" },
+  { value: "A", label: "Aggregator" },
 ] as const;
 const SORTS = [
   { value: "confidence", label: "Confidence" },

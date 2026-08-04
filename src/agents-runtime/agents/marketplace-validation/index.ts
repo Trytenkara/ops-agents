@@ -5,6 +5,7 @@ import { recheckMarketplaceQuote, type RecheckResult } from "./price-recheck";
 import { convertToUsd } from "@/lib/fx";
 import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 import { pullPricesForNewMarketplaceLeads } from "./lead-price-pull";
+import { aggregatorNameOf } from "@/lib/aggregator-hosts";
 
 // Agent 05 - Marketplace Price Re-check.
 //
@@ -188,6 +189,8 @@ registerAgent({
         });
         result = {
           classification: "needs_review",
+          market_kind: aggregatorNameOf(q.product_url) ? "aggregator" : "marketplace",
+          aggregator: aggregatorNameOf(q.product_url),
           current_price: null,
           currency: null,
           pack_size: null,

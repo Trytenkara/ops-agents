@@ -33,8 +33,9 @@ export async function GET(request: NextRequest) {
   const status = (sp.get("status") ?? "").trim();
   const orgSlug = (sp.get("org") ?? "").trim();
   const channel = (sp.get("channel") ?? "").trim();
-  // market=marketplace → published-price listings (site_type M/MS); market=direct
-  // → everything else (non-marketplace suppliers). Mirrors the tab's split.
+  // market=marketplace → published-price listings you can check out on (site_type
+  // M/MS); market=aggregator → multi-seller inquiry platforms (site_type A);
+  // market=direct → everything else. Mirrors the tab's split.
   const market = (sp.get("market") ?? "").trim();
   const pricedOnly = sp.get("priced") === "1";
 
@@ -85,8 +86,9 @@ export async function GET(request: NextRequest) {
       q = q.or(`material_name.ilike.%${esc}%,payload->>inci_name.ilike.%${esc}%`);
     }
     if (source) q = q.eq("source", source);
-    if (channel === "M" || channel === "MS" || channel === "N") q = q.eq("payload->>site_type", channel);
+    if (channel === "M" || channel === "MS" || channel === "A" || channel === "N") q = q.eq("payload->>site_type", channel);
     if (market === "marketplace") q = q.in("payload->>site_type", ["M", "MS"]);
+    else if (market === "aggregator") q = q.eq("payload->>site_type", "A");
     else if (market === "direct") q = q.or("payload->>site_type.eq.N,payload->>site_type.is.null");
     if (pricedOnly) q = q.not("payload->>pack_sizes_pricing", "is", null);
     return q;

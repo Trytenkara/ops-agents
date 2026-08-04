@@ -6,14 +6,23 @@ import { toCsv, type CsvCell } from "@/lib/csv";
 import { correctMaterialSpelling } from "@/lib/material-spelling";
 import { loadMarketplaceCaseDims, resolveCaseDims } from "@/lib/marketplace-case-dims";
 import { tierBreakdown } from "@/lib/price-tiers";
+import { aggregatorNameFromPayload } from "@/lib/aggregator-hosts";
 
-// GET /api/leads-in-flight/marketplace-pricing-csv?org=<slug>
-// Exports marketplace-tab leads (site_type M/MS) as one row per price tier.
+// GET /api/leads-in-flight/marketplace-pricing-csv?org=<slug>&kind=marketplace|aggregator
+// Exports one pricing tab as one row per price tier: marketplace (site_type M/MS,
+// checkout published pricing) or aggregator (site_type A, multi-seller inquiry
+// platforms, where the aggregator column names the platform the ask came from).
 // Ops use this to build / update the manual supplier-sourcing index.
 
 const SITE_TYPE_LABEL: Record<string, string> = {
   M: "Open checkout",
   MS: "Checkout after signup",
+  A: "Inquiry only",
+};
+
+const KIND_SITE_TYPES: Record<string, string[]> = {
+  marketplace: ["M", "MS"],
+  aggregator: ["A"],
 };
 
 const PULL_STATUS_LABEL: Record<string, string> = {
@@ -31,6 +40,7 @@ export async function GET(request: NextRequest) {
 
   const sp = request.nextUrl.searchParams;
   const orgSlug = (sp.get("org") ?? "").trim();
+  const kind = sp.get("kind") === "aggregator" ? "aggregator" : "marketplace";
 
   const admin = createAdminClient();
   const assigned = await getAssignedOrgIds(session);
@@ -51,7 +61,7 @@ export async function GET(request: NextRequest) {
       .from("leads_in_flight")
       .select("id, supplier_name, material_name, source, payload, created_at, orgs(slug, name)")
       .eq("status", "active")
-      .in("payload->>site_type", ["M", "MS"])
+      .in("payload->>site_type", KIND_SITE_TYPES[kind])
       .order("supplier_name", { ascending: true })
       .order("material_name", { ascending: true });
     if (selectedOrgId) q = q.eq("org_id", selectedOrgId);
@@ -75,6 +85,7 @@ export async function GET(request: NextRequest) {
     "material_name",
     "source_url",
     "site_type",
+    "aggregator",
     "pull_status",
     "pull_reason",
     "case_size",
@@ -102,6 +113,7 @@ export async function GET(request: NextRequest) {
     const p = r.payload ?? {};
     const sourceUrl: string | null = p.source_url ?? p.supplier_website ?? null;
     const siteType: string | null = SITE_TYPE_LABEL[p.site_type] ?? p.site_type ?? null;
+    const aggregator = kind === "aggregator" ? aggregatorNameFromPayload(p) : null;
     const pull = p.marketplace_pull as { status?: string; reason?: string } | undefined;
     const pullStatus = PULL_STATUS_LABEL[pull?.status ?? ""] ?? (pull?.status ?? "Pending");
     const pullReason: string | null = pull?.reason ?? null;
@@ -144,6 +156,7 @@ export async function GET(request: NextRequest) {
         materialName,
         sourceUrl,
         siteType,
+        aggregator,
         pullStatus,
         pullReason,
         b.case_size,
@@ -167,7 +180,7 @@ export async function GET(request: NextRequest) {
   const body = toCsv(headers, csvRows);
   const iso = new Date().toISOString().slice(0, 10);
   const fileOrg = orgSlug || "all-orgs";
-  const filename = `marketplace-pricing-${fileOrg}-${iso}.csv`;
+  const filename = `${kind}-pricing-${fileOrg}-${iso}.csv`;
 
   return new NextResponse(body, {
     status: 200,

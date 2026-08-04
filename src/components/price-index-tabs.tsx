@@ -3,23 +3,27 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 
-type TabId = "validation" | "marketplace" | "direct" | "escalations";
+type TabId = "validation" | "marketplace" | "aggregator" | "direct" | "escalations";
 
 export function PriceIndexTabs({
   marketplaceCount,
+  aggregatorCount,
   directCount,
   escalationsCount,
   validationCount,
   marketplace,
+  aggregator,
   direct,
   escalations,
   validation,
 }: {
   marketplaceCount: number;
+  aggregatorCount: number;
   directCount: number;
   escalationsCount: number;
   validationCount: number;
   marketplace: React.ReactNode;
+  aggregator: React.ReactNode;
   direct: React.ReactNode;
   escalations: React.ReactNode;
   validation: React.ReactNode;
@@ -47,11 +51,13 @@ export function PriceIndexTabs({
       <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1">
         <Tab id="validation" label="Quotes Validation" count={validationCount} />
         <Tab id="marketplace" label="Marketplace prices" count={marketplaceCount} />
+        <Tab id="aggregator" label="Aggregator prices" count={aggregatorCount} />
         <Tab id="direct" label="Direct prices" count={directCount} />
         <Tab id="escalations" label="Quotes Escalations" count={escalationsCount} />
       </div>
       <div className={tab === "validation" ? "" : "hidden"}>{validation}</div>
       <div className={tab === "marketplace" ? "" : "hidden"}>{marketplace}</div>
+      <div className={tab === "aggregator" ? "" : "hidden"}>{aggregator}</div>
       <div className={tab === "direct" ? "" : "hidden"}>{direct}</div>
       <div className={tab === "escalations" ? "" : "hidden"}>{escalations}</div>
     </div>

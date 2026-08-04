@@ -1,11 +1,12 @@
 import { SupabaseClient } from "@supabase/supabase-js";
+import { leadMarketKind, type MarketKind } from "@/lib/lead-market";
 
 export interface SupplierProfile {
   id: string;
   org_id: string;
   supplier_id: string | null;
   supplier_name: string;
-  supplier_type: "marketplace" | "direct" | null;
+  supplier_type: MarketKind | null;
   poc_email: string | null;
   poc_phone: string | null;
   poc_name: string | null;
@@ -52,17 +53,27 @@ const PROFILE_COLUMNS = `
   notes, generated_notes, approval_status, created_at, updated_at
 `;
 
+// Paged: PostgREST caps a request at 1000 rows, and a truncated read here makes
+// the seeder's dedup guard blind to everything past the cap, so it recreates
+// those suppliers on every run.
 export async function getSupplierProfiles(
   admin: SupabaseClient,
   orgId: string
 ): Promise<SupplierProfile[]> {
-  const { data, error } = await admin
-    .from("supplier_profiles")
-    .select(PROFILE_COLUMNS)
-    .eq("org_id", orgId)
-    .order("supplier_name");
-  if (error) throw error;
-  return (data ?? []) as SupplierProfile[];
+  const PAGE = 1000;
+  const all: SupplierProfile[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await admin
+      .from("supplier_profiles")
+      .select(PROFILE_COLUMNS)
+      .eq("org_id", orgId)
+      .order("supplier_name")
+      .order("id")
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    all.push(...((data ?? []) as SupplierProfile[]));
+    if (!data || data.length < PAGE) return all;
+  }
 }
 
 export async function getSupplierProfile(
@@ -206,8 +217,7 @@ export async function seedProfilesFromLeads(
     const nameKey = info.name.toLowerCase();
     const current = info.supplierId ? existingById.get(info.supplierId) : existingByName.get(nameKey);
     const p = info.payload;
-    const isMarketplace =
-      p.site_type === "M" || p.site_type === "MS" ? "marketplace" : "direct";
+    const marketKind: MarketKind = leadMarketKind(p.site_type) ?? "direct";
     try {
       const mpShipping = p.marketplace_pull?.shipping;
       const shippingTerms = typeof mpShipping === "string" && mpShipping.trim() ? mpShipping.trim() : null;
@@ -226,7 +236,7 @@ export async function seedProfilesFromLeads(
         if (updateError) throw updateError;
       } else {
         await upsertSupplierProfile(admin, orgId, info.supplierId, info.name, {
-          supplier_type: isMarketplace as "marketplace" | "direct",
+          supplier_type: marketKind,
           poc_email: p.supplier_contact_email ?? p.contact_email ?? null,
           poc_phone: p.sales_phone ?? null,
           poc_name: p.poc_name ?? null,

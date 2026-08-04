@@ -3,6 +3,7 @@ import { recheckMarketplaceQuote } from "./price-recheck";
 import { convertToUsd } from "@/lib/fx";
 import { ensureMarketplaceCaseDims } from "@/lib/marketplace-case-dims-fill";
 import { neverMarketplaceHostOf } from "@/lib/marketplace-hosts";
+import { aggregatorNameOf } from "@/lib/aggregator-hosts";
 import { getOrgOperatorPool, getSupplierAssignments, resolveSupplierOperatorId } from "@/lib/operator-assignment";
 
 type Admin = ReturnType<typeof createAdminClient>;
@@ -176,7 +177,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   const internalOrgIds = activeOrgRows.filter((o: any) => o.is_internal).map((o: any) => o.id);
 
   const cols = "id, org_id, supplier_id, supplier_name, material_id, material_name, payload";
-  const marketplaceFilter = "payload->>site_type.in.(M,MS),payload->>supplier_role.eq.Marketplace";
+  const marketplaceFilter = "payload->>site_type.in.(M,MS,A),payload->>supplier_role.eq.Marketplace";
   const eligible = (l: LeadRow) => Boolean(l.material_name && listingUrl(l.payload));
   const nowIso = new Date().toISOString();
 
@@ -295,6 +296,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       // the read entirely and fall through to the terminal branch below.
       result = {
         classification: "not_marketplace" as const,
+        market_kind: "marketplace" as const, aggregator: null,
         current_price: null, currency: null, pack_size: null, unit_price: null,
         tiers: [] as any[], moq: null, lead_time: null, shipping: null,
         source_url: url, source_citations: [] as any[],
@@ -312,7 +314,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         model: isRecheck ? RECHECK_MODEL : undefined,
       });
     } catch (e: any) {
-      result = { classification: "needs_review" as const, current_price: null, currency: null, pack_size: null, unit_price: null, tiers: [], moq: null, lead_time: null, shipping: null, source_url: url, source_citations: [], notes: `pull failed: ${e?.message ?? e}` };
+      result = { classification: "needs_review" as const, market_kind: (aggregatorNameOf(url) ? "aggregator" : "marketplace") as "marketplace" | "aggregator", aggregator: aggregatorNameOf(url), current_price: null, currency: null, pack_size: null, unit_price: null, tiers: [], moq: null, lead_time: null, shipping: null, source_url: url, source_citations: [], notes: `pull failed: ${e?.message ?? e}` };
     }
     }
 
@@ -448,6 +450,20 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       return "not_marketplace";
     }
 
+    // Aggregators (Alibaba, IndiaMART, ...) are a third market kind alongside
+    // marketplace and direct: multi-seller platforms where ordering runs through
+    // a Send Inquiry form, so the listed number is an indicative ask rather than
+    // a checkout price. We keep and refresh it exactly like a marketplace price,
+    // but stamp WHICH aggregator it came from and mark the trust level so the
+    // Control Room can filter it into its own tab instead of blending it in.
+    const aggregatorName =
+      result.market_kind === "aggregator"
+        ? result.aggregator ?? aggregatorNameOf(result.source_url ?? url)
+        : null;
+    const aggregatorMark = aggregatorName
+      ? { market_kind: "aggregator" as const, aggregator: aggregatorName, price_trust: "low" as const }
+      : {};
+
     const gotPrice = result.classification === "current_price_found" && result.current_price != null;
     const reason = result.classification; // current_price_found | login_required | link_broken | needs_review
     // login_required / link_broken are actionable and escalate on the first hit.
@@ -522,11 +538,18 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         attempts,
         last_recheck_reason: reason,
         last_recheck_at: nowIso,
+        ...aggregatorMark,
       };
       preservedRecheckPull = deferPull;
       const { error: upErr } = await admin
         .from("leads_in_flight")
-        .update({ payload: { ...(l.payload ?? {}), marketplace_pull: deferPull } })
+        .update({
+          payload: {
+            ...(l.payload ?? {}),
+            ...(aggregatorName ? { site_type: "A" } : {}),
+            marketplace_pull: deferPull,
+          },
+        })
         .eq("id", l.id);
       if (upErr) {
         await log(`Lead payload update failed for ${l.id}: ${upErr.message}`, { level: "error", step: "mp_leads", data: { lead_id: l.id } });
@@ -556,6 +579,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           source_url: result.source_url ?? url,
           pulled_at: nowIso,
           ...cadence!,
+          ...aggregatorMark,
         }
       : preservedRecheckPull ?? {
           status: retry ? ("pending" as const) : ("needs_manual_pull" as const),
@@ -564,6 +588,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           source_url: result.source_url ?? url,
           last_notes: result.notes ?? null,
           at: new Date().toISOString(),
+          ...aggregatorMark,
         };
 
     // Populate the same price_tiers the Marketplace-pricing tab renders — but
@@ -571,6 +596,9 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     // 'pulled') owns the ladder it wrote earlier, so it may refresh it; a lead
     // whose tiers came from an operator is left alone.
     const nextPayload: any = { ...(l.payload ?? {}), marketplace_pull: pull };
+    // site_type is what every reader classifies off (leadMarketKind), so move the
+    // lead into the aggregator bucket here rather than only tagging the pull.
+    if (aggregatorName) nextPayload.site_type = "A";
     const existingTiers = Array.isArray(l.payload?.price_tiers) ? l.payload.price_tiers : [];
     const operatorEdited = !!l.payload?.price_tiers_updated_by;
     let writtenTierPacks: string[] = [];

@@ -7,38 +7,53 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useListFilter, byString } from "@/components/use-list-filter";
-import { leadMarketKind } from "@/components/lead-rich-row";
+import { leadMarketKind, type MarketKind } from "@/lib/lead-market";
+import { aggregatorNameFromPayload } from "@/lib/aggregator-hosts";
 import { saveLeadPriceTiers } from "@/app/actions/leads";
 import { type PriceTier, tierBreakdown, composePackSize } from "@/lib/price-tiers";
 import { fmtCaseDims, resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
 import { relativeTime } from "@/lib/utils";
 
-// Marketplace-only view: suppliers whose pricing is published directly on their
-// own site/storefront (site_type M = checkout no-signup, MS = checkout after
-// registration). Ops can structure the published price ladder into tiers
-// (pack size → price → $/unit) and edit them inline.
+// Published-price view, rendered once per market kind:
+//   marketplace — pricing published on a storefront you can actually check out on
+//     (site_type M = no signup, MS = after registration).
+//   aggregator  — multi-seller inquiry platforms (Alibaba, IndiaMART, ...,
+//     site_type A). The number is an indicative ask, not a transactable price, so
+//     these get their own tab and every row names the aggregator it came from.
+// Ops can structure either ladder into tiers (pack size → price → $/unit) inline.
 
 type Row = {
   id: string;
   supplier_name: string | null;
   material_name: string | null;
   source: string | null;
-  market_kind?: "marketplace" | "direct" | null;
+  market_kind?: MarketKind | null;
   payload: any;
 };
-
-function isMarketplace(r: Row): boolean {
-  return (r.market_kind ?? leadMarketKind(r.payload?.site_type)) === "marketplace";
-}
 
 function siteTypeMeta(st: string | null | undefined): { label: string; title: string } | null {
   if (st === "M") return { label: "Open checkout", title: "Marketplace — public price, checkout without signup" };
   if (st === "MS") return { label: "Checkout after signup", title: "Marketplace — price visible after registration" };
+  if (st === "A") return { label: "Inquiry only", title: "Aggregator — ordering goes through a Send Inquiry form, there is no checkout" };
   return null;
 }
 
-export function MarketplacePricing({ rows, canAct, slug, dimsByPack = {} }: { rows: Row[]; canAct: boolean; slug: string; dimsByPack?: Record<string, CaseDims> }) {
-  const marketRows = rows.filter(isMarketplace);
+
+export function MarketplacePricing({
+  rows,
+  canAct,
+  slug,
+  dimsByPack = {},
+  kind = "marketplace",
+}: {
+  rows: Row[];
+  canAct: boolean;
+  slug: string;
+  dimsByPack?: Record<string, CaseDims>;
+  kind?: Extract<MarketKind, "marketplace" | "aggregator">;
+}) {
+  const isAggregatorTab = kind === "aggregator";
+  const marketRows = rows.filter((r) => (r.market_kind ?? leadMarketKind(r.payload?.site_type)) === kind);
 
   const { filtered, controls } = useListFilter(marketRows, {
     searchText: (r) => `${r.supplier_name ?? ""} ${r.material_name ?? ""}`,
@@ -53,13 +68,14 @@ export function MarketplacePricing({ rows, canAct, slug, dimsByPack = {} }: { ro
   if (marketRows.length === 0) {
     return (
       <p className="text-sm text-muted-foreground py-4">
-        No marketplace leads yet. These appear when Scout finds suppliers with published website pricing (open checkout
-        or checkout-after-signup).
+        {isAggregatorTab
+          ? "No aggregator leads yet. These appear when a listing is found on a multi-seller inquiry platform such as Alibaba, IndiaMART, or Made-in-China."
+          : "No marketplace leads yet. These appear when Scout finds suppliers with published website pricing (open checkout or checkout-after-signup)."}
       </p>
     );
   }
 
-  const exportUrl = `/api/leads-in-flight/marketplace-pricing-csv?org=${encodeURIComponent(slug)}`;
+  const exportUrl = `/api/leads-in-flight/marketplace-pricing-csv?org=${encodeURIComponent(slug)}&kind=${kind}`;
 
   return (
     <div className="space-y-4">
@@ -74,15 +90,27 @@ export function MarketplacePricing({ rows, canAct, slug, dimsByPack = {} }: { ro
         </a>
       </div>
       <p className="text-xs text-muted-foreground">
-        {filtered.length} marketplace supplier{filtered.length === 1 ? "" : "s"} with direct website pricing. Structure
-        each published price ladder into tiers — size, unit, and case type (drum, bag…), total price, and the
-        derived $/unit. The split columns export straight into the platform's quote fields.
+        {isAggregatorTab ? (
+          <>
+            {filtered.length} aggregator listing{filtered.length === 1 ? "" : "s"}, each labelled with the platform it came
+            from. These are multi-seller inquiry platforms with no checkout, so treat the numbers as indicative asks to
+            confirm with the seller, not as prices you can buy at. Structure each ladder into tiers the same way.
+          </>
+        ) : (
+          <>
+            {filtered.length} marketplace supplier{filtered.length === 1 ? "" : "s"} with direct website pricing. Structure
+            each published price ladder into tiers — size, unit, and case type (drum, bag…), total price, and the
+            derived $/unit. The split columns export straight into the platform&apos;s quote fields.
+          </>
+        )}
       </p>
       <div className="space-y-3">
         {filtered.map((r) => (
           <MarketplaceLeadCard key={r.id} row={r} canAct={canAct} dimsByPack={dimsByPack} />
         ))}
-        {filtered.length === 0 && <p className="text-sm text-muted-foreground py-4">No marketplace leads match.</p>}
+        {filtered.length === 0 && (
+          <p className="text-sm text-muted-foreground py-4">No {isAggregatorTab ? "aggregator" : "marketplace"} leads match.</p>
+        )}
       </div>
     </div>
   );
@@ -134,6 +162,8 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
   const [tiers, setTiers] = useState<PriceTier[]>(initial);
 
   const st = siteTypeMeta(row.payload?.site_type);
+  const isAggregator = (row.market_kind ?? leadMarketKind(row.payload?.site_type)) === "aggregator";
+  const aggregator = isAggregator ? aggregatorNameFromPayload(row.payload) : null;
   const pull = row.payload?.marketplace_pull as
     | { status: "pulled" | "needs_manual_pull" | "pending"; reason?: string; pulled_at?: string }
     | undefined;
@@ -196,7 +226,12 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
         <div className="space-y-1">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium">{row.supplier_name ?? "—"}</span>
-            {st && <Badge variant="accent" title={st.title}>{st.label}</Badge>}
+            {aggregator && (
+              <Badge variant="warn" title="Aggregator this listing was pulled from. Multi-seller inquiry platform, so the number is an indicative ask, not a checkout price.">
+                via {aggregator}
+              </Badge>
+            )}
+            {st && <Badge variant={isAggregator ? "warn" : "accent"} title={st.title}>{st.label}</Badge>}
             {pull?.status === "pulled" && (
               <Badge variant="success" title={pull.pulled_at ? `Auto-pulled ${pull.pulled_at}` : "Price auto-pulled from the listing"}>
                 price auto-pulled

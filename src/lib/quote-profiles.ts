@@ -87,17 +87,26 @@ const PROFILE_COLUMNS = `
   notes, generated_notes, approval_status, created_at, updated_at
 `;
 
+// Paged for the same reason as getSupplierProfiles: a 1000-row truncation would
+// make the seeders' dedup guard blind and duplicate every profile past the cap.
 export async function getQuoteProfiles(
   admin: SupabaseClient,
   orgId: string
 ): Promise<QuoteProfile[]> {
-  const { data, error } = await admin
-    .from("quote_profiles")
-    .select(PROFILE_COLUMNS)
-    .eq("org_id", orgId)
-    .order("supplier_name");
-  if (error) throw error;
-  return (data ?? []) as QuoteProfile[];
+  const PAGE = 1000;
+  const all: QuoteProfile[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await admin
+      .from("quote_profiles")
+      .select(PROFILE_COLUMNS)
+      .eq("org_id", orgId)
+      .order("supplier_name")
+      .order("id")
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    all.push(...((data ?? []) as QuoteProfile[]));
+    if (!data || data.length < PAGE) return all;
+  }
 }
 
 export type QuoteProfileUpdate = Partial<
@@ -268,7 +277,7 @@ export async function seedQuoteProfilesFromMarketplace(
     .eq("org_id", orgId)
     .eq("status", "active")
     .eq("payload->marketplace_pull->>status", "pulled")
-    .or("payload->>site_type.in.(M,MS),payload->>supplier_role.eq.Marketplace");
+    .or("payload->>site_type.in.(M,MS,A),payload->>supplier_role.eq.Marketplace");
   if (!leads?.length) return 0;
 
   const existing = await getQuoteProfiles(admin, orgId);

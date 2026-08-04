@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { aggregatorNameOf } from "@/lib/aggregator-hosts";
 import { TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/lib/utils";
@@ -144,6 +145,14 @@ export function MarketplaceFindingRow({
         <PctBadge pct={r.pct_change} />
       </TableCell>
       <TableCell className="align-top">
+        {aggregatorNameOf(r.source_url) && (
+          <div
+            className="text-[11px] text-amber-700 dark:text-amber-400"
+            title="Aggregator this price was pulled from. Multi-seller inquiry platform, so the number is an indicative ask, not a checkout price."
+          >
+            via {aggregatorNameOf(r.source_url)}
+          </div>
+        )}
         {r.source_url ? (
           <a
             href={r.source_url}

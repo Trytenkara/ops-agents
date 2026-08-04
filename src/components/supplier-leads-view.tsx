@@ -7,7 +7,7 @@ import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { SupplierProfileCard } from "@/components/supplier-profile-card";
-import { seedSupplierProfiles, createSupplierProfile } from "@/app/actions/supplier-profiles";
+import { createSupplierProfile } from "@/app/actions/supplier-profiles";
 import { LeadRichRow, LeadRichHeaders, leadRichColSpan, LeadMatchBadge, LeadSourceBadge } from "@/components/lead-rich-row";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
@@ -15,7 +15,7 @@ import { profileCompleteness, type SupplierProfile } from "@/lib/supplier-profil
 import { UnlinkedMarketplaceLogins, type MarketplaceAccount } from "@/components/marketplace-logins";
 import { normalizeHost } from "@/lib/marketplace-accounts";
 import { deriveMatchTier } from "@/lib/lead-match-tier";
-import { leadMarketKind } from "@/lib/lead-market";
+import { leadMarketKind, MARKET_KIND_LABEL, MARKET_KIND_TITLE, MARKET_KIND_VARIANT, type MarketKind } from "@/lib/lead-market";
 import { relativeTime } from "@/lib/utils";
 
 interface SupplierGroup {
@@ -23,7 +23,7 @@ interface SupplierGroup {
   supplierId: string | null;
   profile: SupplierProfile | null;
   leads: any[];
-  marketKind: "marketplace" | "direct" | null;
+  marketKind: MarketKind | null;
   latestLead: string | null;
   accounts: MarketplaceAccount[];
   marketplaceHost: string;
@@ -90,8 +90,6 @@ export function SupplierLeadsView({
   const [statusFilter, setStatusFilter] = useState("all");
   const [expandedSupplier, setExpandedSupplier] = useState<string | null>(null);
   const [showLeadsFor, setShowLeadsFor] = useState<string | null>(null);
-  const [seeding, startSeed] = useTransition();
-  const [seedResult, setSeedResult] = useState<string | null>(null);
   const [showAddSupplier, setShowAddSupplier] = useState(false);
 
   const profileBySupplier = new Map<string, SupplierProfile>();
@@ -110,13 +108,13 @@ export function SupplierLeadsView({
       const profile = lead.supplier_id
         ? profileBySupplier.get(lead.supplier_id) ?? null
         : profileByName.get((lead.supplier_name ?? "").toLowerCase()) ?? null;
-      const mk = (lead.market_kind as string | null) ?? leadMarketKind(lead.payload?.site_type);
+      const mk = (lead.market_kind as MarketKind | null) ?? leadMarketKind(lead.payload?.site_type);
       group = {
         supplierName: lead.supplier_name ?? "Unknown",
         supplierId: lead.supplier_id ?? null,
         profile,
         leads: [],
-        marketKind: mk === "marketplace" ? "marketplace" : mk === "direct" ? "direct" : null,
+        marketKind: mk === "marketplace" || mk === "aggregator" || mk === "direct" ? mk : null,
         latestLead: null,
         accounts: [],
         marketplaceHost: "",
@@ -210,16 +208,6 @@ export function SupplierLeadsView({
       )
     : 0;
 
-  function handleSeed() {
-    startSeed(async () => {
-      const res = await seedSupplierProfiles(orgId);
-      if (res.ok) {
-        setSeedResult(`Seeded ${res.count ?? 0} new profiles`);
-        setTimeout(() => setSeedResult(null), 3000);
-      }
-    });
-  }
-
   // CSV export: one row per supplier with profile completeness + lead counts
   const csvHeaders = [
     "Supplier", "Type", "Leads", "Profile Status", "Completeness %",
@@ -284,16 +272,10 @@ export function SupplierLeadsView({
         </span>
         <span className="text-muted-foreground">Avg completeness: {avgCompleteness}%</span>
         {canAct && (
-          <>
-            <Button variant="outline" size="sm" onClick={handleSeed} disabled={seeding}>
-              {seeding ? "Seeding..." : "Seed profiles from leads"}
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setShowAddSupplier(true)}>
-              Add supplier
-            </Button>
-          </>
+          <Button variant="outline" size="sm" onClick={() => setShowAddSupplier(true)}>
+            Add supplier
+          </Button>
         )}
-        {seedResult && <span className="text-xs text-green-600">{seedResult}</span>}
       </div>
 
       {/* Add supplier form */}
@@ -369,8 +351,8 @@ export function SupplierLeadsView({
                   <span className="text-xs text-muted-foreground">{isExpanded ? "v" : ">"}</span>
                   <span className="font-medium text-sm truncate">{g.supplierName}</span>
                   {g.marketKind && (
-                    <Badge variant={g.marketKind === "marketplace" ? "accent" : "secondary"}>
-                      {g.marketKind === "marketplace" ? "Marketplace" : "Direct"}
+                    <Badge variant={MARKET_KIND_VARIANT[g.marketKind]} title={MARKET_KIND_TITLE[g.marketKind]}>
+                      {MARKET_KIND_LABEL[g.marketKind]}
                     </Badge>
                   )}
                   {g.profile ? (
@@ -428,18 +410,10 @@ export function SupplierLeadsView({
                       marketplaceHost={g.marketplaceHost || g.accounts[0]?.host || ""}
                     />
                   ) : (
-                    <div className="rounded-lg border border-dashed p-4 text-center space-y-2">
+                    <div className="rounded-lg border border-dashed p-4 text-center">
                       <p className="text-sm text-muted-foreground">
-                        No approval profile yet for this supplier.
+                        Profile not built yet. Agent 06 creates it automatically on its next pass.
                       </p>
-                      {canAct && (
-                        <CreateProfileButton
-                          orgId={orgId}
-                          supplierId={g.supplierId}
-                          supplierName={g.supplierName}
-                          lead={g.leads[0]}
-                        />
-                      )}
                     </div>
                   )}
 
@@ -484,40 +458,6 @@ export function SupplierLeadsView({
         )}
       </div>
     </div>
-  );
-}
-
-function CreateProfileButton({
-  orgId,
-  supplierId,
-  supplierName,
-  lead,
-}: {
-  orgId: string;
-  supplierId: string | null;
-  supplierName: string;
-  lead?: any;
-}) {
-  const [creating, startCreate] = useTransition();
-
-  function handleCreate() {
-    startCreate(async () => {
-      const p = lead?.payload ?? {};
-      const isMarketplace = p.site_type === "M" || p.site_type === "MS" ? "marketplace" : "direct";
-      await createSupplierProfile(orgId, supplierId, supplierName, {
-        supplier_type: isMarketplace as "marketplace" | "direct",
-        poc_email: p.supplier_contact_email ?? p.contact_email ?? null,
-        poc_phone: p.sales_phone ?? null,
-        poc_name: p.poc_name ?? null,
-        shipping_address: p.hq_address ?? null,
-      });
-    });
-  }
-
-  return (
-    <Button variant="outline" size="sm" onClick={handleCreate} disabled={creating}>
-      {creating ? "Creating..." : "Create profile"}
-    </Button>
   );
 }
 
