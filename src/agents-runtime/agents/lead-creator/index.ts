@@ -11,7 +11,7 @@ import { onlyOrgNames } from "@/lib/org-scope";
 import { normalizeStatus, sourcingAllowed } from "@/lib/org-status";
 import { flagMaterialNames, correctName } from "@/lib/material-name-flags";
 import { materialLabel } from "@/lib/material-label";
-import { sourceReadyEnabled, fireSourceReadyDiscovery } from "./sourceready";
+import { sourceReadyEnabled, sourceReadyUnlockEnabled, fireSourceReadyDiscovery } from "./sourceready";
 import { importYetiEnabled, fireImportYetiDiscovery } from "./importyeti";
 import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 
@@ -1019,7 +1019,7 @@ registerAgent({
           excludedCountries: ex ? Array.from(ex.excludedCountries) : [],
           size: SOURCEREADY_PAGE_SIZE,
           page: srPage,
-          unlockContacts: oaOrgId ? !isInternalByOaId.get(oaOrgId) : false,
+          unlockContacts: sourceReadyUnlockEnabled() && !!oaOrgId && !isInternalByOaId.get(oaOrgId),
         });
         if (ok) {
           sourceReadyFired++;

@@ -21,6 +21,16 @@ export function sourceReadyEnabled(): boolean {
   return !!(process.env[URL_ENV] && process.env[SECRET_ENV]);
 }
 
+// Contact unlocking is an ops toggle, default OFF, because it is not a free upgrade:
+// when the SourceReady contact-credit balance is spent, a search sent with
+// unlock_contacts fails outright with CREDITS_EXCEED_LIMIT and returns NO suppliers,
+// where the same search without it returns all of them. Leaving this on with an empty
+// balance would silently starve discovery for exactly the real clients it is meant to
+// help. Turn it on (SOURCEREADY_UNLOCK_CONTACTS=1) only when credits are topped up.
+export function sourceReadyUnlockEnabled(): boolean {
+  return /^(1|true|yes|on)$/i.test((process.env.SOURCEREADY_UNLOCK_CONTACTS ?? "").trim());
+}
+
 export interface SourceReadyRequest {
   oaOrgId: string | null;
   materialId: string;
