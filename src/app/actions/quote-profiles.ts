@@ -6,7 +6,6 @@ import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import {
   updateQuoteProfile,
   insertQuoteProfile,
-  seedQuoteProfilesFromStaged,
   type QuoteProfileUpdate,
 } from "@/lib/quote-profiles";
 
@@ -60,17 +59,5 @@ export async function createQuoteProfile(
     return { ok: true, profileId: profile.id };
   } catch (e: any) {
     return { ok: false, error: e.message ?? "create failed" };
-  }
-}
-
-export async function seedQuoteProfiles(orgId: string): Promise<ActionResult> {
-  const ctx = await assertCanAct(orgId);
-  if ("error" in ctx) return { ok: false, error: ctx.error };
-  try {
-    const count = await seedQuoteProfilesFromStaged(ctx.admin, orgId);
-    revalidatePath(`/work/orgs`);
-    return { ok: true, count };
-  } catch (e: any) {
-    return { ok: false, error: e.message ?? "seed failed" };
   }
 }

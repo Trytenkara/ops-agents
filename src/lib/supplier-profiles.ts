@@ -35,6 +35,7 @@ export interface SupplierProfile {
   payment_terms_confirmed: boolean;
   notes: string | null;
   generated_notes: string | null;
+  field_sources: Record<string, string>;
   approval_status: "draft" | "pending_review" | "ready_for_submission" | "submitted";
   created_at: string;
   updated_at: string;
@@ -50,7 +51,7 @@ const PROFILE_COLUMNS = `
   hazmat_handling_fee, temp_storage_fee, liftgate_fee, special_packaging_fee,
   contact_info_complete, marketplace_type_correct, address_accurate,
   shipping_terms_correct, billing_verified, payment_info_verified, payment_terms_confirmed,
-  notes, generated_notes, approval_status, created_at, updated_at
+  notes, generated_notes, field_sources, approval_status, created_at, updated_at
 `;
 
 // Paged: PostgREST caps a request at 1000 rows, and a truncated read here makes
@@ -119,15 +120,13 @@ export async function upsertSupplierProfile(
   supplierName: string,
   seed: SupplierProfileSeed = {}
 ): Promise<SupplierProfile> {
-  if (supplierId) {
-    const { data: existing } = await admin
-      .from("supplier_profiles")
-      .select(PROFILE_COLUMNS)
-      .eq("org_id", orgId)
-      .eq("supplier_id", supplierId)
-      .maybeSingle();
-    if (existing) return existing as SupplierProfile;
-  }
+  // One profile per supplier is a unique index now, so resolve an existing row
+  // on whichever key identifies this supplier rather than letting the insert
+  // fail: name-only suppliers are the majority and have no supplier_id.
+  const found = supplierId
+    ? await admin.from("supplier_profiles").select(PROFILE_COLUMNS).eq("org_id", orgId).eq("supplier_id", supplierId).maybeSingle()
+    : await admin.from("supplier_profiles").select(PROFILE_COLUMNS).eq("org_id", orgId).is("supplier_id", null).ilike("supplier_name", supplierName.trim()).maybeSingle();
+  if (found.data) return found.data as SupplierProfile;
 
   const { data, error } = await admin
     .from("supplier_profiles")

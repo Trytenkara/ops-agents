@@ -19,6 +19,26 @@ const STATUS_META: Record<string, { label: string; variant: "success" | "warn" |
   submitted: { label: "Submitted", variant: "success" },
 };
 
+// Terms a supplier only ever states in a reply. Blank here means the ask is
+// outstanding, not that a lookup failed.
+const REPLY_ONLY_FIELDS = new Set([
+  "shipping_terms", "shipping_email", "billing_email", "billing_poc_name",
+  "payment_upfront_pct", "payment_net_days", "payment_completion", "payment_credit_line",
+  "ddp_min_limit", "ddp_max_limit",
+]);
+
+// Why a field is blank, so an empty box never reads as a broken pipeline.
+function emptyReason(field: string, sources: Record<string, string> | null | undefined): string {
+  const source = sources?.[field];
+  if (source === "not_published") {
+    return REPLY_ONLY_FIELDS.has(field) ? "Not public — awaiting supplier reply" : "Not published by supplier";
+  }
+  if (sources?.web_checked_at) {
+    return REPLY_ONLY_FIELDS.has(field) ? "Awaiting supplier reply" : "Not found";
+  }
+  return "Pending agent lookup";
+}
+
 function Field({
   label,
   value,
@@ -26,6 +46,7 @@ function Field({
   editing,
   onChange,
   type = "text",
+  sources,
 }: {
   label: string;
   value: string | number | null;
@@ -33,12 +54,20 @@ function Field({
   editing: boolean;
   onChange: (field: string, value: string) => void;
   type?: string;
+  sources?: Record<string, string> | null;
 }) {
   if (!editing) {
+    const filledBy = value != null && value !== "" ? sources?.[field] : null;
     return (
       <div className="space-y-0.5">
         <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">{label}</div>
-        <div className="text-sm">{value ?? <span className="text-muted-foreground italic">empty</span>}</div>
+        <div className="text-sm" title={filledBy ? `Source: ${filledBy}` : undefined}>
+          {value != null && value !== "" ? (
+            value
+          ) : (
+            <span className="text-muted-foreground italic">{emptyReason(field, sources)}</span>
+          )}
+        </div>
       </div>
     );
   }
@@ -236,9 +265,9 @@ export function SupplierProfileCard({
             <h4 className="text-xs uppercase tracking-wider font-semibold text-muted-foreground border-b pb-1">
               Contact
             </h4>
-            <Field label="POC Email" value={profile.poc_email} field="poc_email" editing={editing} onChange={handleFieldChange} />
-            <Field label="POC Phone" value={profile.poc_phone} field="poc_phone" editing={editing} onChange={handleFieldChange} />
-            <Field label="POC Name" value={profile.poc_name} field="poc_name" editing={editing} onChange={handleFieldChange} />
+            <Field label="POC Email" value={profile.poc_email} field="poc_email" editing={editing} onChange={handleFieldChange} sources={profile.field_sources} />
+            <Field label="POC Phone" value={profile.poc_phone} field="poc_phone" editing={editing} onChange={handleFieldChange} sources={profile.field_sources} />
+            <Field label="POC Name" value={profile.poc_name} field="poc_name" editing={editing} onChange={handleFieldChange} sources={profile.field_sources} />
             {editing && (
               <div className="pt-1">
                 <div className="space-y-0.5">
@@ -266,9 +295,9 @@ export function SupplierProfileCard({
             <h4 className="text-xs uppercase tracking-wider font-semibold text-muted-foreground border-b pb-1">
               Shipping
             </h4>
-            <Field label="Address" value={profile.shipping_address} field="shipping_address" editing={editing} onChange={handleFieldChange} />
-            <Field label="Shipping Terms" value={profile.shipping_terms} field="shipping_terms" editing={editing} onChange={handleFieldChange} />
-            <Field label="Shipping Email" value={profile.shipping_email} field="shipping_email" editing={editing} onChange={handleFieldChange} />
+            <Field label="Address" value={profile.shipping_address} field="shipping_address" editing={editing} onChange={handleFieldChange} sources={profile.field_sources} />
+            <Field label="Shipping Terms" value={profile.shipping_terms} field="shipping_terms" editing={editing} onChange={handleFieldChange} sources={profile.field_sources} />
+            <Field label="Shipping Email" value={profile.shipping_email} field="shipping_email" editing={editing} onChange={handleFieldChange} sources={profile.field_sources} />
             <div className="grid grid-cols-3 gap-2">
               <div className="space-y-0.5">
                 <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">DDP Book</div>
@@ -287,8 +316,8 @@ export function SupplierProfileCard({
                   <div className="text-sm">{profile.ddp_can_book ? "Yes" : "No"}</div>
                 )}
               </div>
-              <Field label="DDP Min" value={profile.ddp_min_limit} field="ddp_min_limit" editing={editing} onChange={handleNumberChange} type="number" />
-              <Field label="DDP Max" value={profile.ddp_max_limit} field="ddp_max_limit" editing={editing} onChange={handleNumberChange} type="number" />
+              <Field label="DDP Min" value={profile.ddp_min_limit} field="ddp_min_limit" editing={editing} onChange={handleNumberChange} type="number" sources={profile.field_sources} />
+              <Field label="DDP Max" value={profile.ddp_max_limit} field="ddp_max_limit" editing={editing} onChange={handleNumberChange} type="number" sources={profile.field_sources} />
             </div>
             <Checkbox label="Address accurate US based location" checked={profile.address_accurate} field="address_accurate" editing={editing} onChange={handleCheckChange} />
             <Checkbox label="Shipping terms correct" checked={profile.shipping_terms_correct} field="shipping_terms_correct" editing={editing} onChange={handleCheckChange} />
@@ -299,16 +328,16 @@ export function SupplierProfileCard({
             <h4 className="text-xs uppercase tracking-wider font-semibold text-muted-foreground border-b pb-1">
               Billing / Payment
             </h4>
-            <Field label="Billing Email" value={profile.billing_email} field="billing_email" editing={editing} onChange={handleFieldChange} />
-            <Field label="Billing POC Name" value={profile.billing_poc_name} field="billing_poc_name" editing={editing} onChange={handleFieldChange} />
+            <Field label="Billing Email" value={profile.billing_email} field="billing_email" editing={editing} onChange={handleFieldChange} sources={profile.field_sources} />
+            <Field label="Billing POC Name" value={profile.billing_poc_name} field="billing_poc_name" editing={editing} onChange={handleFieldChange} sources={profile.field_sources} />
             <Checkbox label="Billing information verified" checked={profile.billing_verified} field="billing_verified" editing={editing} onChange={handleCheckChange} />
             <div className="border-t pt-2 mt-2">
               <h5 className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-2">Payment Terms</h5>
               <div className="grid grid-cols-2 gap-2">
-                <Field label="Upfront %" value={profile.payment_upfront_pct} field="payment_upfront_pct" editing={editing} onChange={handleNumberChange} type="number" />
-                <Field label="Net Days" value={profile.payment_net_days} field="payment_net_days" editing={editing} onChange={handleNumberChange} type="number" />
-                <Field label="Completion" value={profile.payment_completion} field="payment_completion" editing={editing} onChange={handleFieldChange} />
-                <Field label="Credit Line" value={profile.payment_credit_line} field="payment_credit_line" editing={editing} onChange={handleFieldChange} />
+                <Field label="Upfront %" value={profile.payment_upfront_pct} field="payment_upfront_pct" editing={editing} onChange={handleNumberChange} type="number" sources={profile.field_sources} />
+                <Field label="Net Days" value={profile.payment_net_days} field="payment_net_days" editing={editing} onChange={handleNumberChange} type="number" sources={profile.field_sources} />
+                <Field label="Completion" value={profile.payment_completion} field="payment_completion" editing={editing} onChange={handleFieldChange} sources={profile.field_sources} />
+                <Field label="Credit Line" value={profile.payment_credit_line} field="payment_credit_line" editing={editing} onChange={handleFieldChange} sources={profile.field_sources} />
               </div>
             </div>
             <Checkbox label="Payment information verified" checked={profile.payment_info_verified} field="payment_info_verified" editing={editing} onChange={handleCheckChange} />
@@ -322,10 +351,10 @@ export function SupplierProfileCard({
             Accessorial Charges
           </h4>
           <div className="grid grid-cols-4 gap-3">
-            <Field label="Hazmat Handling" value={profile.hazmat_handling_fee} field="hazmat_handling_fee" editing={editing} onChange={handleNumberChange} type="number" />
-            <Field label="Temp Storage" value={profile.temp_storage_fee} field="temp_storage_fee" editing={editing} onChange={handleNumberChange} type="number" />
-            <Field label="Liftgate" value={profile.liftgate_fee} field="liftgate_fee" editing={editing} onChange={handleNumberChange} type="number" />
-            <Field label="Special Packaging" value={profile.special_packaging_fee} field="special_packaging_fee" editing={editing} onChange={handleNumberChange} type="number" />
+            <Field label="Hazmat Handling" value={profile.hazmat_handling_fee} field="hazmat_handling_fee" editing={editing} onChange={handleNumberChange} type="number" sources={profile.field_sources} />
+            <Field label="Temp Storage" value={profile.temp_storage_fee} field="temp_storage_fee" editing={editing} onChange={handleNumberChange} type="number" sources={profile.field_sources} />
+            <Field label="Liftgate" value={profile.liftgate_fee} field="liftgate_fee" editing={editing} onChange={handleNumberChange} type="number" sources={profile.field_sources} />
+            <Field label="Special Packaging" value={profile.special_packaging_fee} field="special_packaging_fee" editing={editing} onChange={handleNumberChange} type="number" sources={profile.field_sources} />
           </div>
         </div>
 

@@ -6,7 +6,6 @@ import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import {
   updateSupplierProfile,
   upsertSupplierProfile,
-  seedProfilesFromLeads,
   type SupplierProfileUpdate,
 } from "@/lib/supplier-profiles";
 
@@ -60,18 +59,7 @@ export async function createSupplierProfile(
     revalidatePath(`/work/orgs`);
     return { ok: true, profileId: profile.id };
   } catch (e: any) {
+    if (e?.code === "23505") return { ok: false, error: "A profile for that supplier already exists." };
     return { ok: false, error: e.message ?? "create failed" };
-  }
-}
-
-export async function seedSupplierProfiles(orgId: string): Promise<ActionResult & { count?: number }> {
-  const ctx = await assertCanAct(orgId);
-  if ("error" in ctx) return { ok: false, error: ctx.error };
-  try {
-    const count = await seedProfilesFromLeads(ctx.admin, orgId);
-    revalidatePath(`/work/orgs`);
-    return { ok: true, count };
-  } catch (e: any) {
-    return { ok: false, error: e.message ?? "seed failed" };
   }
 }

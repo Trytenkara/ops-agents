@@ -7,6 +7,8 @@ import { enrichAndStageLead } from "./run-enrich";
 import { seedProfilesFromLeads } from "@/lib/supplier-profiles";
 import { seedQuoteProfilesFromStaged, seedQuoteProfilesFromMarketplace } from "@/lib/quote-profiles";
 import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
+import { fillProfilesFromKnownSources } from "@/lib/supplier-profile-fill";
+import { runSupplierWebFill } from "./web-fill-run";
 
 // v1 trim (vs. full spec):
 //   - pre-outreach only. Reply-driven enrichment lands when Agent 08
@@ -17,6 +19,10 @@ import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
 //     8s timeout each), so 25 keeps us comfortably under the 300s Vercel
 //     Hobby maxDuration even in worst-case all-timeout scenarios.
 const MAX_LEADS_PER_RUN = 25;
+// Web profile completion: suppliers per run, and the wall-clock slice it may
+// take before the rest of the agent's work starts.
+const WEB_FILL_CAP = 12;
+const WEB_FILL_BUDGET_MS = 120_000;
 
 registerAgent({
   slug: "agent-06-enrichment",
@@ -94,12 +100,59 @@ registerAgent({
       ? ` · seeded ${seededSuppliers} supplier + ${seededQuotes} quote profiles`
       : "";
 
+    // Creating the profile row is only half the job: the validation card is
+    // useless while every field in it is blank. Refill from the sources we
+    // already own on every cycle (free, deterministic), then spend web calls on
+    // the long tail that none of them cover.
+    const tenkaraOrgIdByOa = new Map(
+      (await admin.from("orgs").select("id, tenkara_org_id").in("id", allSourcingOrgIds)).data
+        ?.map((o: any) => [o.id, o.tenkara_org_id as string | null]) ?? []
+    );
+    let filledFields = 0;
+    for (const orgId of seedOrder) {
+      try {
+        const s = await fillProfilesFromKnownSources(admin, orgId, tenkaraOrgIdByOa.get(orgId) ?? null);
+        filledFields += s.fieldsFilled;
+        if (s.fieldsFilled) {
+          await ctx.log(`Filled ${s.fieldsFilled} profile fields across ${s.profilesUpdated} suppliers`, {
+            step: "fill-profiles",
+            data: { org_id: orgId, ...s },
+          });
+        }
+      } catch (e: any) {
+        await ctx.log(`Profile fill failed for org ${orgId}: ${e?.message ?? e}`, { level: "warn", step: "fill-profiles" });
+      }
+    }
+
+    // Web completion is paid work, so it is real clients only and hard-capped.
+    // The deadline keeps it from eating the enrichment budget behind it.
+    let webFilled = 0;
+    const webDeadline = Date.now() + WEB_FILL_BUDGET_MS;
+    let webBudget = WEB_FILL_CAP;
+    for (const orgId of seedOrder.filter((id) => !isInternalById.get(id))) {
+      if (webBudget <= 0 || Date.now() >= webDeadline) break;
+      try {
+        const s = await runSupplierWebFill(admin, orgId, webBudget, webDeadline);
+        webBudget -= s.attempted;
+        webFilled += s.fieldsFilled;
+        if (s.attempted) {
+          await ctx.log(`Web-filled ${s.fieldsFilled} fields over ${s.attempted} suppliers (${s.exhausted} fields not published)`, {
+            step: "web-fill-profiles",
+            data: { org_id: orgId, ...s },
+          });
+        }
+      } catch (e: any) {
+        await ctx.log(`Profile web fill failed for org ${orgId}: ${e?.message ?? e}`, { level: "warn", step: "web-fill-profiles" });
+      }
+    }
+    const fillNote = filledFields || webFilled ? ` · filled ${filledFields + webFilled} profile fields` : "";
+
     const timingMap06 = await loadOrgTimingMap(admin, "agent-06-enrichment", allSourcingOrgIds);
     const sourcingOrgIds = filterDueOrgIds(allSourcingOrgIds, timingMap06, "agent-06-enrichment");
     if (sourcingOrgIds.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary((allSourcingOrgIds.length ? "All orgs throttled by tier — not due yet." : "No orgs are active/sourcing_only — nothing to enrich.") + seedNote);
+      ctx.setSummary((allSourcingOrgIds.length ? "All orgs throttled by tier — not due yet." : "No orgs are active/sourcing_only — nothing to enrich.") + seedNote + fillNote);
       return;
     }
 
@@ -177,7 +230,7 @@ registerAgent({
     if (!leads || leads.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary("No raw leads to enrich." + seedNote);
+      ctx.setSummary("No raw leads to enrich." + seedNote + fillNote);
       return;
     }
 
@@ -245,7 +298,7 @@ registerAgent({
       .map(([k, v]) => `${k}=${v}`)
       .join(", ");
     ctx.setSummary(
-      `Enriched ${promoted}/${leads.length} → stage=enriched · ${blocked} left at raw${reasonStr ? ` (${reasonStr})` : ""}${skipped ? ` · ${skipped} deferred (deadline)` : ""}${superseded ? ` · ${superseded} superseded` : ""}${errored ? ` · ${errored} errors` : ""}${seedNote}`
+      `Enriched ${promoted}/${leads.length} → stage=enriched · ${blocked} left at raw${reasonStr ? ` (${reasonStr})` : ""}${skipped ? ` · ${skipped} deferred (deadline)` : ""}${superseded ? ` · ${superseded} superseded` : ""}${errored ? ` · ${errored} errors` : ""}${seedNote}${fillNote}`
     );
   },
 });
