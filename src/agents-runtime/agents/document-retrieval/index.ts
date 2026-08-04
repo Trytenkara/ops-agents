@@ -153,6 +153,8 @@ registerAgent({
     let docsStored = 0;
     let pagesWithDocs = 0;
     let blocked = 0;
+    let docErrors = 0;
+    let extractFailures = 0;
 
     for (const t of queue) {
       if (Date.now() - startedAt > RUN_BUDGET_MS) {
@@ -176,15 +178,25 @@ registerAgent({
           inserted: 0,
           skippedDuplicates: 0,
           errors: 1,
+          extractFailures: 0,
           docs: [],
           note: `error: ${String(e?.message ?? e).slice(0, 120)}`,
         };
+      }
+
+      // A page whose links all failed to download looks identical to a page with
+      // no links unless the reason is recorded, which is exactly how the first
+      // live run hid a bug behind 21 blank rows.
+      if (!res.note && res.candidates > 0 && res.inserted === 0) {
+        res.note = `found ${res.candidates} link(s), stored 0 (${res.errors} fetch/insert error(s))`;
       }
 
       pagesScanned++;
       docsStored += res.inserted;
       if (res.inserted) pagesWithDocs++;
       if (/\b(403|429)\b/.test(res.note ?? "")) blocked++;
+      docErrors += res.errors;
+      extractFailures += res.extractFailures;
 
       const h = pageHash(t.pageUrl);
       const { data: prior } = await admin
@@ -227,7 +239,15 @@ registerAgent({
     }
 
     ctx.setItemsProcessed(pagesScanned);
-    ctx.setMetadata({ pages_scanned: pagesScanned, pages_with_docs: pagesWithDocs, docs_stored: docsStored, blocked });
+    ctx.setMetadata({
+      pages_scanned: pagesScanned,
+      pages_with_docs: pagesWithDocs,
+      docs_stored: docsStored,
+      blocked,
+      doc_errors: docErrors,
+      extract_failures: extractFailures,
+      requirements_ticked: requirementsTicked,
+    });
     ctx.setSummary(
       `${docsStored} document(s) from ${pagesWithDocs}/${pagesScanned} page(s)` +
         (blocked ? `; ${blocked} page(s) blocked (403/429)` : "")

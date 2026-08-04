@@ -64,6 +64,8 @@ export interface DocRetrieveResult {
   inserted: number;
   skippedDuplicates: number;
   errors: number;
+  // Documents fetched and stored, but whose fields could not be parsed.
+  extractFailures: number;
   docs: { url: string; docType: string; expiresOn: string | null }[];
   note?: string;
 }
@@ -142,6 +144,7 @@ export async function retrieveDocumentsFromUrl(
     inserted: 0,
     skippedDuplicates: 0,
     errors: 0,
+    extractFailures: 0,
     docs: [],
   };
 
@@ -186,7 +189,16 @@ export async function retrieveDocumentsFromUrl(
       const ext = extOf(link.url) || (contentType.includes("pdf") ? "pdf" : "");
       const fileName = fileNameOf(link.url);
       const docType = classifyDocType(`${fileName} ${link.text}`, contentType);
-      const extracted = await extractDocumentFields(buf, docType, ext);
+      // Field parsing is a bonus; the file is the point. Anthropic rejects some
+      // real PDFs outright (encrypted, malformed, oversize), and when that
+      // throws inside the download's try block the document itself was being
+      // thrown away with it. Isolated so a parse failure costs only the fields.
+      let extracted: Awaited<ReturnType<typeof extractDocumentFields>> = null;
+      try {
+        extracted = await extractDocumentFields(buf, docType, ext);
+      } catch {
+        result.extractFailures++;
+      }
       rows.push({
         orgId: target.orgId,
         supplierId: target.supplierId ?? null,
