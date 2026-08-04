@@ -6,6 +6,7 @@ import { extractQuotesFromReplyText, type ExtractedQuote, type ReplyQuoteExtract
 import { insertStagedQuotes, type StagedQuoteInput, type StagedQuoteSource } from "@/lib/staged-quotes";
 import { normalizeToUsd } from "@/lib/fx";
 import { classifyDocType, insertSupplierDocuments, type SupplierDocumentInput } from "@/lib/supplier-documents";
+import { syncDocRequirementsMet } from "@/lib/document-requirements";
 import { extractDocumentFields, isDocExtractableExt } from "@/lib/document-extract";
 import { getTenkaraMessageAttachments, downloadTenkaraAttachment } from "@/lib/tenkara-attachments";
 import { parseAttachmentBytes, deriveExt, isPricingCandidateExt } from "@/lib/attachment-parser";
@@ -541,7 +542,10 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
           supplierIssued: true,
         });
       }
-      if (docRows.length) await insertSupplierDocuments(admin, docRows);
+      if (docRows.length) {
+        await insertSupplierDocuments(admin, docRows);
+        if (ref.org_id) await syncDocRequirementsMet(admin, ref.org_id);
+      }
     } catch {
       /* doc capture is best-effort */
     }

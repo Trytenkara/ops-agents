@@ -3,6 +3,7 @@ import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { loadOrgStatuses, sourcingAllowed } from "@/lib/org-status";
 import { retrieveDocumentsFromUrl } from "@/lib/document-retrieve";
+import { syncDocRequirementsMet } from "@/lib/document-requirements";
 
 // Agent 09 - Document Retrieval.
 //
@@ -212,6 +213,17 @@ registerAgent({
           data: { pageUrl: t.pageUrl },
         });
       }
+    }
+
+    // A stored document should tick the requirement it satisfies, not wait for
+    // an operator to notice it arrived.
+    let requirementsTicked = 0;
+    for (const orgId of new Set(queue.map((t) => t.orgId))) {
+      const r = await syncDocRequirementsMet(admin, orgId);
+      requirementsTicked += r.updated;
+    }
+    if (requirementsTicked) {
+      await ctx.log(`${requirementsTicked} quote profile(s) had a document requirement met.`, { step: "requirements" });
     }
 
     ctx.setItemsProcessed(pagesScanned);
