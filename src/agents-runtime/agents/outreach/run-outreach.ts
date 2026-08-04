@@ -1,7 +1,7 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { composeOutreachDraft, type DraftMaterial } from "./drafter";
 import { stageDraft } from "@/lib/draft-staging";
-import { coldOutboundEmailClient, tenkaraEmailAccountIdFor } from "@/lib/tenkara";
+import { tenkaraEmailAccountIdFor } from "@/lib/tenkara";
 import { resolveMaterialGradeSpecs, type MaterialGradeSpec } from "@/lib/tenkara-names";
 
 // Short stable hash so a corrected/changed material set yields a NEW Tenkara
@@ -125,9 +125,8 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
     reference,
   });
 
-  const emailClient = coldOutboundEmailClient("04");
-  const emailAccountId = emailClient === "rod_app" ? tenkaraEmailAccountIdFor({ mode, clientOrgName, ghostBrand, explicit: configuredEmailAccountId }) : undefined;
-  if (emailClient === "rod_app" && !emailAccountId) {
+  const emailAccountId = tenkaraEmailAccountIdFor({ mode, clientOrgName, ghostBrand, explicit: configuredEmailAccountId });
+  if (!emailAccountId) {
     await log(`No Tenkara inbox mapped for brand "${mode === "ghost" ? ghostBrand : clientOrgName}" — staging without a sender; operator must pick`, {
       step: "outreach",
       data: { supplier_id: supplierId, mode, ghost_brand: ghostBrand ?? null },
@@ -138,10 +137,7 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
   // (material added/removed/corrected) yields a fresh Tenkara conversation while
   // the caller supersedes the stale one.
   const supplierKey = supplierId ?? nameHash(email.toLowerCase());
-  const externalId =
-    emailClient === "rod_app"
-      ? `agent-04-outreach-supplier-${supplierKey}-${nameHash(materialNames.map((n) => n.toLowerCase()).join("|"))}`
-      : undefined;
+  const externalId = `agent-04-outreach-supplier-${supplierKey}-${nameHash(materialNames.map((n) => n.toLowerCase()).join("|"))}`;
 
   const staged = await stageDraft({
     admin,
@@ -155,7 +151,6 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
     subject: draft.subject,
     body: draft.body,
     assignedOperator,
-    emailClient,
     emailAccountId,
     supplierCompany: supplierName,
     externalId,
@@ -200,11 +195,9 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
     const newPayload = {
       ...rest,
       outreach: {
-        email_client: emailClient,
+        email_client: "rod_app",
         draft_id: staged.draftId ?? null,
         conversation_id: staged.conversationId ?? null,
-        missive_draft_id: emailClient === "missive" ? staged.missiveDraftId : null,
-        missive_conversation_id: emailClient === "missive" ? (staged.conversationId ?? null) : null,
         mode,
         ghost_brand: ghostBrand ?? null,
         consolidated_material_ids: materialIds,

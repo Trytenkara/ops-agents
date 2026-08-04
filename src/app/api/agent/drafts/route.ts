@@ -4,7 +4,7 @@ import { authenticateAgent, unauthorized } from "@/lib/agent-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const postSchema = z.object({
-  email_client: z.enum(["missive", "rod_app"]).default("missive"),
+  email_client: z.literal("rod_app").default("rod_app"),
   thread_id: z.string(),
   draft_id: z.string(),
   agent_run_id: z.string().uuid().optional(),
@@ -15,7 +15,7 @@ const postSchema = z.object({
   supplier_id: z.string().optional(),
   material_id: z.string().optional(),
   // quote_id is the canonical de-dup key for the revalidation flow.
-  // quote_ids accepts a list when a single Missive draft covers multiple expiring materials
+  // quote_ids accepts a list when a single draft covers multiple expiring materials
   // for the same supplier — in that case we still store one draft_references row with
   // metadata.covered_quote_ids set to the full list, and quote_id is the primary (first) id.
   quote_id: z.string().optional(),

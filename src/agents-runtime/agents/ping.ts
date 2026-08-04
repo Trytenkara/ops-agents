@@ -1,7 +1,7 @@
 import { registerAgent } from "../registry";
 
 // A no-op agent. Useful for verifying the embedded runtime end-to-end
-// without burning LLM tokens or touching Missive.
+// without burning LLM tokens or touching the email app.
 registerAgent({
   slug: "agent-01-ping",
   displayName: "Agent 01 - Ping",

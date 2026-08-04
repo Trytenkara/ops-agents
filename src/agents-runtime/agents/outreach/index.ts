@@ -13,16 +13,17 @@ import { resolveMaterialNames } from "@/lib/tenkara-names";
 import { randomUUID } from "crypto";
 
 // v1 trim (vs. full spec):
-//   - pre-outreach only. Reply tracking + follow-up cadence land with Agent 08.
+//   - pre-outreach only. Reply tracking lands with the Tenkara inbound webhook
+//     (Agent 08); the no-reply cadence with Agent 15.
 //   - cron-style sweep of stage='enriched' & status='active' leads, ordered by
 //     completeness_score DESC so the best-known suppliers go first.
 //   - cap aggressively (env-overridable). The first run is meant to be small
-//     and reviewable — operators eyeball every draft in Missive before sending.
+//     and reviewable — operators eyeball every draft in Tenkara before sending.
 //   - deterministic template only (no LLM). Keeps voice consistent across runs
 //     and avoids burning OpenAI tokens when the email content is so structured.
 //
-// Safety: the Missive client refuses `send: true` and `from_field` at both
-// compile- and run-time. No email leaves Missive without a human pressing Send.
+// Safety: drafts are staged, never sent. No email leaves Tenkara without a human
+// pressing Send.
 const DEFAULT_MAX_DRAFTS_PER_RUN = 5;
 
 function envMaxDrafts(): number {
@@ -61,18 +62,11 @@ registerAgent({
   slug: "agent-04-outreach",
   displayName: "Agent 04 - Outreach",
   description:
-    "Composes outreach emails for enriched leads, stages them as Missive drafts (never sends), and promotes leads to stage=ready_for_outreach.",
+    "Composes outreach emails for enriched leads, stages them as Tenkara drafts (never sends), and promotes leads to stage=ready_for_outreach.",
   async run(ctx) {
     const admin = createAdminClient();
     const retryRequestId = typeof ctx.input?.retryRequestId === "string" ? ctx.input.retryRequestId : null;
     const maxDrafts = retryRequestId ? 1 : envMaxDrafts();
-
-    if (!process.env.MISSIVE_API_TOKEN) {
-      await ctx.log("MISSIVE_API_TOKEN not configured — cannot stage drafts", { level: "error", step: "config" });
-      ctx.setStatus("failure");
-      ctx.setSummary("MISSIVE_API_TOKEN missing.");
-      return;
-    }
 
     const tackleAgentId = await getAgentIdBySlug(admin, ctx.agentSlug);
     if (!tackleAgentId) {
@@ -591,7 +585,7 @@ registerAgent({
     //       sourcing from that supplier, so a supplier never gets a separate
     //       mail per material.
     let staged = 0; // first-contact email drafts staged (one per supplier)
-    let missiveErrors = 0;
+    let draftErrors = 0;
     let promoted = 0; // leads promoted to ready_for_outreach (the first pool)
     let heldSuppliers = 0; // suppliers held because a sibling material is blocked
     let heldCompiling = 0; // suppliers held: full material list not yet enriched
@@ -870,18 +864,18 @@ registerAgent({
         if (remainder.length) await holdForFollowup(remainder, poolMaterialIds, res.draftRefId);
       } else {
         await admin.rpc("release_supplier_email_reservation", { p_org_id: primary.lead.org_id, p_reservation_id: reservationId });
-        missiveErrors++;
+        draftErrors++;
       }
     }
 
     await recordOrgRuns(admin, "agent-04-outreach", [...dueOrgIds04]);
     ctx.setItemsProcessed(staged);
-    ctx.setStatus(missiveErrors > 0 && staged === 0 ? "failure" : missiveErrors > 0 ? "partial" : "success");
+    ctx.setStatus(draftErrors > 0 && staged === 0 ? "failure" : draftErrors > 0 ? "partial" : "success");
     ctx.setSummary(
       `Staged ${staged} first-contact email${staged === 1 ? "" : "s"} · promoted ${promoted} to ready_for_outreach${phasedHeld ? ` · ${phasedHeld} material${phasedHeld === 1 ? "" : "s"} held for follow-up` : ""}` +
         (heldSuppliers ? ` · held ${heldSuppliers} supplier${heldSuppliers === 1 ? "" : "s"} (blocked material)` : "") +
         (heldCompiling ? ` · held ${heldCompiling} supplier${heldCompiling === 1 ? "" : "s"} (compiling full list)` : "") +
-        (missiveErrors ? ` · ${missiveErrors} errors` : "") +
+        (draftErrors ? ` · ${draftErrors} errors` : "") +
         (priorRelSkipped ? ` · skipped ${priorRelSkipped} existing-relationship` : "") +
         (equipmentSkipped ? ` · skipped ${equipmentSkipped} equipment-supplier` : "") +
         (marketplacePricingLeft ? ` · left ${marketplacePricingLeft} marketplace for price-pull` : "") +

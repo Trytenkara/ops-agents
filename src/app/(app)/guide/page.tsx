@@ -62,7 +62,7 @@ const AGENTS: { id: string; name: string; does: string; feeds: string }[] = [
   { id: "10", name: "Draft QA", does: "Lints every draft as it is staged; hard-blocks a draft with fabricated contact details.", feeds: "Email Thread Tracker (quality)" },
   { id: "11", name: "Lead Scanner CSV Push", does: "Per-supplier CSV handoff of dropped leads. Built, currently kill-switched.", feeds: "Exports (paused)" },
   { id: "12", name: "Client Profile", does: "Researches and maintains the client summary and rep sheet.", feeds: "Client Profile" },
-  { id: "13", name: "Inbox Context", does: "Built for the old Missive inbox; dormant since the Tenkara cutover.", feeds: "— (paused)" },
+  { id: "13", name: "Inbox Context", does: "Reads our Tenkara threads and records where each supplier conversation stands.", feeds: "02" },
   { id: "14", name: "QA Watchdog", does: "Data-integrity sweep; flags what fell through the cracks to Slack.", feeds: "— (alerts)" },
   { id: "15", name: "Reply Manager", does: "Owns the conversation after the first email: nudges silence, answers replies, chases the price.", feeds: "Email Thread Tracker" },
   { id: "—", name: "Fleet Summary", does: "Daily digest of how every agent ran.", feeds: "— (Slack)" },

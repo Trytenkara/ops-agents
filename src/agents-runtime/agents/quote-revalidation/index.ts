@@ -1,12 +1,11 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { queryOverdueRows, type OverdueRow } from "./sql";
-import { classifyClient, type OutreachMode, MISSIVE_ORGANIZATION_ID, MISSIVE_TEAM_ID } from "./config";
+import { classifyClient, type OutreachMode } from "./config";
 import { generateRevalidationEmail, formatUserMessage } from "./drafter";
 import { buildCsv, type GroupResult } from "./csv-builder";
 import { uploadCsvAndSign } from "@/lib/storage";
-import { createMissiveDraft, missiveDraftLink } from "@/lib/missive";
-import { createTenkaraConversation, createTenkaraDraft, coldOutboundEmailClient, tenkaraEmailAccountIdFor } from "@/lib/tenkara";
+import { createTenkaraConversation, createTenkaraDraft, tenkaraEmailAccountIdFor } from "@/lib/tenkara";
 import { bodyToHtml } from "@/lib/email-style";
 import { lintDraft } from "../outreach-qa/lint";
 import { postQrSummary } from "./slack-notifier";
@@ -41,7 +40,7 @@ interface Group {
   rows: OverdueRow[];
 }
 
-// Run draft generation + Missive staging with bounded concurrency.
+// Run draft generation + draft staging with bounded concurrency.
 async function pMap<T, R>(items: T[], concurrency: number, mapper: (t: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
@@ -63,7 +62,6 @@ registerAgent({
   description: "Weekly platform-wide sweep for expiring/expired supplier quotes.",
   async run(ctx) {
     const today = new Date().toISOString().slice(0, 10);
-    const emailClient = coldOutboundEmailClient("02");
     await ctx.log("Querying Tenkara prod for overdue quotes…", { step: "query" });
 
     let overdue: OverdueRow[];
@@ -234,104 +232,86 @@ registerAgent({
       let draftIdValue: string;
       let conversationIdValue: string;
       try {
-        if (emailClient === "rod_app") {
-          const emailAccountId = tenkaraEmailAccountIdFor({
-            mode: group.mode as "active" | "ghost",
-            clientOrgName: group.client_org_name,
-            ghostBrand: group.ghostBrand,
-            explicit: inboxByTenkaraOrg.get(group.client_org_id) ?? null,
+        const emailAccountId = tenkaraEmailAccountIdFor({
+          mode: group.mode as "active" | "ghost",
+          clientOrgName: group.client_org_name,
+          ghostBrand: group.ghostBrand,
+          explicit: inboxByTenkaraOrg.get(group.client_org_id) ?? null,
+        });
+        if (!emailAccountId) {
+          await ctx.log(`No Tenkara inbox mapped for brand "${group.mode === "ghost" ? group.ghostBrand : group.client_org_name}" — staging without a sender; operator must pick`, {
+            level: "warn",
+            step: "stage",
+            data: { client: group.client_org_name, mode: group.mode, ghost_brand: group.ghostBrand ?? null },
           });
-          if (!emailAccountId) {
-            await ctx.log(`No Tenkara inbox mapped for brand "${group.mode === "ghost" ? group.ghostBrand : group.client_org_name}" — staging without a sender; operator must pick`, {
-              level: "warn",
-              step: "stage",
-              data: { client: group.client_org_name, mode: group.mode, ghost_brand: group.ghostBrand ?? null },
-            });
-          }
+        }
 
-          // Reply into the existing Tenkara thread when one exists for this
-          // supplier + client org, rather than opening a new conversation each
-          // revalidation cycle. Best-effort: a lookup failure falls through to
-          // creating a new thread.
-          let existingConversationId: string | null = null;
-          try {
-            const { data: oaOrgRow } = await admin.from("orgs").select("id").eq("tenkara_org_id", group.client_org_id).maybeSingle();
-            if (oaOrgRow?.id) {
-              const { data: existingRef } = await admin
-                .from("draft_references")
-                .select("thread_id")
-                .eq("org_id", oaOrgRow.id)
-                .eq("supplier_id", group.supplier_id)
-                .eq("email_client", "rod_app")
-                .not("thread_id", "is", null)
-                .not("status", "in", '("discarded","superseded","blocked")')
-                .order("created_at", { ascending: false })
-                .limit(1)
-                .maybeSingle();
-              existingConversationId = (existingRef as any)?.thread_id ?? null;
-            }
-          } catch (err) {
-            await ctx.log(`Thread lookup failed for ${group.supplier_name} — falling through to new conversation`, {
-              level: "warn",
-              step: "stage",
-              data: { error: String(err), supplier_id: group.supplier_id },
-            });
+        // Reply into the existing Tenkara thread when one exists for this
+        // supplier + client org, rather than opening a new conversation each
+        // revalidation cycle. Best-effort: a lookup failure falls through to
+        // creating a new thread.
+        let existingConversationId: string | null = null;
+        try {
+          const { data: oaOrgRow } = await admin.from("orgs").select("id").eq("tenkara_org_id", group.client_org_id).maybeSingle();
+          if (oaOrgRow?.id) {
+            const { data: existingRef } = await admin
+              .from("draft_references")
+              .select("thread_id")
+              .eq("org_id", oaOrgRow.id)
+              .eq("supplier_id", group.supplier_id)
+              .eq("email_client", "rod_app")
+              .not("thread_id", "is", null)
+              .not("status", "in", '("discarded","superseded","blocked")')
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            existingConversationId = (existingRef as any)?.thread_id ?? null;
           }
+        } catch (err) {
+          await ctx.log(`Thread lookup failed for ${group.supplier_name} — falling through to new conversation`, {
+            level: "warn",
+            step: "stage",
+            data: { error: String(err), supplier_id: group.supplier_id },
+          });
+        }
 
-          if (existingConversationId) {
-            const d = await createTenkaraDraft({
-              conversationId: existingConversationId,
-              to: { name: group.supplier_contact_name ?? "", address: group.supplier_contact_email },
-              subject: `Re: ${draft.subject.replace(/^Re:\s*/i, "")}`,
-              bodyHtml: bodyToHtml(draft.body),
-              bodyText: draft.body,
-              emailAccountId,
-            });
-            draftIdValue = d.id;
-            conversationIdValue = d.conversationId;
-            await ctx.log(`Replying into existing thread ${existingConversationId} for ${group.supplier_name}`, { step: "stage", data: { existing_thread: true } });
-          } else {
-            const c = await createTenkaraConversation({
-              externalId: `agent-02-reval-${group.client_org_id}-${group.supplier_id}`,
-              to: { name: group.supplier_contact_name ?? "", address: group.supplier_contact_email },
-              subject: draft.subject,
-              bodyHtml: bodyToHtml(draft.body),
-              bodyText: draft.body,
-              emailAccountId,
-              supplierContact: {
-                email: group.supplier_contact_email,
-                name: group.supplier_contact_name ?? null,
-                company: group.supplier_name ?? null,
-              },
-              context: { agent: "02 Quote Revalidation", client_org_id: group.client_org_id, supplier_id: group.supplier_id },
-            });
-            draftIdValue = c.draftId;
-            conversationIdValue = c.conversationId;
-          }
+        if (existingConversationId) {
+          const d = await createTenkaraDraft({
+            conversationId: existingConversationId,
+            to: { name: group.supplier_contact_name ?? "", address: group.supplier_contact_email },
+            subject: `Re: ${draft.subject.replace(/^Re:\s*/i, "")}`,
+            bodyHtml: bodyToHtml(draft.body),
+            bodyText: draft.body,
+            emailAccountId,
+          });
+          draftIdValue = d.id;
+          conversationIdValue = d.conversationId;
+          await ctx.log(`Replying into existing thread ${existingConversationId} for ${group.supplier_name}`, { step: "stage", data: { existing_thread: true } });
         } else {
-          const m = await createMissiveDraft({
+          const c = await createTenkaraConversation({
+            externalId: `agent-02-reval-${group.client_org_id}-${group.supplier_id}`,
+            to: { name: group.supplier_contact_name ?? "", address: group.supplier_contact_email },
             subject: draft.subject,
-            // Missive renders the draft body as HTML — convert paragraphs/line
-            // breaks to <p>/<br> or it collapses into one blob.
-            body: bodyToHtml(draft.body),
-            to_fields: [{
-              name: group.supplier_contact_name ?? "",
-              address: group.supplier_contact_email,
-            }],
-            organization: MISSIVE_ORGANIZATION_ID,
-            team: MISSIVE_TEAM_ID,
-            add_to_team_inbox: true,
+            bodyHtml: bodyToHtml(draft.body),
+            bodyText: draft.body,
+            emailAccountId,
+            supplierContact: {
+              email: group.supplier_contact_email,
+              name: group.supplier_contact_name ?? null,
+              company: group.supplier_name ?? null,
+            },
+            context: { agent: "02 Quote Revalidation", client_org_id: group.client_org_id, supplier_id: group.supplier_id },
           });
-          draftIdValue = m.id;
-          conversationIdValue = m.conversation_id ?? "";
+          draftIdValue = c.draftId;
+          conversationIdValue = c.conversationId;
         }
       } catch (e: any) {
-        await ctx.log(`${emailClient} error for ${group.client_org_name}/${group.supplier_name}: ${e.message}`, {
+        await ctx.log(`Tenkara error for ${group.client_org_name}/${group.supplier_name}: ${e.message}`, {
           level: "warn",
           step: "stage",
           data: { client: group.client_org_name, supplier: group.supplier_name },
         });
-        return { ...baseResult, stage: emailClient === "rod_app" ? "tenkara_error" : "missive_error", error: e.message };
+        return { ...baseResult, stage: "tenkara_error", error: e.message };
       }
 
       await ctx.log(`Staged: ${group.client_org_name} × ${group.supplier_name} (${group.rows.length} material${group.rows.length === 1 ? "" : "s"})`, {
@@ -340,7 +320,6 @@ registerAgent({
           client: group.client_org_name,
           supplier: group.supplier_name,
           materials: group.rows.length,
-          email_client: emailClient,
           draft_id: draftIdValue,
         },
       });
@@ -349,9 +328,8 @@ registerAgent({
         stage: "ok",
         subject: draft.subject,
         body: draft.body,
-        missiveConversationId: conversationIdValue,
-        missiveDraftId: draftIdValue,
-        draftLink: emailClient === "missive" ? `https://mail.missiveapp.com/#inbox/conversations/${conversationIdValue}` : null,
+        conversationId: conversationIdValue,
+        draftId: draftIdValue,
       };
     });
 
@@ -365,7 +343,7 @@ registerAgent({
     if (tackleAgentId) {
       let registered = 0;
       for (const r of okResults) {
-        if (!r.missiveDraftId || !r.missiveConversationId) continue;
+        if (!r.draftId || !r.conversationId) continue;
         // Map Tenkara org_id → Tackle Box org_id (one row per (client × supplier)).
         const { data: oaOrg } = await admin
           .from("orgs")
@@ -388,9 +366,7 @@ registerAgent({
         // Mirror the Control Room operator onto the Tenkara conversation so the
         // email app shows the same assignee (Agent 02 creates conversations
         // directly, bypassing stageDraft's mirror).
-        if (emailClient === "rod_app") {
-          await mirrorDraftAssignee(admin, r.missiveConversationId, assignedOperator);
-        }
+        await mirrorDraftAssignee(admin, r.conversationId, assignedOperator);
         const qaFindings = lintDraft({
           subject: r.subject ?? null,
           body_preview: r.body ?? null,
@@ -406,9 +382,9 @@ registerAgent({
             .select("id").eq("quote_id", row.quote_id).eq("agent_id", tackleAgentId).gte("created_at", debounceSince).maybeSingle();
           if (existing) continue;
           await admin.from("draft_references").insert({
-            email_client: emailClient,
-            thread_id: r.missiveConversationId,
-            draft_id: r.missiveDraftId,
+            email_client: "rod_app",
+            thread_id: r.conversationId,
+            draft_id: r.draftId,
             agent_id: tackleAgentId,
             org_id: oaOrg?.id ?? null,
             supplier_id: row.supplier_id,
@@ -428,10 +404,8 @@ registerAgent({
               suggested_signoff: r.mode === "active" ? `${r.group.client_org_name} Purchasing Team` : `${r.ghostBrand} Sourcing`,
               suggested_from_email: r.group.client_purchasing_email,
               ghost_brand: r.ghostBrand ?? null,
-              missive_draft_link: emailClient === "missive" ? missiveDraftLink(r.missiveConversationId, r.missiveDraftId) : null,
-              ...(emailClient === "rod_app"
-                ? { draft_kind: "cold_outbound", external_id: `agent-02-reval-${r.group.client_org_id}-${r.group.supplier_id}` }
-                : {}),
+              draft_kind: "cold_outbound",
+              external_id: `agent-02-reval-${r.group.client_org_id}-${r.group.supplier_id}`,
               qa_findings: qaFindings,
               qa_linted_at: new Date().toISOString(),
             },

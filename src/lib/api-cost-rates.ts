@@ -123,10 +123,6 @@ export const UNMETERED_SERVICES: UnmeteredService[] = [
     label: "Anthropic (Claude API)",
     note: "Token-metered; used for PO/document/reply extraction and material-name flags. Usage and cost are in the Anthropic console, not tracked here.",
   },
-  {
-    label: "Missive",
-    note: "Email/inbox API on a flat per-seat subscription, not per-call metered.",
-  },
 ];
 
 export function estimateCostUsd(key: ProviderRate["key"], units: number): number {

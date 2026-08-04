@@ -1,14 +1,14 @@
 import { randomUUID } from "crypto";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { stageDraft } from "@/lib/draft-staging";
-import { composeReply } from "@/agents-runtime/agents/email-scanner/reply-drafter";
+import { composeReply } from "@/lib/reply-drafter";
 import { extractQuotesFromReplyText, type ExtractedQuote, type ReplyQuoteExtraction } from "@/lib/reply-quote-extract";
 import { insertStagedQuotes, type StagedQuoteInput, type StagedQuoteSource } from "@/lib/staged-quotes";
 import { normalizeToUsd } from "@/lib/fx";
 import { classifyDocType, insertSupplierDocuments, type SupplierDocumentInput } from "@/lib/supplier-documents";
 import { extractDocumentFields, isDocExtractableExt } from "@/lib/document-extract";
 import { getTenkaraMessageAttachments, downloadTenkaraAttachment } from "@/lib/tenkara-attachments";
-import { parseAttachmentBytes, deriveExt, isPricingCandidateExt } from "@/agents-runtime/agents/email-scanner/attachment-parser";
+import { parseAttachmentBytes, deriveExt, isPricingCandidateExt } from "@/lib/attachment-parser";
 import { getTenkaraConversationMessages } from "@/lib/tenkara";
 import { postAgentAlert } from "@/lib/slack-alert";
 import { parseTaggedRecipient } from "@/lib/inquiry-reply-tag";
@@ -37,9 +37,8 @@ function isBounce(senderAddr: string | null, subject: string | null): boolean {
 // originating draft_references row, compose a reply (inline), and stage that
 // reply as a new Tenkara draft in the same conversation for an operator to send.
 //
-// This is the webhook-driven equivalent of Agent 08's Missive inbox scan — Rod
-// pushes us the inbound instead of us polling, and replies go back into Tenkara
-// (email_client='rod_app') rather than Missive.
+// This IS Agent 08: Rod pushes us each inbound message instead of us polling an
+// inbox, and replies go back into the same Tenkara conversation.
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -338,9 +337,8 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     return { status: 200, body: { bounced: true, draft_ref_id: ref.id } };
   }
 
-  // Advance the pipeline board unless the thread is already further along
-  // (mirrors Agent 08's flow_status handling so the /work board is consistent
-  // whether a reply arrived via Missive scan or the Tenkara webhook).
+  // Advance the pipeline board unless the thread is already further along, so a
+  // late or duplicate inbound can't walk /work backwards.
   const ADVANCED = ["responded", "price_captured", "finalized", "closed_declined"];
   const flowAt = (s: string) => (ADVANCED.includes(refMeta.flow_status) ? refMeta.flow_status : s);
 
@@ -851,7 +849,6 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     orgId: ref.org_id,
     supplierId: ref.supplier_id,
     materialId: ref.material_id,
-    emailClient: "rod_app",
     conversationId: msg.conversation_id,
     to: from,
     subject: reply.subject,
@@ -1076,7 +1073,6 @@ async function recordUnmatchedInbound(
         to: { name: from.name, address: from.address },
         subject,
         body,
-        emailClient: "rod_app",
         conversationId: msg.conversation_id,
         metadata: {
           draft_kind: "unmatched_inbound_clarification",

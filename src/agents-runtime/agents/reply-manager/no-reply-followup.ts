@@ -239,7 +239,6 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
       subject: (r.subject ?? "").startsWith("Re:") ? r.subject : `Re: ${r.subject ?? "your quote"}`,
       body,
       assignedOperator: r.assigned_operator ?? null,
-      emailClient: (r.email_client as "missive" | "rod_app") ?? "missive",
       conversationId: r.thread_id ?? null, // reply into the original thread
       metadata: {
         outreach_mode: meta.outreach_mode ?? "ghost",

@@ -20,7 +20,6 @@ type AlertReason =
   | "run_failed"
   | "run_partial"
   | "error_event"
-  | "missive_from_field"
   | "tenkara_write_attempt"
   | "export_failed_72h";
 
@@ -89,16 +88,6 @@ export async function alertErrorEvent(opts: {
     `Run: ${deepLink(`/agents/runs/${opts.runId}`)}`,
     `_(debounced 1h per agent)_`,
   ].filter(Boolean) as string[]);
-}
-
-// CRITICAL — Missive client tried to POST a draft with from_field set.
-// This means an agent constructed an unsafe payload; safety floor compromised.
-export async function alertMissiveFromField(detail: string): Promise<void> {
-  await send("missive_from_field", [
-    "Missive client refused a draft with a non-empty `from_field`. This should never happen.",
-    `> ${detail}`,
-    "Action: stop the relevant agent immediately and inspect the drafter code.",
-  ], true);
 }
 
 // CRITICAL — Tenkara client refused a connection that wasn't using the mcp_readonly role.

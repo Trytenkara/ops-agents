@@ -1,13 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import ExcelJS from "exceljs";
 import JSZip from "jszip";
-import type { MissiveAttachment } from "@/lib/missive";
 
 // Extract supplier pricing from email attachments. Pricing frequently arrives
-// as a PDF quote, a scanned/photographed price sheet, or a CSV — not just inline
-// reply text. We fetch the attachment bytes (Missive serves a signed URL) and
-// hand them to Claude as a document/image/text block to pull structured quote
-// lines. Read-only: this only produces extracted data; nothing is sent anywhere.
+// as a PDF quote, a scanned/photographed price sheet, or a CSV, not just inline
+// reply text. Callers hand us the downloaded bytes and we pass them to Claude as
+// a document/image/text block to pull structured quote lines. Read-only: this
+// only produces extracted data; nothing is sent anywhere.
 
 const MODEL = "claude-sonnet-4-5";
 const MAX_OUTPUT_TOKENS = 2048;
@@ -94,29 +93,13 @@ export function isPricingCandidateExt(ext: string, size: number | null | undefin
   return PRICE_EXT.includes(ext.toLowerCase()) && (size ?? 0) <= MAX_BYTES;
 }
 
-// Best-effort file extension from a filename, falling back to the MIME subtype
-// (Tenkara gives content_type + filename; Missive gives extension/sub_type).
+// Best-effort file extension from a filename, falling back to the MIME subtype.
 export function deriveExt(filename: string | null | undefined, contentType?: string | null): string {
   const fromName = (filename ?? "").toLowerCase().match(/\.([a-z0-9]+)\s*$/)?.[1];
   if (fromName) return fromName;
   const sub = (contentType ?? "").toLowerCase().split("/")[1]?.split(";")[0]?.trim() ?? "";
   if (sub === "jpeg") return "jpg";
   return sub;
-}
-
-// Which Missive attachments are worth parsing for pricing.
-export function isPricingCandidate(att: MissiveAttachment): boolean {
-  const ext = (att.extension ?? att.sub_type ?? "").toLowerCase();
-  return isPricingCandidateExt(ext, att.size);
-}
-
-async function fetchBytes(url: string): Promise<{ buf: Buffer; contentType: string } | null> {
-  const res = await fetch(url);
-  if (!res.ok) return null;
-  const contentType = res.headers.get("content-type") ?? "application/octet-stream";
-  const ab = await res.arrayBuffer();
-  if (ab.byteLength > MAX_BYTES) return null;
-  return { buf: Buffer.from(ab), contentType };
 }
 
 function imageMediaType(ext: string): "image/png" | "image/jpeg" | "image/webp" | "image/gif" | null {
@@ -200,20 +183,8 @@ async function docxToText(buf: Buffer): Promise<string> {
     .trim();
 }
 
-// Parse a single Missive attachment into quote lines. Fetches the signed URL,
-// then hands the bytes to the shared parser. Returns [] on any failure.
-export async function parseAttachment(att: MissiveAttachment): Promise<ExtractedQuote[]> {
-  if (!isPricingCandidate(att)) return [];
-  const fetched = await fetchBytes(att.url);
-  if (!fetched) return [];
-  const ext = (att.extension ?? att.sub_type ?? "").toLowerCase();
-  return parseAttachmentBytes(fetched.buf, att.filename, ext);
-}
-
-// Parse already-downloaded attachment bytes into quote lines. Transport-agnostic
-// so Missive (signed URL) and Tenkara (authed endpoint) share the same PDF /
-// image / spreadsheet / text handling. Returns [] on any failure — a bad
-// attachment must never break the caller.
+// Parse already-downloaded attachment bytes into quote lines. Returns [] on any
+// failure: a bad attachment must never break the caller.
 export async function parseAttachmentBytes(
   buf: Buffer,
   filename: string | null | undefined,
@@ -291,22 +262,4 @@ export async function parseAttachmentBytes(
   } catch {
     return [];
   }
-}
-
-// Parse all pricing-candidate attachments on a message.
-export async function parseMessageAttachments(
-  attachments: MissiveAttachment[] | undefined
-): Promise<{ attachment: MissiveAttachment; quotes: ExtractedQuote[] }[]> {
-  if (!attachments?.length) return [];
-  const out: { attachment: MissiveAttachment; quotes: ExtractedQuote[] }[] = [];
-  for (const att of attachments) {
-    if (!isPricingCandidate(att)) continue;
-    try {
-      const quotes = await parseAttachment(att);
-      if (quotes.length) out.push({ attachment: att, quotes });
-    } catch {
-      // best-effort: skip unparseable attachment
-    }
-  }
-  return out;
 }

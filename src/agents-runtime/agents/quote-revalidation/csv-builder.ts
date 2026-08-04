@@ -20,7 +20,7 @@ const CSV_HEADERS = [
   "Created By Operator",
   "Last Updated By Operator",
   "Draft Status",
-  "Missive Draft Link",
+  "Conversation ID",
 ] as const;
 
 export interface GroupResult {
@@ -36,15 +36,12 @@ export interface GroupResult {
   };
   mode: "active" | "ghost";
   ghostBrand?: string;
-  stage: "ok" | "llm_error" | "missive_error" | "tenkara_error";
+  stage: "ok" | "llm_error" | "tenkara_error";
   error?: string;
   subject?: string;
   body?: string;
-  missiveConversationId?: string;
-  missiveDraftId?: string;
-  // Pre-computed operator deep-link to the staged draft (Missive URL, or null
-  // for Tenkara where the conversation surfaces in the Pending Outreach UI).
-  draftLink?: string | null;
+  conversationId?: string;
+  draftId?: string;
 }
 
 function operatorString(row: OverdueRow): string {
@@ -76,11 +73,6 @@ export function buildCsv(results: GroupResult[]): string {
       : `${ghostBrand} Sourcing`;
     const suggestedFrom = group.client_purchasing_email ?? "";
 
-    const draftLink = res.draftLink !== undefined
-      ? (res.draftLink ?? "")
-      : (stage === "ok" && res.missiveConversationId)
-        ? `https://mail.missiveapp.com/#inbox/conversations/${res.missiveConversationId}`
-        : "";
 
     for (const row of group.rows) {
       let draftStatus: string;
@@ -116,7 +108,7 @@ export function buildCsv(results: GroupResult[]): string {
         operator,
         operator, // Created By Operator + Last Updated By Operator (Tenkara schema has one column)
         draftStatus,
-        draftLink,
+        stage === "ok" ? (res.conversationId ?? "") : "",
       ];
       rows.push(cells.map(csvEscape).join(","));
     }

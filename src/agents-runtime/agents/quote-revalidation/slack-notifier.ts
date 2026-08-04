@@ -36,13 +36,13 @@ function buildText({ results, dropped, csvSignedUrl, csvFilename }: BuildOpts): 
   const lines: string[] = [
     `*Weekly quote revalidation — ${today}*`,
     "",
-    `${m("rosie")} ${m("mildred")} ${m("andrea")} — *${nDrafts} drafts staged in Missive* across ${nSuppliersActive + nSuppliersGhost} suppliers.`,
+    `${m("rosie")} ${m("mildred")} ${m("andrea")} — *${nDrafts} drafts staged in Tenkara* across ${nSuppliersActive + nSuppliersGhost} suppliers.`,
     "",
     `📎 *CSV:* <${csvSignedUrl}|${csvFilename}>`,
     "",
     "*Flow*",
     "1. Open the CSV → review the *Suggested From Email* + *Suggested Signoff* columns",
-    "2. Open each Missive draft (link in CSV), set the From field, then click Send",
+    "2. Open each draft in the Tenkara inbox (conversation id in CSV), set the From field, then click Send",
     "3. Anything marked `Operator Invalid` or `Failed` needs manual triage",
     "",
     "*Audit*",
@@ -66,7 +66,7 @@ function buildText({ results, dropped, csvSignedUrl, csvFilename }: BuildOpts): 
   if (nDrafts === 0) {
     lines.push("", "_No expired quotes found this week — heartbeat CSV uploaded._");
   } else {
-    lines.push("", "_Drafts in Missive's `Auto Outbox Testing` teamspace, from_field empty, send=false._");
+    lines.push("", "_Drafts staged in the Tenkara inbox, unsent._");
   }
   return lines.join("\n");
 }

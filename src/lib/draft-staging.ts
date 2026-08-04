@@ -1,20 +1,15 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
-import { createMissiveDraft, missiveDraftLink } from "@/lib/missive";
 import { createTenkaraDraft, createTenkaraConversation, setTenkaraConversationAssignee } from "@/lib/tenkara";
 import { bodyToHtml } from "@/lib/email-style";
-import { MISSIVE_ORGANIZATION_ID, MISSIVE_TEAM_ID } from "@/agents-runtime/agents/quote-revalidation/config";
 import { lintDraft, type Finding } from "@/agents-runtime/agents/outreach-qa/lint";
 import { approvedContactsFor } from "@/lib/contact-guard";
 import { postAgentAlert } from "@/lib/slack-alert";
 
 // Shared draft → QA building block. Every intake agent (02 expiries,
-// 03 new-material outreach, 08 inbound replies) composes its own copy, then
-// calls this to: stage a Missive draft (never sends), run the Agent 10 QA lint
-// inline, and write the draft_references pointer with qa_findings attached.
-//
-// This replaces the duplicated Missive-create + draft_references-insert blocks
-// that lived in agents 02 and 04, and means QA runs at creation time instead of
-// only on the hourly sweep.
+// 04 new-material outreach) and the Tenkara inbound webhook composes its own
+// copy, then calls this to: stage a Tenkara draft (never sends), run the Agent 10
+// QA lint inline, and write the draft_references pointer with qa_findings
+// attached. QA therefore runs at creation time, not only on the hourly sweep.
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -63,18 +58,15 @@ export interface StageDraftInput {
   subject: string;
   body: string; // plain text; converted to HTML for the email client, sliced for preview
   assignedOperator?: string | null;
-  // Which email app to stage into. "missive" (default) POSTs a Missive draft;
-  // "rod_app" POSTs a Tenkara draft and requires conversationId (Phase 1 = replies only).
-  emailClient?: "missive" | "rod_app";
-  // For emailClient="rod_app": pass conversationId to reply into an existing thread,
-  // OR externalId to create a brand-new cold-outbound conversation. One is required.
+  // Pass conversationId to reply into an existing Tenkara thread, OR externalId to
+  // create a brand-new cold-outbound conversation. One is required.
   conversationId?: string | null;
   externalId?: string | null; // idempotency key for cold-outbound conversation creates
-  // For emailClient="rod_app" cold outbound: the Tenkara inbox UUID to send from
-  // (resolved by the caller from the sending brand). Omit → operator picks at review.
+  // Cold outbound: the Tenkara inbox UUID to send from (resolved by the caller from
+  // the sending brand). Omit → operator picks at review.
   emailAccountId?: string | null;
-  // For emailClient="rod_app" cold outbound: supplier contact card written to the
-  // supplier record. Email defaults to the recipient; omitted fields take defaults.
+  // Cold outbound: supplier contact card written to the supplier record. Email
+  // defaults to the recipient; omitted fields take defaults.
   supplierCompany?: string | null;
   // Caller-supplied metadata (outreach_mode, ghost_brand, lead_id, etc.).
   // qa_findings + the draft link are merged in here.
@@ -85,8 +77,7 @@ export interface StageDraftResult {
   ok: boolean;
   error?: string;
   draftRefId?: string;
-  draftId?: string;           // the email client's draft id (Missive draft id or Tenkara draft UUID)
-  missiveDraftId?: string;    // kept for back-compat with existing Missive callers
+  draftId?: string;           // the Tenkara draft UUID
   conversationId?: string | null;
   qaFindings?: Finding[];
   // True when the anti-fabrication guard held the draft: no provider draft was
@@ -97,7 +88,6 @@ export interface StageDraftResult {
 export async function stageDraft(input: StageDraftInput): Promise<StageDraftResult> {
   const { admin, agentId, runId, orgId, supplierId, materialId, quoteId, to, subject, body, assignedOperator } = input;
   const callerMeta = input.metadata ?? {};
-  const emailClient = input.emailClient ?? "missive";
 
   // Allowlist for the anti-fabrication guard: per-brand/org approved contact
   // values plus the recipient's own address (echoing that back is legitimate).
@@ -128,7 +118,7 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
     const { data, error } = await admin
       .from("draft_references")
       .insert({
-        email_client: emailClient,
+        email_client: "rod_app",
         thread_id: input.conversationId ?? `blocked:${input.externalId ?? "reply"}`,
         draft_id: `blocked:${runId ?? agentId ?? "agent"}`,
         agent_id: agentId,
@@ -156,62 +146,46 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
     return { ok: true, draftRefId: data?.id, qaFindings, blocked: true };
   }
 
-  // Create the draft in the target email app. Both paths only stage — never send.
+  // Create the draft in Tenkara. Only ever stages — never sends.
   let draftId: string;
   let threadId: string;
-  let draftLink: string | null = null;
   const extraMeta: Record<string, any> = {};
   try {
-    if (emailClient === "rod_app") {
-      if (input.conversationId) {
-        // Reply into an existing Tenkara conversation.
-        const t = await createTenkaraDraft({
-          conversationId: input.conversationId,
-          to: { name: to.name ?? "", address: to.address },
-          subject,
-          bodyHtml: bodyToHtml(body),
-          bodyText: body,
-          cc: ccString || undefined,
-        });
-        draftId = t.id;
-        threadId = t.conversationId;
-      } else if (input.externalId) {
-        // Cold outbound: create a brand-new conversation + draft.
-        const c = await createTenkaraConversation({
-          externalId: input.externalId,
-          to: { name: to.name ?? "", address: to.address },
-          subject,
-          bodyHtml: bodyToHtml(body),
-          bodyText: body,
-          cc: ccString || undefined,
-          emailAccountId: input.emailAccountId ?? undefined,
-          supplierContact: { email: to.address, name: to.name ?? null, company: input.supplierCompany ?? null },
-          context: { org_id: orgId, supplier_id: supplierId ?? null, material_id: materialId ?? null, quote_id: quoteId ?? null, ...callerMeta },
-        });
-        draftId = c.draftId;
-        threadId = c.conversationId;
-        extraMeta.draft_kind = callerMeta.draft_kind ?? "cold_outbound";
-        extraMeta.external_id = input.externalId;
-        extraMeta.requires_sender_selection = c.requiresSenderSelection;
-      } else {
-        return { ok: false, error: "rod_app drafts require conversationId (reply) or externalId (cold outbound)", qaFindings };
-      }
-    } else {
-      const m = await createMissiveDraft({
+    if (input.conversationId) {
+      // Reply into an existing Tenkara conversation.
+      const t = await createTenkaraDraft({
+        conversationId: input.conversationId,
+        to: { name: to.name ?? "", address: to.address },
         subject,
-        body: bodyToHtml(body),
-        to_fields: [{ name: to.name ?? "", address: to.address }],
-        cc_fields: ccList.length ? ccList.map((c) => ({ name: c.name ?? "", address: c.address })) : undefined,
-        organization: MISSIVE_ORGANIZATION_ID,
-        team: MISSIVE_TEAM_ID,
-        add_to_team_inbox: true,
+        bodyHtml: bodyToHtml(body),
+        bodyText: body,
+        cc: ccString || undefined,
       });
-      draftId = m.id;
-      threadId = m.conversation_id ?? "";
-      draftLink = m.conversation_id ? missiveDraftLink(m.conversation_id, m.id) : null;
+      draftId = t.id;
+      threadId = t.conversationId;
+    } else if (input.externalId) {
+      // Cold outbound: create a brand-new conversation + draft.
+      const c = await createTenkaraConversation({
+        externalId: input.externalId,
+        to: { name: to.name ?? "", address: to.address },
+        subject,
+        bodyHtml: bodyToHtml(body),
+        bodyText: body,
+        cc: ccString || undefined,
+        emailAccountId: input.emailAccountId ?? undefined,
+        supplierContact: { email: to.address, name: to.name ?? null, company: input.supplierCompany ?? null },
+        context: { org_id: orgId, supplier_id: supplierId ?? null, material_id: materialId ?? null, quote_id: quoteId ?? null, ...callerMeta },
+      });
+      draftId = c.draftId;
+      threadId = c.conversationId;
+      extraMeta.draft_kind = callerMeta.draft_kind ?? "cold_outbound";
+      extraMeta.external_id = input.externalId;
+      extraMeta.requires_sender_selection = c.requiresSenderSelection;
+    } else {
+      return { ok: false, error: "drafts require conversationId (reply) or externalId (cold outbound)", qaFindings };
     }
   } catch (e: any) {
-    return { ok: false, error: `${emailClient}: ${e?.message ?? e}`, qaFindings };
+    return { ok: false, error: `tenkara: ${e?.message ?? e}`, qaFindings };
   }
 
   const metadata = {
@@ -219,7 +193,6 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
     approved_contacts: approvedContacts,
     qa_findings: qaFindings,
     qa_linted_at: new Date().toISOString(),
-    missive_draft_link: draftLink,
     // Record who we actually CC'd so the reply/follow-up loop knows which
     // supplier contacts have already been reached on this thread.
     ...(ccList.length ? { cc_contacts: ccList.map((c) => c.address) } : {}),
@@ -229,7 +202,7 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
   const { data, error } = await admin
     .from("draft_references")
     .insert({
-      email_client: emailClient,
+      email_client: "rod_app",
       thread_id: threadId,
       draft_id: draftId,
       agent_id: agentId,
@@ -250,15 +223,12 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
 
   // Mirror the Control Room operator onto the Tenkara conversation so the email
   // app shows the same assignee the moment the draft is staged.
-  if (emailClient === "rod_app") {
-    await mirrorDraftAssignee(admin, threadId, assignedOperator ?? null);
-  }
+  await mirrorDraftAssignee(admin, threadId, assignedOperator ?? null);
 
   return {
     ok: true,
     draftRefId: data?.id,
     draftId,
-    missiveDraftId: emailClient === "missive" ? draftId : undefined,
     conversationId: threadId || null,
     qaFindings,
   };

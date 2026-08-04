@@ -101,10 +101,10 @@ export const AGENT_SPECS: AgentSpec[] = [
     slug: "agent-08-email-scanner",
     name: "Email Scanner",
     status: "shipped",
-    cadence: "Continuous: inbound Tenkara webhook (the scheduled 30-min sweep is a no-op unless Missive polling is switched back on)",
+    cadence: "Continuous: inbound Tenkara webhook. There is no scheduled run (the old inbox-polling sweep was retired with the Missive cutover).",
     purpose: "Catch supplier replies as they arrive and turn them into staged quotes, documents and a drafted response.",
     automatic:
-      "Tenkara pushes each inbound message to a signed webhook, which matches it to a thread by draft, then conversation, then a known alternate address, then sender domain: anything unmatched raises a triage case. It detects bounces, auto-confirms marketplace signups, extracts prices from the reply body and attachments into staged quotes (converting currency to USD), files supplier documents with their parsed fields, updates the supplier profile, and stages a reply draft back into the Tenkara thread. The older poll-the-inbox path is retired and skips itself.",
+      "Tenkara pushes each inbound message to a signed webhook, which matches it to a thread by draft, then conversation, then a known alternate address, then sender domain: anything unmatched raises a triage case. It detects bounces, auto-confirms marketplace signups, extracts prices from the reply body and attachments into staged quotes (converting currency to USD), files supplier documents with their parsed fields, updates the supplier profile, and stages a reply draft back into the Tenkara thread. Nothing about this agent is on a timer any more: the webhook is the whole agent.",
     humanInput: "Review the extracted quotes on the client's Agent Quotes tab and the drafted reply in the Tenkara inbox, then send.",
   },
   {
@@ -151,11 +151,11 @@ export const AGENT_SPECS: AgentSpec[] = [
     number: 13,
     slug: "agent-13-inbox-context",
     name: "Inbox Context",
-    status: "paused",
-    cadence: "Daily: 06:45 America/New_York, but a no-op since the Tenkara cutover",
+    status: "shipped",
+    cadence: "Daily: 06:45 America/New_York",
     purpose: "Build a per-supplier email-context row (thread state, last contact, open ask) so Agent 02 reaches out with the right tone.",
-    automatic: "Skips itself immediately: it reads the old Missive inbox, which is no longer the email path. Supplier email context is therefore no longer being refreshed, and Agent 02's follow-up tone falls back to whatever was last written.",
-    humanInput: "None. Rebuilding this on the Tenkara thread history is outstanding work.",
+    automatic: "Takes the list of Tenkara threads we have drafted into over the last 90 days, reads each conversation, and works out where it stands: they replied and owe us nothing, we are waiting on them, or the thread has gone quiet for 3 weeks. For threads where the supplier replied it summarizes the open ask, otherwise it falls back to the last message. Writes one row per supplier email. Read-only on Tenkara; never drafts or sends.",
+    humanInput: "None. The output only shapes the tone of Agent 02's follow-ups.",
   },
   {
     number: 14,
@@ -173,10 +173,10 @@ export const AGENT_SPECS: AgentSpec[] = [
     name: "Supplier Reply Manager",
     status: "shipped",
     cadence: "Every 5 min · America/New_York",
-    purpose: "Own the supplier conversation after the first email: chase silence, and once a supplier replies, keep the thread going until a price is captured.",
+    purpose: "Chase suppliers who never answered the first email, and escalate the ones who still don't.",
     automatic:
-      "For threads with no reply, it sends two nudges (roughly 4 and 8 days out), pulling in any supplier contacts not yet reached, then opens a calling-escalation case. For threads that did reply, it classifies the response and drafts the right next message: answering a question, reframing a no-record reply as a fresh pricing ask, or chasing the missing number, and always asks for EXW and tiered pricing plus whatever qualification documents that client requires. Bounces are recorded and, past two in a day, raise a Slack alert and a case; a supplier who sends a web form or asks for information we don't have is handed to a human. Replies from a different address than the one we wrote to update the contact. Everything is staged in the Tenkara thread; it never sends. Skipped entirely for orgs whose sourcing status isn't Active.",
-    humanInput: "Review the staged reply in the Tenkara inbox and send it. Work the calling escalations, bounce alerts and supplier-form cases. Track each thread to a captured price on the Pricing pipeline board.",
+      "For threads with no reply it stages two nudges (roughly 4 and 8 days out), pulling in any supplier contacts not yet reached, then opens a calling-escalation case. Everything is staged in the Tenkara thread; it never sends. Skipped entirely for orgs whose sourcing status isn't Active. Handling of replies that DID arrive lives on the Tenkara inbound webhook (Agent 08), not here: a scheduled agent can't react to a message, and this one only exists to act on the message that never came.",
+    humanInput: "Review the staged nudge in the Tenkara inbox and send it. Work the calling escalations. Track each thread to a captured price on the Pricing pipeline board.",
   },
   {
     number: null,

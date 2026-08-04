@@ -5,7 +5,7 @@ import { enrichContactViaHunter, enrichContactsViaHunter, isHunterConfigured } f
 import { enrichContactViaLeadMagic, enrichContactsViaLeadMagic, isLeadMagicConfigured } from "@/lib/leadmagic";
 import { AGGREGATOR_HOSTS } from "@/lib/aggregator-hosts";
 
-// Pre-outreach enrichment building blocks. No LLM, no Missive — those land
+// Pre-outreach enrichment building blocks. No LLM, no email — those land
 // when Agent 04 (Outreach) and Agent 08 (Email Scanner) ship.
 //
 // Contact discovery is PERSISTENT and multi-step (mirrors Ben's manual method):

@@ -1,32 +1,37 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
-import { listLabelConversations, getConversationMessages } from "@/lib/missive";
-import { missivePollingEnabled } from "@/lib/tenkara";
-import { MISSIVE_BOBBER_LABS_LABEL_ID } from "../quote-revalidation/config";
+import { getTenkaraConversationDetails, type TenkaraMessage } from "@/lib/tenkara";
 import { onlyOrgNames, onlyOrgLabel } from "@/lib/org-scope";
 import Anthropic from "@anthropic-ai/sdk";
 
 // Agent 13 - Inbox Context.
-// Reads the Missive "Bobber Labs" shared label and, for every supplier we recognize, records
-// when we last reached out, when (if) they last replied, the resulting thread
-// state, and a short summary / open ask. Agent 02 reads supplier_email_context
-// before drafting so revalidation uses a follow-up tone when a thread exists.
+// For every supplier we have emailed, records when we last reached out, when (if)
+// they last replied, the resulting thread state, and a short summary / open ask.
+// Agent 02 reads supplier_email_context before drafting so revalidation uses a
+// follow-up tone when a thread already exists.
 //
-// Read-only on Missive + Tenkara; the only writes are upserts into
-// supplier_email_context (OA).
+// Thread list comes from draft_references (OA), which holds the Tenkara
+// conversation id for every draft we have ever staged. Tenkara has no
+// list-conversations endpoint, so this is the only way to enumerate threads.
+// Message history comes from GET /api/external/conversations/{id}.
+//
+// Read-only on Tenkara; the only writes are upserts into supplier_email_context.
 
 const STALE_DAYS = 21;
-// Missive caps the conversation-list endpoint at 50 (listLabelConversations
-// clamps anyway). Requesting more 400s the whole run.
-const MAX_CONVERSATIONS = 50;
-const MESSAGES_PER_CONVERSATION = 10;
+// How far back to consider a thread worth refreshing context for.
+const LOOKBACK_DAYS = 90;
+// Each thread costs one Tenkara API call, so cap the fan-out per run.
+const MAX_CONVERSATIONS = 150;
 // Cap LLM summaries so a big inbox can't blow the run budget. Threads beyond
-// this still get a heuristic summary from the latest message preview.
+// this still get a heuristic summary from the latest message body.
 const MAX_LLM_SUMMARIES = 40;
+// Messages and characters fed to the summarizer per thread.
+const TRANSCRIPT_MESSAGES = 4;
+const TRANSCRIPT_CHARS_PER_MESSAGE = 1200;
 
-// Optional scope: reuse the same flag Agent 02 uses so a Bobber-Labs-only run
-// only builds context for Bobber Labs suppliers.
+// Optional scope: reuse the same flag Agent 02 uses so a single-org run only
+// builds context for that org's suppliers.
 const ONLY_ORGS = onlyOrgNames();
 const ONLY_ORG_LABEL = onlyOrgLabel();
 
@@ -34,62 +39,40 @@ const ONLY_ORG_LABEL = onlyOrgLabel();
 // claude-sonnet-5 only if summary quality feeding downstream agents regresses.
 const SUMMARY_MODEL = "claude-haiku-4-5";
 
+interface ThreadRef {
+  thread_id: string;
+  supplier_id: string;
+  org_id: string | null;
+}
+
 interface SupplierRef {
   supplier_id: string;
   supplier_name: string;
+  supplier_email: string;
   tenkara_org_id: string;
-  org_name: string;
+  addresses: Set<string>;
 }
 
 interface ThreadAccum {
   ref: SupplierRef;
-  lastOutboundAt: number | null; // unix seconds (message we sent)
-  lastInboundAt: number | null; // unix seconds (message from the supplier)
+  org_id: string | null;
+  lastOutboundAt: number | null; // epoch ms
+  lastInboundAt: number | null;
   messageCount: number;
   latestConversationId: string | null;
-  latestInboundPreview: string | null;
-  latestOutboundPreview: string | null;
+  latestInbound: string | null;
+  latestOutbound: string | null;
+  transcript: { who: "us" | "them"; at: number; text: string }[];
 }
 
 const lc = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
-const iso = (unix: number | null) => (unix ? new Date(unix * 1000).toISOString() : null);
+const iso = (ms: number | null) => (ms ? new Date(ms).toISOString() : null);
+const EMAIL_RE = /^[^@\s;,]+@[^@\s;,]+\.[^@\s;,]+$/;
 
-async function loadSupplierMap(): Promise<Map<string, SupplierRef>> {
-  const rows = await tenkaraQuery<{
-    supplier_id: string;
-    supplier_name: string;
-    poc_email: string;
-    tenkara_org_id: string;
-    org_name: string;
-  }>(
-    `
-    SELECT DISTINCT s.id::text AS supplier_id, s.name AS supplier_name, s.poc_email,
-      client_org.id::text AS tenkara_org_id, client_org.name AS org_name
-    FROM suppliers s
-    JOIN material_quotes mq ON mq.supplier_id = s.id
-    JOIN materials m ON m.id = mq.material_id
-    JOIN users u ON u.id = m.user_id
-    JOIN organizations client_org ON client_org.id = u.organization_id
-    WHERE s.poc_email IS NOT NULL AND s.poc_email <> ''
-      ${ONLY_ORGS.length ? "AND client_org.name = ANY($1)" : ""}
-    `,
-    ONLY_ORGS.length ? [ONLY_ORGS] : []
-  );
-  const map = new Map<string, SupplierRef>();
-  for (const r of rows) {
-    const email = lc(r.poc_email);
-    // A valid single address only (mirrors the Agent 02 contact filter).
-    if (!/^[^@\s;,]+@[^@\s;,]+\.[^@\s;,]+$/.test(email)) continue;
-    if (!map.has(email)) {
-      map.set(email, {
-        supplier_id: r.supplier_id,
-        supplier_name: r.supplier_name,
-        tenkara_org_id: r.tenkara_org_id,
-        org_name: r.org_name,
-      });
-    }
-  }
-  return map;
+function messageText(m: TenkaraMessage): string {
+  const body = (m.body_text ?? "").trim();
+  if (body) return body;
+  return (m.subject ?? "").trim();
 }
 
 async function summarize(
@@ -128,143 +111,189 @@ registerAgent({
   slug: "agent-13-inbox-context",
   displayName: "Agent 13 - Inbox Context",
   description:
-    "Reads the Missive 'Bobber Labs' shared label and builds a per-supplier email-context row (last outbound/inbound, thread state, summary, open ask) so Agent 02 reaches out with the right tone. Read-only on Missive/Tenkara; writes supplier_email_context in OA only.",
+    "Walks the Tenkara threads we have staged drafts into and builds a per-supplier email-context row (last outbound/inbound, thread state, summary, open ask) so Agent 02 reaches out with the right tone. Read-only on Tenkara; writes supplier_email_context in OA only.",
   async run(ctx) {
-    if (!missivePollingEnabled()) {
-      ctx.setStatus("success");
-      ctx.setSummary("Skipped: Missive polling disabled (Tenkara cutover). Supplier email context now derives from the Tenkara reply path.");
-      return;
-    }
-    if (!process.env.MISSIVE_API_TOKEN) {
-      ctx.setStatus("failure");
-      ctx.setSummary("MISSIVE_API_TOKEN missing.");
-      return;
-    }
     const admin = createAdminClient();
 
-    // 1. Universe of supplier emails we care about (scoped if ONLY_ORG set).
-    let supplierMap: Map<string, SupplierRef>;
+    // 1. Every Tenkara thread we have staged a draft into, most recent first.
+    const since = new Date(Date.now() - LOOKBACK_DAYS * 86400_000).toISOString();
+    const { data: draftRows, error: draftErr } = await admin
+      .from("draft_references")
+      .select("thread_id, supplier_id, org_id, created_at")
+      .eq("email_client", "rod_app")
+      .not("thread_id", "is", null)
+      .not("supplier_id", "is", null)
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(2000);
+    if (draftErr) {
+      await ctx.log(`draft_references read failed: ${draftErr.message}`, { level: "error", step: "threads" });
+      ctx.setStatus("failure");
+      ctx.setSummary(`Could not list threads: ${draftErr.message}`);
+      return;
+    }
+
+    // Dedupe to one entry per thread, keeping the newest draft's supplier/org.
+    const threads: ThreadRef[] = [];
+    const seenThreads = new Set<string>();
+    for (const r of draftRows ?? []) {
+      const tid = (r as any).thread_id as string;
+      if (seenThreads.has(tid)) continue;
+      seenThreads.add(tid);
+      threads.push({ thread_id: tid, supplier_id: (r as any).supplier_id, org_id: (r as any).org_id ?? null });
+    }
+    const budgeted = threads.slice(0, MAX_CONVERSATIONS);
+    await ctx.log(
+      `${threads.length} Tenkara threads in the last ${LOOKBACK_DAYS}d; walking ${budgeted.length}`,
+      { step: "threads", data: { threads: threads.length, walking: budgeted.length } }
+    );
+    if (budgeted.length === 0) {
+      ctx.setStatus("success");
+      ctx.setSummary("No Tenkara threads to build context from.");
+      ctx.setItemsProcessed(0);
+      return;
+    }
+
+    // 2. Supplier identity for those threads (name, primary address, client org).
+    const supplierIds = [...new Set(budgeted.map((t) => t.supplier_id))];
+    let supplierRows: {
+      supplier_id: string;
+      supplier_name: string;
+      poc_email: string;
+      tenkara_org_id: string;
+      org_name: string;
+    }[];
     try {
-      supplierMap = await loadSupplierMap();
+      supplierRows = await tenkaraQuery(
+        `
+        SELECT DISTINCT s.id::text AS supplier_id, s.name AS supplier_name, s.poc_email,
+          client_org.id::text AS tenkara_org_id, client_org.name AS org_name
+        FROM suppliers s
+        JOIN material_quotes mq ON mq.supplier_id = s.id
+        JOIN materials m ON m.id = mq.material_id
+        JOIN users u ON u.id = m.user_id
+        JOIN organizations client_org ON client_org.id = u.organization_id
+        WHERE s.id = ANY($1::uuid[])
+          ${ONLY_ORGS.length ? "AND client_org.name = ANY($2)" : ""}
+        `,
+        ONLY_ORGS.length ? [supplierIds, ONLY_ORGS] : [supplierIds]
+      );
     } catch (e: any) {
       await ctx.log(`Tenkara supplier query failed: ${e.message}`, { level: "error", step: "suppliers" });
       ctx.setStatus("failure");
       ctx.setSummary(`Failed loading suppliers: ${e.message}`);
       return;
     }
-    await ctx.log(`Tracking ${supplierMap.size} supplier addresses${ONLY_ORG_LABEL ? ` for ${ONLY_ORG_LABEL}` : ""}`, {
-      step: "suppliers",
-      data: { suppliers: supplierMap.size, scope: ONLY_ORG_LABEL },
-    });
-    if (supplierMap.size === 0) {
-      ctx.setStatus("success");
-      ctx.setSummary("No supplier addresses to track.");
-      return;
+
+    const suppliers = new Map<string, SupplierRef>();
+    for (const r of supplierRows) {
+      if (suppliers.has(r.supplier_id)) continue;
+      const email = lc(r.poc_email);
+      if (!EMAIL_RE.test(email)) continue;
+      suppliers.set(r.supplier_id, {
+        supplier_id: r.supplier_id,
+        supplier_name: r.supplier_name,
+        supplier_email: email,
+        tenkara_org_id: r.tenkara_org_id,
+        addresses: new Set([email]),
+      });
     }
 
-    // 2. Pull conversations (scoped to the Bobber Labs shared label) and
-    //    accumulate per-supplier timelines.
-    const labelId = process.env.INBOX_CONTEXT_LABEL_ID?.trim() || MISSIVE_BOBBER_LABS_LABEL_ID;
-    let conversations;
-    try {
-      conversations = await listLabelConversations(labelId, MAX_CONVERSATIONS);
-    } catch (e: any) {
-      await ctx.log(`Missive list conversations failed: ${e.message}`, { level: "error", step: "missive" });
-      ctx.setStatus("failure");
-      ctx.setSummary(`Missive read failed: ${e.message}`);
-      return;
+    // Replies often arrive from a colleague rather than the address we wrote to;
+    // supplier_email_aliases records those so they count as inbound.
+    const { data: aliasRows } = await admin
+      .from("supplier_email_aliases")
+      .select("supplier_id, email")
+      .in("supplier_id", supplierIds);
+    for (const a of aliasRows ?? []) {
+      const s = suppliers.get((a as any).supplier_id);
+      const em = lc((a as any).email);
+      if (s && EMAIL_RE.test(em)) s.addresses.add(em);
     }
 
-    // Only bother fetching messages for conversations that involve a tracked
-    // supplier address (per external_authors), to keep API calls bounded.
-    const relevant = conversations.filter((c) =>
-      (c.external_authors ?? []).some((a) => supplierMap.has(lc(a.address)))
+    await ctx.log(
+      `Resolved ${suppliers.size}/${supplierIds.length} suppliers${ONLY_ORG_LABEL ? ` for ${ONLY_ORG_LABEL}` : ""}`,
+      { step: "suppliers", data: { resolved: suppliers.size, requested: supplierIds.length, scope: ONLY_ORG_LABEL } }
     );
-    await ctx.log(`Pulled ${conversations.length} conversations; ${relevant.length} involve a tracked supplier`, {
-      step: "list",
-      data: { total: conversations.length, relevant: relevant.length },
-    });
+    if (suppliers.size === 0) {
+      ctx.setStatus("success");
+      ctx.setSummary("No tracked suppliers among the recent threads.");
+      ctx.setItemsProcessed(0);
+      return;
+    }
 
-    const accum = new Map<string, ThreadAccum>(); // keyed by supplier_email
-    let conversationErrors = 0;
-    for (const conv of relevant) {
-      let msgs;
-      try {
-        msgs = await getConversationMessages(conv.id, MESSAGES_PER_CONVERSATION);
-      } catch (e: any) {
-        conversationErrors++;
-        await ctx.log(`Missive get messages failed for ${conv.id}: ${e.message}`, {
-          level: "warn",
-          step: "messages",
-          data: { conversation_id: conv.id },
-        });
+    // 3. Walk each thread's message history and accumulate per supplier.
+    const accum = new Map<string, ThreadAccum>(); // keyed by supplier_id
+    let threadMisses = 0;
+    for (const t of budgeted) {
+      const ref = suppliers.get(t.supplier_id);
+      if (!ref) continue;
+      const details = await getTenkaraConversationDetails(t.thread_id);
+      if (!details.found) {
+        threadMisses++;
         continue;
       }
 
-      // Which tracked suppliers are in this conversation (by any participant)?
-      const convSuppliers = new Set<string>();
-      for (const a of conv.external_authors ?? []) {
-        const em = lc(a.address);
-        if (supplierMap.has(em)) convSuppliers.add(em);
+      let a = accum.get(t.supplier_id);
+      if (!a) {
+        a = {
+          ref,
+          org_id: t.org_id,
+          lastOutboundAt: null,
+          lastInboundAt: null,
+          messageCount: 0,
+          latestConversationId: t.thread_id,
+          latestInbound: null,
+          latestOutbound: null,
+          transcript: [],
+        };
+        accum.set(t.supplier_id, a);
       }
 
-      for (const m of msgs) {
-        if (m.draft) continue; // ignore unsent drafts
-        if (!m.created_at) continue;
-        const sender = lc(m.from_field?.address);
-        const preview = (m.preview ?? m.subject ?? "").toString().slice(0, 500) || null;
+      for (const m of details.messages) {
+        if (!m.sent_at) continue;
+        const at = Date.parse(m.sent_at);
+        if (Number.isNaN(at)) continue;
+        const text = messageText(m);
+        if (!text) continue;
+        const inbound = ref.addresses.has(lc(m.from_email));
 
-        for (const email of convSuppliers) {
-          let a = accum.get(email);
-          if (!a) {
-            a = {
-              ref: supplierMap.get(email)!,
-              lastOutboundAt: null,
-              lastInboundAt: null,
-              messageCount: 0,
-              latestConversationId: conv.id,
-              latestInboundPreview: null,
-              latestOutboundPreview: null,
-            };
-            accum.set(email, a);
+        a.messageCount += 1;
+        a.transcript.push({ who: inbound ? "them" : "us", at, text });
+        if (inbound) {
+          if (!a.lastInboundAt || at > a.lastInboundAt) {
+            a.lastInboundAt = at;
+            a.latestInbound = text;
+            a.latestConversationId = t.thread_id;
           }
-          a.messageCount += 1;
-          a.latestConversationId = conv.id;
-          if (sender === email) {
-            // Inbound: the supplier sent this.
-            if (!a.lastInboundAt || m.created_at > a.lastInboundAt) {
-              a.lastInboundAt = m.created_at;
-              a.latestInboundPreview = preview;
-            }
-          } else {
-            // Outbound: anyone-not-the-supplier in a thread with them = us.
-            if (!a.lastOutboundAt || m.created_at > a.lastOutboundAt) {
-              a.lastOutboundAt = m.created_at;
-              a.latestOutboundPreview = preview;
-            }
-          }
+        } else if (!a.lastOutboundAt || at > a.lastOutboundAt) {
+          a.lastOutboundAt = at;
+          a.latestOutbound = text;
         }
       }
     }
 
     if (accum.size === 0) {
-      await ctx.log("No supplier threads found in the inbox — nothing to upsert.", { step: "done" });
-      ctx.setStatus("success");
-      ctx.setSummary(`Scanned ${relevant.length} relevant conversations; no supplier threads yet.`);
+      await ctx.log("No readable supplier threads — nothing to upsert.", {
+        step: "done",
+        data: { threadMisses },
+      });
+      ctx.setStatus(threadMisses > 0 ? "partial" : "success");
+      ctx.setSummary(`Walked ${budgeted.length} threads; none readable (${threadMisses} misses).`);
       ctx.setItemsProcessed(0);
       return;
     }
 
-    // 3. Derive state, summarize, upsert.
-    const nowUnix = Math.floor(Date.now() / 1000);
-    const staleCutoff = nowUnix - STALE_DAYS * 86400;
-    const canSummarize = !!process.env.ANTHROPIC_API_KEY;
-    const client = canSummarize ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }) : null;
+    // 4. Derive state, summarize, upsert.
+    const staleCutoff = Date.now() - STALE_DAYS * 86400_000;
+    const client = process.env.ANTHROPIC_API_KEY
+      ? new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+      : null;
     let summariesDone = 0;
     let upserted = 0;
     const stateCounts: Record<string, number> = {};
 
-    // Resolve tenkara_org_id -> OA org_id once.
+    // Fall back to the tenkara_org_id mapping when the draft carried no org.
     const orgIdCache = new Map<string, string | null>();
     async function resolveOrgId(tenkaraOrgId: string): Promise<string | null> {
       if (orgIdCache.has(tenkaraOrgId)) return orgIdCache.get(tenkaraOrgId)!;
@@ -274,7 +303,7 @@ registerAgent({
       return id;
     }
 
-    for (const [email, a] of accum) {
+    for (const [, a] of accum) {
       const lastMessageAt = Math.max(a.lastInboundAt ?? 0, a.lastOutboundAt ?? 0) || null;
       let thread_state: string;
       if (lastMessageAt && lastMessageAt < staleCutoff) {
@@ -289,16 +318,14 @@ registerAgent({
       stateCounts[thread_state] = (stateCounts[thread_state] ?? 0) + 1;
 
       // Summary: LLM for replied threads (most valuable), capped; else heuristic.
-      let summary: string | null =
-        a.latestInboundPreview ?? a.latestOutboundPreview ?? null;
+      let summary: string | null = (a.latestInbound ?? a.latestOutbound ?? "").slice(0, 800) || null;
       let open_ask: string | null = null;
       if (client && a.lastInboundAt && summariesDone < MAX_LLM_SUMMARIES) {
-        const transcript = [
-          a.latestOutboundPreview ? `Us: ${a.latestOutboundPreview}` : null,
-          a.latestInboundPreview ? `${a.ref.supplier_name}: ${a.latestInboundPreview}` : null,
-        ]
-          .filter(Boolean)
-          .join("\n");
+        const transcript = a.transcript
+          .sort((x, y) => x.at - y.at)
+          .slice(-TRANSCRIPT_MESSAGES)
+          .map((m) => `${m.who === "us" ? "Us" : a.ref.supplier_name}: ${m.text.slice(0, TRANSCRIPT_CHARS_PER_MESSAGE)}`)
+          .join("\n\n");
         if (transcript) {
           try {
             const r = await summarize(client, a.ref.supplier_name, transcript);
@@ -314,7 +341,7 @@ registerAgent({
         }
       }
 
-      const org_id = await resolveOrgId(a.ref.tenkara_org_id);
+      const org_id = a.org_id ?? (await resolveOrgId(a.ref.tenkara_org_id));
       const { error } = await admin.from("supplier_email_context").upsert(
         {
           org_id,
@@ -322,7 +349,7 @@ registerAgent({
           tenkara_org_id: a.ref.tenkara_org_id,
           supplier_id: a.ref.supplier_id,
           supplier_name: a.ref.supplier_name,
-          supplier_email: email,
+          supplier_email: a.ref.supplier_email,
           last_outbound_at: iso(a.lastOutboundAt),
           last_inbound_at: iso(a.lastInboundAt),
           last_message_at: iso(lastMessageAt),
@@ -336,7 +363,10 @@ registerAgent({
         { onConflict: "supplier_email" }
       );
       if (error) {
-        await ctx.log(`Upsert failed for ${email}: ${error.message}`, { level: "error", step: "upsert" });
+        await ctx.log(`Upsert failed for ${a.ref.supplier_email}: ${error.message}`, {
+          level: "error",
+          step: "upsert",
+        });
       } else {
         upserted += 1;
       }
@@ -346,9 +376,9 @@ registerAgent({
       `Upserted ${upserted} supplier-context rows (${Object.entries(stateCounts)
         .map(([k, v]) => `${k}=${v}`)
         .join(", ")}); ${summariesDone} LLM summaries`,
-      { step: "done", data: { upserted, stateCounts, summaries: summariesDone, conversationErrors } }
+      { step: "done", data: { upserted, stateCounts, summaries: summariesDone, threadMisses } }
     );
-    ctx.setStatus(conversationErrors > 0 ? "partial" : "success");
+    ctx.setStatus(threadMisses > 0 ? "partial" : "success");
     ctx.setItemsProcessed(upserted);
     ctx.setSummary(
       `Built context for ${upserted} suppliers (${Object.entries(stateCounts)

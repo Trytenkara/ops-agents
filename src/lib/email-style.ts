@@ -42,7 +42,7 @@ export function sanitizeDraft<T extends { subject: string; body: string }>(d: T)
   return { ...d, subject: clean(d.subject), body: clean(d.body) };
 }
 
-// Missive renders a plain `\n`-separated body as one collapsed paragraph.
+// Email clients render a plain `\n`-separated body as one collapsed paragraph.
 // Convert to minimal HTML: each blank-line-separated block becomes a <p>,
 // single newlines inside a block become <br>. HTML-escape everything first.
 function escapeHtml(s: string): string {
