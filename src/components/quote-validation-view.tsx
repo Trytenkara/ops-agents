@@ -7,6 +7,7 @@ import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { QuoteProfileCard } from "@/components/quote-profile-card";
 import { createQuoteProfile } from "@/app/actions/quote-profiles";
+import { qaQuoteProfile } from "@/lib/price-qa";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
 import { quoteCompleteness, type QuoteProfile } from "@/lib/quote-profiles";
@@ -156,10 +157,12 @@ export function QuoteValidationView({
     "Hazardous", "Refrigerated", "Protect From Freezing",
     "Name Match", "INCI Match", "Grades Match", "Additional Grades",
     "Pre-Order COA Met", "Pre-Order SDS Met", "Pre-Order TDS Met", "Pre-Order Sample Met",
+    "$/kg", "Pack Class", "QA Verdict", "QA Flags",
     "Status", "Completeness %", "Checkout Link", "Purchasing Notes", "Operator Notes", "Generated Notes",
   ];
   const csvRows = profiles.map((q) => {
     const up = q.price != null && q.case_size && q.case_size > 0 ? (q.price / q.case_size).toFixed(4) : "";
+    const qa = qaQuoteProfile(q);
     return [
       q.supplier_name, kindOf(q), q.material_name,
       q.price ?? "", q.case_size ?? "", q.unit_of_measurement ?? "", up, q.currency,
@@ -170,6 +173,7 @@ export function QuoteValidationView({
       q.name_match ? "Yes" : "No", q.inci_match ? "Yes" : "No", q.grades_match ? "Yes" : "No", q.additional_grades ?? "",
       q.preorder_coa_met ? "Yes" : "No", q.preorder_sds_met ? "Yes" : "No",
       q.preorder_tds_met ? "Yes" : "No", q.preorder_sample_met ? "Yes" : "No",
+      qa.price_per_kg_usd ?? "", qa.pack_class, qa.verdict, qa.flags.map((f) => f.code).join("; "),
       q.approval_status, quoteCompleteness(q).pct,
       q.source_url ?? "", q.purchasing_notes ?? "", q.notes ?? "", q.generated_notes ?? "",
     ];

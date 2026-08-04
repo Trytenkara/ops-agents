@@ -6,6 +6,7 @@ import { toCsv, type CsvCell } from "@/lib/csv";
 import { correctMaterialSpelling } from "@/lib/material-spelling";
 import { loadMarketplaceCaseDims, resolveCaseDims } from "@/lib/marketplace-case-dims";
 import { tierBreakdown } from "@/lib/price-tiers";
+import { qaPrice } from "@/lib/price-qa";
 import { aggregatorNameFromPayload } from "@/lib/aggregator-hosts";
 
 // GET /api/leads-in-flight/marketplace-pricing-csv?org=<slug>&kind=marketplace|aggregator
@@ -98,6 +99,10 @@ export async function GET(request: NextRequest) {
     "case_weight_kg",
     "price_total",
     "price_per_unit",
+    "price_per_kg_usd",
+    "pack_class",
+    "qa_verdict",
+    "qa_flags",
     "raw_listed_pricing",
     "moq",
     "tiers_updated_at",
@@ -151,6 +156,18 @@ export async function GET(request: NextRequest) {
         (t.price != null && b.case_size != null && b.case_size !== 0
           ? Math.round((t.price / b.case_size) * 10000) / 10000
           : null);
+      const qa = qaPrice({
+        material_name: materialName,
+        price: t.price ?? null,
+        unit_price: t.unit_price ?? null,
+        pack_size: t.pack_size ?? null,
+        case_size: b.case_size,
+        unit_of_measurement: b.unit_of_measurement,
+        source_url: sourceUrl,
+        price_trust: (pull as { price_trust?: string } | undefined)?.price_trust ?? null,
+        market_kind: (pull as { market_kind?: string } | undefined)?.market_kind ?? null,
+        citation_required: true,
+      });
       csvRows.push([
         r.supplier_name ?? null,
         materialName,
@@ -169,6 +186,10 @@ export async function GET(request: NextRequest) {
         dims?.weight_kg ?? null,
         t.price ?? null,
         unitPrice,
+        qa.price_per_kg_usd,
+        qa.pack_class,
+        qa.verdict,
+        qa.flags.map((f) => f.code).join("; ") || null,
         rawPricing,
         moq,
         updatedAt,

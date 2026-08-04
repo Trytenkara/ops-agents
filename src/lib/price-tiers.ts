@@ -65,8 +65,26 @@ export function parsePackSize(packSize: string | null | undefined): {
   const empty = { case_size: null, unit_of_measurement: null, case_type: null };
   if (!packSize || typeof packSize !== "string") return empty;
   // Drop parentheticals like "(2.2 lb)" / "(upper range)" so they don't pollute parsing.
-  const s = packSize.replace(/\([^)]*\)/g, " ").trim();
+  let s = packSize.replace(/\([^)]*\)/g, " ").trim();
+  // A leading comparator is a MOQ phrasing (">=1000 kilograms"), not part of the
+  // quantity, so strip it or the pack reads as unknown.
+  s = s.replace(/^\s*(?:>=|<=|≥|≤|>|<|~|±|approx\.?|about|min\.?|minimum)\s*/i, "").trim();
   if (!s) return empty;
+
+  // "Per Kg" / "/lb" quote the price for ONE unit. That is a pack size of 1, and
+  // the most comparable form there is; reading it as unknown loses a good quote.
+  const perUnit = s.match(/^(?:per\s+|\/\s*)([a-zA-Z]+)\b/i);
+  if (perUnit) {
+    const canon = UNIT_CANON[perUnit[1].toLowerCase()];
+    if (canon) {
+      let case_type: string | null = null;
+      const lower = packSize.toLowerCase();
+      for (const c of CONTAINERS) {
+        if (new RegExp(`\\b${c}s?\\b`, "i").test(lower)) { case_type = c; break; }
+      }
+      return { case_size: 1, unit_of_measurement: canon, case_type };
+    }
+  }
 
   let case_size: number | null = null;
   let rest = s;

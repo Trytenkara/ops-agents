@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { saveQuoteProfile } from "@/app/actions/quote-profiles";
 import type { QuoteProfile, QuoteProfileUpdate } from "@/lib/quote-profiles";
 import { quoteCompleteness } from "@/lib/quote-profiles";
+import { qaQuoteProfile } from "@/lib/price-qa";
 
 const STATUS_META: Record<string, { label: string; variant: "success" | "warn" | "secondary" }> = {
   draft: { label: "Draft", variant: "secondary" },
@@ -162,6 +163,8 @@ export function QuoteProfileCard({
   const unitPrice = profile.price != null && profile.case_size && profile.case_size > 0
     ? (profile.price / profile.case_size).toFixed(4)
     : null;
+  // Recomputed from the edited profile, so fixing a pack size clears the flag on save.
+  const qa = qaQuoteProfile(profile);
 
   function handleFieldChange(field: string, value: string) {
     setProfile((p) => ({ ...p, [field]: value || null }));
@@ -204,6 +207,14 @@ export function QuoteProfileCard({
               </a>
             )}
             <Badge variant={status.variant}>{status.label}</Badge>
+            {qa.verdict !== "pass" && (
+              <Badge
+                variant={qa.verdict === "needs_review" ? "danger" : "warn"}
+                title={qa.flags.map((f) => f.message).join("\n")}
+              >
+                {qa.verdict === "needs_review" ? "Needs review" : "QA warn"}
+              </Badge>
+            )}
             {profile.is_hazardous && <Badge variant="warn">Hazardous</Badge>}
             {profile.is_refrigerated && <Badge variant="info">Refrigerated</Badge>}
           </div>
@@ -237,6 +248,12 @@ export function QuoteProfileCard({
             </div>
             {unitPrice && (
               <div className="text-xs text-muted-foreground">Unit price: ${unitPrice}/{profile.unit_of_measurement ?? "unit"}</div>
+            )}
+            {qa.price_per_kg_usd != null && (
+              <div className="text-xs text-muted-foreground">
+                ${qa.price_per_kg_usd}/kg
+                {qa.pack_class === "retail" && <span className="ml-1 text-amber-600 dark:text-amber-400">(retail pack)</span>}
+              </div>
             )}
             {editing ? (
               <div className="space-y-0.5">

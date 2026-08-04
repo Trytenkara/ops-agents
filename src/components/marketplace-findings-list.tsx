@@ -16,6 +16,7 @@ import { filenameFor } from "@/lib/csv";
 import { fmtCaseDims, resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
 import { relativeTime } from "@/lib/utils";
 import { aggregatorNameOf } from "@/lib/aggregator-hosts";
+import { qaPrice, type QaResult } from "@/lib/price-qa";
 
 const COLS = 10;
 
@@ -29,13 +30,32 @@ function unitPriceOf(r: any): { value: number; unit: string } | null {
   return perUnitPrice(r.current_price ?? r.baseline_price ?? null, r.pack_size ?? null);
 }
 
+function qaOf(r: any): QaResult {
+  return qaPrice({
+    material_name: r.material_name,
+    price: r.current_price ?? r.baseline_price ?? null,
+    unit_price: r.unit_price ?? null,
+    pack_size: r.pack_size ?? null,
+    source_url: r.source_url ?? null,
+    market_kind: r.aggregator ? "aggregator" : null,
+    citation_required: true,
+  });
+}
+
 function perUnitLabel(r: any): string {
   const pu = unitPriceOf(r);
   return pu ? `$${pu.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}/${pu.unit}` : "";
 }
 
-// Cheapest per-unit first; rows without a parseable pack size sort last.
+// Cheapest first. $/kg is the only figure comparable ACROSS pack sizes, so it
+// sorts ahead of raw per-unit (which would rank $/oz against $/kg as if they
+// were the same number); rows with neither sort last.
 function tierSort(a: any, b: any): number {
+  const ka = qaOf(a).price_per_kg_usd;
+  const kb = qaOf(b).price_per_kg_usd;
+  if (ka != null && kb != null && ka !== kb) return ka - kb;
+  if (ka != null && kb == null) return -1;
+  if (ka == null && kb != null) return 1;
   const pa = unitPriceOf(a)?.value ?? Infinity;
   const pb = unitPriceOf(b)?.value ?? Infinity;
   if (pa !== pb) return pa - pb;
@@ -90,6 +110,9 @@ export function MarketplaceFindingsList({
     r.pack_size ?? "",
     fmtCaseDims(resolveCaseDims(dimsByPack, r.pack_size)) ?? "",
     perUnitLabel(r),
+    qaOf(r).price_per_kg_usd ?? "",
+    qaOf(r).pack_class,
+    qaOf(r).verdict,
     r.baseline_price ?? "",
     r.current_price ?? "",
     r.pct_change != null ? `${r.pct_change}%` : "",
@@ -117,7 +140,7 @@ export function MarketplaceFindingsList({
         {controls}
         <ListCsvButton
           filename={filenameFor(slug, "price-changes")}
-          headers={["Supplier", "Aggregator", "Material", "Pack / tier", "Case dims", "Per-unit", "On file", "Current", "Change", "Updated"]}
+          headers={["Supplier", "Aggregator", "Material", "Pack / tier", "Case dims", "Per-unit", "$/kg", "Pack class", "QA", "On file", "Current", "Change", "Updated"]}
           rows={csvRows}
         />
       </div>
@@ -154,6 +177,7 @@ export function MarketplaceFindingsList({
                 </TableRow>
                 {sorted.map((r) => {
                   const pu = unitPriceOf(r);
+                  const qa = qaOf(r);
                   return (
                     <TableRow key={r.id}>
                       <TableCell className="align-top">
@@ -161,6 +185,23 @@ export function MarketplaceFindingsList({
                           <span>{r.pack_size}</span>
                         ) : (
                           <span className="text-muted-foreground text-xs">size unknown · bulk total</span>
+                        )}
+                        {qa.verdict !== "pass" && (
+                          <div
+                            className={
+                              qa.verdict === "needs_review"
+                                ? "mt-0.5 w-fit rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-medium text-rose-800 dark:bg-rose-950 dark:text-rose-300"
+                                : "mt-0.5 w-fit rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                            }
+                            title={qa.flags.map((f) => f.message).join("\n")}
+                          >
+                            {qa.verdict === "needs_review" ? "Needs review" : "Check"}
+                          </div>
+                        )}
+                        {qa.pack_class === "retail" && (
+                          <div className="mt-0.5 text-[10px] text-muted-foreground" title="Retail-size pack, not a wholesale comparable.">
+                            retail pack
+                          </div>
                         )}
                       </TableCell>
                       <TableCell className="align-top text-xs">
@@ -185,6 +226,11 @@ export function MarketplaceFindingsList({
                           </span>
                         ) : (
                           <span className="text-muted-foreground">—</span>
+                        )}
+                        {qa.price_per_kg_usd != null && (
+                          <div className="text-[11px] text-muted-foreground" title="Normalized to $/kg, the only basis comparable across pack sizes.">
+                            ${qa.price_per_kg_usd.toLocaleString(undefined, { maximumFractionDigits: 2 })}/kg
+                          </div>
                         )}
                       </TableCell>
                       <TableCell className="text-right align-top tabular-nums">{formatPrice(r.baseline_price, r.currency)}</TableCell>
