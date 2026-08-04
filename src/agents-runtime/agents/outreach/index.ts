@@ -256,7 +256,19 @@ registerAgent({
       }
     }
 
+    // A seller split out of an aggregator index page is only a "marketplace" lead
+    // for as long as the platform is the sole way to reach it. Once we hold that
+    // company's own email, on its own domain, it is an ordinary supplier: the
+    // listing is just where we found it. Without this, such a lead keeps its
+    // aggregator provenance forever and sits in the price-pull bucket instead of
+    // being cold-emailed like any other supplier we have an address for.
+    const directContactCaptured = (payload: any) => {
+      if (!payload.aggregator) return false;
+      const email = payload.supplier_contact_email as string | undefined;
+      return !!email && !isAggregatorEmail(email);
+    };
     const marketplaceFor = (lead: any, payload: any, channelUrl: string | null) => {
+      if (directContactCaptured(payload)) return false;
       const host = channelUrl ? channelUrl.replace(/^https?:\/\//, "").split("/")[0].toLowerCase().replace(/^www\./, "") : null;
       return isAggregatorDomain(host) || payload.site_type === "M" || payload.site_type === "MS" || payload.site_type === "A" || payload.supplier_role === "Marketplace" || payload.supplier_role === "Reseller" || payload.enrichment?.tenkara_supplier?.is_marketplace === true;
     };
