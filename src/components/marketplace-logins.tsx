@@ -18,6 +18,12 @@ export type MarketplaceAccount = {
   created_by: string | null;
   created_by_email: string | null;
   created_at: string;
+  gate_reason?: string | null;
+  contact_name?: string | null;
+  contact_email?: string | null;
+  contact_phone?: string | null;
+  contact_url?: string | null;
+  contact_notes?: string | null;
 };
 
 // One login as the validation form edits it. Mirrors a marketplace_accounts row;
@@ -34,7 +40,29 @@ export type AccountDraft = {
   lastError: string | null;
   lastLoginAt: string | null;
   verifiedAt: string | null;
+  gateReason: string | null;
+  contact: GateContact | null;
 };
+
+// Who to ask when a marketplace only opens accounts by hand.
+export type GateContact = {
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  url: string | null;
+  notes: string | null;
+};
+
+function gateContactOf(a: MarketplaceAccount): GateContact | null {
+  if (!(a.contact_email || a.contact_phone || a.contact_url)) return null;
+  return {
+    name: a.contact_name ?? null,
+    email: a.contact_email ?? null,
+    phone: a.contact_phone ?? null,
+    url: a.contact_url ?? null,
+    notes: a.contact_notes ?? null,
+  };
+}
 
 export function toAccountDrafts(accounts: MarketplaceAccount[]): AccountDraft[] {
   return accounts.map((a) => ({
@@ -49,6 +77,8 @@ export function toAccountDrafts(accounts: MarketplaceAccount[]): AccountDraft[] 
     lastError: a.last_error,
     lastLoginAt: a.last_login_at,
     verifiedAt: a.verified_at,
+    gateReason: a.gate_reason ?? null,
+    contact: gateContactOf(a),
   }));
 }
 
@@ -62,6 +92,63 @@ const STATUS: Record<string, { label: string; cls: string; hint: string }> = {
   banned: { label: "Banned", cls: "bg-destructive/15 text-destructive ring-destructive/30", hint: "The marketplace blocked this account." },
   failed: { label: "Failed", cls: "bg-destructive/10 text-destructive ring-destructive/20", hint: "Signup could not complete — see the error." },
 };
+
+// Why self-serve signup could not finish (marketplace_accounts.gate_reason).
+// "Failed" alone tells an operator nothing they can act on; the gate says whether
+// to retry, wait, or go ask a person, which is a different job each time.
+const GATE: Record<string, { label: string; hint: string }> = {
+  invite_only: { label: "Invite only", hint: "The store publishes no registration route at all. An account has to be granted from their side." },
+  application_only: { label: "Application only", hint: "Self-serve signup is disabled. The account is opened by application, usually by phone or email." },
+  email_confirm_required: { label: "Needs email confirm", hint: "Registration went through, but the login stays refused until a link in the confirmation email is clicked." },
+  pending_approval: { label: "Awaiting their approval", hint: "The account exists and is confirmed. The marketplace reviews B2B buyers by hand and has not approved it yet." },
+  captcha_wall: { label: "Captcha wall", hint: "A captcha the agent cannot solve stands in front of signup and login." },
+  already_registered: { label: "Address already taken", hint: "The email is already registered on this store. Needs a password reset by hand." },
+  needs_client_data: { label: "Missing client data", hint: "The form requires a detail the client's own records do not hold (usually a phone number). Fill it in client settings and re-run." },
+  no_signup_form: { label: "No signup form found", hint: "No registration form at any known path. Paste the store's register URL and the agent can retry." },
+  login_rejected: { label: "Credentials refused", hint: "The store rejected the saved credentials for an unstated reason." },
+  not_needed: { label: "No login needed", hint: "This store's prices are public. The login flag was a false positive, nothing to do." },
+  unclassified: { label: "Unclassified", hint: "The run could not diagnose what stopped it. Inspect the session recording." },
+};
+
+function GateBadge({ gate }: { gate: string }) {
+  const g = GATE[gate];
+  const neutral = gate === "not_needed";
+  return (
+    <span
+      className={cn(
+        "inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ring-1",
+        neutral ? "bg-slate-500/15 text-slate-500 ring-slate-500/30" : "bg-amber-500/15 text-amber-700 ring-amber-500/30 dark:text-amber-300"
+      )}
+      title={g?.hint ?? gate}
+    >
+      {g?.label ?? gate}
+    </span>
+  );
+}
+
+// The way past a human gate: mailto / tel / the store's own application page.
+function GateContactLine({ contact }: { contact: GateContact }) {
+  return (
+    <span className="w-full text-[11px] text-muted-foreground">
+      Ask for access:{" "}
+      {contact.name && <span className="text-foreground">{contact.name} </span>}
+      {contact.email && (
+        <>
+          <a href={`mailto:${contact.email}`} className="text-foreground hover:underline">
+            {contact.email}
+          </a>{" "}
+        </>
+      )}
+      {contact.phone && <span className="text-foreground">{contact.phone} </span>}
+      {contact.url && (
+        <a href={contact.url} target="_blank" rel="noopener noreferrer" className="hover:underline">
+          (application page)
+        </a>
+      )}
+      {contact.notes && <span className="block">{contact.notes}</span>}
+    </span>
+  );
+}
 
 // Statuses an operator can pick. The agent-only transitional states
 // (signing_up, verifying, pending) stay out of the form.
@@ -188,6 +275,7 @@ export function MarketplaceAccessFields({
               </span>
               <Secret value={r.password} />
               <StatusBadge status={r.status} />
+              {r.gateReason && <GateBadge gate={r.gateReason} />}
               <OriginBadge createdBy={r.createdBy} createdByEmail={r.createdByEmail} />
               {r.createdBy === "ops" && r.createdByEmail && (
                 <span className="text-[11px] text-muted-foreground">{r.createdByEmail}</span>
@@ -199,6 +287,7 @@ export function MarketplaceAccessFields({
                     ? `confirmed ${relativeTime(r.verifiedAt)}`
                     : ""}
               </span>
+              {r.contact && <GateContactLine contact={r.contact} />}
               {r.status === "failed" && r.lastError && (
                 <span className="w-full text-[11px] text-muted-foreground">{r.lastError}</span>
               )}
@@ -265,6 +354,8 @@ export function MarketplaceAccessFields({
                   lastError: null,
                   lastLoginAt: null,
                   verifiedAt: null,
+                  gateReason: null,
+                  contact: null,
                 },
               ])
             }
@@ -313,6 +404,7 @@ export function UnlinkedMarketplaceLogins({
           <span className="text-foreground">{a.signup_email ?? "—"}</span>
           <Secret value={a.password} />
           <StatusBadge status={a.status} />
+          {a.gate_reason && <GateBadge gate={a.gate_reason} />}
           {canAct && (
             <span className="inline-flex items-center gap-1.5">
               <Select

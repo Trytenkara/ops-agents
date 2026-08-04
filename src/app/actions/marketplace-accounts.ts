@@ -62,6 +62,9 @@ export async function saveSupplierMarketplaceAccounts(
       password: row.password,
       status: row.status,
       supplier_profile_id: supplierProfileId,
+      // An operator saying the login works retires whatever gate the agent
+      // diagnosed, so the row stops advertising a blocker that is now cleared.
+      ...(row.status === "active" ? { gate_reason: null } : {}),
     };
     const { error } = row.id
       ? await ctx.admin

@@ -15,10 +15,18 @@ export interface MarketplaceAccountRow {
   created_by: "agent" | "ops";
   created_by_email: string | null;
   created_at: string;
+  // Why self-serve provisioning could not finish, as a code (migration 0081),
+  // plus who to ask when clearing it needs a person at the supplier.
+  gate_reason: string | null;
+  contact_name: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
+  contact_url: string | null;
+  contact_notes: string | null;
 }
 
 export const ACCOUNT_COLUMNS =
-  "id, org_id, supplier_profile_id, host, slug, signup_email, password, status, last_error, verified_at, last_login_at, created_by, created_by_email, created_at";
+  "id, org_id, supplier_profile_id, host, slug, signup_email, password, status, last_error, verified_at, last_login_at, created_by, created_by_email, created_at, gate_reason, contact_name, contact_email, contact_phone, contact_url, contact_notes";
 
 export const ACCOUNT_STATUSES = ["pending", "signing_up", "verifying", "active", "failed", "banned"] as const;
 
