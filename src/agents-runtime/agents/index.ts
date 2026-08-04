@@ -10,6 +10,7 @@ import "./data-enrichment";
 import "./outreach";
 import "./marketplace-validation";
 import "./escalation";
+import "./document-retrieval";
 import "./outreach-qa";
 import "./client-profile";
 import "./inbox-context";
