@@ -325,20 +325,39 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
       } as any],
       messages: [{ role: "user", content: buildUserMessage(material, pass.focus) }],
     } as any);
-    const timer = setTimeout(() => stream.abort(), SCOUT_CALL_TIMEOUT_MS);
-    let res;
+    // Accumulate text as it streams. abort() rejects finalMessage(), so without
+    // this every supplier the model had already written is lost — the pass reports
+    // "Request was aborted" and returns nothing, even when it was nearly done.
+    let streamed = "";
+    stream.on("text", (delta: string) => {
+      streamed += delta;
+    });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      stream.abort();
+    }, SCOUT_CALL_TIMEOUT_MS);
+    let raw: string;
     try {
-      res = await stream.finalMessage();
+      const res = await stream.finalMessage();
+      raw = res.content.map((b: any) => (b.type === "text" ? b.text : "")).join("");
+    } catch (err) {
+      // Only our own timeout is recoverable, and only once the model had begun
+      // writing JSON. Real API errors — and timeouts that landed while it was
+      // still searching — keep their original error, which is the true cause.
+      // extractJson salvages the complete objects out of the unterminated array.
+      if (!timedOut || !streamed.includes("{")) throw err;
+      raw = streamed;
     } finally {
       clearTimeout(timer);
     }
-    const raw = res.content.map((b: any) => (b.type === "text" ? b.text : "")).join("");
     const secs = Math.round((Date.now() - startedAt) / 1000);
     const found = extractJson(raw).suppliers;
     const list = Array.isArray(found) ? found : [];
-    await log(`scout: pass ${pass.key} returned ${list.length} for ${matLabel} in ${secs}s`, {
-      material_id: material.id, pass: pass.key, secs, count: list.length,
-    });
+    await log(
+      `scout: pass ${pass.key} returned ${list.length} for ${matLabel} in ${secs}s${timedOut ? " (salvaged from timeout)" : ""}`,
+      { material_id: material.id, pass: pass.key, secs, count: list.length, salvaged: timedOut }
+    );
     return list;
   }
 
