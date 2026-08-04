@@ -14,12 +14,13 @@ import { DirectPricesOnFile, type DirectPriceRow } from "@/components/direct-pri
 import { PriceIndexTabs } from "@/components/price-index-tabs";
 import { QuoteValidationView } from "@/components/quote-validation-view";
 import { getQuoteProfiles } from "@/lib/quote-profiles";
+import { getSupplierProfiles } from "@/lib/supplier-profiles";
 import { CasesSection } from "@/components/cases-section";
 import { loadOrgCases, caseCategory } from "@/lib/org-cases";
 import { loadMarketplaceCaseDims, fmtCaseDims } from "@/lib/marketplace-case-dims";
 import { cn } from "@/lib/utils";
 import { aggregatorNameFromPayload, aggregatorNameOf } from "@/lib/aggregator-hosts";
-import { leadMarketKind } from "@/lib/lead-market";
+import { leadMarketKind, type MarketKind } from "@/lib/lead-market";
 
 export const dynamic = "force-dynamic";
 
@@ -266,6 +267,21 @@ export default async function OrgPriceIndexPage({
   });
 
   const quoteProfiles = await getQuoteProfiles(admin, org.id).catch(() => []);
+
+  // Quote Validation groups by supplier, and a quote itself carries no market
+  // kind — so hand the view the supplier's kind. The validated supplier profile
+  // wins; leads only fill in suppliers that have no profile yet.
+  const supplierTypes: Record<string, MarketKind> = {};
+  for (const l of (leadsRes.data ?? []) as any[]) {
+    const kind = leadMarketKind(l.payload?.site_type);
+    if (kind && l.supplier_name) supplierTypes[`name:${l.supplier_name.toLowerCase()}`] = kind;
+  }
+  for (const p of await getSupplierProfiles(admin, org.id).catch(() => [])) {
+    if (!p.supplier_type) continue;
+    if (p.supplier_id) supplierTypes[`id:${p.supplier_id}`] = p.supplier_type;
+    supplierTypes[`name:${p.supplier_name.toLowerCase()}`] = p.supplier_type;
+  }
+
   const marketplaceDims = await loadMarketplaceCaseDims(admin);
 
   const { openRows: caseOpen, resolvedRows: caseResolved } = await loadOrgCases(admin, org.id);
@@ -309,6 +325,7 @@ export default async function OrgPriceIndexPage({
             canAct={canAct}
             slug={org.slug}
             orgId={org.id}
+            supplierTypes={supplierTypes}
           />
         }
         escalations={

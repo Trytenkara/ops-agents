@@ -59,6 +59,14 @@ const SORT_OPTIONS = [
   { value: "newest", label: "Newest leads" },
 ];
 
+const TYPE_FILTER: { value: string; label: string }[] = [
+  { value: "all", label: "All types" },
+  { value: "marketplace", label: MARKET_KIND_LABEL.marketplace },
+  { value: "aggregator", label: MARKET_KIND_LABEL.aggregator },
+  { value: "direct", label: MARKET_KIND_LABEL.direct },
+  { value: "unclassified", label: "Unclassified" },
+];
+
 const STATUS_FILTER = [
   { value: "all", label: "All statuses" },
   { value: "draft", label: "Draft" },
@@ -88,6 +96,7 @@ export function SupplierLeadsView({
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("leads");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
   const [expandedSupplier, setExpandedSupplier] = useState<string | null>(null);
   const [showLeadsFor, setShowLeadsFor] = useState<string | null>(null);
   const [showAddSupplier, setShowAddSupplier] = useState(false);
@@ -109,12 +118,15 @@ export function SupplierLeadsView({
         ? profileBySupplier.get(lead.supplier_id) ?? null
         : profileByName.get((lead.supplier_name ?? "").toLowerCase()) ?? null;
       const mk = (lead.market_kind as MarketKind | null) ?? leadMarketKind(lead.payload?.site_type);
+      const leadKind = mk === "marketplace" || mk === "aggregator" || mk === "direct" ? mk : null;
       group = {
         supplierName: lead.supplier_name ?? "Unknown",
         supplierId: lead.supplier_id ?? null,
         profile,
         leads: [],
-        marketKind: mk === "marketplace" || mk === "aggregator" || mk === "direct" ? mk : null,
+        // The profile is the validated record, so an operator's correction there
+        // wins over the scanner's read of the lead.
+        marketKind: profile?.supplier_type ?? leadKind,
         latestLead: null,
         accounts: [],
         marketplaceHost: "",
@@ -176,6 +188,19 @@ export function SupplierLeadsView({
     } else {
       groups = groups.filter((g) => g.profile?.approval_status === statusFilter);
     }
+  }
+
+  // Counts come off the pre-type set, so each option reads as "how many would I
+  // get if I picked this" rather than shifting once a type is selected.
+  const typeCounts = { marketplace: 0, aggregator: 0, direct: 0, unclassified: 0 };
+  for (const g of groups) typeCounts[g.marketKind ?? "unclassified"]++;
+  const typeOptions = TYPE_FILTER.map((o) =>
+    o.value === "all"
+      ? { ...o, label: `${o.label} (${groups.length})` }
+      : { ...o, label: `${o.label} (${typeCounts[o.value as keyof typeof typeCounts]})` }
+  );
+  if (typeFilter !== "all") {
+    groups = groups.filter((g) => (g.marketKind ?? "unclassified") === typeFilter);
   }
 
   // Sort
@@ -295,6 +320,17 @@ export function SupplierLeadsView({
             className="h-8 w-56"
           />
         </label>
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Type</span>
+          <Select
+            size="sm"
+            className="min-w-[11rem]"
+            ariaLabel="Supplier type"
+            value={typeFilter}
+            onValueChange={setTypeFilter}
+            options={typeOptions}
+          />
+        </div>
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">Profile status</span>
           <Select
@@ -464,7 +500,7 @@ export function SupplierLeadsView({
 function AddSupplierForm({ orgId, onClose }: { orgId: string; onClose: () => void }) {
   const [supplierName, setSupplierName] = useState("");
   const [pocEmail, setPocEmail] = useState("");
-  const [supplierType, setSupplierType] = useState<"marketplace" | "direct">("direct");
+  const [supplierType, setSupplierType] = useState<MarketKind>("direct");
   const [creating, startCreate] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -495,20 +531,21 @@ function AddSupplierForm({ orgId, onClose }: { orgId: string; onClose: () => voi
           <span className="text-xs text-muted-foreground">Email (optional)</span>
           <Input value={pocEmail} onChange={(e) => setPocEmail(e.target.value)} className="h-8" placeholder="contact@example.com" type="email" />
         </label>
-        <label className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">Type</span>
           <Select
             size="sm"
             className="w-40"
             ariaLabel="Supplier type"
             value={supplierType}
-            onValueChange={(v) => setSupplierType(v as "marketplace" | "direct")}
+            onValueChange={(v) => setSupplierType(v as MarketKind)}
             options={[
-              { value: "direct", label: "Direct" },
-              { value: "marketplace", label: "Marketplace" },
+              { value: "direct", label: MARKET_KIND_LABEL.direct },
+              { value: "marketplace", label: MARKET_KIND_LABEL.marketplace },
+              { value: "aggregator", label: MARKET_KIND_LABEL.aggregator },
             ]}
           />
-        </label>
+        </div>
       </div>
       {error && <p className="text-xs text-red-500">{error}</p>}
       <div className="flex gap-2">

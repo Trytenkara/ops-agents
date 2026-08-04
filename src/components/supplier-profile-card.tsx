@@ -11,6 +11,7 @@ import { MarketplaceAccessFields, toAccountDrafts, type AccountDraft, type Marke
 import { saveSupplierMarketplaceAccounts } from "@/app/actions/marketplace-accounts";
 import type { SupplierProfile, SupplierProfileUpdate } from "@/lib/supplier-profiles";
 import { profileCompleteness } from "@/lib/supplier-profiles";
+import { MARKET_KIND_LABEL, MARKET_KIND_TITLE, MARKET_KIND_VARIANT } from "@/lib/lead-market";
 
 const STATUS_META: Record<string, { label: string; variant: "success" | "warn" | "secondary" }> = {
   draft: { label: "Draft", variant: "secondary" },
@@ -227,7 +228,9 @@ export function SupplierProfileCard({
           <div className="flex items-center gap-3">
             <CardTitle className="text-base">{profile.supplier_name}</CardTitle>
             {profile.supplier_type && (
-              <Badge variant="secondary">{profile.supplier_type}</Badge>
+              <Badge variant={MARKET_KIND_VARIANT[profile.supplier_type]} title={MARKET_KIND_TITLE[profile.supplier_type]}>
+                {MARKET_KIND_LABEL[profile.supplier_type]}
+              </Badge>
             )}
             <Badge variant={status.variant}>{status.label}</Badge>
             {tenkara && (
@@ -279,8 +282,9 @@ export function SupplierProfileCard({
                     value={profile.supplier_type ?? ""}
                     onValueChange={(v) => handleFieldChange("supplier_type", v)}
                     options={[
-                      { value: "marketplace", label: "Marketplace" },
-                      { value: "direct", label: "Direct" },
+                      { value: "marketplace", label: MARKET_KIND_LABEL.marketplace },
+                      { value: "aggregator", label: MARKET_KIND_LABEL.aggregator },
+                      { value: "direct", label: MARKET_KIND_LABEL.direct },
                     ]}
                   />
                 </div>

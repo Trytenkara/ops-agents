@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { aggregatorNameOf } from "@/lib/aggregator-hosts";
+import { aggregatorNameOf, isAggregatorPlatformName } from "@/lib/aggregator-hosts";
 
 // One-quote price re-check. Asks Anthropic with the web_search server-side
 // tool to (a) visit the product URL we have on file, (b) check that the
@@ -24,6 +24,22 @@ export interface RecheckInput {
   // lead re-check path passes a cheaper model here since re-checks only compare
   // against a known baseline (lower stakes than a first-time extraction).
   model?: string;
+  // Set when the lead looks like an aggregator index page (the platform itself
+  // recorded as the supplier, or a category/search/showroom URL). Switches the
+  // reader from "find one price" to "list the individual sellers on this page"
+  // so the caller can split it into one lead per real company.
+  enumerate_sellers?: boolean;
+}
+
+// One third-party company listed on an aggregator index page.
+export interface AggregatorSeller {
+  supplier_name: string;
+  product_url: string;
+  country: string | null;
+  price: number | null;
+  currency: string | null;
+  pack_size: string | null;
+  moq: string | null;
 }
 
 export interface PriceTier {
@@ -52,6 +68,10 @@ export interface RecheckResult {
   source_url: string | null;
   source_citations: string[];
   notes: string | null;
+  // Set only when enumerate_sellers was requested: the page turned out to be a
+  // multi-seller index, and these are the individual companies listed on it.
+  index_page: boolean;
+  sellers: AggregatorSeller[];
 }
 
 const SYSTEM_PROMPT = `You are a B2B sourcing analyst checking whether a marketplace's current listed price for a material matches what we have on file.
@@ -106,6 +126,26 @@ Rules:
 - Never fabricate, infer, estimate, round, or back-calculate a price. Only report a number that is explicitly printed on the page for that exact pack size. If the price only appears after selecting a size/variant you cannot confirm was rendered, or you are otherwise unsure of the exact figure, return needs_review — a blank is better than a guess.
 - Never fabricate. If a public price isn't visible, return login_required (if it's behind a login) or needs_review, with a note explaining why.`;
 
+// Appended only when the caller flagged the lead as a suspected aggregator index
+// page. It overrides rule 2 for that one case: instead of searching away from a
+// category/search/showroom listing, read the sellers off it so the caller can
+// replace the umbrella row with one lead per real company.
+const INDEX_PAGE_RULES = `
+
+AGGREGATOR INDEX PAGE (this lead is suspected to be one — this section OVERRIDES rule 2 for a category/search/showroom page):
+The platform is never the supplier. If the page you fetch is an aggregator CATEGORY, SEARCH-RESULTS or SHOWROOM listing showing products from MANY different third-party sellers, do NOT search for a different page and do NOT report a single price for it: the numbers on it belong to different companies. Instead set "index_page": true and enumerate the sellers into "sellers".
+
+For each seller listed on the page report:
+- "supplier_name": the SELLING COMPANY's own name as printed (e.g. "Hebei Yanxi Chemical Co., Ltd."). NEVER the platform's name, never "multiple sellers", never a product name.
+- "product_url": the URL of THAT SELLER's own product listing or storefront on the platform, as linked from the page. Never the index URL you were given.
+- "country", "price", "currency", "pack_size", "moq": as printed for that seller, else null.
+
+Rules for "sellers":
+- Up to 12 sellers, in the order they appear. Skip any row you cannot attribute to a named company with its own link (sponsored blocks, "related searches", bare product tiles).
+- Never invent a seller name, URL, or price. Only list what you actually read on the page. An empty array is correct if the page shows no attributable sellers.
+- Leave current_price, tiers, moq, lead_time and shipping null/empty when "index_page" is true. Use classification "aggregator".
+- If the page is actually ONE seller's own listing (a single company's product page on the platform), set "index_page": false, leave "sellers" empty, and handle it normally per the rules above.`;
+
 let client: Anthropic | null = null;
 function anthropic(): Anthropic {
   if (!client) {
@@ -142,7 +182,11 @@ function buildUserMessage(input: RecheckInput): string {
   lines.push(`Baseline price: ${input.baseline_price ?? "unknown"}`);
   lines.push(`Baseline pack size: ${input.case_size ?? "?"} ${input.unit ?? ""}`.trim());
   lines.push("");
-  lines.push("Re-check the current public price and return the JSON.");
+  lines.push(
+    input.enumerate_sellers
+      ? "This URL is suspected to be an aggregator index page. If it is, list the individual sellers on it (see AGGREGATOR INDEX PAGE); if it is one seller's own listing, re-check its price normally. Return the JSON."
+      : "Re-check the current public price and return the JSON.",
+  );
   return lines.join("\n");
 }
 
@@ -151,7 +195,7 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
     model: input.model ?? MODEL,
     max_tokens: MAX_OUTPUT_TOKENS,
     betas: [WEB_FETCH_BETA],
-    system: SYSTEM_PROMPT,
+    system: input.enumerate_sellers ? SYSTEM_PROMPT + INDEX_PAGE_RULES : SYSTEM_PROMPT,
     tools: [
       // Read the actual product page (Ben's algorithm) — the highest-yield signal.
       { type: "web_fetch_20250910", name: "web_fetch", max_uses: MAX_FETCH_USES } as any,
@@ -180,6 +224,8 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
       source_url: input.product_url,
       source_citations: [],
       notes: `Model returned no JSON: ${text.slice(0, 200)}`,
+      index_page: false,
+      sellers: [],
     };
   }
 
@@ -223,6 +269,40 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
     ? parsed.currency.trim().toUpperCase()
     : null;
 
+  // Sellers read off an index page. Each must be a named company with its own
+  // link: anything that echoes the platform's name, repeats the index URL, or
+  // has no usable URL is dropped rather than staged as a lead.
+  const sellers: AggregatorSeller[] = [];
+  if (input.enumerate_sellers && Array.isArray(parsed.sellers)) {
+    const seenUrls = new Set<string>([input.product_url.trim()]);
+    for (const s of parsed.sellers) {
+      if (!s || typeof s !== "object") continue;
+      const name = typeof s.supplier_name === "string" ? s.supplier_name.trim() : "";
+      const rawUrl = typeof s.product_url === "string" ? s.product_url.trim() : "";
+      if (!name || !rawUrl) continue;
+      if (isAggregatorPlatformName(name, input.material_name)) continue;
+      let url: string;
+      try {
+        url = new URL(rawUrl).toString();
+      } catch {
+        continue;
+      }
+      if (seenUrls.has(url)) continue;
+      seenUrls.add(url);
+      sellers.push({
+        supplier_name: name,
+        product_url: url,
+        country: typeof s.country === "string" && s.country.trim() ? s.country.trim() : null,
+        price: toNum(s.price),
+        currency: typeof s.currency === "string" && /^[A-Za-z]{3}$/.test(s.currency.trim()) ? s.currency.trim().toUpperCase() : null,
+        pack_size: typeof s.pack_size === "string" && s.pack_size.trim() ? s.pack_size.trim() : null,
+        moq: typeof s.moq === "string" && s.moq.trim() ? s.moq.trim() : null,
+      });
+      if (sellers.length >= 12) break;
+    }
+  }
+  const indexPage = input.enumerate_sellers === true && (parsed.index_page === true || sellers.length > 0);
+
   const readUrl = typeof parsed.source_url === "string" ? parsed.source_url : input.product_url;
   // The curated host list is authoritative over the model's read: on a known
   // aggregator, inquiry-only ordering is the expected shape, so a "no checkout"
@@ -234,7 +314,9 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
   // A listing with a visible price but no checkout is NOT a marketplace price —
   // never publish its number. Force the price fields empty so nothing downstream
   // can treat it as a marketplace quote (see the checkout rule in SYSTEM_PROMPT).
-  const isNotMarketplace = validCls === "not_marketplace" && !isAggregator;
+  // An index page is blanked for the same reason: its numbers belong to a dozen
+  // different sellers, so none of them is this lead's price.
+  const isNotMarketplace = (validCls === "not_marketplace" && !isAggregator) || indexPage;
   const classification = isAggregator && validCls === "not_marketplace"
     ? (price != null ? "current_price_found" : "needs_review")
     : validCls;
@@ -248,13 +330,15 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
     pack_size: isNotMarketplace ? null : (typeof parsed.pack_size === "string" ? parsed.pack_size : null),
     unit_price: isNotMarketplace ? null : toNum(parsed.unit_price),
     tiers: isNotMarketplace ? [] : tiers,
-    moq: typeof parsed.moq === "string" && parsed.moq.trim() ? parsed.moq.trim() : null,
-    lead_time: typeof parsed.lead_time === "string" && parsed.lead_time.trim() ? parsed.lead_time.trim() : null,
-    shipping: typeof parsed.shipping === "string" && parsed.shipping.trim() ? parsed.shipping.trim() : null,
+    moq: !indexPage && typeof parsed.moq === "string" && parsed.moq.trim() ? parsed.moq.trim() : null,
+    lead_time: !indexPage && typeof parsed.lead_time === "string" && parsed.lead_time.trim() ? parsed.lead_time.trim() : null,
+    shipping: !indexPage && typeof parsed.shipping === "string" && parsed.shipping.trim() ? parsed.shipping.trim() : null,
     source_url: typeof parsed.source_url === "string" ? parsed.source_url : input.product_url,
     source_citations: Array.isArray(parsed.source_citations)
       ? parsed.source_citations.filter((u: any) => typeof u === "string").slice(0, 8)
       : [],
     notes: typeof parsed.notes === "string" ? parsed.notes : null,
+    index_page: indexPage,
+    sellers,
   };
 }

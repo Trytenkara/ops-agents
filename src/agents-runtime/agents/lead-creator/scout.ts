@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { MaterialRow } from "./sql";
 import { materialLabel } from "@/lib/material-label";
+import { isAggregatorHost, isAggregatorIndexUrl, isAggregatorPlatformName } from "@/lib/aggregator-hosts";
 
 // Web-discovery layer for Agent 03. When Tenkara's supplier graph returns
 // nothing (or thin coverage) for a material, this asks Anthropic with the
@@ -113,6 +114,8 @@ BREADTH IS THE PRIMARY GOAL. A good run returns as many legitimate suppliers as 
 4. Marketplace & retail listings WITH published prices — IndiaMART, Alibaba, Made-in-China, TradeIndia sellers; bulk/retail shops like Bulk Apothecary, Natural Bulk Supplies, Wholesale Supplies Plus, MakingCosmetics, Lerochem, Alexmo, Shay & Company. These are where published price ladders live — they are valuable, not noise. Include them.
 
 For marketplace category pages (IndiaMART, Alibaba, Made-in-China, TradeIndia): do NOT collapse them into a single "IndiaMART" row. Drill INTO the platform's result pages and return AT LEAST 6-8 individual seller companies per major marketplace, each as its own row with its own company name, price/MOQ, and contact path. Recording "IndiaMART (Marketplace)" as one row is a bug — it wastes the slot and hides the actual sellers.
+
+THE PLATFORM IS NEVER THE SUPPLIER. Never return a row whose supplier_name is an aggregator's own name ("Alibaba", "Alibaba Marketplace (Multiple Sellers)", "IndiaMART suppliers", "Made-in-China (Platform)", "TradeIndia", "Global Sources", "EC21", "TradeKey", "Go4WorldBusiness"), and never point a row's url at a category, search-results or showroom page listing many sellers (e.g. alibaba.com/showroom/..., indiamart.com/impcat/..., a /search result). Those rows are discarded. Each aggregator row must name ONE selling company and link to THAT company's own listing or storefront on the platform.
 
 DISCOVERY — use the web_search tool aggressively across regions and channels:
 - Generic: "<material> bulk supplier wholesale B2B manufacturer"
@@ -399,18 +402,32 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
     throw new Error(`all ${slice.length} scout passes failed: ${failures.join("; ")}`);
   }
 
-  // Normalize, validate, dedup by host, drop excluded hosts.
-  const seenHosts = new Set<string>();
+  // Normalize, validate, dedup, drop excluded hosts.
+  const seenKeys = new Set<string>();
   const candidates: ScoutSupplier[] = [];
+  let platformRows = 0;
   for (const s of suppliers) {
     if (!s || typeof s !== "object") continue;
     const url = normalizeUrl((s as any).url);
     if (!url) continue;
     const host = hostOf(url);
     if (!host) continue;
-    if (opts?.excludeHosts?.has(host)) continue;
-    if (seenHosts.has(host)) continue;
-    seenHosts.add(host);
+    const name = String((s as any).supplier_name ?? "").trim();
+    // The platform is never the supplier: an "Alibaba (Multiple Sellers)" row
+    // pointing at a search page is a bundle of other companies' listings, not a
+    // lead anyone can contact.
+    if (isAggregatorPlatformName(name, matLabel) || isAggregatorIndexUrl(url)) {
+      platformRows++;
+      continue;
+    }
+    // Every seller on an aggregator shares one host, so host-dedup would keep
+    // only the first of them. Dedup those on their own listing URL instead —
+    // that is what makes "6-8 individual sellers per platform" survive.
+    const onAggregator = isAggregatorHost(host);
+    const key = onAggregator ? url : host;
+    if (!onAggregator && opts?.excludeHosts?.has(host)) continue;
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
 
     const site_type = (s as any).site_type;
     const confidence_hint = (s as any).confidence_hint;
@@ -420,7 +437,7 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
       return t ? t : null;
     };
     candidates.push({
-      supplier_name: String((s as any).supplier_name ?? "").trim() || host,
+      supplier_name: name || host,
       trade_name: str((s as any).trade_name),
       url,
       country: str((s as any).country),
@@ -444,7 +461,7 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
     });
   }
 
-  await log(`scout: ${candidates.length} candidates from model for ${matLabel} (pre-probe)`, {
+  await log(`scout: ${candidates.length} candidates from model for ${matLabel} (pre-probe)${platformRows ? `, dropped ${platformRows} aggregator platform/index row(s)` : ""}`, {
     material_id: material.id,
   });
 

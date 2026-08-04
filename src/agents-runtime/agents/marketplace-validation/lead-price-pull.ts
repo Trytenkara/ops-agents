@@ -3,7 +3,7 @@ import { recheckMarketplaceQuote } from "./price-recheck";
 import { convertToUsd } from "@/lib/fx";
 import { ensureMarketplaceCaseDims } from "@/lib/marketplace-case-dims-fill";
 import { neverMarketplaceHostOf } from "@/lib/marketplace-hosts";
-import { aggregatorNameOf } from "@/lib/aggregator-hosts";
+import { aggregatorNameOf, isAggregatorIndexUrl, isAggregatorPlatformName } from "@/lib/aggregator-hosts";
 import { getOrgOperatorPool, getSupplierAssignments, resolveSupplierOperatorId } from "@/lib/operator-assignment";
 
 type Admin = ReturnType<typeof createAdminClient>;
@@ -71,6 +71,7 @@ interface LeadRow {
   supplier_name: string | null;
   material_id: string | null;
   material_name: string | null;
+  source: string | null;
   payload: any;
 }
 
@@ -139,6 +140,8 @@ export interface LeadPullResult {
   flagged: number;
   pending: number;
   notMarketplace: number;
+  expanded: number;   // aggregator index pages split into one lead per seller
+  sellersStaged: number;
   stoppedEarly: boolean;
 }
 
@@ -149,7 +152,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   log: (msg: string, meta?: any) => Promise<void> | void;
 }): Promise<LeadPullResult> {
   const { admin, runId, deadline, log } = opts;
-  const empty: LeadPullResult = { processed: 0, pulled: 0, flagged: 0, pending: 0, notMarketplace: 0, stoppedEarly: false };
+  const empty: LeadPullResult = { processed: 0, pulled: 0, flagged: 0, pending: 0, notMarketplace: 0, expanded: 0, sellersStaged: 0, stoppedEarly: false };
   if (Date.now() > deadline) return empty;
 
   // Only pull for orgs that are actively sourcing. Paused ('off') orgs otherwise
@@ -176,7 +179,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   const realOrgIds = activeOrgRows.filter((o: any) => !o.is_internal).map((o: any) => o.id);
   const internalOrgIds = activeOrgRows.filter((o: any) => o.is_internal).map((o: any) => o.id);
 
-  const cols = "id, org_id, supplier_id, supplier_name, material_id, material_name, payload";
+  const cols = "id, org_id, supplier_id, supplier_name, material_id, material_name, source, payload";
   const marketplaceFilter = "payload->>site_type.in.(M,MS,A),payload->>supplier_role.eq.Marketplace";
   const eligible = (l: LeadRow) => Boolean(l.material_name && listingUrl(l.payload));
   const nowIso = new Date().toISOString();
@@ -280,15 +283,110 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   let flagged = 0;
   let pending = 0;
   let notMarketplace = 0;
+  let expanded = 0;
+  let sellersStaged = 0;
   let stoppedEarly = false;
 
-  const processOne = async (l: LeadRow): Promise<"pulled" | "flagged" | "pending" | "not_marketplace" | null> => {
+  // An aggregator index page is not a supplier: replace it with one lead per
+  // company actually listed on it, so every row a buyer sees links to a real
+  // seller instead of to Alibaba's search results. Returns how many were staged.
+  const expandIndexPage = async (l: LeadRow, indexUrl: string, sellers: { supplier_name: string; product_url: string; country: string | null; price: number | null; currency: string | null; pack_size: string | null; moq: string | null }[]): Promise<number> => {
+    const aggregator = aggregatorNameOf(indexUrl);
+    // Don't re-stage sellers already on file for this material (a re-read of the
+    // same index page, or a seller the scout found directly).
+    const urls = sellers.map((s) => s.product_url);
+    const { data: existing } = await admin
+      .from("leads_in_flight")
+      .select("payload")
+      .eq("org_id", l.org_id)
+      .eq("material_id", l.material_id)
+      .in("payload->>source_url", urls);
+    const taken = new Set((existing ?? []).map((r: any) => r.payload?.source_url).filter(Boolean));
+    const fresh = sellers.filter((s) => !taken.has(s.product_url));
+    if (fresh.length) {
+      const { error } = await admin.from("leads_in_flight").insert(
+        fresh.map((s) => ({
+          org_id: l.org_id,
+          supplier_name: s.supplier_name,
+          supplier_id: null,
+          material_name: l.material_name,
+          material_id: l.material_id,
+          stage: "raw" as const,
+          status: "active" as const,
+          source: l.source ?? "ai_discovery",
+          payload: {
+            inci_name: l.payload?.inci_name ?? null,
+            tenkara_org_id: l.payload?.tenkara_org_id ?? null,
+            supplier_website: s.product_url,
+            source_url: s.product_url,
+            supplier_country: s.country,
+            supplier_role: "Reseller",
+            site_type: "A",
+            // The index page's numbers are recorded as text only. The child's own
+            // price pull reads the seller's listing and publishes from there, so
+            // nothing here can become a published price.
+            pack_sizes_pricing: s.price != null ? `${s.price}${s.currency ? ` ${s.currency}` : ""}${s.pack_size ? ` / ${s.pack_size}` : ""}` : null,
+            moq: s.moq,
+            aggregator,
+            aggregator_index_url: indexUrl,
+            aggregator_parent_lead_id: l.id,
+            confidence_hint: "lead",
+            confidence_reason: "Low — unverified seller listed on an aggregator, needs human follow-up",
+            relevance_tier: "Potential",
+            scout_notes: `Listed on ${aggregator ?? "an aggregator"} under ${l.material_name ?? "this material"}.`,
+          },
+          confidence_score: 0.35,
+          agent_run_id: runId,
+        })),
+      );
+      if (error) {
+        await log(`Aggregator seller insert failed for ${l.id}: ${error.message}`, { level: "error", step: "mp_aggregator_split", data: { lead_id: l.id } });
+        return 0;
+      }
+    }
+    // Retire the umbrella row. Terminal (not "dropped") because no operator
+    // rejected it: it was never a supplier, and its sellers now stand in for it.
+    await admin
+      .from("leads_in_flight")
+      .update({
+        status: "terminal",
+        stage: "terminal",
+        drop_reason: "aggregator_index_page",
+        payload: {
+          ...(l.payload ?? {}),
+          site_type: "A",
+          drop_reason: "aggregator_index_page",
+          aggregator_split: {
+            at: new Date().toISOString(),
+            index_url: indexUrl,
+            sellers_found: sellers.length,
+            sellers_staged: fresh.length,
+          },
+        },
+      })
+      .eq("id", l.id);
+    await log(
+      `Aggregator index page split into ${fresh.length} seller lead${fresh.length === 1 ? "" : "s"} (${sellers.length} read${sellers.length - fresh.length ? `, ${sellers.length - fresh.length} already on file` : ""}): ${l.supplier_name} × ${l.material_name}`,
+      { step: "mp_aggregator_split", data: { lead_id: l.id, index_url: indexUrl, staged: fresh.length } },
+    );
+    return fresh.length;
+  };
+
+  const processOne = async (l: LeadRow): Promise<"pulled" | "flagged" | "pending" | "not_marketplace" | "expanded" | null> => {
     const url = listingUrl(l.payload)!;
     const priorPull = l.payload?.marketplace_pull ?? null;
     // A re-check is a lead we've already priced (status 'pulled'); a first pull
     // is anything else. Re-checks compare to a known baseline on a cheaper model.
     const isRecheck = priorPull?.status === "pulled";
     const priorPrice = isRecheck ? (typeof priorPull?.price === "number" ? priorPull.price : null) : null;
+    // Two shapes of "the platform is the lead", handled differently:
+    //  - platformAsSupplier: no real company on the row at all. Ask the reader to
+    //    enumerate the sellers on the page so we can replace it with one lead each.
+    //  - staleIndexUrl: a real company whose stored link points at a category
+    //    page. The normal read already searches out its own product page; we just
+    //    persist that repaired URL so the row stops linking to the category.
+    const platformAsSupplier = isAggregatorPlatformName(l.supplier_name, l.material_name);
+    const staleIndexUrl = !platformAsSupplier && isAggregatorIndexUrl(url);
     let result;
     const directoryHost = neverMarketplaceHostOf(url);
     if (directoryHost) {
@@ -301,6 +399,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         tiers: [] as any[], moq: null, lead_time: null, shipping: null,
         source_url: url, source_citations: [] as any[],
         notes: `${directoryHost} is a lead-source directory (no checkout) — used to find suppliers, never a marketplace price.`,
+        index_page: false, sellers: [] as any[],
       };
     } else {
     try {
@@ -311,12 +410,62 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         baseline_price: priorPrice,
         case_size: null,
         unit: null,
-        model: isRecheck ? RECHECK_MODEL : undefined,
+        // Enumerating sellers is a harder read than a price check, so an
+        // umbrella lead always goes to the full model even on a re-check.
+        model: isRecheck && !platformAsSupplier ? RECHECK_MODEL : undefined,
+        enumerate_sellers: platformAsSupplier,
       });
     } catch (e: any) {
-      result = { classification: "needs_review" as const, market_kind: (aggregatorNameOf(url) ? "aggregator" : "marketplace") as "marketplace" | "aggregator", aggregator: aggregatorNameOf(url), current_price: null, currency: null, pack_size: null, unit_price: null, tiers: [], moq: null, lead_time: null, shipping: null, source_url: url, source_citations: [], notes: `pull failed: ${e?.message ?? e}` };
+      result = { classification: "needs_review" as const, market_kind: (aggregatorNameOf(url) ? "aggregator" : "marketplace") as "marketplace" | "aggregator", aggregator: aggregatorNameOf(url), current_price: null, currency: null, pack_size: null, unit_price: null, tiers: [], moq: null, lead_time: null, shipping: null, source_url: url, source_citations: [], notes: `pull failed: ${e?.message ?? e}`, index_page: false, sellers: [] };
     }
     }
+
+    // Index page confirmed: split it into its sellers and retire the umbrella.
+    if (result.index_page && result.sellers.length > 0) {
+      sellersStaged += await expandIndexPage(l, url, result.sellers);
+      return "expanded";
+    }
+    // Nothing readable on it. The platform is not a company, so the row can
+    // never become a lead no matter what the page turned out to be. (Lead-source
+    // directories keep their own terminal branch below, which says so precisely.)
+    if (platformAsSupplier && !directoryHost) {
+      await admin
+        .from("leads_in_flight")
+        .update({
+          status: "terminal",
+          stage: "terminal",
+          drop_reason: "aggregator_index_page",
+          payload: {
+            ...(l.payload ?? {}),
+            site_type: "A",
+            drop_reason: "aggregator_index_page",
+            aggregator_split: { at: new Date().toISOString(), index_url: url, sellers_found: 0, sellers_staged: 0, notes: result.notes ?? null },
+          },
+        })
+        .eq("id", l.id);
+      await log(`Aggregator platform recorded as the supplier and no sellers were readable — retiring the row: ${l.supplier_name} × ${l.material_name}`, {
+        step: "mp_aggregator_split",
+        data: { lead_id: l.id, index_url: url, notes: result.notes ?? null },
+      });
+      return "expanded";
+    }
+
+    // The row links to whatever is in the payload, so a lead left pointing at a
+    // category page keeps showing "Alibaba search results" as its supplier link
+    // even after the reader found the company's own listing. Promote the page it
+    // actually read to be the lead's URL.
+    const repairedUrl =
+      staleIndexUrl && result.source_url && result.source_url !== url && !isAggregatorIndexUrl(result.source_url)
+        ? result.source_url
+        : null;
+    const withRepairedUrl = (payload: any): any => {
+      if (!repairedUrl) return payload;
+      const next = { ...payload, supplier_website: repairedUrl, source_url: repairedUrl, aggregator_index_url: url };
+      if (payload?.enrichment?.contact?.contact_url === url) {
+        next.enrichment = { ...payload.enrichment, contact: { ...payload.enrichment.contact, contact_url: repairedUrl } };
+      }
+      return next;
+    };
 
     // Currency safety net (runs BEFORE conversion below). Correct a wrong/blank
     // currency label so the conversion step actually fires, and quarantine prices
@@ -544,11 +693,11 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       const { error: upErr } = await admin
         .from("leads_in_flight")
         .update({
-          payload: {
+          payload: withRepairedUrl({
             ...(l.payload ?? {}),
             ...(aggregatorName ? { site_type: "A" } : {}),
             marketplace_pull: deferPull,
-          },
+          }),
         })
         .eq("id", l.id);
       if (upErr) {
@@ -595,7 +744,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     // never clobber tiers an operator already entered. A re-check (prior status
     // 'pulled') owns the ladder it wrote earlier, so it may refresh it; a lead
     // whose tiers came from an operator is left alone.
-    const nextPayload: any = { ...(l.payload ?? {}), marketplace_pull: pull };
+    const nextPayload: any = withRepairedUrl({ ...(l.payload ?? {}), marketplace_pull: pull });
     // site_type is what every reader classifies off (leadMarketKind), so move the
     // lead into the aggregator bucket here rather than only tagging the pull.
     if (aggregatorName) nextPayload.site_type = "A";
@@ -728,9 +877,10 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       if (o === "pulled") pulled++;
       else if (o === "pending") pending++;
       else if (o === "not_marketplace") notMarketplace++;
+      else if (o === "expanded") expanded++;
       else flagged++;
     }
   }
 
-  return { processed, pulled, flagged, pending, notMarketplace, stoppedEarly };
+  return { processed, pulled, flagged, pending, notMarketplace, expanded, sellersStaged, stoppedEarly };
 }

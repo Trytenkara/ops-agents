@@ -10,12 +10,33 @@ import { createQuoteProfile } from "@/app/actions/quote-profiles";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
 import { quoteCompleteness, type QuoteProfile } from "@/lib/quote-profiles";
+import { aggregatorNameOf } from "@/lib/aggregator-hosts";
+import { MARKET_KIND_LABEL, MARKET_KIND_TITLE, MARKET_KIND_VARIANT, type MarketKind } from "@/lib/lead-market";
 
 interface SupplierQuoteGroup {
   supplierName: string;
   supplierId: string | null;
   quotes: QuoteProfile[];
 }
+
+// A quote carries no market kind of its own, so read it off the listing it came
+// from (an aggregator host is decisive: the price is an indicative ask) and fall
+// back to the supplier's validated type.
+export type SupplierTypeMap = Record<string, MarketKind>;
+
+function quoteMarketKind(q: QuoteProfile, types: SupplierTypeMap): MarketKind | null {
+  if (aggregatorNameOf(q.source_url)) return "aggregator";
+  const byId = q.supplier_id ? types[`id:${q.supplier_id}`] : undefined;
+  return byId ?? types[`name:${q.supplier_name.toLowerCase()}`] ?? null;
+}
+
+const TYPE_FILTER: { value: string; label: string }[] = [
+  { value: "all", label: "All types" },
+  { value: "marketplace", label: MARKET_KIND_LABEL.marketplace },
+  { value: "aggregator", label: MARKET_KIND_LABEL.aggregator },
+  { value: "direct", label: MARKET_KIND_LABEL.direct },
+  { value: "unclassified", label: "Unclassified" },
+];
 
 const SORT_OPTIONS = [
   { value: "quotes", label: "Most quotes" },
@@ -37,17 +58,23 @@ export function QuoteValidationView({
   canAct,
   slug,
   orgId,
+  supplierTypes = {},
 }: {
   profiles: QuoteProfile[];
   canAct: boolean;
   slug: string;
   orgId: string;
+  supplierTypes?: SupplierTypeMap;
 }) {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("quotes");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
   const [expandedSupplier, setExpandedSupplier] = useState<string | null>(null);
   const [showAddQuote, setShowAddQuote] = useState(false);
+
+  const kindOf = (q: QuoteProfile): MarketKind | "unclassified" =>
+    quoteMarketKind(q, supplierTypes) ?? "unclassified";
 
   // Group quotes by supplier
   const groupMap = new Map<string, SupplierQuoteGroup>();
@@ -75,6 +102,22 @@ export function QuoteValidationView({
     groups = groups.map((g) => ({
       ...g,
       quotes: g.quotes.filter((q) => q.approval_status === statusFilter),
+    })).filter((g) => g.quotes.length > 0);
+  }
+
+  // Counts come off the pre-type set, so each option reads as "how many quotes
+  // would I get if I picked this" rather than shifting once a type is selected.
+  const typeCounts = { marketplace: 0, aggregator: 0, direct: 0, unclassified: 0 };
+  for (const g of groups) for (const q of g.quotes) typeCounts[kindOf(q)]++;
+  const typeOptions = TYPE_FILTER.map((o) =>
+    o.value === "all"
+      ? { ...o, label: `${o.label} (${groups.reduce((n, g) => n + g.quotes.length, 0)})` }
+      : { ...o, label: `${o.label} (${typeCounts[o.value as keyof typeof typeCounts]})` }
+  );
+  if (typeFilter !== "all") {
+    groups = groups.map((g) => ({
+      ...g,
+      quotes: g.quotes.filter((q) => kindOf(q) === typeFilter),
     })).filter((g) => g.quotes.length > 0);
   }
 
@@ -106,7 +149,7 @@ export function QuoteValidationView({
 
   // CSV export
   const csvHeaders = [
-    "Supplier", "Material", "Price", "Case Size", "Units", "Unit Price", "Currency",
+    "Supplier", "Type", "Material", "Price", "Case Size", "Units", "Unit Price", "Currency",
     "Case Type", "Case Width", "Case Height", "Case Length", "Case Weight",
     "Density", "Density Unit", "Density Source",
     "Quote Expiry", "Lead Time Days",
@@ -118,7 +161,7 @@ export function QuoteValidationView({
   const csvRows = profiles.map((q) => {
     const up = q.price != null && q.case_size && q.case_size > 0 ? (q.price / q.case_size).toFixed(4) : "";
     return [
-      q.supplier_name, q.material_name,
+      q.supplier_name, kindOf(q), q.material_name,
       q.price ?? "", q.case_size ?? "", q.unit_of_measurement ?? "", up, q.currency,
       q.case_type ?? "", q.case_width ?? "", q.case_height ?? "", q.case_length ?? "", q.case_weight ?? "",
       q.density ?? "", q.density != null ? (q.density_unit ?? "") : "", q.density_source ?? "",
@@ -163,6 +206,10 @@ export function QuoteValidationView({
             className="h-8 w-56"
           />
         </label>
+        <div className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Type</span>
+          <Select size="sm" className="min-w-[11rem]" ariaLabel="Quote type" value={typeFilter} onValueChange={setTypeFilter} options={typeOptions} />
+        </div>
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">Status</span>
           <Select size="sm" className="min-w-[10rem]" ariaLabel="Status" value={statusFilter} onValueChange={setStatusFilter} options={STATUS_FILTER} />
@@ -185,6 +232,8 @@ export function QuoteValidationView({
             ? Math.round(g.quotes.reduce((s, q) => s + quoteCompleteness(q).pct, 0) / g.quotes.length)
             : 0;
           const materials = g.quotes.map((q) => q.material_name);
+          const kinds = Array.from(new Set(g.quotes.map(kindOf))).filter((k): k is MarketKind => k !== "unclassified");
+          const aggregators = Array.from(new Set(g.quotes.map((q) => aggregatorNameOf(q.source_url)).filter(Boolean)));
           const statuses = { draft: 0, pending_review: 0, ready_for_submission: 0, submitted: 0 };
           for (const q of g.quotes) {
             if (q.approval_status in statuses) (statuses as any)[q.approval_status]++;
@@ -200,6 +249,13 @@ export function QuoteValidationView({
                 <div className="flex items-center gap-3 min-w-0">
                   <span className="text-xs text-muted-foreground">{isExpanded ? "v" : ">"}</span>
                   <span className="font-medium text-sm truncate">{g.supplierName}</span>
+                  {kinds.map((k) => (
+                    <Badge key={k} variant={MARKET_KIND_VARIANT[k]} title={MARKET_KIND_TITLE[k]}>
+                      {k === "aggregator" && aggregators.length === 1
+                        ? `${MARKET_KIND_LABEL.aggregator} · ${aggregators[0]}`
+                        : MARKET_KIND_LABEL[k]}
+                    </Badge>
+                  ))}
                   {/* Status summary badges */}
                   {statuses.ready_for_submission > 0 && <Badge variant="success">{statuses.ready_for_submission} ready</Badge>}
                   {statuses.pending_review > 0 && <Badge variant="warn">{statuses.pending_review} pending</Badge>}
