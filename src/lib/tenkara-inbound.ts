@@ -11,6 +11,8 @@ import { getTenkaraMessageAttachments, downloadTenkaraAttachment } from "@/lib/t
 import { parseAttachmentBytes, deriveExt, isPricingCandidateExt } from "@/agents-runtime/agents/email-scanner/attachment-parser";
 import { getTenkaraConversationMessages } from "@/lib/tenkara";
 import { postAgentAlert } from "@/lib/slack-alert";
+import { parseTaggedRecipient } from "@/lib/inquiry-reply-tag";
+import { isAggregatorEmail } from "@/agents-runtime/agents/data-enrichment/enrich";
 import { upsertSupplierProfile } from "@/lib/supplier-profiles";
 import { getClientShipTo } from "@/lib/tenkara-client-settings";
 import { resolveMaterialGradeSpecs } from "@/lib/tenkara-names";
@@ -75,7 +77,7 @@ const GENERIC_EMAIL_DOMAINS = new Set([
   "protonmail.com", "proton.me", "qq.com", "163.com", "126.com", "sina.com",
 ]);
 
-async function resolveInboundOrg(admin: Admin, msg: InboundMessage): Promise<{ orgId: string; accountKey: string } | null> {
+async function resolveInboundOrg(admin: Admin, msg: InboundMessage): Promise<{ orgId: string; accountKey: string; replyTag: string | null } | null> {
   let accountId = msg.email_account_id?.trim() || null;
   let toEmail = msg.to_email?.trim().toLowerCase() || null;
 
@@ -84,6 +86,14 @@ async function resolveInboundOrg(admin: Admin, msg: InboundMessage): Promise<{ o
     const inboundRecipient = [...messages].reverse().find((m) => m.to)?.to ?? null;
     toEmail = inboundRecipient?.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0]?.toLowerCase() ?? null;
   }
+
+  // An inquiry-form reply arrives at a tagged address. orgs.tenkara_email_address
+  // holds the plain inbox, so match on the base and carry the tag out for the
+  // per-inquiry match below; without stripping it, the ilike misses and a reply
+  // we deliberately routed here dead-letters as unassignable.
+  const { base, tag } = parseTaggedRecipient(toEmail);
+  const replyTag = tag;
+  toEmail = base;
 
   let accountRows: any[] = [];
   let addressRows: any[] = [];
@@ -103,11 +113,11 @@ async function resolveInboundOrg(admin: Admin, msg: InboundMessage): Promise<{ o
   if (accountOrg && addressOrg && accountOrg !== addressOrg) throw new Error("Tenkara account and recipient resolve to different clients");
   const orgId = accountOrg ?? addressOrg;
   if (!orgId) return null;
-  return { orgId, accountKey: accountId ?? toEmail! };
+  return { orgId, accountKey: accountId ?? toEmail!, replyTag };
 }
 
 export async function handleInboundReply(admin: Admin, msg: InboundMessage): Promise<InboundResult> {
-  let inboundOrg: { orgId: string; accountKey: string } | null = null;
+  let inboundOrg: { orgId: string; accountKey: string; replyTag: string | null } | null = null;
   try {
     inboundOrg = await resolveInboundOrg(admin, msg);
   } catch (error: any) {
@@ -122,7 +132,30 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   if (confirmed) return confirmed;
   // 1. Find the originating draft (the one our agent posted that this replies to).
   let ref: any = null;
-  if (msg.in_reply_to_draft_id) {
+
+  // A plus-tag is the strongest signal we have: we minted it for exactly one
+  // inquiry, so it identifies the outreach even when the seller replies from an
+  // address we have never seen and starts a brand-new thread (the normal case for
+  // a platform inquiry form, which is the only channel these sellers have).
+  let replyTagMatch = false;
+  if (inboundOrg?.replyTag) {
+    const { data: tagRef, error } = await admin
+      .from("draft_references")
+      .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata")
+      .eq("email_client", "rod_app")
+      .eq("org_id", inboundOrg.orgId)
+      .eq("metadata->>reply_tag", inboundOrg.replyTag)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) return { status: 503, body: { error: "reply_tag_match_failed", detail: error.message } };
+    if (tagRef) {
+      ref = tagRef;
+      replyTagMatch = true;
+    }
+  }
+
+  if (!ref && msg.in_reply_to_draft_id) {
     let lookup = admin
       .from("draft_references")
       .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata")
@@ -329,6 +362,8 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     // from the same gmail/personal address we emailed). Audit flag only.
     exact_address_match: exactAddressMatch || undefined,
     alias_address_match: aliasAddressMatch || undefined,
+    // Matched on the plus-tag we gave a platform inquiry form. Audit flag only.
+    reply_tag_match: replyTagMatch || undefined,
   };
   await admin
     .from("draft_references")
@@ -351,8 +386,9 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       .eq("id", leadId)
       .maybeSingle();
     leadRow = data;
-    const newPayload = {
-      ...((leadRow?.payload as any) ?? {}),
+    const leadPayload = (leadRow?.payload as any) ?? {};
+    const newPayload: Record<string, any> = {
+      ...leadPayload,
       supplier_reply: {
         replied_at: msg.received_at ?? new Date().toISOString(),
         reply_message_id: msg.message_id,
@@ -360,6 +396,17 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
         source: "tenkara_webhook",
       },
     };
+    // A seller we could only reach through a platform inquiry form has just told
+    // us its own address by replying. Capture it: from here the platform is only
+    // where we found this company, so the lead leaves the marketplace track and
+    // becomes an ordinary supplier for outreach (provenance fields stay put).
+    if (leadPayload.aggregator && !leadPayload.supplier_contact_email && !isAggregatorEmail(from.address)) {
+      newPayload.supplier_contact_email = from.address;
+      newPayload.site_type = "N";
+      newPayload.supplier_role = "Supplier";
+      newPayload.aggregator_direct_contact = true;
+      newPayload.needs_contact_resolution = false;
+    }
     await admin.from("leads_in_flight").update({ payload: newPayload }).eq("id", leadId);
   }
 
