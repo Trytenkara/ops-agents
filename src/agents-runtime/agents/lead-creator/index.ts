@@ -277,16 +277,18 @@ registerAgent({
 
     // 3b. Build Tenkara→OA org map (orgs.tenkara_org_id is the join key).
     //     Cached for the run so we make one round-trip total.
-    const { data: orgRows } = await admin.from("orgs").select("id, tenkara_org_id, name, sourcing_status");
+    const { data: orgRows } = await admin.from("orgs").select("id, tenkara_org_id, name, sourcing_status, is_internal");
     const tenkaraOrgToOaOrg = new Map<string, string>();
+    const isInternalByOaId = new Map<string, boolean>();
     // Discovery is allowed for orgs whose sourcing_status is 'active' or 'sourcing_only'
     // (see lib/org-status.ts). ONLY_ORG, if still set, is an AND-override during rollout.
     const sourcingTenkaraOrgIds = new Set<string>();
     const sourcingNames: string[] = [];
     const only = new Set(onlyOrgNames());
-    for (const r of (orgRows ?? []) as { id: string; tenkara_org_id: string | null; name: string; sourcing_status: string | null }[]) {
+    for (const r of (orgRows ?? []) as { id: string; tenkara_org_id: string | null; name: string; sourcing_status: string | null; is_internal: boolean | null }[]) {
       if (!r.tenkara_org_id) continue;
       tenkaraOrgToOaOrg.set(r.tenkara_org_id, r.id);
+      isInternalByOaId.set(r.id, !!r.is_internal);
       let status = normalizeStatus(r.sourcing_status);
       if (only.size && !only.has(r.name)) status = "off";
       if (sourcingAllowed(status)) {
@@ -1017,6 +1019,7 @@ registerAgent({
           excludedCountries: ex ? Array.from(ex.excludedCountries) : [],
           size: SOURCEREADY_PAGE_SIZE,
           page: srPage,
+          unlockContacts: oaOrgId ? !isInternalByOaId.get(oaOrgId) : false,
         });
         if (ok) {
           sourceReadyFired++;

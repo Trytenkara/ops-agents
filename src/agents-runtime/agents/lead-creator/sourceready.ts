@@ -31,6 +31,12 @@ export interface SourceReadyRequest {
   excludedCountries: string[]; // client-configured country names (best-effort)
   size?: number;
   page?: number; // 1-based; each pass advances so repeated fires walk deeper
+  // Pay to unmask supplier contacts on this fire. SourceReady bills a
+  // view_supplier_contact credit per newly unlocked supplier, so this is on for
+  // real clients only: their leads land with an address already attached, which
+  // short-circuits the Agent 06 contact waterfall (crawl + Hunter/ZoomInfo/etc)
+  // at its stage-0 seed. Internal test orgs keep crawling for free.
+  unlockContacts?: boolean;
 }
 
 // POST a signed discovery request. Resolves to true on a 2xx acceptance.

@@ -176,7 +176,7 @@ export interface ContactDiscovery {
   phone: string | null;        // best discovered/known phone
   contact_url: string | null;  // contact page / quote-form URL used as a channel
   pages_tried: number;         // how many pages we actually fetched
-  source: "scout" | "discovered" | "path" | "tenkara" | "hunter" | "leadmagic" | "zoominfo" | "getprospect" | null;
+  source: "scout" | "sourceready" | "discovered" | "path" | "tenkara" | "hunter" | "leadmagic" | "zoominfo" | "getprospect" | null;
   poc_name?: string | null;
   poc_title?: string | null;
 }
@@ -903,7 +903,11 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   let phone: string | null =
     (scoutPhone && !isContactPath(scoutPhone) ? scoutPhone : null) ?? tenkara_supplier?.poc_phone ?? null;
   let contactUrl: string | null = isContactPath(scoutEmail) ? null : null;
-  let contactSource: ContactDiscovery["source"] = email ? "scout" : null;
+  // A SourceReady unlock is a paid contact, not a scout find; label it so the
+  // provider mix in the cost report stays honest.
+  let contactSource: ContactDiscovery["source"] = email
+    ? (payload.email_source === "sourceready_unlock" ? "sourceready" : "scout")
+    : null;
   let pagesTried = 0;
   // Listing HTML fetched during contact discovery, reused for marketplace-trust
   // signal detection (Send Inquiry / price range) with no extra network call.
