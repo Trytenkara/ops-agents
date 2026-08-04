@@ -13,7 +13,7 @@
 export type RateConfidence = "reported" | "estimated" | "placeholder";
 
 export interface ProviderRate {
-  key: "importyeti" | "sourceready" | "browserbase";
+  key: "importyeti" | "sourceready" | "browserbase" | "hunter" | "leadmagic" | "zoominfo" | "getprospect";
   label: string;
   unitLabel: string; // what one billable unit is, e.g. "search", "session"
   // Effective estimated dollar cost per billable unit.
@@ -59,7 +59,56 @@ export const API_COST_RATES: Record<ProviderRate["key"], ProviderRate> = {
     source: "browserbase.com/pricing",
     reviewedOn: "2026-07-29",
   },
+  hunter: {
+    key: "hunter",
+    label: "Hunter.io",
+    unitLabel: "email revealed",
+    usdPerUnit: 0.0245,
+    confidence: "estimated",
+    assumption:
+      "All-in-one plans bill 1 credit per email REVEALED by Domain Search, not per search — a search that reveals nothing is free, and a repeat search on the same domain inside a billing period is free. We reveal up to HUNTER_MAX_EMAILS_PER_DOMAIN (default 3) per domain. $0.0245 = Starter $49/mo ÷ 2,000 credits; on the Free plan the true marginal cost is $0.",
+    source: "help.hunter.io/en/articles/1911617 (credit table), hunter.io/pricing",
+    reviewedOn: "2026-08-04",
+  },
+  zoominfo: {
+    key: "zoominfo",
+    label: "ZoomInfo",
+    unitLabel: "contact enriched",
+    usdPerUnit: 1.0,
+    confidence: "placeholder",
+    assumption:
+      "Contact Search is free; Enrich bills 1 credit per person returned (NO_MATCH is not charged). ZoomInfo does not publish per-credit pricing and the contract rate is not recorded here — $1.00 is a PLACEHOLDER. Replace it with the real contract number before treating this column as spend.",
+    source: "ZoomInfo GTM Data API; contract rate not public",
+    reviewedOn: "2026-08-04",
+  },
+  getprospect: {
+    key: "getprospect",
+    label: "GetProspect",
+    unitLabel: "email found",
+    usdPerUnit: 0,
+    confidence: "estimated",
+    assumption:
+      "Account is on the free monthly quota with no overage path, so the marginal cost of a lookup is $0 — the real constraint is the quota, not the bill. Units count emails the finder actually returned; misses are free.",
+    source: "getprospect.com plan (free tier)",
+    reviewedOn: "2026-08-04",
+  },
+  leadmagic: {
+    key: "leadmagic",
+    label: "LeadMagic",
+    unitLabel: "credit",
+    usdPerUnit: 0.007,
+    confidence: "estimated",
+    assumption:
+      "Pay-per-result: 2 credits on a Role Finder hit, 1 on a valid Email Finder result, free on a miss. ~$0.007/credit. DORMANT — no LEADMAGIC_API_KEY is configured, so this row should read zero.",
+    source: "leadmagic.io pricing (Basic $49.99/mo)",
+    reviewedOn: "2026-08-04",
+  },
 };
+
+// The paid contact-enrichment waterfall, in the order enrich.ts tries them.
+// Kept separate from the discovery providers because their units are journaled
+// per call into agent_run_events rather than derived from lead rows.
+export const CONTACT_PROVIDER_KEYS = ["hunter", "leadmagic", "zoominfo", "getprospect"] as const;
 
 // Other paid services this system uses that are NOT per-call metered in this app.
 // Listed for transparency; no dollar figure is computed here (we would have to

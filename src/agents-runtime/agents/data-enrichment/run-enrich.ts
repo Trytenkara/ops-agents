@@ -1,4 +1,5 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
+import { drainContactApiCalls } from "@/lib/contact-provider-usage";
 import { enrichLead, isAggregatorEmail, type RawLead } from "./enrich";
 
 // Per-lead enrichment: run enrichLead(), merge the result into the lead payload,
@@ -16,6 +17,46 @@ export interface EnrichOutcome {
   completeness?: number;
 }
 
+// Persist the paid-contact-provider calls this lead made. This is the only
+// durable record that a provider was reached at all: a quota-exhausted provider
+// returns the same null as a genuine miss, so without these rows an exhausted
+// Hunter just looks like a Hunter that never finds anything, while spend
+// quietly reroutes to ZoomInfo. Also the input to Settings > "API usage & cost".
+//
+// Best-effort: a failed insert is logged and dropped. Usage bookkeeping must
+// never fail a lead that enriched fine.
+async function flushContactApiCalls(
+  admin: Admin,
+  runId: string,
+  leadId: string,
+  log: (msg: string, meta?: any) => Promise<void> | void
+): Promise<void> {
+  const calls = drainContactApiCalls();
+  if (!calls.length) return;
+
+  const rows = calls.map((c) => ({
+    run_id: runId,
+    level: c.outcome === "hit" || c.outcome === "miss" ? "info" : "warn",
+    step: c.provider,
+    message: `${c.provider} ${c.outcome}${c.units ? ` (${c.units} billable)` : ""}${c.detail ? ` — ${c.detail}` : ""}`,
+    data: { outcome: c.outcome, units: c.units, domain: c.domain, lead_id: leadId },
+  }));
+
+  const { error } = await admin.from("agent_run_events").insert(rows);
+  if (error) await log(`Contact-provider usage log failed: ${error.message}`, { step: "usage", data: { lead_id: leadId } });
+
+  // A quota wall is the one outcome that changes what the fleet should do next,
+  // so surface it in the run log rather than leaving it buried in the events table.
+  for (const c of calls) {
+    if (c.outcome === "quota" || c.outcome === "auth") {
+      await log(`${c.provider} ${c.outcome === "quota" ? "quota exhausted" : "auth rejected"} — lookups are now falling through to the next provider`, {
+        step: c.provider,
+        data: { lead_id: leadId, detail: c.detail },
+      });
+    }
+  }
+}
+
 export async function enrichAndStageLead(
   lead: RawLead,
   deps: { admin: Admin; runId: string; log?: (msg: string, meta?: any) => Promise<void> | void }
@@ -29,6 +70,8 @@ export async function enrichAndStageLead(
     result = await enrichLead(lead);
   } catch (e: any) {
     await log(`Enrichment threw for lead ${lead.id}: ${e?.message ?? e}`, { step: "enrich", data: { lead_id: lead.id } });
+    // A throw mid-waterfall may still have spent provider credits.
+    await flushContactApiCalls(admin, runId, lead.id, log);
     // Stamp before bailing: a throw still consumed an attempt, and an unstamped
     // lead sorts first forever.
     const { data, error: stampErr } = await admin
@@ -46,6 +89,8 @@ export async function enrichAndStageLead(
     if (!stampErr && !data?.length) return { status: "superseded" };
     return { status: "error", reason: e?.message ?? "threw" };
   }
+
+  await flushContactApiCalls(admin, runId, lead.id, log);
 
   // Never let a rejected marketplace address (e.g. concierge@knowde.com) survive
   // as the outreach email via the raw-scout fallback below.

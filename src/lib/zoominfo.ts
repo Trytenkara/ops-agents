@@ -5,9 +5,12 @@
 // phone. Used as a FALLBACK when web-scraping + Tenkara found no direct email.
 //
 // Soft dependency: every failure path returns null. ZoomInfo being down, out of
-// credits, or misconfigured must NEVER block enrichment or outreach.
+// credits, or misconfigured must NEVER block enrichment or outreach. Every call
+// is journaled to contact-provider-usage so a soft failure is not a silent one.
 
-const BASE = (process.env.ZOOMINFO_API_BASE ?? "https://api.zoominfo.com/gtm").replace(/\/+$/, "");
+import { recordContactApiCall } from "@/lib/contact-provider-usage";
+
+const BASE =(process.env.ZOOMINFO_API_BASE ?? "https://api.zoominfo.com/gtm").replace(/\/+$/, "");
 const CLIENT_ID = process.env.ZOOMINFO_CLIENT_ID ?? "";
 const CLIENT_SECRET = process.env.ZOOMINFO_CLIENT_SECRET ?? "";
 
@@ -28,6 +31,18 @@ export interface ZoomInfoContact {
 
 export function isZoomInfoConfigured(): boolean {
   return !!(CLIENT_ID && CLIENT_SECRET);
+}
+
+// Only used to label journal entries — ZoomInfo itself is searched by company name.
+function domainOf(website: string | null): string | null {
+  if (!website) return null;
+  try {
+    return new URL(website.startsWith("http") ? website : `https://${website}`).hostname
+      .replace(/^www\./i, "")
+      .toLowerCase();
+  } catch {
+    return null;
+  }
 }
 
 // Module-level token cache. expiresAt is epoch ms; refresh ~60s early.
@@ -74,7 +89,7 @@ async function getToken(): Promise<string | null> {
   return inFlight;
 }
 
-async function ziFetch(path: string, token: string, body: unknown): Promise<any | null> {
+async function ziFetch(path: string, token: string, body: unknown, domain: string | null): Promise<any | null> {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), TIMEOUT_MS);
   try {
@@ -84,9 +99,17 @@ async function ziFetch(path: string, token: string, body: unknown): Promise<any 
       headers: { authorization: `Bearer ${token}`, "content-type": JSONAPI, accept: JSONAPI },
       body: JSON.stringify(body),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      // 429 here is the contract allowance, which ZoomInfo enforces per-account
+      // and does not refill until the term resets.
+      const outcome = res.status === 429 ? "quota" : res.status === 401 || res.status === 403 ? "auth" : "error";
+      recordContactApiCall({ provider: "zoominfo", outcome, units: 0, domain, detail: `HTTP ${res.status} on ${path.split("?")[0]}` });
+      return null;
+    }
     return await res.json();
-  } catch {
+  } catch (e: any) {
+    const timedOut = e?.name === "AbortError";
+    recordContactApiCall({ provider: "zoominfo", outcome: "error", units: 0, domain, detail: timedOut ? `timeout after ${TIMEOUT_MS}ms` : String(e?.message ?? e) });
     return null;
   } finally {
     clearTimeout(t);
@@ -151,17 +174,26 @@ export async function enrichContactsViaZoomInfo(
   const company = (input.companyName ?? "").trim();
   if (!company) return [];
 
+  const domain = domainOf(input.website);
+
   const token = await getToken();
-  if (!token) return [];
+  if (!token) {
+    recordContactApiCall({ provider: "zoominfo", outcome: "auth", units: 0, domain, detail: "OAuth token request failed" });
+    return [];
+  }
 
   // Step 1 — Search (free). Only contacts that have an email, best accuracy first.
   const search = await ziFetch(
     "/data/v1/contacts/search?page%5Bnumber%5D=1&page%5Bsize%5D=5&sort=-contactAccuracyScore",
     token,
-    { data: { type: "ContactSearch", attributes: { companyName: company, requiredFields: "email" } } }
+    { data: { type: "ContactSearch", attributes: { companyName: company, requiredFields: "email" } } },
+    domain
   );
   const candidates: any[] = Array.isArray(search?.data) ? search.data : [];
-  if (!candidates.length) return [];
+  if (!candidates.length) {
+    if (search) recordContactApiCall({ provider: "zoominfo", outcome: "miss", units: 0, domain, detail: "no search candidates" });
+    return [];
+  }
 
   // Keep the highest-accuracy candidates whose company actually matches ours.
   const personIds = candidates
@@ -169,13 +201,24 @@ export async function enrichContactsViaZoomInfo(
     .map((c) => (c?.id ? String(c.id) : null))
     .filter((id): id is string => !!id)
     .slice(0, max);
-  if (!personIds.length) return [];
+  if (!personIds.length) {
+    recordContactApiCall({ provider: "zoominfo", outcome: "miss", units: 0, domain, detail: "no candidate matched the company" });
+    return [];
+  }
 
   // Step 2 — Enrich the matched people in one call (one credit each).
-  const enrich = await ziFetch("/data/v1/contacts/enrich", token, {
-    data: { type: "ContactEnrich", attributes: { matchPersonInput: personIds.map((personId) => ({ personId })), outputFields: OUTPUT_FIELDS } },
-  });
+  const enrich = await ziFetch(
+    "/data/v1/contacts/enrich",
+    token,
+    { data: { type: "ContactEnrich", attributes: { matchPersonInput: personIds.map((personId) => ({ personId })), outputFields: OUTPUT_FIELDS } } },
+    domain
+  );
   const recs: any[] = Array.isArray(enrich?.data) ? enrich.data : [];
+  if (enrich) {
+    // Billed per person enriched; NO_MATCH records are not charged.
+    const billed = recs.filter((r) => r?.meta?.matchStatus !== "NO_MATCH").length;
+    recordContactApiCall({ provider: "zoominfo", outcome: billed ? "hit" : "miss", units: billed, domain });
+  }
   const out: ZoomInfoContact[] = [];
   const seen = new Set<string>();
   for (const rec of recs) {

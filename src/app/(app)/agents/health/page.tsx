@@ -9,6 +9,7 @@ import { compareAgentsBySlug } from "@/lib/agents-sort";
 import { HaltAllAgents } from "@/components/halt-all-agents";
 import { getApiUsage } from "@/lib/api-usage";
 import { formatUsd, UNMETERED_SERVICES } from "@/lib/api-cost-rates";
+import { fetchHunterAccount, isHunterConfigured } from "@/lib/hunter";
 
 export const dynamic = "force-dynamic";
 
@@ -30,8 +31,19 @@ export default async function SystemHealthPage() {
   const totalEstCost30d = apiUsage.reduce((sum, u) => sum + (u.estCost30d ?? 0), 0);
   const totalEstCostAll = apiUsage.reduce((sum, u) => sum + u.estCostAll, 0);
 
+  // Hunter's remaining allowance, live. An exhausted plan is not an outage —
+  // the waterfall keeps working by falling through to ZoomInfo, which is the
+  // expensive one — so it has to be visible here or nobody finds out.
+  const hunter = await fetchHunterAccount();
+  const hunterNote = !isHunterConfigured()
+    ? "missing HUNTER_API_KEY"
+    : !hunter
+    ? "configured (balance unavailable)"
+    : `${hunter.planName} — ${hunter.remaining.toLocaleString()} of ${hunter.available.toLocaleString()} credits left${hunter.resetDate ? `, resets ${hunter.resetDate}` : ""}`;
+
   const checks = [
     { name: "Supabase (OA DB)", ok: true, note: "connected (this page loaded)" },
+    { name: "Hunter.io credits", ok: !!hunter && hunter.remaining > 0, note: hunterNote },
     { name: "Slack bot token", ok: !!process.env.SLACK_BOT_TOKEN, note: process.env.SLACK_BOT_TOKEN ? "configured" : "missing" },
     { name: "Slack escalation channel", ok: !!process.env.SLACK_ESCALATION_CHANNEL_ID, note: process.env.SLACK_ESCALATION_CHANNEL_ID ?? "unset" },
     { name: "Service role key", ok: !!process.env.SUPABASE_SERVICE_ROLE_KEY, note: process.env.SUPABASE_SERVICE_ROLE_KEY ? "configured" : "missing" },

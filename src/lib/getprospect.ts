@@ -1,3 +1,5 @@
+import { recordContactApiCall } from "@/lib/contact-provider-usage";
+
 const BASE = "https://api.getprospect.com";
 const API_KEY = (globalThis as any).process?.env?.GETPROSPECT_API_KEY ?? "";
 const TIMEOUT_MS = 9_000;
@@ -24,7 +26,7 @@ function domainOf(website: string | null): string | null {
   }
 }
 
-async function gpRequest(path: string, options: RequestInit): Promise<any | null> {
+async function gpRequest(path: string, options: RequestInit, domain: string | null): Promise<any | null> {
   const allowed =
     (path.startsWith("/public/v1/insights/contacts?") && options.method === "POST") ||
     (path.startsWith("/v2/email-finder?") && options.method === "GET");
@@ -42,9 +44,17 @@ async function gpRequest(path: string, options: RequestInit): Promise<any | null
         ...(options.headers ?? {}),
       },
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      // The account has a hard monthly quota with no overage path, so a 429 here
+      // means dead until the reset, not "retry in a second".
+      const outcome = response.status === 429 ? "quota" : response.status === 401 || response.status === 403 ? "auth" : "error";
+      recordContactApiCall({ provider: "getprospect", outcome, units: 0, domain, detail: `HTTP ${response.status} on ${path.split("?")[0]}` });
+      return null;
+    }
     return await response.json();
-  } catch {
+  } catch (e: any) {
+    const timedOut = e?.name === "AbortError";
+    recordContactApiCall({ provider: "getprospect", outcome: "error", units: 0, domain, detail: timedOut ? `timeout after ${TIMEOUT_MS}ms` : String(e?.message ?? e) });
     return null;
   } finally {
     clearTimeout(timer);
@@ -73,18 +83,24 @@ export async function enrichContactViaGetProspect(input: {
   const searchBody = domain
     ? { domain: { included: [domain], excluded: [] }, email: "all_contacts" }
     : { companyName: { included: [companyName], excluded: [] }, email: "all_contacts" };
-  const search = await gpRequest("/public/v1/insights/contacts?pageSize=10&pageNumber=1", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(searchBody),
-  });
+  const search = await gpRequest(
+    "/public/v1/insights/contacts?pageSize=10&pageNumber=1",
+    { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(searchBody) },
+    domain
+  );
   const candidates: any[] = Array.isArray(search?.data) ? search.data : [];
-  if (!candidates.length) return null;
+  if (!candidates.length) {
+    if (search) recordContactApiCall({ provider: "getprospect", outcome: "miss", units: 0, domain, detail: "no search candidates" });
+    return null;
+  }
 
   const candidate = [...candidates]
     .filter((row) => row?.firstName && row?.lastName)
     .sort((a, b) => candidateScore(b) - candidateScore(a))[0];
-  if (!candidate) return null;
+  if (!candidate) {
+    recordContactApiCall({ provider: "getprospect", outcome: "miss", units: 0, domain, detail: "no named candidate" });
+    return null;
+  }
 
   const contactName = `${candidate.firstName} ${candidate.lastName}`.trim();
   const finderDomain = domain || candidate?.companies?.[0]?.company?.domain || null;
@@ -95,9 +111,13 @@ export async function enrichContactViaGetProspect(input: {
     full_name: contactName,
     api_key: API_KEY,
   });
-  const found = await gpRequest(`/v2/email-finder?${query.toString()}`, { method: "GET" });
+  const found = await gpRequest(`/v2/email-finder?${query.toString()}`, { method: "GET" }, domain);
   const email = String(found?.email ?? found?.data?.email ?? "").trim().toLowerCase();
-  if (!email.includes("@")) return null;
+  if (!email.includes("@")) {
+    if (found) recordContactApiCall({ provider: "getprospect", outcome: "miss", units: 0, domain, detail: "email-finder returned no address" });
+    return null;
+  }
+  recordContactApiCall({ provider: "getprospect", outcome: "hit", units: 1, domain });
 
   return {
     email,
