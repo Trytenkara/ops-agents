@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { SearchSuggest, type SearchOption } from "@/components/ui/search-suggest";
 import { Button } from "@/components/ui/button";
 import { QuoteProfileCard } from "@/components/quote-profile-card";
 import { createQuoteProfile } from "@/app/actions/quote-profiles";
@@ -88,6 +89,11 @@ export function QuoteValidationView({
     }
     group.quotes.push(q);
   }
+
+  const searchOptions: SearchOption[] = [
+    ...Array.from(groupMap.values()).map((g) => ({ value: g.supplierName, group: "Suppliers" })),
+    ...profiles.map((q) => ({ value: q.material_name ?? "", group: "Materials" })),
+  ];
 
   let groups = Array.from(groupMap.values());
 
@@ -200,16 +206,17 @@ export function QuoteValidationView({
 
       {/* Filters */}
       <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">Search</span>
-          <Input
-            type="text"
+          <SearchSuggest
+            className="w-56"
+            ariaLabel="Search suppliers and materials"
             placeholder="supplier, material..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="h-8 w-56"
+            onValueChange={setSearch}
+            options={searchOptions}
           />
-        </label>
+        </div>
         <div className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">Type</span>
           <Select size="sm" className="min-w-[11rem]" ariaLabel="Quote type" value={typeFilter} onValueChange={setTypeFilter} options={typeOptions} />

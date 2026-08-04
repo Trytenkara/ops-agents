@@ -380,6 +380,9 @@ export function tenkaraEmailAccountIdFor(input: {
 }
 
 export interface TenkaraMessage {
+  // Tenkara's own record of which side sent the message. Authoritative: it does
+  // not depend on us knowing every inbox address we have ever sent from.
+  is_outbound: boolean | null;
   from_email: string | null;
   from_name: string | null;
   to: string | null;
@@ -410,6 +413,7 @@ export async function getTenkaraConversationDetails(conversationId: string): Pro
     if (!res.ok) return { found: false, emailAccountId: null, hasActiveDraft: false, messages: [] };
     const data = await res.json();
     const messages = (Array.isArray(data?.messages) ? data.messages : []).map((m: any) => ({
+      is_outbound: typeof m.is_outbound === "boolean" ? m.is_outbound : null,
       from_email: m.from_email ?? null,
       from_name: m.from_name ?? null,
       to: m.to ?? null,

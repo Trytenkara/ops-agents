@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { SearchSuggest, type SearchOption } from "@/components/ui/search-suggest";
 import { Button } from "@/components/ui/button";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { SupplierProfileCard } from "@/components/supplier-profile-card";
@@ -172,13 +173,18 @@ export function SupplierLeadsView({
     else unlinkedAccounts.push(a);
   }
 
+  const searchOptions: SearchOption[] = [
+    ...allGroups.map((g) => ({ value: g.supplierName, group: "Suppliers" })),
+    ...rows.map((l: any) => ({ value: l.material_name ?? "", group: "Materials" })),
+  ];
+
   let groups = allGroups;
 
   // Filters
   if (search) {
     const q = search.toLowerCase();
     groups = groups.filter((g) => {
-      const hay = `${g.supplierName} ${g.profile?.poc_email ?? ""} ${g.profile?.poc_name ?? ""} ${g.leads.map((l: any) => l.material_name ?? "").join(" ")}`.toLowerCase();
+      const hay = `${g.supplierName} ${g.leads.map((l: any) => l.material_name ?? "").join(" ")}`.toLowerCase();
       return hay.includes(q);
     });
   }
@@ -310,16 +316,17 @@ export function SupplierLeadsView({
 
       {/* Filters */}
       <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">Search</span>
-          <Input
-            type="text"
-            placeholder="supplier, material, email..."
+          <SearchSuggest
+            className="w-56"
+            ariaLabel="Search suppliers and materials"
+            placeholder="supplier, material..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="h-8 w-56"
+            onValueChange={setSearch}
+            options={searchOptions}
           />
-        </label>
+        </div>
         <div className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">Type</span>
           <Select

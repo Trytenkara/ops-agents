@@ -26,10 +26,11 @@ import Anthropic from "@anthropic-ai/sdk";
 const STALE_DAYS = 21;
 // How far back to consider a thread worth refreshing context for.
 const LOOKBACK_DAYS = 90;
-// Each thread costs one Tenkara API call, so cap the fan-out per run. Threads are
-// walked best-first (see rankThreads), so the cap drops cold unsent drafts, which
-// are the ones that would have yielded nothing anyway.
-const MAX_CONVERSATIONS = 200;
+// Each thread costs one Tenkara API call (~1.4s serially), so reads run in a
+// small pool and the fan-out is capped. Threads are walked best-first (see
+// rankThreads), so the cap drops the coldest unsent drafts first.
+const MAX_CONVERSATIONS = 700;
+const READ_CONCURRENCY = 6;
 // Cap LLM summaries so a big inbox can't blow the run budget. Threads beyond
 // this still get a heuristic summary from the latest message body.
 const MAX_LLM_SUMMARIES = 40;
@@ -145,9 +146,10 @@ registerAgent({
   async run(ctx) {
     const admin = createAdminClient();
 
-    // 1. Our own inbox addresses, so a message can be classified by sender.
-    //    Anything not from us is the supplier, which handles the common case of a
-    //    colleague replying from an address we never wrote to.
+    // 1. Our own inbox addresses. Only a fallback: Tenkara stamps every message
+    //    with is_outbound, which is the signal we trust. Most orgs have no
+    //    tenkara_email_address on record, and treating their sent mail as inbound
+    //    would fabricate a reply and push Agent 02 into follow-up mode.
     const { data: orgRows, error: orgErr } = await admin
       .from("orgs")
       .select("id, name, is_internal, tenkara_org_id, tenkara_email_address");
@@ -170,13 +172,10 @@ registerAgent({
       if (addr) ourAddresses.add(parseTaggedRecipient(addr).base ?? addr);
     }
     if (ourAddresses.size === 0) {
-      await ctx.log("No org has a Tenkara inbox address — cannot tell inbound from outbound.", {
-        level: "error",
+      await ctx.log("No org has a Tenkara inbox address; relying on Tenkara's is_outbound flag alone.", {
+        level: "warn",
         step: "orgs",
       });
-      ctx.setStatus("failure");
-      ctx.setSummary("No Tenkara inbox addresses configured.");
-      return;
     }
 
     // 2. Every Tenkara thread we have staged a draft into, most recent first.
@@ -272,61 +271,68 @@ registerAgent({
     const accum = new Map<string, Accum>();
     let threadMisses = 0;
     let emptyThreads = 0;
-    for (const t of budgeted) {
-      const details = await getTenkaraConversationDetails(t.thread_id);
-      if (!details.found) {
-        threadMisses++;
-        continue;
-      }
+    for (let i = 0; i < budgeted.length; i += READ_CONCURRENCY) {
+      const chunk = budgeted.slice(i, i + READ_CONCURRENCY);
+      const fetched = await Promise.all(chunk.map((t) => getTenkaraConversationDetails(t.thread_id)));
+      for (let k = 0; k < chunk.length; k++) {
+        const t = chunk[k];
+        const details = fetched[k];
+        if (!details.found) {
+          threadMisses++;
+          continue;
+        }
 
-      const usable = details.messages
-        .map((m) => {
-          if (!m.sent_at) return null;
-          const at = Date.parse(m.sent_at);
-          if (Number.isNaN(at)) return null;
-          const text = messageText(m);
-          if (!text) return null;
-          const sender = parseTaggedRecipient(lc(m.from_email)).base ?? lc(m.from_email);
-          return { at, text, inbound: !ourAddresses.has(sender) };
-        })
-        .filter((m): m is { at: number; text: string; inbound: boolean } => m !== null);
+        const usable = details.messages
+          .map((m) => {
+            if (!m.sent_at) return null;
+            const at = Date.parse(m.sent_at);
+            if (Number.isNaN(at)) return null;
+            const text = messageText(m);
+            if (!text) return null;
+            const sender = parseTaggedRecipient(lc(m.from_email)).base ?? lc(m.from_email);
+            const inbound =
+              m.is_outbound === null ? !ourAddresses.has(sender) : !m.is_outbound;
+            return { at, text, inbound };
+          })
+          .filter((m): m is { at: number; text: string; inbound: boolean } => m !== null);
 
-      // Staged but never sent. No conversation happened, so record nothing.
-      if (usable.length === 0) {
-        emptyThreads++;
-        continue;
-      }
+        // Staged but never sent. No conversation happened, so record nothing.
+        if (usable.length === 0) {
+          emptyThreads++;
+          continue;
+        }
 
-      let a = accum.get(t.supplier_email);
-      if (!a) {
-        a = {
-          supplier_email: t.supplier_email,
-          supplier_name: t.supplier_name,
-          supplier_id: t.supplier_id,
-          org_id: t.org_id,
-          lastOutboundAt: null,
-          lastInboundAt: null,
-          messageCount: 0,
-          latestConversationId: t.thread_id,
-          latestInbound: null,
-          latestOutbound: null,
-          transcript: [],
-        };
-        accum.set(t.supplier_email, a);
-      }
+        let a = accum.get(t.supplier_email);
+        if (!a) {
+          a = {
+            supplier_email: t.supplier_email,
+            supplier_name: t.supplier_name,
+            supplier_id: t.supplier_id,
+            org_id: t.org_id,
+            lastOutboundAt: null,
+            lastInboundAt: null,
+            messageCount: 0,
+            latestConversationId: t.thread_id,
+            latestInbound: null,
+            latestOutbound: null,
+            transcript: [],
+          };
+          accum.set(t.supplier_email, a);
+        }
 
-      for (const m of usable) {
-        a.messageCount += 1;
-        a.transcript.push({ who: m.inbound ? "them" : "us", at: m.at, text: m.text });
-        if (m.inbound) {
-          if (!a.lastInboundAt || m.at > a.lastInboundAt) {
-            a.lastInboundAt = m.at;
-            a.latestInbound = m.text;
-            a.latestConversationId = t.thread_id;
+        for (const m of usable) {
+          a.messageCount += 1;
+          a.transcript.push({ who: m.inbound ? "them" : "us", at: m.at, text: m.text });
+          if (m.inbound) {
+            if (!a.lastInboundAt || m.at > a.lastInboundAt) {
+              a.lastInboundAt = m.at;
+              a.latestInbound = m.text;
+              a.latestConversationId = t.thread_id;
+            }
+          } else if (!a.lastOutboundAt || m.at > a.lastOutboundAt) {
+            a.lastOutboundAt = m.at;
+            a.latestOutbound = m.text;
           }
-        } else if (!a.lastOutboundAt || m.at > a.lastOutboundAt) {
-          a.lastOutboundAt = m.at;
-          a.latestOutbound = m.text;
         }
       }
     }
