@@ -1,4 +1,6 @@
+import crypto from "crypto";
 import type { createAdminClient } from "@/lib/supabase/admin";
+import { uploadBinaryFile } from "@/lib/storage";
 
 // Capture of qualification documents a supplier emailed (CoA, SDS, certs, ...).
 // Classification is a deterministic filename/content-type heuristic — cheap and
@@ -24,6 +26,26 @@ export interface SupplierDocumentInput {
   sourceUrl?: string | null;
   extracted?: Record<string, any> | null;
   expiresOn?: string | null; // YYYY-MM-DD
+  // The file itself. When present the bytes are stored in the private
+  // 'supplier-docs' bucket and hashed, which is what makes a received document
+  // evidence rather than a link that may 404 or be quietly revised later.
+  bytes?: Buffer | null;
+  sourceKind?: "email" | "web";
+  // False for a third-party reference copy (a substance SDS from a chemical
+  // database). Those are useful chemistry but do not qualify the supplier.
+  supplierIssued?: boolean | null;
+}
+
+export const DOC_BUCKET = "supplier-docs";
+
+// Content-addressed path, so re-storing identical bytes overwrites itself and
+// two suppliers shipping the same manufacturer SDS don't collide.
+function storagePathFor(orgId: string | null, sha: string, fileName: string | null | undefined): string {
+  const safe = (fileName ?? "document")
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(-80) || "document";
+  return `${orgId ?? "unassigned"}/${sha.slice(0, 16)}-${safe}`;
 }
 
 // Best-effort document type from a filename (+ content type). Callers pass
@@ -89,6 +111,27 @@ export async function insertSupplierDocuments(admin: Admin, rows: SupplierDocume
       result.skippedDuplicates++;
       continue;
     }
+    // Store the file before the row, so a row never claims a storage_path that
+    // isn't there. An upload failure degrades to the old behaviour (metadata +
+    // source URL only) rather than losing the document record entirely.
+    let storagePath: string | null = null;
+    let sha: string | null = null;
+    if (r.bytes?.byteLength) {
+      sha = crypto.createHash("sha256").update(r.bytes).digest("hex");
+      const path = storagePathFor(r.orgId, sha, r.fileName);
+      try {
+        await uploadBinaryFile({
+          bucket: DOC_BUCKET,
+          path,
+          content: r.bytes,
+          contentType: r.contentType || "application/octet-stream",
+        });
+        storagePath = path;
+      } catch {
+        storagePath = null;
+      }
+    }
+
     const { error } = await admin.from("supplier_documents").insert({
       org_id: r.orgId,
       supplier_id: r.supplierId ?? null,
@@ -103,6 +146,11 @@ export async function insertSupplierDocuments(admin: Admin, rows: SupplierDocume
       source_url: r.sourceUrl ?? null,
       extracted: r.extracted ?? {},
       expires_on: r.expiresOn ?? null,
+      storage_path: storagePath,
+      content_sha256: sha,
+      retrieved_at: new Date().toISOString(),
+      source_kind: r.sourceKind ?? "email",
+      supplier_issued: r.supplierIssued ?? null,
     });
     if (error) {
       result.errors++;

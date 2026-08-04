@@ -496,17 +496,23 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
         // Per-doc best-effort so one bad file doesn't drop the rest.
         let extracted: Record<string, any> | null = null;
         let expiresOn: string | null = null;
-        if (docType !== "price_sheet" && docType !== "other") {
+        // Downloaded once and used twice: to parse fields, and to keep a copy.
+        // Tenkara's download_url needs a bearer token, so the stored bytes are
+        // the only thing an operator can actually open from the bench.
+        let bytes: Buffer | null = null;
+        try {
+          bytes = await downloadTenkaraAttachment(att);
+        } catch {
+          /* per-doc download best-effort */
+        }
+        if (bytes && docType !== "price_sheet" && docType !== "other") {
           const ext = deriveExt(att.filename, att.content_type);
           if (isDocExtractableExt(ext)) {
             try {
-              const buf = await downloadTenkaraAttachment(att);
-              if (buf) {
-                const res = await extractDocumentFields(buf, docType, ext);
-                if (res) {
-                  extracted = res.fields;
-                  expiresOn = res.expires_on;
-                }
+              const res = await extractDocumentFields(bytes, docType, ext);
+              if (res) {
+                extracted = res.fields;
+                expiresOn = res.expires_on;
               }
             } catch {
               /* per-doc extraction best-effort */
@@ -528,6 +534,11 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
           sourceUrl: att.download_url ?? null,
           extracted,
           expiresOn,
+          bytes,
+          sourceKind: "email",
+          // A supplier attaching a document to their own reply is issuing it,
+          // even when the PDF was authored by their upstream manufacturer.
+          supplierIssued: true,
         });
       }
       if (docRows.length) await insertSupplierDocuments(admin, docRows);

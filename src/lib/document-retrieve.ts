@@ -19,6 +19,33 @@ type Admin = ReturnType<typeof createAdminClient>;
 const DOC_HINT_RE =
   /\b(m?sds|coa|c\.?o\.?a|tds|coo|certificate|cert|analysis|technical\s*data|data\s*sheet|datasheet|spec(?:ification)?\s*sheet|safety\s*data|safety\s*sheet)\b/i;
 
+// Storefront and CDN hosts that serve a supplier's OWN files under someone
+// else's domain. Without this list a Shopify seller's own SDS on cdn.shopify.com
+// reads as third-party, which is the opposite of the truth. Anything not here
+// and not on the page's own host is treated as a reference copy (e.g. a
+// substance SDS from chemicalbook.com), which is real chemistry but does not
+// qualify the supplier.
+const STOREFRONT_CDN_RE =
+  /(^|\.)(shopify|shopifycdn|myshopify|bigcommerce|squarespace-cdn|wixstatic|demandware\.net|shoplightspeed|volusion|3dcart|woocommerce)\.(com|net)$|(^|\.)(cloudfront\.net|amazonaws\.com|rocketcdn\.me|akamaized\.net|cdn77\.org|b-cdn\.net)$/i;
+
+function registrableRoot(host: string): string {
+  const parts = host.toLowerCase().replace(/^www\./, "").split(".");
+  return parts.length > 2 ? parts.slice(-2).join(".") : parts.join(".");
+}
+
+// True when the document plausibly comes from the supplier themselves: same
+// site as the product page, or that site's storefront CDN.
+export function isSupplierIssued(docUrl: string, pageUrl: string): boolean {
+  try {
+    const dh = new URL(docUrl).host;
+    const ph = new URL(pageUrl).host;
+    if (registrableRoot(dh) === registrableRoot(ph)) return true;
+    return STOREFRONT_CDN_RE.test(dh);
+  } catch {
+    return false;
+  }
+}
+
 const FETCH_TIMEOUT_MS = 20_000;
 const UA =
   "Mozilla/5.0 (compatible; TenkaraOpsBot/1.0; +https://ops-agents-vu4o.vercel.app)";
@@ -173,6 +200,9 @@ export async function retrieveDocumentsFromUrl(
         sourceUrl: link.url,
         extracted: extracted?.fields ?? null,
         expiresOn: extracted?.expires_on ?? null,
+        bytes: buf,
+        sourceKind: "web",
+        supplierIssued: isSupplierIssued(link.url, target.pageUrl),
       });
       result.docs.push({ url: link.url, docType, expiresOn: extracted?.expires_on ?? null });
     } catch {

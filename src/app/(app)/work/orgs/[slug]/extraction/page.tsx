@@ -106,13 +106,21 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
   // bench can mark a requirement received, and listed with their key values.
   const { data: docs } = await admin
     .from("supplier_documents")
-    .select("id, doc_type, supplier_id, file_name, supplier_name, source_url, expires_on, extracted, created_at")
+    .select(
+      "id, doc_type, supplier_id, file_name, supplier_name, source_url, expires_on, extracted, created_at, storage_path, source_kind, supplier_issued"
+    )
     .eq("org_id", org.id)
     .order("created_at", { ascending: false })
     .limit(500);
   const docList = (docs ?? []) as any[];
   const docCountByType = new Map<string, number>();
-  for (const d of docList) docCountByType.set(d.doc_type, (docCountByType.get(d.doc_type) ?? 0) + 1);
+  // A third-party reference sheet scraped off the web is not the supplier
+  // issuing a document, so it must not tick a client requirement. It still
+  // appears in the list below, tagged.
+  for (const d of docList) {
+    if (d.supplier_issued === false) continue;
+    docCountByType.set(d.doc_type, (docCountByType.get(d.doc_type) ?? 0) + 1);
+  }
   // Requirement key → the document type that satisfies it. Sample is physical
   // (no document), so it has no mapping.
   const REQ_KEY_TO_DOCTYPE: Record<string, string> = {
@@ -153,6 +161,7 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
     if (!suppliers.has(k)) suppliers.set(k, { name: r.supplier_name ?? "Unknown supplier", provided: new Set() });
   }
   for (const d of docList) {
+    if (d.supplier_issued === false) continue; // reference copy, not this vendor's document
     const k = supKey(d.supplier_id ?? null, d.supplier_name ?? null);
     const s = suppliers.get(k) ?? { name: d.supplier_name ?? "Unknown supplier", provided: new Set<string>() };
     s.provided.add(d.doc_type);
@@ -326,9 +335,17 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
                           {exp.label}
                         </span>
                       )}
-                      {d.source_url && (
+                      {d.source_kind === "web" && d.supplier_issued === false && (
+                        <span
+                          className="rounded-full bg-secondary px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground"
+                          title="Third-party reference copy, not issued by this supplier. Useful chemistry, but it does not qualify the vendor."
+                        >
+                          reference
+                        </span>
+                      )}
+                      {(d.storage_path || /^https?:\/\//i.test(d.source_url ?? "")) && (
                         <a
-                          href={d.source_url}
+                          href={`/api/supplier-documents/${d.id}`}
                           target="_blank"
                           rel="noreferrer"
                           className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
