@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { aggregatorNameOf, isAggregatorPlatformName } from "@/lib/aggregator-hosts";
+import { aggregatorNameOf, isAggregatorIndexUrl, isAggregatorPlatformName } from "@/lib/aggregator-hosts";
 
 // One-quote price re-check. Asks Anthropic with the web_search server-side
 // tool to (a) visit the product URL we have on file, (b) check that the
@@ -11,6 +11,7 @@ const MODEL = "claude-sonnet-5";
 const MAX_WEB_USES = 6;   // web_search calls (link repair)
 const MAX_FETCH_USES = 5; // web_fetch calls (read the actual product page)
 const MAX_OUTPUT_TOKENS = 2048; // room for a full multi-tier ladder + JSON
+const MAX_OUTPUT_TOKENS_ENUM = 8000; // a seller roster is far longer than one price; 2048 truncates it mid-array
 const WEB_FETCH_BETA = "web-fetch-2025-09-10";
 
 export interface RecheckInput {
@@ -141,7 +142,8 @@ For each seller listed on the page report:
 - "country", "price", "currency", "pack_size", "moq": as printed for that seller, else null.
 
 Rules for "sellers":
-- Up to 12 sellers, in the order they appear. Skip any row you cannot attribute to a named company with its own link (sponsored blocks, "related searches", bare product tiles).
+- Up to 8 sellers, in the order they appear. Skip any row you cannot attribute to a named company with its own link (sponsored blocks, "related searches", bare product tiles).
+- Every seller must be selling THIS material, on THIS platform. Aggregator index pages are often JavaScript-rendered and come back empty: if that happens you may read the same platform's own listing for the SAME material instead (its country page, its search results, a "<material> suppliers" page). Never switch to a different material and never list sellers off another platform. If the only pages you can read are for a different product, return an empty "sellers" array.
 - Never invent a seller name, URL, or price. Only list what you actually read on the page. An empty array is correct if the page shows no attributable sellers.
 - Leave current_price, tiers, moq, lead_time and shipping null/empty when "index_page" is true. Use classification "aggregator".
 - If the page is actually ONE seller's own listing (a single company's product page on the platform), set "index_page": false, leave "sellers" empty, and handle it normally per the rules above.`;
@@ -193,7 +195,7 @@ function buildUserMessage(input: RecheckInput): string {
 export async function recheckMarketplaceQuote(input: RecheckInput): Promise<RecheckResult> {
   const res = await anthropic().beta.messages.create({
     model: input.model ?? MODEL,
-    max_tokens: MAX_OUTPUT_TOKENS,
+    max_tokens: input.enumerate_sellers ? MAX_OUTPUT_TOKENS_ENUM : MAX_OUTPUT_TOKENS,
     betas: [WEB_FETCH_BETA],
     system: input.enumerate_sellers ? SYSTEM_PROMPT + INDEX_PAGE_RULES : SYSTEM_PROMPT,
     tools: [
@@ -274,6 +276,7 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
   // has no usable URL is dropped rather than staged as a lead.
   const sellers: AggregatorSeller[] = [];
   if (input.enumerate_sellers && Array.isArray(parsed.sellers)) {
+    const indexPlatform = aggregatorNameOf(input.product_url);
     const seenUrls = new Set<string>([input.product_url.trim()]);
     for (const s of parsed.sellers) {
       if (!s || typeof s !== "object") continue;
@@ -288,6 +291,11 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
         continue;
       }
       if (seenUrls.has(url)) continue;
+      // A seller read off an Alibaba page must live on Alibaba: when the reader
+      // wanders off-platform it is no longer reading this index page's roster.
+      if (indexPlatform && aggregatorNameOf(url) !== indexPlatform) continue;
+      // ...and it must be that seller's own page, not another category listing.
+      if (isAggregatorIndexUrl(url)) continue;
       seenUrls.add(url);
       sellers.push({
         supplier_name: name,
@@ -298,7 +306,7 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
         pack_size: typeof s.pack_size === "string" && s.pack_size.trim() ? s.pack_size.trim() : null,
         moq: typeof s.moq === "string" && s.moq.trim() ? s.moq.trim() : null,
       });
-      if (sellers.length >= 12) break;
+      if (sellers.length >= 8) break;
     }
   }
   const indexPage = input.enumerate_sellers === true && (parsed.index_page === true || sellers.length > 0);

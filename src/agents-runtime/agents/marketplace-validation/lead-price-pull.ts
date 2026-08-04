@@ -1,5 +1,5 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
-import { recheckMarketplaceQuote } from "./price-recheck";
+import { recheckMarketplaceQuote, type AggregatorSeller } from "./price-recheck";
 import { convertToUsd } from "@/lib/fx";
 import { ensureMarketplaceCaseDims } from "@/lib/marketplace-case-dims-fill";
 import { neverMarketplaceHostOf } from "@/lib/marketplace-hosts";
@@ -132,6 +132,99 @@ async function computeHostPriors(admin: Admin, activeOrgIds: string[]): Promise<
   }
   for (const [host, a] of agg) priors.set(host, priorDaysFor(a.checks, a.changes));
   return priors;
+}
+
+// An aggregator index page is not a supplier: replace it with one lead per
+// company actually listed on it, so every row a buyer sees links to a real
+// seller instead of to Alibaba's search results. Returns how many were staged.
+export async function expandAggregatorIndexPage(opts: {
+  admin: Admin;
+  log: (msg: string, meta?: any) => Promise<void> | void;
+  runId: string | null;
+  lead: LeadRow;
+  indexUrl: string;
+  sellers: AggregatorSeller[];
+}): Promise<number> {
+  const { admin, log, runId, lead: l, indexUrl, sellers } = opts;
+  const aggregator = aggregatorNameOf(indexUrl);
+    // Don't re-stage sellers already on file for this material (a re-read of the
+    // same index page, or a seller the scout found directly).
+    const urls = sellers.map((s) => s.product_url);
+    const { data: existing } = await admin
+      .from("leads_in_flight")
+      .select("payload")
+      .eq("org_id", l.org_id)
+      .eq("material_id", l.material_id)
+      .in("payload->>source_url", urls);
+    const taken = new Set((existing ?? []).map((r: any) => r.payload?.source_url).filter(Boolean));
+    const fresh = sellers.filter((s) => !taken.has(s.product_url));
+    if (fresh.length) {
+      const { error } = await admin.from("leads_in_flight").insert(
+        fresh.map((s) => ({
+          org_id: l.org_id,
+          supplier_name: s.supplier_name,
+          supplier_id: null,
+          material_name: l.material_name,
+          material_id: l.material_id,
+          stage: "raw" as const,
+          status: "active" as const,
+          source: l.source ?? "ai_discovery",
+          payload: {
+            inci_name: l.payload?.inci_name ?? null,
+            tenkara_org_id: l.payload?.tenkara_org_id ?? null,
+            supplier_website: s.product_url,
+            source_url: s.product_url,
+            supplier_country: s.country,
+            supplier_role: "Reseller",
+            site_type: "A",
+            // The index page's numbers are recorded as text only. The child's own
+            // price pull reads the seller's listing and publishes from there, so
+            // nothing here can become a published price.
+            pack_sizes_pricing: s.price != null ? `${s.price}${s.currency ? ` ${s.currency}` : ""}${s.pack_size ? ` / ${s.pack_size}` : ""}` : null,
+            moq: s.moq,
+            aggregator,
+            aggregator_index_url: indexUrl,
+            aggregator_parent_lead_id: l.id,
+            confidence_hint: "lead",
+            confidence_reason: "Low — unverified seller listed on an aggregator, needs human follow-up",
+            relevance_tier: "Potential",
+            scout_notes: `Listed on ${aggregator ?? "an aggregator"} under ${l.material_name ?? "this material"}.`,
+          },
+          confidence_score: 0.35,
+          agent_run_id: runId,
+        })),
+      );
+      if (error) {
+        await log(`Aggregator seller insert failed for ${l.id}: ${error.message}`, { level: "error", step: "mp_aggregator_split", data: { lead_id: l.id } });
+        return 0;
+      }
+    }
+    // Retire the umbrella row. Terminal (not "dropped") because no operator
+    // rejected it: it was never a supplier, and its sellers now stand in for it.
+    await admin
+      .from("leads_in_flight")
+      .update({
+        status: "terminal",
+        stage: "terminal",
+        drop_reason: "aggregator_index_page",
+        payload: {
+          ...(l.payload ?? {}),
+          site_type: "A",
+          drop_reason: "aggregator_index_page",
+          aggregator_split: {
+            at: new Date().toISOString(),
+            index_url: indexUrl,
+            sellers_found: sellers.length,
+            sellers_staged: fresh.length,
+          },
+        },
+      })
+      .eq("id", l.id);
+    await log(
+      `Aggregator index page split into ${fresh.length} seller lead${fresh.length === 1 ? "" : "s"} (${sellers.length} read${sellers.length - fresh.length ? `, ${sellers.length - fresh.length} already on file` : ""}): ${l.supplier_name} × ${l.material_name}`,
+      { step: "mp_aggregator_split", data: { lead_id: l.id, index_url: indexUrl, staged: fresh.length } },
+    );
+    return fresh.length;
 }
 
 export interface LeadPullResult {
@@ -287,90 +380,8 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   let sellersStaged = 0;
   let stoppedEarly = false;
 
-  // An aggregator index page is not a supplier: replace it with one lead per
-  // company actually listed on it, so every row a buyer sees links to a real
-  // seller instead of to Alibaba's search results. Returns how many were staged.
-  const expandIndexPage = async (l: LeadRow, indexUrl: string, sellers: { supplier_name: string; product_url: string; country: string | null; price: number | null; currency: string | null; pack_size: string | null; moq: string | null }[]): Promise<number> => {
-    const aggregator = aggregatorNameOf(indexUrl);
-    // Don't re-stage sellers already on file for this material (a re-read of the
-    // same index page, or a seller the scout found directly).
-    const urls = sellers.map((s) => s.product_url);
-    const { data: existing } = await admin
-      .from("leads_in_flight")
-      .select("payload")
-      .eq("org_id", l.org_id)
-      .eq("material_id", l.material_id)
-      .in("payload->>source_url", urls);
-    const taken = new Set((existing ?? []).map((r: any) => r.payload?.source_url).filter(Boolean));
-    const fresh = sellers.filter((s) => !taken.has(s.product_url));
-    if (fresh.length) {
-      const { error } = await admin.from("leads_in_flight").insert(
-        fresh.map((s) => ({
-          org_id: l.org_id,
-          supplier_name: s.supplier_name,
-          supplier_id: null,
-          material_name: l.material_name,
-          material_id: l.material_id,
-          stage: "raw" as const,
-          status: "active" as const,
-          source: l.source ?? "ai_discovery",
-          payload: {
-            inci_name: l.payload?.inci_name ?? null,
-            tenkara_org_id: l.payload?.tenkara_org_id ?? null,
-            supplier_website: s.product_url,
-            source_url: s.product_url,
-            supplier_country: s.country,
-            supplier_role: "Reseller",
-            site_type: "A",
-            // The index page's numbers are recorded as text only. The child's own
-            // price pull reads the seller's listing and publishes from there, so
-            // nothing here can become a published price.
-            pack_sizes_pricing: s.price != null ? `${s.price}${s.currency ? ` ${s.currency}` : ""}${s.pack_size ? ` / ${s.pack_size}` : ""}` : null,
-            moq: s.moq,
-            aggregator,
-            aggregator_index_url: indexUrl,
-            aggregator_parent_lead_id: l.id,
-            confidence_hint: "lead",
-            confidence_reason: "Low — unverified seller listed on an aggregator, needs human follow-up",
-            relevance_tier: "Potential",
-            scout_notes: `Listed on ${aggregator ?? "an aggregator"} under ${l.material_name ?? "this material"}.`,
-          },
-          confidence_score: 0.35,
-          agent_run_id: runId,
-        })),
-      );
-      if (error) {
-        await log(`Aggregator seller insert failed for ${l.id}: ${error.message}`, { level: "error", step: "mp_aggregator_split", data: { lead_id: l.id } });
-        return 0;
-      }
-    }
-    // Retire the umbrella row. Terminal (not "dropped") because no operator
-    // rejected it: it was never a supplier, and its sellers now stand in for it.
-    await admin
-      .from("leads_in_flight")
-      .update({
-        status: "terminal",
-        stage: "terminal",
-        drop_reason: "aggregator_index_page",
-        payload: {
-          ...(l.payload ?? {}),
-          site_type: "A",
-          drop_reason: "aggregator_index_page",
-          aggregator_split: {
-            at: new Date().toISOString(),
-            index_url: indexUrl,
-            sellers_found: sellers.length,
-            sellers_staged: fresh.length,
-          },
-        },
-      })
-      .eq("id", l.id);
-    await log(
-      `Aggregator index page split into ${fresh.length} seller lead${fresh.length === 1 ? "" : "s"} (${sellers.length} read${sellers.length - fresh.length ? `, ${sellers.length - fresh.length} already on file` : ""}): ${l.supplier_name} × ${l.material_name}`,
-      { step: "mp_aggregator_split", data: { lead_id: l.id, index_url: indexUrl, staged: fresh.length } },
-    );
-    return fresh.length;
-  };
+  const expandIndexPage = (l: LeadRow, indexUrl: string, sellers: AggregatorSeller[]) =>
+    expandAggregatorIndexPage({ admin, log, runId, lead: l, indexUrl, sellers });
 
   const processOne = async (l: LeadRow): Promise<"pulled" | "flagged" | "pending" | "not_marketplace" | "expanded" | null> => {
     const url = listingUrl(l.payload)!;
