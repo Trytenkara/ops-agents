@@ -109,7 +109,11 @@ registerAgent({
         .select(leadCols)
         .eq("stage", "enriched")
         .eq("status", "active")
-        .in("org_id", ids);
+        .in("org_id", ids)
+        // Phase-2 holds are skipped below anyway, but they cluster at the recent
+        // end of this created_at DESC window and were consuming most of the
+        // fetch limit every run, starving the cold leads behind them.
+        .is("payload->phased_hold", null);
       if (retryRequestId) query = query.eq("payload->outreach_retry->>request_id", retryRequestId);
       else query = query.is("payload->outreach_retry", null);
       return query.order("created_at", { ascending: false }).limit(retryRequestId ? 1000 : limit);
