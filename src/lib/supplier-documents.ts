@@ -40,7 +40,7 @@ export const DOC_BUCKET = "supplier-docs";
 
 // Content-addressed path, so re-storing identical bytes overwrites itself and
 // two suppliers shipping the same manufacturer SDS don't collide.
-function storagePathFor(orgId: string | null, sha: string, fileName: string | null | undefined): string {
+export function storagePathFor(orgId: string | null, sha: string, fileName: string | null | undefined): string {
   const safe = (fileName ?? "document")
     .replace(/[^A-Za-z0-9._-]+/g, "_")
     .replace(/^_+|_+$/g, "")
