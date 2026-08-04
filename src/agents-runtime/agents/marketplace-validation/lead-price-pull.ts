@@ -172,7 +172,12 @@ export async function expandAggregatorIndexPage(opts: {
           payload: {
             inci_name: l.payload?.inci_name ?? null,
             tenkara_org_id: l.payload?.tenkara_org_id ?? null,
-            supplier_website: s.product_url,
+            // No supplier_website: a storefront listing is not the seller's own
+            // site, and storing one makes enrichment domain-search the platform
+            // and return the platform's OWN staff as this seller's contacts
+            // (the same trap cleanSupplierWebsite guards at discovery). Every
+            // consumer falls back to source_url, which holds the same listing,
+            // so the field stays blank until we resolve a real site.
             source_url: s.product_url,
             supplier_country: s.country,
             supplier_role: "Reseller",
