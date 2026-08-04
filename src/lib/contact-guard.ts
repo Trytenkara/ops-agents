@@ -53,6 +53,11 @@ const STREET_RE =
 // total. The 10-digit floor excludes quantities/MOQs/prices/dates/lead times.
 const PHONE_CANDIDATE_RE = /\+?\d[\d\s().\-]{8,}\d/g;
 
+// Our own per-thread outreach reference (SR-YYYYMMDD-NNNN, see run-outreach.ts)
+// is not contact info, but its 12 digits and hyphen read as a phone number to
+// PHONE_CANDIDATE_RE. It blocked 124 legitimate drafts before being excluded.
+const OUTREACH_REFERENCE_RE = /\bSR-\d{8}-\d{4}\b/gi;
+
 function digitCount(s: string): number {
   return (s.match(/\d/g) ?? []).length;
 }
@@ -66,6 +71,7 @@ export interface ContactViolation {
 // means the body is clean.
 export function findFabricatedContacts(text: string, allowed: string[]): ContactViolation[] {
   if (!text) return [];
+  const scan = text.replace(OUTREACH_REFERENCE_RE, " ");
   const allow = allowed.map(normalizeContact).filter(Boolean);
   const seen = new Set<string>();
   const out: ContactViolation[] = [];
@@ -85,9 +91,9 @@ export function findFabricatedContacts(text: string, allowed: string[]): Contact
     out.push({ kind, value });
   };
 
-  for (const m of text.matchAll(EMAIL_RE)) push("email", m[0]);
-  for (const m of text.matchAll(STREET_RE)) push("address", m[0]);
-  for (const m of text.matchAll(PHONE_CANDIDATE_RE)) {
+  for (const m of scan.matchAll(EMAIL_RE)) push("email", m[0]);
+  for (const m of scan.matchAll(STREET_RE)) push("address", m[0]);
+  for (const m of scan.matchAll(PHONE_CANDIDATE_RE)) {
     const n = digitCount(m[0]);
     if (n >= 10 && n <= 15) push("phone", m[0]);
   }
