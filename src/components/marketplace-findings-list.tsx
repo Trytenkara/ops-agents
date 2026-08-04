@@ -235,11 +235,22 @@ export function MarketplaceFindingsList({
                         ) : (
                           <span className="text-muted-foreground">—</span>
                         )}
-                        {qa.price_per_kg_usd != null && (
-                          <div className="text-[11px] text-muted-foreground" title="Normalized to $/kg, the only basis comparable across pack sizes.">
-                            ${qa.price_per_kg_usd.toLocaleString(undefined, { maximumFractionDigits: 2 })}/kg
-                          </div>
-                        )}
+                        {qa.price_per_kg_usd != null && (() => {
+                          // A $/kg converted from a volume pack rests on a density we
+                          // sourced, not on a weight the supplier printed. That flag is
+                          // info-level, so the QA chip stays hidden; say it here or the
+                          // operator cannot tell the two apart.
+                          const via = qa.flags.find((f) => f.code === "converted_via_density");
+                          return (
+                            <div
+                              className="text-[11px] text-muted-foreground"
+                              title={via ? via.message : "Normalized to $/kg, the only basis comparable across pack sizes."}
+                            >
+                              ${qa.price_per_kg_usd.toLocaleString(undefined, { maximumFractionDigits: 2 })}/kg
+                              {via && <span className="ml-1 underline decoration-dotted">via density</span>}
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell className="text-right align-top tabular-nums">{formatPrice(r.baseline_price, r.currency)}</TableCell>
                       <TableCell className="text-right align-top tabular-nums">{formatPrice(r.current_price, r.currency)}</TableCell>
