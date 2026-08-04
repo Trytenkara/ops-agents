@@ -76,6 +76,22 @@ const conversationCreatedSchema = z.object({
   context: z.record(z.any()).nullish(),
 });
 
+// Tenkara detects account-verification mail on ingest and sends us only the
+// extracted URLs, never the body — those inboxes carry supplier pricing on
+// threads we are not party to. A distinct event (not message.received) so a
+// marketplace mail can never be routed into the supplier-reply flow.
+const verificationLinkSchema = z.object({
+  event: z.literal("verification_link.detected"),
+  to_email: z.string().nullish(),
+  from_email: z.string().nullish(),
+  from: z.string().nullish(),
+  subject: z.string().nullish(),
+  links: z.array(z.string()).nullish(),
+  conversation_id: z.string().nullish(),
+  message_id: z.string().nullish(),
+  received_at: z.string().nullish(),
+});
+
 const EVENT_TO_STATUS: Record<z.infer<typeof statusSchema>["event"], "sent" | "discarded"> = {
   "draft.sent": "sent",
   "draft.discarded": "discarded",
@@ -118,6 +134,19 @@ export async function POST(request: NextRequest) {
     }
     const { handleInboundReply } = await import("@/lib/tenkara-inbound");
     const result = await handleInboundReply(admin, inbound.data);
+    return NextResponse.json(result.body, { status: result.status });
+  }
+
+  // Marketplace account-verification link. Idempotent by construction: a
+  // successful click leaves the account outside ELIGIBLE_STATUSES, so a
+  // redelivery (or the parallel message.received for the same mail) no-ops.
+  if (json?.event === "verification_link.detected") {
+    const evt = verificationLinkSchema.safeParse(json);
+    if (!evt.success) {
+      return NextResponse.json({ error: evt.error.flatten() }, { status: 400 });
+    }
+    const { handleVerificationLinkDetected } = await import("@/lib/marketplace-confirm");
+    const result = await handleVerificationLinkDetected(admin, evt.data);
     return NextResponse.json(result.body, { status: result.status });
   }
 
