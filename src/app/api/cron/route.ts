@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { executeAgentRun } from "@/agents-runtime/runtime";
+import { executeAgentRun, getAgentDefinition } from "@/agents-runtime/runtime";
 import { CronExpressionParser } from "cron-parser";
 
 // Vercel cron hits this endpoint on a 5-minute interval (see vercel.json).
@@ -31,8 +31,13 @@ export async function GET(request: NextRequest) {
   // regardless of schedule. Same CRON_SECRET auth — no new endpoint.
   const explicitSlug = new URL(request.url).searchParams.get("slug");
   if (explicitSlug) {
-    const r = await executeAgentRun({ agentSlug: explicitSlug, triggerSource: "manual" });
-    return NextResponse.json({ explicit: true, slug: explicitSlug, result: r, at: new Date().toISOString() });
+    const laneParam = new URL(request.url).searchParams.get("lane");
+    const lane = laneParam ? Number(laneParam) : 1;
+    if (!Number.isInteger(lane) || lane < 1) {
+      return NextResponse.json({ error: `bad lane: ${laneParam}` }, { status: 400 });
+    }
+    const r = await executeAgentRun({ agentSlug: explicitSlug, triggerSource: "manual", lane });
+    return NextResponse.json({ explicit: true, slug: explicitSlug, lane, result: r, at: new Date().toISOString() });
   }
 
   const { data: agents } = await admin
@@ -73,16 +78,26 @@ export async function GET(request: NextRequest) {
   // can no longer starve/kill the lightweight ones, and if this dispatcher hits
   // its own limit while waiting, each agent's invocation still finishes
   // independently. We await so a quick cron tick reports real outcomes.
+  //
+  // A lane-parallel agent (AgentDefinition.lanes) gets one invocation PER LANE,
+  // all in flight together. This is the only way its throughput can exceed one
+  // batch per tick: the work is bounded by per-lead latency, not by the 800s
+  // ceiling, so more wall-clock in a single lane buys nothing.
   const origin = new URL(request.url).origin;
+  const dispatch = due.flatMap((slug) => {
+    const lanes = getAgentDefinition(slug)?.lanes ?? 1;
+    return Array.from({ length: lanes }, (_, i) => ({ slug, lane: i + 1 }));
+  });
   const results = await Promise.allSettled(
-    due.map((slug) =>
-      fetch(`${origin}/api/cron?slug=${encodeURIComponent(slug)}`, {
+    dispatch.map(({ slug, lane }) =>
+      fetch(`${origin}/api/cron?slug=${encodeURIComponent(slug)}&lane=${lane}`, {
         headers: { authorization: `Bearer ${expected}` },
       }).then((r) => r.json())
     )
   );
-  const triggered = due.map((slug, i) => ({
+  const triggered = dispatch.map(({ slug, lane }, i) => ({
     slug,
+    lane,
     ok: results[i].status === "fulfilled",
   }));
 

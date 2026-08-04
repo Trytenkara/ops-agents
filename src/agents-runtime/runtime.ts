@@ -16,7 +16,14 @@ export interface RunClaim {
   runId: string;
   triggerSource: "cron" | "manual" | "webhook";
   input?: Record<string, any>;
+  // Lane 1 (or undefined) is the primary run and owns the agents.locked_until
+  // reservation. Lanes 2..N are extra parallel workers for the same agent.
+  lane?: number;
   def: AgentDefinition;
+}
+
+function laneLockKey(agentSlug: string, lane: number) {
+  return `agent-lane:${agentSlug}:${lane}`;
 }
 
 // Step 1: synchronously reserve the agent's lock and open the agent_runs row.
@@ -26,9 +33,17 @@ export async function claimRun(opts: {
   agentSlug: string;
   triggerSource: "cron" | "manual" | "webhook";
   input?: Record<string, any>;
+  lane?: number;
 }): Promise<{ ok: true; claim: RunClaim } | { ok: false; error: string }> {
   const def = getAgentDefinition(opts.agentSlug);
   if (!def) return { ok: false, error: `agent ${opts.agentSlug} not registered in embedded runtime` };
+  const lane = opts.lane ?? 1;
+  if (lane > 1 && !def.lanes) {
+    return { ok: false, error: `agent ${opts.agentSlug} is not lane-parallel (requested lane ${lane})` };
+  }
+  if (lane > (def.lanes ?? 1)) {
+    return { ok: false, error: `agent ${opts.agentSlug} declares ${def.lanes} lanes (requested lane ${lane})` };
+  }
 
   const admin = createAdminClient();
   const now = new Date();
@@ -57,15 +72,36 @@ export async function claimRun(opts: {
     .lt("run_started_at", orphanCutoff)
     .is("run_finished_at", null);
 
-  const { data: agent, error: lockError } = await admin
-    .from("agents")
-    .update({ locked_until: lockUntil, status: "running" })
-    .eq("slug", opts.agentSlug)
-    .or(`locked_until.is.null,locked_until.lt.${now.toISOString()}`)
-    .select("id, slug, name")
-    .maybeSingle();
-  if (lockError) return { ok: false, error: lockError.message };
-  if (!agent) return { ok: false, error: "agent is already running (lock held)" };
+  // Secondary lanes take a lock on their own lane NUMBER instead of on the agent
+  // (lane 1 owns the agent reservation, and the point of a secondary lane is to
+  // run alongside it). Two lanes never collide over work because each claims its
+  // batch through claim_enrichment_leads (FOR UPDATE SKIP LOCKED); the lane lock
+  // exists to stop overlapping dispatcher ticks from stacking a second copy of
+  // lane 2 on top of the first.
+  if (lane > 1) {
+    const { data: got, error: laneLockError } = await admin.rpc("try_runtime_lock", {
+      p_key: laneLockKey(opts.agentSlug, lane),
+      p_ttl_seconds: Math.floor(LOCK_TTL_MS / 1000),
+    });
+    if (laneLockError) return { ok: false, error: laneLockError.message };
+    if (!got) return { ok: false, error: `lane ${lane} is already running (lane lock held)` };
+  }
+
+  const { data: agent, error: lockError } =
+    lane === 1
+      ? await admin
+          .from("agents")
+          .update({ locked_until: lockUntil, status: "running" })
+          .eq("slug", opts.agentSlug)
+          .or(`locked_until.is.null,locked_until.lt.${now.toISOString()}`)
+          .select("id, slug, name")
+          .maybeSingle()
+      : await admin.from("agents").select("id, slug, name").eq("slug", opts.agentSlug).maybeSingle();
+  if (lockError || !agent) {
+    if (lane > 1) await admin.rpc("release_runtime_lock", { p_key: laneLockKey(opts.agentSlug, lane) });
+    if (lockError) return { ok: false, error: lockError.message };
+    return { ok: false, error: lane === 1 ? "agent is already running (lock held)" : "agent not found" };
+  }
 
   const { data: run, error: runError } = await admin
     .from("agent_runs")
@@ -78,10 +114,16 @@ export async function claimRun(opts: {
     .select("id, run_started_at")
     .single();
   if (runError || !run) {
-    await admin.from("agents").update({ locked_until: null, status: "idle" }).eq("id", agent.id);
+    if (lane === 1) {
+      await admin.from("agents").update({ locked_until: null, status: "idle" }).eq("id", agent.id);
+    } else {
+      await admin.rpc("release_runtime_lock", { p_key: laneLockKey(opts.agentSlug, lane) });
+    }
     return { ok: false, error: runError?.message ?? "failed to open run" };
   }
-  await admin.from("agents").update({ current_run_id: run.id }).eq("id", agent.id);
+  if (lane === 1) {
+    await admin.from("agents").update({ current_run_id: run.id }).eq("id", agent.id);
+  }
 
   return {
     ok: true,
@@ -92,6 +134,7 @@ export async function claimRun(opts: {
       runId: run.id,
       triggerSource: opts.triggerSource,
       input: opts.input,
+      lane,
       def,
     },
   };
@@ -106,13 +149,14 @@ export async function runClaimed(claim: RunClaim): Promise<void> {
   let finalSummary: string | null = null;
   let itemsProcessed = 0;
   let finalStatus: "success" | "partial" | "failure" = "success";
-  let metadata: Record<string, any> = {};
+  const lane = claim.lane ?? 1;
+  let metadata: Record<string, any> = (claim.def.lanes ?? 1) > 1 ? { lane } : {};
 
   const ctx: RuntimeContext = {
     runId: claim.runId,
     agentId: claim.agentId,
     agentSlug: claim.agentSlug,
-    input: claim.input ?? {},
+    input: { ...(claim.input ?? {}), lane },
     log: async (message, o) => {
       const level = o?.level ?? "info";
       await admin.from("agent_run_events").insert({
@@ -140,7 +184,10 @@ export async function runClaimed(claim: RunClaim): Promise<void> {
     setMetadata: (patch) => { metadata = { ...metadata, ...patch }; },
   };
 
-  await ctx.log(`Run started — ${claim.agentName}`, { step: "start", data: { trigger: claim.triggerSource } });
+  await ctx.log(
+    (claim.def.lanes ?? 1) > 1 ? `Run started: ${claim.agentName} (lane ${lane})` : `Run started: ${claim.agentName}`,
+    { step: "start", data: { trigger: claim.triggerSource, lane } },
+  );
 
   try {
     await claim.def.run(ctx);
@@ -163,10 +210,17 @@ export async function runClaimed(claim: RunClaim): Promise<void> {
       metadata: Object.keys(metadata).length > 0 ? metadata : null,
     })
     .eq("id", claim.runId);
-  await admin
-    .from("agents")
-    .update({ locked_until: null, status: "idle", current_run_id: null, last_run_at: new Date().toISOString() })
-    .eq("id", claim.agentId);
+  // Secondary lanes never took the reservation, so clearing it here would free
+  // the agent while lane 1 is still working and let the next tick start a
+  // duplicate primary run.
+  if (lane === 1) {
+    await admin
+      .from("agents")
+      .update({ locked_until: null, status: "idle", current_run_id: null, last_run_at: new Date().toISOString() })
+      .eq("id", claim.agentId);
+  } else {
+    await admin.rpc("release_runtime_lock", { p_key: laneLockKey(claim.agentSlug, lane) });
+  }
 
   if (finalStatus !== "success") {
     alertRunFinished({
@@ -186,8 +240,14 @@ export async function executeAgentRun(opts: {
   triggerSource: "cron" | "manual" | "webhook";
   triggeredBy?: string | null;
   input?: Record<string, any>;
+  lane?: number;
 }): Promise<{ ok: true; runId: string } | { ok: false; error: string }> {
-  const claimed = await claimRun({ agentSlug: opts.agentSlug, triggerSource: opts.triggerSource, input: opts.input });
+  const claimed = await claimRun({
+    agentSlug: opts.agentSlug,
+    triggerSource: opts.triggerSource,
+    input: opts.input,
+    lane: opts.lane,
+  });
   if (!claimed.ok) return claimed;
   await runClaimed(claimed.claim);
   return { ok: true, runId: claimed.claim.runId };

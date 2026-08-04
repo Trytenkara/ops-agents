@@ -19,6 +19,13 @@ import { runSupplierWebFill } from "./web-fill-run";
 //     8s timeout each), so 25 keeps us comfortably under the 300s Vercel
 //     Hobby maxDuration even in worst-case all-timeout scenarios.
 const MAX_LEADS_PER_RUN = 25;
+// Secondary lanes skip the profile seed/fill phases, so their whole invocation is
+// lead work and they can afford to finish the batch they claimed. That is where
+// most of the throughput comes from, not the lane count: measured over 24h the
+// single lane averaged 460s and reached only ~10 of its 25 leads, because seeding
+// and filling had already eaten the wall clock ahead of it.
+const LEAD_DEADLINE_MS = 230_000; // primary: what is left after seed + fill
+const LANE_LEAD_DEADLINE_MS = 650_000; // secondary: headroom under maxDuration 800s
 // Web profile completion: suppliers per run, and the wall-clock slice it may
 // take before the rest of the agent's work starts.
 const WEB_FILL_CAP = 12;
@@ -30,8 +37,20 @@ registerAgent({
   displayName: "Agent 06 - Data Enrichment",
   description:
     "Pre-outreach enrichment. Sweeps stage=raw leads, probes supplier website + contact email, merges Tenkara supplier metadata, then promotes to stage=enriched for human review.",
+  // Discovery stages more high-confidence leads per day (3,017) than one lane can
+  // attempt (1,689), so the raw queue grew without bound and the leads at the
+  // confidence floor, which is every aggregator seller we split out, were never
+  // reached at all. Lanes claim disjoint batches through claim_enrichment_leads.
+  // Deliberately starting at 2: contact lookups are paid per lead, so this is the
+  // smallest step that still clears the daily inflow and drains the backlog.
+  lanes: 2,
   async run(ctx) {
     const admin = createAdminClient();
+    const lane = Number(ctx.input?.lane ?? 1);
+    // Once-per-tick work (profile seeding, profile filling, the relevance
+    // backfill) belongs to the primary lane alone. None of it is partitioned, so
+    // a second lane doing it would just repeat the same sweep.
+    const isPrimary = lane === 1;
 
     // Per-org switch: only enrich leads for orgs whose sourcing_status allows
     // pool-building (active or sourcing_only). 'off' orgs are skipped entirely.
@@ -62,11 +81,12 @@ registerAgent({
     let seededQuotes = 0;
     const { data: orgMeta } = await admin.from("orgs").select("id, is_internal").in("id", allSourcingOrgIds);
     const isInternalById = new Map((orgMeta ?? []).map((o: any) => [o.id, !!o.is_internal]));
-    const seedOrder = [...allSourcingOrgIds].sort(
+    // Empty on secondary lanes, which no-ops every seed and fill loop below.
+    const seedOrder = (isPrimary ? [...allSourcingOrgIds] : []).sort(
       (a, b) => Number(isInternalById.get(a) ?? false) - Number(isInternalById.get(b) ?? false)
     );
     // Case-dims cache is org-agnostic; load once and reuse for the marketplace seed.
-    const caseDimsMap = allSourcingOrgIds.length ? await loadMarketplaceCaseDims(admin) : {};
+    const caseDimsMap = seedOrder.length ? await loadMarketplaceCaseDims(admin) : {};
     for (const orgId of seedOrder) {
       if (supplierBudget <= 0 && stagedQuoteBudget <= 0 && marketplaceQuoteBudget <= 0) break;
       try {
@@ -162,16 +182,20 @@ registerAgent({
       return;
     }
 
-    const { data: historical, error: historicalError } = await admin
-      .from("leads_in_flight")
-      .select("id, material_name, source, payload")
-      .eq("status", "active")
-      .in("stage", ["enriched", "ready_for_outreach"])
-      .in("source", ["importyeti", "sourceready"])
-      .in("org_id", sourcingOrgIds)
-      .is("payload->enrichment->material_relevance", null)
-      .order("created_at", { ascending: true })
-      .limit(MAX_LEADS_PER_RUN);
+    // Relevance backfill is a sweep over already-promoted leads, so like the
+    // seeders it is primary-lane-only.
+    const { data: historical, error: historicalError } = isPrimary
+      ? await admin
+          .from("leads_in_flight")
+          .select("id, material_name, source, payload")
+          .eq("status", "active")
+          .in("stage", ["enriched", "ready_for_outreach"])
+          .in("source", ["importyeti", "sourceready"])
+          .in("org_id", sourcingOrgIds)
+          .is("payload->enrichment->material_relevance", null)
+          .order("created_at", { ascending: true })
+          .limit(MAX_LEADS_PER_RUN)
+      : { data: [] as any[], error: null };
     if (historicalError) {
       await ctx.log(`Historical relevance scan failed: ${historicalError.message}`, { level: "error", step: "relevance_backfill" });
     } else {
@@ -207,8 +231,8 @@ registerAgent({
       }
     }
 
-    // 1. Pull a batch of raw leads: never-attempted first, then whatever was tried
-    //    longest ago, with confidence breaking ties inside each group.
+    // 1. CLAIM a batch of raw leads: never-attempted first, then whatever was tried
+    //    longest ago, with confidence and then age breaking ties inside each group.
     //
     //    Ordering on confidence alone deadlocked this sweep: a blocked lead stays at
     //    stage=raw and its score never moves, so once 25 of them collected at the top
@@ -216,15 +240,16 @@ registerAgent({
     //    for days. The attempt timestamp is mutated by every attempt, so a lead
     //    physically cannot be re-selected ahead of untried work, and blocked leads
     //    come back for a retry only after the queue has cycled.
-    const { data: leads, error: pullErr } = await admin
-      .from("leads_in_flight")
-      .select("id, org_id, supplier_id, supplier_name, material_name, source, payload, confidence_score")
-      .eq("stage", "raw")
-      .eq("status", "active")
-      .in("org_id", sourcingOrgIds)
-      .order("last_enrichment_attempt_at", { ascending: true, nullsFirst: true })
-      .order("confidence_score", { ascending: false, nullsFirst: false })
-      .limit(MAX_LEADS_PER_RUN);
+    //
+    //    This is an RPC rather than a select because lanes run concurrently: the
+    //    function picks and stamps in one statement (FOR UPDATE SKIP LOCKED), so no
+    //    two lanes can be handed the same lead and pay for the same contact lookup
+    //    twice. It returns prev_attempt_at so leads we drop at the deadline can have
+    //    their stamp put back, having never actually been attempted.
+    const { data: leads, error: pullErr } = await admin.rpc("claim_enrichment_leads", {
+      p_org_ids: sourcingOrgIds,
+      p_cap: MAX_LEADS_PER_RUN,
+    });
 
     if (pullErr) {
       await ctx.log(`Failed to pull raw leads: ${pullErr.message}`, { level: "error", step: "pull" });
@@ -240,7 +265,10 @@ registerAgent({
       return;
     }
 
-    await ctx.log(`Enriching ${leads.length} raw leads`, { step: "pull", data: { count: leads.length } });
+    await ctx.log(`Enriching ${leads.length} raw leads (lane ${lane})`, {
+      step: "pull",
+      data: { count: leads.length, lane },
+    });
 
     // 2. Enrich each lead. Contact discovery now fetches multiple pages per
     //    supplier, so we run leads in small concurrent batches (different
@@ -257,7 +285,7 @@ registerAgent({
     const blockedReasons: Record<string, number> = {};
     const startedAt = Date.now();
 
-    type LeadRow = { id: string; supplier_id: string | null; supplier_name: string | null; material_name: string | null; source: string | null; payload: any; confidence_score: number | null };
+    type LeadRow = { id: string; supplier_id: string | null; supplier_name: string | null; material_name: string | null; source: string | null; payload: any; confidence_score: number | null; prev_attempt_at: string | null };
     async function processLead(row: LeadRow): Promise<void> {
       const lead: RawLead = {
         id: row.id,
@@ -287,24 +315,39 @@ registerAgent({
     }
 
     const CONCURRENCY = 5;
-    const DEADLINE_MS = 230_000; // leave headroom under the 300s function limit
-    for (let i = 0; i < leads.length; i += CONCURRENCY) {
+    const DEADLINE_MS = isPrimary ? LEAD_DEADLINE_MS : LANE_LEAD_DEADLINE_MS;
+    const rows = leads as LeadRow[];
+    for (let i = 0; i < rows.length; i += CONCURRENCY) {
       if (Date.now() - startedAt > DEADLINE_MS) {
-        skipped = leads.length - i;
-        await ctx.log(`Deadline reached, leaving ${skipped} leads at raw for the next run`, { step: "deadline" });
+        const unreached = rows.slice(i);
+        skipped = unreached.length;
+        // Hand the claim back. Claiming stamped these as attempted so a parallel
+        // lane would skip past them; we never touched them, so leaving the stamp
+        // would push untried leads behind the whole queue.
+        for (const r of unreached) {
+          await admin
+            .from("leads_in_flight")
+            .update({ last_enrichment_attempt_at: r.prev_attempt_at })
+            .eq("id", r.id)
+            .eq("stage", "raw");
+        }
+        await ctx.log(`Deadline reached, released ${skipped} unattempted claims back to raw`, { step: "deadline" });
         break;
       }
-      await Promise.all(leads.slice(i, i + CONCURRENCY).map(processLead));
+      await Promise.all(rows.slice(i, i + CONCURRENCY).map(processLead));
     }
 
-    await recordOrgRuns(admin, "agent-06-enrichment", sourcingOrgIds);
+    // Only the primary lane advances the per-org tier clock. If every lane
+    // recorded, a three-lane tick would look like three separate runs to the
+    // throttle and pace clients faster than their tier allows.
+    if (isPrimary) await recordOrgRuns(admin, "agent-06-enrichment", sourcingOrgIds);
     ctx.setItemsProcessed(promoted + blocked);
     ctx.setStatus(errored > 0 && promoted + blocked === 0 ? "failure" : errored > 0 ? "partial" : "success");
     const reasonStr = Object.entries(blockedReasons)
       .map(([k, v]) => `${k}=${v}`)
       .join(", ");
     ctx.setSummary(
-      `Enriched ${promoted}/${leads.length} → stage=enriched · ${blocked} left at raw${reasonStr ? ` (${reasonStr})` : ""}${skipped ? ` · ${skipped} deferred (deadline)` : ""}${superseded ? ` · ${superseded} superseded` : ""}${errored ? ` · ${errored} errors` : ""}${seedNote}${fillNote}`
+      `Lane ${lane}: enriched ${promoted}/${leads.length} → stage=enriched · ${blocked} left at raw${reasonStr ? ` (${reasonStr})` : ""}${skipped ? ` · ${skipped} deferred (deadline)` : ""}${superseded ? ` · ${superseded} superseded` : ""}${errored ? ` · ${errored} errors` : ""}${seedNote}${fillNote}`
     );
   },
 });

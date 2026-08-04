@@ -22,6 +22,12 @@ export interface AgentDefinition {
   slug: string;
   displayName: string;
   description: string;
+  // How many copies of this agent may run at once. Only set it above 1 when the
+  // agent claims its work atomically (see claim_enrichment_leads); otherwise two
+  // lanes pick the same rows and every side effect happens twice. The lane number
+  // arrives as ctx.input.lane, and phases that must not repeat per run (seeding,
+  // sweeps) belong to lane 1 only.
+  lanes?: number;
   run: (ctx: RuntimeContext) => Promise<void>;
 }
 
