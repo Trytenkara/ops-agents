@@ -5,7 +5,7 @@ import { Table, TableHeader, TableBody, TableRow, TableCell } from "@/components
 import { LeadRichRow, LeadRichHeaders, leadRichColSpan, leadMarketKind, humanizeSignal } from "@/components/lead-rich-row";
 import { aggregatorNameFromPayload } from "@/lib/aggregator-hosts";
 import { deriveMatchTier, matchTierRank } from "@/lib/lead-match-tier";
-import { useListFilter, byString, byDateDesc, usePersistedState } from "@/components/use-list-filter";
+import { useListFilter, byString, byDateDesc, byStringBlankLast, usePersistedState } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { BulkRemoveBar } from "@/components/bulk-remove-bar";
 import { removeLeads, importEmailsFromCsv, type EmailImportResult } from "@/app/actions/leads";
@@ -121,8 +121,9 @@ export function LeadsList({
     .filter((r: any) => (source === "all" ? true : r.source === source));
 
   const { filtered, controls } = useListFilter(typeRows, {
-    searchText: (r) => `${r.supplier_name ?? ""} ${r.material_name ?? ""} ${r.grade ?? ""} ${countryOf(r)}`,
-    searchPlaceholder: "supplier, material, grade, country…",
+    searchText: (r) =>
+      `${r.supplier_name ?? ""} ${r.material_name ?? ""} ${r.grade ?? ""} ${countryOf(r)} ${r.operator_name ?? ""}`,
+    searchPlaceholder: "supplier, material, grade, country, operator…",
     sorts: [
       {
         value: "match",
@@ -133,6 +134,12 @@ export function LeadsList({
       { value: "newest", label: "Newest", compare: byDateDesc((r: any) => r.created_at) },
       { value: "supplier", label: "Supplier (A–Z)", compare: byString((r: any) => r.supplier_name) },
       { value: "material", label: "Material (A–Z)", compare: byString((r: any) => r.material_name) },
+      {
+        value: "operator",
+        label: "Operator (A–Z)",
+        compare: (a: any, b: any) =>
+          byStringBlankLast((r: any) => r.operator_name)(a, b) || byDateDesc((r: any) => r.created_at)(a, b),
+      },
     ],
     defaultSort: "match",
     persistKey: "leads",

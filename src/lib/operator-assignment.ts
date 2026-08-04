@@ -2,8 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 // Sticky-random operator assignment. A supplier is always owned by the SAME
 // operator within an org (so the supplier sees one point of contact), but
-// suppliers are spread across the org's operators. We hash the supplier id into
-// the org's operator pool — deterministic (stable per supplier, survives
+// suppliers are spread across the org's operators. We hash the supplier id
+// against the org's operator pool. Deterministic (stable per supplier, survives
 // re-runs, no storage/races) yet evenly distributed.
 
 export interface OperatorRef {
@@ -12,29 +12,52 @@ export interface OperatorRef {
   email: string | null;
 }
 
-// FNV-1a — small, stable, well-distributed string hash.
+// FNV-1a plus a murmur3 avalanche finalizer. The finalizer matters: picking the
+// max hash across the pool amplifies any weakness in the mix into a permanently
+// lucky operator, and raw FNV-1a over near-identical "<supplierId>:<operatorId>"
+// strings left one operator ~25% over quota. Mixed, every operator lands within
+// ~10% of an even share.
 function hashStr(s: string): number {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
     h = Math.imul(h, 16777619);
   }
+  h ^= h >>> 16;
+  h = Math.imul(h, 2246822507);
+  h ^= h >>> 13;
+  h = Math.imul(h, 3266489909);
+  h ^= h >>> 16;
   return h >>> 0;
 }
 
+// Rendezvous ("highest random weight") pick, NOT `hash % pool.length`. Modulo
+// depends on the pool SIZE, so adding one operator to an org re-derived the owner
+// of nearly every supplier, so the whole team's book of business appeared to churn
+// overnight. Rendezvous only moves the suppliers the newcomer outranks, so adding
+// or removing an operator moves ~1/N of them and leaves everyone else's alone.
 export function pickSupplierOperator<T extends { id: string }>(
   pool: T[],
   supplierId: string | null | undefined
 ): T | null {
   if (pool.length === 0) return null;
   if (!supplierId) return pool[0];
-  return pool[hashStr(supplierId) % pool.length];
+  let best = pool[0];
+  let bestScore = -1;
+  for (const op of pool) {
+    const score = hashStr(`${supplierId}:${op.id}`);
+    // Tie-break on id so a hash collision still resolves the same way every run.
+    if (score > bestScore || (score === bestScore && op.id < best.id)) {
+      best = op;
+      bestScore = score;
+    }
+  }
+  return best;
 }
 
 // The operators an org's suppliers can be assigned to: everyone explicitly
 // assigned to the org (user_org_assignments), minus anyone out of office.
-// Falls back to the org's default primary/backup operators when no one is
-// explicitly assigned. Sorted by id so the pool order is stable across runs.
+// Sorted by id so the pool order is stable across runs.
 export async function getOrgOperatorPool(
   admin: SupabaseClient,
   orgId: string

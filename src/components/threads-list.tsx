@@ -17,7 +17,7 @@ import { setThreadHidden } from "@/app/actions/drafts";
 import { attachAlternateEmail } from "@/app/actions/supplier-emails";
 import { Button } from "@/components/ui/button";
 import { filenameFor } from "@/lib/csv";
-import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
+import { useListFilter, byString, byDateDesc, byStringBlankLast } from "@/components/use-list-filter";
 
 export type ThreadKind = "outbound" | "inbound";
 
@@ -84,13 +84,19 @@ export function ThreadsList({ rows, slug, orgId, canAct = false }: { rows: Threa
   }, [rows]);
 
   const { filtered, controls } = useListFilter(byKind, {
-    searchText: (r) => `${r.subject ?? ""} ${r.supplierName ?? ""} ${r.materialName ?? ""}`,
-    searchPlaceholder: "subject, supplier, material…",
+    searchText: (r) => `${r.subject ?? ""} ${r.supplierName ?? ""} ${r.materialName ?? ""} ${r.assignedName ?? ""} ${r.assignedEmail ?? ""}`,
+    searchPlaceholder: "subject, supplier, material, assignee…",
     sorts: [
       { value: "newest", label: "Newest", compare: byDateDesc((r: ThreadRow) => r.createdAt) },
       { value: "supplier", label: "Supplier (A–Z)", compare: byString((r: ThreadRow) => r.supplierName) },
       { value: "material", label: "Material (A–Z)", compare: byString((r: ThreadRow) => r.materialName) },
       { value: "status", label: "Status", compare: byString((r: ThreadRow) => r.status) },
+      {
+        value: "assignee",
+        label: "Assigned (A–Z)",
+        compare: (a, b) =>
+          byStringBlankLast((r: ThreadRow) => r.assignedName ?? r.assignedEmail)(a, b) || byDateDesc((r: ThreadRow) => r.createdAt)(a, b),
+      },
     ],
     defaultSort: "newest",
     persistKey: "threads",

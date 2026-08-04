@@ -23,6 +23,8 @@ interface SupplierGroup {
   supplierName: string;
   supplierId: string | null;
   profile: SupplierProfile | null;
+  // Owning operator, read off the group's leads (manual claim, else auto owner).
+  operatorName: string | null;
   leads: any[];
   marketKind: MarketKind | null;
   latestLead: string | null;
@@ -56,6 +58,7 @@ function nameMatchesHost(supplierName: string, host: string): boolean {
 const SORT_OPTIONS = [
   { value: "leads", label: "Most leads" },
   { value: "name", label: "Supplier (A-Z)" },
+  { value: "operator", label: "Operator (A-Z)" },
   { value: "completeness", label: "Profile completeness" },
   { value: "newest", label: "Newest leads" },
 ];
@@ -124,6 +127,7 @@ export function SupplierLeadsView({
         supplierName: lead.supplier_name ?? "Unknown",
         supplierId: lead.supplier_id ?? null,
         profile,
+        operatorName: null,
         leads: [],
         // The profile is the validated record, so an operator's correction there
         // wins over the scanner's read of the lead.
@@ -135,6 +139,7 @@ export function SupplierLeadsView({
       groupMap.set(key, group);
     }
     group.leads.push(lead);
+    if (!group.operatorName && lead.operator_name) group.operatorName = lead.operator_name;
     if (!group.latestLead || (lead.created_at && lead.created_at > group.latestLead)) {
       group.latestLead = lead.created_at;
     }
@@ -148,6 +153,7 @@ export function SupplierLeadsView({
         supplierName: p.supplier_name,
         supplierId: p.supplier_id,
         profile: p,
+        operatorName: null,
         leads: [],
         marketKind: p.supplier_type,
         latestLead: null,
@@ -184,7 +190,7 @@ export function SupplierLeadsView({
   if (search) {
     const q = search.toLowerCase();
     groups = groups.filter((g) => {
-      const hay = `${g.supplierName} ${g.leads.map((l: any) => l.material_name ?? "").join(" ")}`.toLowerCase();
+      const hay = `${g.supplierName} ${g.operatorName ?? ""} ${g.leads.map((l: any) => l.material_name ?? "").join(" ")}`.toLowerCase();
       return hay.includes(q);
     });
   }
@@ -214,6 +220,13 @@ export function SupplierLeadsView({
     switch (sort) {
       case "name":
         return a.supplierName.localeCompare(b.supplierName);
+      case "operator": {
+        // Unassigned suppliers sort last, so the pile nobody owns is easy to find.
+        const aOp = a.operatorName ?? "";
+        const bOp = b.operatorName ?? "";
+        if (!aOp !== !bOp) return aOp ? -1 : 1;
+        return aOp.localeCompare(bOp) || a.supplierName.localeCompare(b.supplierName);
+      }
       case "completeness": {
         const aPct = a.profile ? profileCompleteness(a.profile).pct : -1;
         const bPct = b.profile ? profileCompleteness(b.profile).pct : -1;
@@ -241,7 +254,7 @@ export function SupplierLeadsView({
 
   // CSV export: one row per supplier with profile completeness + lead counts
   const csvHeaders = [
-    "Supplier", "Type", "Leads", "Profile Status", "Completeness %",
+    "Supplier", "Type", "Operator", "Leads", "Profile Status", "Completeness %",
     "POC Email", "POC Phone", "POC Name",
     "Shipping Address", "Shipping Terms", "Shipping Email",
     "DDP Can Book", "DDP Min", "DDP Max",
@@ -256,6 +269,7 @@ export function SupplierLeadsView({
     return [
       g.supplierName,
       g.marketKind ?? "",
+      g.operatorName ?? "",
       g.leads.length,
       p?.approval_status ?? "no profile",
       p ? profileCompleteness(p).pct : "",
@@ -417,6 +431,16 @@ export function SupplierLeadsView({
                     {stages.ready_for_outreach > 0 && <span title="Ready"><span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" /> {stages.ready_for_outreach}</span>}
                     {stages.held > 0 && <span title="Held"><span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" /> {stages.held}</span>}
                   </div>
+                  <span
+                    className="text-xs text-muted-foreground truncate max-w-[14ch]"
+                    title={
+                      g.operatorName
+                        ? `Operator who owns this supplier for this client: ${g.operatorName}`
+                        : "No operator owns this supplier yet"
+                    }
+                  >
+                    {g.operatorName ?? <span className="italic">Unassigned</span>}
+                  </span>
                   <span className="text-xs text-muted-foreground">
                     {g.leads.length} lead{g.leads.length !== 1 ? "s" : ""}
                   </span>

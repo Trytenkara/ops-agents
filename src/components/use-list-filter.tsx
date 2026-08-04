@@ -102,6 +102,16 @@ export function useListFilter<T>(
 export function byString<T>(get: (r: T) => string | null | undefined) {
   return (a: T, b: T) => (get(a) ?? "").localeCompare(get(b) ?? "");
 }
+// A–Z with blanks last. For assignee columns: "Unassigned" is the pile you want
+// at the bottom, not sorted in ahead of everyone under the empty string.
+export function byStringBlankLast<T>(get: (r: T) => string | null | undefined) {
+  return (a: T, b: T) => {
+    const x = (get(a) ?? "").trim();
+    const y = (get(b) ?? "").trim();
+    if (!x !== !y) return x ? -1 : 1;
+    return x.localeCompare(y);
+  };
+}
 export function byNumberDesc<T>(get: (r: T) => number | null | undefined) {
   return (a: T, b: T) => (get(b) ?? -Infinity) - (get(a) ?? -Infinity);
 }
