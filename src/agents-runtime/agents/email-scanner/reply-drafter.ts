@@ -46,6 +46,9 @@ export interface ReplyInput {
   // complete. A missing field NEVER blocks a draft. Gated by the caller behind
   // COMPLETENESS_FOLLOWUP_ENABLED.
   missingApprovalFields?: MissingApprovalField[] | null;
+  // City/state/ZIP of the client's ship-to, mirrored from Tenkara by Agent 12.
+  // Null means we genuinely don't know it and the draft must defer.
+  shipToRegion?: string | null;
 }
 
 export interface ComposedReply {
@@ -69,7 +72,8 @@ const SYSTEM = `You draft short, professional replies to suppliers on behalf of 
 - KEEP INQUIRING UNTIL COMPLETE. If the input lists "Still needed to complete this quote", those are approval-required details we do not have yet. When the supplier is engaged (not declining), ask for all of them in one concise, organized question. Never re-ask for something already provided, and never ask the supplier to pick or suggest a grade.
 - Be concise (3-6 sentences). Warm, businesslike, no fluff.
 - NEVER invent prices, quantities, commitments, ship dates, or terms. If a specific is needed, ask for it rather than stating one.
-- NEVER state a shipping address, phone number, or email address. You do not have real ones. If a supplier asks for an address or contact number (e.g. to "assign a representative"), DEFER — say it will be provided once terms are agreed, and keep the thread as the point of contact. Do not make one up under any circumstances.
+- SHIP-TO: the input may include a "Confirmed ship-to" line, synced from our system of record. When present, that destination is verified and you SHOULD give it if the supplier asks where the material ships, or when a destination helps them quote freight. Quote it EXACTLY as written; never append a street address, building number, or suite to it. When there is no "Confirmed ship-to" line, DEFER — say the delivery location will be confirmed shortly — and never guess a city, state, or ZIP.
+- NEVER state a street address, phone number, or email address. You do not have real ones. If a supplier asks for a full mailing address or a contact number (e.g. to "assign a representative"), DEFER — say it will be provided once terms are agreed, and keep the thread as the point of contact. Do not make one up under any circumstances.
 - Do not fabricate names or sign with a real person's name — end with the team sign-off provided.
 - In ghost mode, only reference the ghost brand; never name the underlying client.
 - Attachments: if the input lists files the supplier attached to this reply, treat them as RECEIVED. NEVER tell the supplier an attachment didn't arrive / isn't coming through / is missing, and never ask them to resend or re-share it. Acknowledge it (e.g. "thanks, we've got your quote/price sheet") and, if pricing was already read from it, say you're reviewing it. Only ask for a specific document if it is genuinely not among the attached files.
@@ -113,6 +117,7 @@ export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
     `Our original outreach subject: ${input.originalSubject ?? "(none)"}`,
     `Their reply subject: ${input.theirSubject ?? "(none)"}`,
     `Their message (snippet): ${input.theirPreview ?? "(not available)"}`,
+    ...(input.shipToRegion ? [`Confirmed ship-to: ${input.shipToRegion}`] : []),
     ...(atts.length
       ? [
           "",

@@ -8,6 +8,7 @@ import { runNoReplyFollowups } from "./no-reply-followup";
 import { handleSupplierForm } from "./form-handler";
 import { postAgentAlert } from "@/lib/slack-alert";
 import { getClientRequirements, requestedDocLabels } from "@/lib/tenkara-requirements";
+import { getClientShipTo } from "@/lib/tenkara-client-settings";
 import Anthropic from "@anthropic-ai/sdk";
 
 // Real Bobber Labs context (from bobberlabs.com / how the client is set up).
@@ -103,6 +104,8 @@ ${BOBBER_LABS_PROFILE}
 ABSOLUTE RULE — NEVER FABRICATE:
 Never state a quantity, volume, order size, grade, ship-to, ZIP, price, or date we don't actually have.
 
+SHIP-TO: the user message may include a "CONFIRMED SHIP-TO" line, synced from our system of record. When it is present that destination is verified, and you SHOULD give it if the supplier asks where the material ships, or when naming a destination helps them quote freight. Quote it EXACTLY as written and never add a street address, building number, or suite to it, even if one appears elsewhere in the thread. When there is no CONFIRMED SHIP-TO line we do not know the destination: say it will be confirmed shortly and do NOT guess a city, state, or ZIP.
+
 HOW WE OPERATE (important): We are gathering supplier pricing. We do NOT need to tell a supplier our order quantity, ship-to, or grade to get a quote — we simply ask for THEIR current pricing, lead time, and MOQ for the materials, and confirm exact volumes later. So missing order specs on our side is NORMAL and is NOT a reason to stall. Just ask the supplier for their pricing.
 
 needs_info is for genuine blockers only: set it true ONLY if the supplier explicitly asks a specific question we cannot answer from OUR ORIGINAL OUTREACH or the profile AND it truly blocks any reply. Do NOT set needs_info just because we lack a quantity/ship-to/grade — in that case still draft the pricing ask.
@@ -166,12 +169,16 @@ async function classifyAndDraft(opts: {
   theirSubject: string | null;
   theirBody: string | null;
   clientNotes: string | null;
+  shipToRegion: string | null;
 }): Promise<Classification | null> {
   const user = [
     `Supplier company: ${opts.supplierName ?? "(unknown)"}`,
     `Their contact name: ${opts.contactName ?? "(unknown)"}`,
     `Materials in our outreach: ${opts.materials.join(", ") || "(unspecified)"}`,
     "",
+    ...(opts.shipToRegion
+      ? [`CONFIRMED SHIP-TO: ${opts.shipToRegion}`, ""]
+      : []),
     "CLIENT PROFILE / SOURCING SETTINGS (authoritative facts only — ship-to, pack sizes, pricing preference. Never state anything not here):",
     opts.clientNotes || BOBBER_LABS_PROFILE,
     "",
@@ -269,6 +276,23 @@ registerAgent({
       const notes = (data as any)?.sourcing_notes ?? null;
       clientNotesByOrg.set(orgId, notes);
       return notes;
+    }
+
+    // The client's ship-to, mirrored hourly from Tenkara by Agent 12. City,
+    // state and ZIP only — enough for a supplier to quote freight, and it stays
+    // clear of contact-guard's street-address block.
+    const shipToByOrg = new Map<string, string | null>();
+    async function getShipToRegion(orgId: string | null): Promise<string | null> {
+      if (!orgId) return null;
+      if (shipToByOrg.has(orgId)) return shipToByOrg.get(orgId)!;
+      let region: string | null = null;
+      try {
+        region = (await getClientShipTo(admin, orgId))?.region ?? null;
+      } catch {
+        region = null;
+      }
+      shipToByOrg.set(orgId, region);
+      return region;
     }
 
     // Cache the client's requested qualification-document labels per org. Read
@@ -437,6 +461,7 @@ registerAgent({
 
       const materials = Array.from(new Set(rows.map((r) => (r.metadata as any)?.material_name).filter(Boolean)));
       const clientNotes = await getClientNotes(head.org_id ?? null);
+      const shipTo = await getShipToRegion(head.org_id ?? null);
       const cls = await classifyAndDraft({
         supplierName: meta.supplier_name ?? null,
         contactName,
@@ -446,6 +471,7 @@ registerAgent({
         theirSubject,
         theirBody,
         clientNotes,
+        shipToRegion: shipTo,
       });
       if (!cls) { skipped++; continue; }
 

@@ -1,8 +1,9 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { notFound } from "next/navigation";
 import { getSession, hasAnyRole } from "@/lib/auth";
-import { ClientProfilePanel, type ProfileValue, type SettingsValue, type UploadItem, type DncValue } from "@/components/client-profile-form";
+import { ClientProfilePanel, type ProfileValue, type SettingsValue, type UploadItem, type DncValue, type SyncedShipToValue } from "@/components/client-profile-form";
 import { getSourcingExclusionsDetail } from "@/lib/tenkara-sourcing-exclusions";
+import { formatFullAddress, shipToRegion } from "@/lib/tenkara-client-settings";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
@@ -71,6 +72,37 @@ export default async function ClientProfilePage({ params }: { params: { slug: st
     dnc = null;
   }
 
+  // Ship-to, mirrored from Tenkara by Agent 12. Read straight from the mirror
+  // (not Tenkara) so the page shows exactly what the agents will use.
+  const { data: syncRow } = await admin
+    .from("client_tenkara_settings")
+    .select("ship_to_company, ship_to_address_line, ship_to_apartment, ship_to_city, ship_to_state, ship_to_zip, ship_to_country, shipping_addresses, unit_of_measurement, synced_at, source_updated_at, sync_error")
+    .eq("org_id", org.id)
+    .maybeSingle();
+
+  const syncedAddress = syncRow
+    ? {
+        company: syncRow.ship_to_company,
+        addressLine: syncRow.ship_to_address_line,
+        apartment: syncRow.ship_to_apartment,
+        city: syncRow.ship_to_city,
+        state: syncRow.ship_to_state,
+        zip: syncRow.ship_to_zip,
+        country: syncRow.ship_to_country,
+      }
+    : null;
+
+  const shipTo: SyncedShipToValue = {
+    linked: !!org.tenkara_org_id,
+    region: shipToRegion(syncedAddress),
+    full: formatFullAddress(syncedAddress),
+    addressCount: Array.isArray(syncRow?.shipping_addresses) ? syncRow!.shipping_addresses.length : 0,
+    unitOfMeasurement: syncRow?.unit_of_measurement ?? null,
+    syncedAt: syncRow?.synced_at ?? null,
+    sourceUpdatedAt: syncRow?.source_updated_at ?? null,
+    syncError: syncRow?.sync_error ?? null,
+  };
+
   return (
     <div className="space-y-6">
       <p className="text-sm text-muted-foreground">
@@ -89,7 +121,7 @@ export default async function ClientProfilePage({ params }: { params: { slug: st
         <span className="text-muted-foreground group-hover:text-foreground" aria-hidden>→</span>
       </Link>
 
-      <ClientProfilePanel orgId={org.id} slug={org.slug} profile={profile} settings={settings} uploads={uploads} canEdit={canEdit} dnc={dnc} />
+      <ClientProfilePanel orgId={org.id} slug={org.slug} profile={profile} settings={settings} uploads={uploads} canEdit={canEdit} dnc={dnc} shipTo={shipTo} />
     </div>
   );
 }

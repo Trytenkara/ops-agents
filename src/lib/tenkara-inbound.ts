@@ -12,6 +12,7 @@ import { parseAttachmentBytes, deriveExt, isPricingCandidateExt } from "@/agents
 import { getTenkaraConversationMessages } from "@/lib/tenkara";
 import { postAgentAlert } from "@/lib/slack-alert";
 import { upsertSupplierProfile } from "@/lib/supplier-profiles";
+import { getClientShipTo } from "@/lib/tenkara-client-settings";
 import {
   completenessFollowupEnabled,
   computeMissingApprovalFields,
@@ -766,6 +767,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     threadContext,
     heldMaterialNames,
     missingApprovalFields: bodyExtraction.declined ? [] : missingApprovalFields,
+    shipToRegion: (await getClientShipTo(admin, ref.org_id))?.region ?? null,
   });
 
   // Introduce held materials only when the supplier engaged and did not hard-decline.

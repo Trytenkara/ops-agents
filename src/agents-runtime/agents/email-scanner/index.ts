@@ -7,6 +7,7 @@ import { stageDraft } from "@/lib/draft-staging";
 import { parseMessageAttachments } from "./attachment-parser";
 import { insertStagedQuotes, type StagedQuoteInput } from "@/lib/staged-quotes";
 import { missivePollingEnabled } from "@/lib/tenkara";
+import { getClientShipTo } from "@/lib/tenkara-client-settings";
 
 // Agent 08 — Email Scanner (v1)
 //
@@ -451,6 +452,7 @@ registerAgent({
                 originalSubject: ref.subject,
                 theirSubject: m.subject ?? conv.latest_message_subject ?? null,
                 theirPreview: m.preview ?? null,
+                shipToRegion: (await getClientShipTo(admin, ref.org_id))?.region ?? null,
               });
               const staged = await stageDraft({
                 admin,

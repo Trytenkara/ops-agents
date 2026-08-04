@@ -44,6 +44,16 @@ export interface DncValue {
   countries: string[];
   linked: boolean; // false when the org has no Tenkara client link
 }
+export interface SyncedShipToValue {
+  linked: boolean;      // false when the org has no Tenkara client link
+  region: string | null; // city, state ZIP — what agents may tell a supplier
+  full: string | null;   // full address, ops reference only
+  addressCount: number;
+  unitOfMeasurement: string | null;
+  syncedAt: string | null;
+  sourceUpdatedAt: string | null;
+  syncError: string | null;
+}
 
 const MODE_OPTIONS = [
   { value: "active", label: "Active" },
@@ -73,6 +83,7 @@ export function ClientProfilePanel({
   uploads,
   canEdit,
   dnc,
+  shipTo,
 }: {
   orgId: string;
   slug: string;
@@ -81,6 +92,7 @@ export function ClientProfilePanel({
   uploads: UploadItem[];
   canEdit: boolean;
   dnc: DncValue | null;
+  shipTo: SyncedShipToValue | null;
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -98,7 +110,7 @@ export function ClientProfilePanel({
   return (
     <div className="space-y-6">
       <SettingsCard orgId={orgId} settings={settings} canEdit={canEdit} pending={pending} run={run} />
-      <RepSheetCard orgId={orgId} profile={profile} canEdit={canEdit} pending={pending} run={run} dnc={dnc} />
+      <RepSheetCard orgId={orgId} profile={profile} canEdit={canEdit} pending={pending} run={run} dnc={dnc} shipTo={shipTo} />
       <ProfileCard orgId={orgId} profile={profile} canEdit={canEdit} pending={pending} run={run} />
       <UploadsCard orgId={orgId} slug={slug} uploads={uploads} canEdit={canEdit} pending={pending} run={run} />
       {msg && <p className={msg.kind === "ok" ? "text-sm text-emerald-700" : "text-sm text-red-700"}>{msg.text}</p>}
@@ -120,7 +132,7 @@ function Section({ title, action, children }: { title: string; action?: React.Re
   );
 }
 
-function RepSheetCard({ orgId, profile, canEdit, pending, run, dnc }: { orgId: string; profile: ProfileValue | null; canEdit: boolean; pending: boolean; run: RunFn; dnc: DncValue | null }) {
+function RepSheetCard({ orgId, profile, canEdit, pending, run, dnc, shipTo }: { orgId: string; profile: ProfileValue | null; canEdit: boolean; pending: boolean; run: RunFn; dnc: DncValue | null; shipTo: SyncedShipToValue | null }) {
   const sheet = profile?.rep_sheet ?? {};
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>(() =>
@@ -158,6 +170,38 @@ function RepSheetCard({ orgId, profile, canEdit, pending, run, dnc }: { orgId: s
           </div>
         ))}
       </dl>
+
+      <div className="border-t border-border pt-3 mt-1 space-y-2">
+        <div className="text-xs uppercase tracking-wider text-muted-foreground">Ship-to</div>
+        <p className="text-xs text-muted-foreground -mt-1">
+          Synced from this client&apos;s Tenkara settings every hour. Edit it in Tenkara, not here. Agents tell suppliers
+          the city, state and ZIP only; the street line is never sent.
+        </p>
+        {shipTo === null ? (
+          <p className="text-sm text-muted-foreground">Couldn&apos;t load right now — refresh to retry.</p>
+        ) : !shipTo.linked ? (
+          <p className="text-sm text-muted-foreground italic">Not linked to a Tenkara client yet.</p>
+        ) : !shipTo.region ? (
+          <p className="text-sm text-amber-700">
+            No ship-to configured in Tenkara. Suppliers who ask where material ships will be told it is coming shortly.
+          </p>
+        ) : (
+          <div className="text-sm space-y-1">
+            <div>
+              <span className="font-medium">{shipTo.region}</span>
+              <span className="text-xs text-muted-foreground ml-2">shared with suppliers</span>
+            </div>
+            {shipTo.full && <div className="text-xs text-muted-foreground">{shipTo.full} (internal reference)</div>}
+            <div className="text-xs text-muted-foreground">
+              {shipTo.addressCount > 1 && `${shipTo.addressCount} addresses in Tenkara, first one used · `}
+              {shipTo.unitOfMeasurement && `units: ${shipTo.unitOfMeasurement} · `}
+              {shipTo.sourceUpdatedAt && `changed in Tenkara ${new Date(shipTo.sourceUpdatedAt).toLocaleDateString()} · `}
+              {shipTo.syncedAt ? `synced ${new Date(shipTo.syncedAt).toLocaleString()}` : "not synced yet"}
+            </div>
+          </div>
+        )}
+        {shipTo?.syncError && <p className="text-sm text-red-700">Last sync failed: {shipTo.syncError}</p>}
+      </div>
 
       <div className="border-t border-border pt-3 mt-1 space-y-2">
         <div className="text-xs uppercase tracking-wider text-muted-foreground">Do-not-contact &amp; excluded countries</div>
