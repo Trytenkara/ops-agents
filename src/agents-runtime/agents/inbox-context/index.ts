@@ -56,8 +56,9 @@ interface ThreadRef {
   supplier_name: string | null;
   supplier_id: string | null;
   org_id: string | null;
-  // A reply we have already processed, or a no-reply nudge, both prove the
-  // outreach was actually sent — so the conversation has messages to read.
+  // A sent draft, a reply we have already processed, or a no-reply nudge all
+  // prove the outreach really went out, so the conversation has messages to
+  // read. Everything else is probably a staged draft nobody sent.
   hasKnownTraffic: boolean;
   isInternalOrg: boolean;
   createdAt: string;
@@ -184,20 +185,28 @@ registerAgent({
     // 2. Every Tenkara thread we have staged a draft into, most recent first.
     //    supplier_id is NOT required: Agents 04/08/15 leave it null (only Agent 02
     //    sets it), and Agent 02 keys this table on the email anyway.
+    //    Paged: PostgREST caps a response at 1000 rows regardless of .limit(),
+    //    which silently hid a third of the threads.
     const since = new Date(Date.now() - LOOKBACK_DAYS * 86400_000).toISOString();
-    const { data: draftRows, error: draftErr } = await admin
-      .from("draft_references")
-      .select("thread_id, supplier_id, org_id, metadata, created_at")
-      .eq("email_client", "rod_app")
-      .not("thread_id", "is", null)
-      .gte("created_at", since)
-      .order("created_at", { ascending: false })
-      .limit(5000);
-    if (draftErr) {
-      await ctx.log(`draft_references read failed: ${draftErr.message}`, { level: "error", step: "threads" });
-      ctx.setStatus("failure");
-      ctx.setSummary(`Could not list threads: ${draftErr.message}`);
-      return;
+    const PAGE = 1000;
+    const draftRows: any[] = [];
+    for (let page = 0; page < 20; page++) {
+      const { data, error } = await admin
+        .from("draft_references")
+        .select("thread_id, supplier_id, org_id, status, metadata, created_at")
+        .eq("email_client", "rod_app")
+        .not("thread_id", "is", null)
+        .gte("created_at", since)
+        .order("created_at", { ascending: false })
+        .range(page * PAGE, page * PAGE + PAGE - 1);
+      if (error) {
+        await ctx.log(`draft_references read failed: ${error.message}`, { level: "error", step: "threads" });
+        ctx.setStatus("failure");
+        ctx.setSummary(`Could not list threads: ${error.message}`);
+        return;
+      }
+      draftRows.push(...(data ?? []));
+      if ((data?.length ?? 0) < PAGE) break;
     }
 
     // Collapse to one entry per thread. Prefer a company name over the personal
@@ -220,7 +229,8 @@ registerAgent({
         continue;
       }
       const kind = row.metadata?.draft_kind ?? null;
-      const traffic = kind === "inbound_reply" || kind === "no_reply_followup";
+      const traffic =
+        row.status === "sent" || kind === "inbound_reply" || kind === "no_reply_followup";
       const existing = byThread.get(tid);
       if (!existing) {
         byThread.set(tid, {
