@@ -398,6 +398,9 @@ export interface TenkaraMessage {
 // state. Returns [] on any error so callers never break on a read miss.
 export interface TenkaraConversationDetails {
   found: boolean;
+  // HTTP status of the read, or null when the request never completed. Lets a
+  // caller report WHY a thread was unreadable instead of guessing.
+  status: number | null;
   // The read was throttled (Tenkara allows 60 requests/minute), so "not found"
   // here means "unknown", not "no such conversation". Callers that infer state
   // from an empty history must not treat a throttled read as an empty thread.
@@ -411,9 +414,10 @@ export async function getTenkaraConversationDetails(
   conversationId: string,
   opts?: { retryOn429?: boolean }
 ): Promise<TenkaraConversationDetails> {
-  const miss = (rateLimited = false): TenkaraConversationDetails => ({
+  const miss = (status: number | null = null): TenkaraConversationDetails => ({
     found: false,
-    rateLimited,
+    status,
+    rateLimited: status === 429,
     emailAccountId: null,
     hasActiveDraft: false,
     messages: [],
@@ -431,7 +435,7 @@ export async function getTenkaraConversationDetails(
         headers: { Authorization: `Bearer ${token}` },
       });
     }
-    if (!res.ok) return miss(res.status === 429);
+    if (!res.ok) return miss(res.status);
     const data = await res.json();
     const messages = (Array.isArray(data?.messages) ? data.messages : []).map((m: any) => ({
       is_outbound: typeof m.is_outbound === "boolean" ? m.is_outbound : null,
@@ -445,6 +449,7 @@ export async function getTenkaraConversationDetails(
     }));
     return {
       found: true,
+      status: res.status,
       rateLimited: false,
       emailAccountId: data?.email_account_id ?? data?.conversation?.email_account_id ?? null,
       hasActiveDraft: Boolean(data?.draft ?? data?.active_draft ?? data?.conversation?.draft),

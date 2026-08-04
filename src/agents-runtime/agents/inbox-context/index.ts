@@ -286,6 +286,7 @@ registerAgent({
     let emptyThreads = 0;
     let throttled = 0;
     let walked = 0;
+    const missStatuses: Record<string, number> = {};
     {
       const walkUntil = Date.now() + WALK_BUDGET_MS;
       for (const t of budgeted) {
@@ -294,7 +295,11 @@ registerAgent({
         const details = await getTenkaraConversationDetails(t.thread_id, { retryOn429: true });
         if (!details.found) {
           if (details.rateLimited) throttled++;
-          else threadMisses++;
+          else {
+            threadMisses++;
+            const key = details.status === null ? "no_response" : String(details.status);
+            missStatuses[key] = (missStatuses[key] ?? 0) + 1;
+          }
           continue;
         }
 
@@ -357,7 +362,7 @@ registerAgent({
     if (accum.size === 0) {
       await ctx.log("No thread had any sent or received message — nothing to upsert.", {
         step: "done",
-        data: { walked, unwalked, threadMisses, emptyThreads, throttled },
+        data: { walked, unwalked, threadMisses, missStatuses, emptyThreads, throttled },
       });
       ctx.setStatus(threadMisses + throttled + unwalked > 0 ? "partial" : "success");
       ctx.setSummary(
@@ -455,6 +460,7 @@ registerAgent({
           walked,
           unwalked,
           threadMisses,
+          missStatuses,
           emptyThreads,
           throttled,
         },
