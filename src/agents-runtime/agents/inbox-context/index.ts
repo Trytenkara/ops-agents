@@ -26,11 +26,14 @@ import Anthropic from "@anthropic-ai/sdk";
 const STALE_DAYS = 21;
 // How far back to consider a thread worth refreshing context for.
 const LOOKBACK_DAYS = 90;
-// Each thread costs one Tenkara API call (~1.4s serially), so reads run in a
-// small pool and the fan-out is capped. Threads are walked best-first (see
-// rankThreads), so the cap drops the coldest unsent drafts first.
-const MAX_CONVERSATIONS = 700;
-const READ_CONCURRENCY = 6;
+// Each thread costs one Tenkara API call. Tenkara allows 60 requests/minute and
+// a read takes ~1.4s, so reads stay SERIAL: that paces at ~43/min on its own,
+// while six in parallel burns the whole minute's budget in nine seconds and the
+// rest of the run reads nothing. Threads are walked best-first (see rankThreads)
+// and the walk also stops on a wall-clock budget, so what gets dropped is the
+// coldest unsent drafts.
+const MAX_CONVERSATIONS = 400;
+const WALK_BUDGET_MS = 8.5 * 60_000;
 // Cap LLM summaries so a big inbox can't blow the run budget. Threads beyond
 // this still get a heuristic summary from the latest message body.
 const MAX_LLM_SUMMARIES = 40;
@@ -271,14 +274,17 @@ registerAgent({
     const accum = new Map<string, Accum>();
     let threadMisses = 0;
     let emptyThreads = 0;
-    for (let i = 0; i < budgeted.length; i += READ_CONCURRENCY) {
-      const chunk = budgeted.slice(i, i + READ_CONCURRENCY);
-      const fetched = await Promise.all(chunk.map((t) => getTenkaraConversationDetails(t.thread_id)));
-      for (let k = 0; k < chunk.length; k++) {
-        const t = chunk[k];
-        const details = fetched[k];
+    let throttled = 0;
+    let walked = 0;
+    {
+      const walkUntil = Date.now() + WALK_BUDGET_MS;
+      for (const t of budgeted) {
+        if (Date.now() > walkUntil) break;
+        walked++;
+        const details = await getTenkaraConversationDetails(t.thread_id, { retryOn429: true });
         if (!details.found) {
-          threadMisses++;
+          if (details.rateLimited) throttled++;
+          else threadMisses++;
           continue;
         }
 
@@ -337,14 +343,15 @@ registerAgent({
       }
     }
 
+    const unwalked = budgeted.length - walked;
     if (accum.size === 0) {
       await ctx.log("No thread had any sent or received message — nothing to upsert.", {
         step: "done",
-        data: { threadMisses, emptyThreads },
+        data: { walked, unwalked, threadMisses, emptyThreads, throttled },
       });
-      ctx.setStatus(threadMisses > 0 ? "partial" : "success");
+      ctx.setStatus(threadMisses + throttled + unwalked > 0 ? "partial" : "success");
       ctx.setSummary(
-        `Walked ${budgeted.length} threads; ${emptyThreads} staged-but-unsent, ${threadMisses} unreadable. No context to write.`
+        `Walked ${walked} threads; ${emptyThreads} staged-but-unsent, ${threadMisses} unreadable, ${throttled} throttled, ${unwalked} out of time. No context to write.`
       );
       ctx.setItemsProcessed(0);
       return;
@@ -429,14 +436,29 @@ registerAgent({
       `Upserted ${upserted} supplier-context rows (${Object.entries(stateCounts)
         .map(([k, v]) => `${k}=${v}`)
         .join(", ")}); ${summariesDone} LLM summaries; ${emptyThreads} threads staged-but-unsent`,
-      { step: "done", data: { upserted, stateCounts, summaries: summariesDone, threadMisses, emptyThreads } }
+      {
+        step: "done",
+        data: {
+          upserted,
+          stateCounts,
+          summaries: summariesDone,
+          walked,
+          unwalked,
+          threadMisses,
+          emptyThreads,
+          throttled,
+        },
+      }
     );
-    ctx.setStatus(threadMisses > 0 ? "partial" : "success");
+    ctx.setStatus(threadMisses + throttled + unwalked > 0 ? "partial" : "success");
     ctx.setItemsProcessed(upserted);
     ctx.setSummary(
       `Built context for ${upserted} suppliers (${Object.entries(stateCounts)
         .map(([k, v]) => `${v} ${k}`)
-        .join(", ")}); ${emptyThreads} threads staged but never sent.`
+        .join(", ")}); ${emptyThreads} threads staged but never sent` +
+        (throttled ? `; ${throttled} throttled by Tenkara` : "") +
+        (unwalked ? `; ${unwalked} left for the next run` : "") +
+        "."
     );
   },
 });

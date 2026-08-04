@@ -398,19 +398,40 @@ export interface TenkaraMessage {
 // state. Returns [] on any error so callers never break on a read miss.
 export interface TenkaraConversationDetails {
   found: boolean;
+  // The read was throttled (Tenkara allows 60 requests/minute), so "not found"
+  // here means "unknown", not "no such conversation". Callers that infer state
+  // from an empty history must not treat a throttled read as an empty thread.
+  rateLimited: boolean;
   emailAccountId: string | null;
   hasActiveDraft: boolean;
   messages: TenkaraMessage[];
 }
 
-export async function getTenkaraConversationDetails(conversationId: string): Promise<TenkaraConversationDetails> {
+export async function getTenkaraConversationDetails(
+  conversationId: string,
+  opts?: { retryOn429?: boolean }
+): Promise<TenkaraConversationDetails> {
+  const miss = (rateLimited = false): TenkaraConversationDetails => ({
+    found: false,
+    rateLimited,
+    emailAccountId: null,
+    hasActiveDraft: false,
+    messages: [],
+  });
   const token = process.env.TENKARA_API_TOKEN;
-  if (!token || !conversationId) return { found: false, emailAccountId: null, hasActiveDraft: false, messages: [] };
+  if (!token || !conversationId) return miss();
   try {
-    const res = await fetch(`${TENKARA_INBOX_BASE}/api/external/conversations/${encodeURIComponent(conversationId)}`, {
+    let res = await fetch(`${TENKARA_INBOX_BASE}/api/external/conversations/${encodeURIComponent(conversationId)}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (!res.ok) return { found: false, emailAccountId: null, hasActiveDraft: false, messages: [] };
+    if (res.status === 429 && opts?.retryOn429) {
+      const wait = Math.min(65_000, (Number(res.headers.get("retry-after")) || 60) * 1000);
+      await new Promise((r) => setTimeout(r, wait));
+      res = await fetch(`${TENKARA_INBOX_BASE}/api/external/conversations/${encodeURIComponent(conversationId)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    }
+    if (!res.ok) return miss(res.status === 429);
     const data = await res.json();
     const messages = (Array.isArray(data?.messages) ? data.messages : []).map((m: any) => ({
       is_outbound: typeof m.is_outbound === "boolean" ? m.is_outbound : null,
@@ -424,12 +445,13 @@ export async function getTenkaraConversationDetails(conversationId: string): Pro
     }));
     return {
       found: true,
+      rateLimited: false,
       emailAccountId: data?.email_account_id ?? data?.conversation?.email_account_id ?? null,
       hasActiveDraft: Boolean(data?.draft ?? data?.active_draft ?? data?.conversation?.draft),
       messages,
     };
   } catch {
-    return { found: false, emailAccountId: null, hasActiveDraft: false, messages: [] };
+    return miss();
   }
 }
 
