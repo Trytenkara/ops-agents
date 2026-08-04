@@ -17,6 +17,7 @@ import { fmtCaseDims, resolveCaseDims, type CaseDims } from "@/lib/marketplace-c
 import { relativeTime } from "@/lib/utils";
 import { aggregatorNameOf } from "@/lib/aggregator-hosts";
 import { qaPrice, type QaResult } from "@/lib/price-qa";
+import { resolveDensity, type DensityIndex } from "@/lib/material-density";
 
 const COLS = 10;
 
@@ -30,9 +31,14 @@ function unitPriceOf(r: any): { value: number; unit: string } | null {
   return perUnitPrice(r.current_price ?? r.baseline_price ?? null, r.pack_size ?? null);
 }
 
-function qaOf(r: any): QaResult {
+function qaOf(r: any, densities: DensityIndex = {}): QaResult {
+  const d = resolveDensity(densities, r.material_name);
   return qaPrice({
     material_name: r.material_name,
+    density: d?.density ?? null,
+    density_unit: d?.unit ?? null,
+    density_rank: d?.rank ?? null,
+    density_kind: d?.kind ?? null,
     price: r.current_price ?? r.baseline_price ?? null,
     unit_price: r.unit_price ?? null,
     pack_size: r.pack_size ?? null,
@@ -50,9 +56,9 @@ function perUnitLabel(r: any): string {
 // Cheapest first. $/kg is the only figure comparable ACROSS pack sizes, so it
 // sorts ahead of raw per-unit (which would rank $/oz against $/kg as if they
 // were the same number); rows with neither sort last.
-function tierSort(a: any, b: any): number {
-  const ka = qaOf(a).price_per_kg_usd;
-  const kb = qaOf(b).price_per_kg_usd;
+function tierSort(a: any, b: any, densities: DensityIndex): number {
+  const ka = qaOf(a, densities).price_per_kg_usd;
+  const kb = qaOf(b, densities).price_per_kg_usd;
   if (ka != null && kb != null && ka !== kb) return ka - kb;
   if (ka != null && kb == null) return -1;
   if (ka == null && kb != null) return 1;
@@ -69,6 +75,7 @@ export function MarketplaceFindingsList({
   orgClients = [],
   tagsByMaterialName = {},
   dimsByPack = {},
+  densities = {},
 }: {
   rows: any[];
   canAct: boolean;
@@ -76,6 +83,7 @@ export function MarketplaceFindingsList({
   orgClients?: { id: string; name: string }[];
   tagsByMaterialName?: Record<string, string>;
   dimsByPack?: Record<string, CaseDims>;
+  densities?: DensityIndex;
 }) {
   const [clientFilter, setClientFilter] = useState("all");
   const clientRows = clientFilter === "all"
@@ -110,9 +118,9 @@ export function MarketplaceFindingsList({
     r.pack_size ?? "",
     fmtCaseDims(resolveCaseDims(dimsByPack, r.pack_size)) ?? "",
     perUnitLabel(r),
-    qaOf(r).price_per_kg_usd ?? "",
-    qaOf(r).pack_class,
-    qaOf(r).verdict,
+    qaOf(r, densities).price_per_kg_usd ?? "",
+    qaOf(r, densities).pack_class,
+    qaOf(r, densities).verdict,
     r.baseline_price ?? "",
     r.current_price ?? "",
     r.pct_change != null ? `${r.pct_change}%` : "",
@@ -162,7 +170,7 @@ export function MarketplaceFindingsList({
         <TableBody>
           {Array.from(groups.values()).map((tiers) => {
             const head = tiers[0];
-            const sorted = [...tiers].sort(tierSort);
+            const sorted = [...tiers].sort((x, y) => tierSort(x, y, densities));
             const supplierCount = new Set(tiers.map((t) => t.supplier_name).filter(Boolean)).size;
             return (
               <Fragment key={head.material_name ?? "—"}>
@@ -177,7 +185,7 @@ export function MarketplaceFindingsList({
                 </TableRow>
                 {sorted.map((r) => {
                   const pu = unitPriceOf(r);
-                  const qa = qaOf(r);
+                  const qa = qaOf(r, densities);
                   return (
                     <TableRow key={r.id}>
                       <TableCell className="align-top">

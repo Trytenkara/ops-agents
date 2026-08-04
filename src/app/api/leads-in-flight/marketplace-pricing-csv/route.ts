@@ -5,6 +5,7 @@ import { getAssignedOrgIds } from "@/lib/org-access";
 import { toCsv, type CsvCell } from "@/lib/csv";
 import { correctMaterialSpelling } from "@/lib/material-spelling";
 import { loadMarketplaceCaseDims, resolveCaseDims } from "@/lib/marketplace-case-dims";
+import { loadMaterialDensities, resolveDensity } from "@/lib/material-density";
 import { tierBreakdown } from "@/lib/price-tiers";
 import { qaPrice } from "@/lib/price-qa";
 import { aggregatorNameFromPayload } from "@/lib/aggregator-hosts";
@@ -110,6 +111,10 @@ export async function GET(request: NextRequest) {
   ];
 
   const dimsByPack = await loadMarketplaceCaseDims(admin);
+  // Loaded across orgs on purpose: a density is a physical property of the material
+  // with a public citation, not client data, so one org's sourced value is valid
+  // for every org quoting the same material.
+  const densities = await loadMaterialDensities(admin);
 
   // Expand each lead into one row per price tier. If no tiers exist, emit one
   // row with empty tier columns so every lead is still visible in the export.
@@ -126,6 +131,7 @@ export async function GET(request: NextRequest) {
     const moq: string | null = p.moq ?? null;
     const updatedAt: string | null = p.price_tiers_updated_at ?? null;
     const materialName = correctMaterialSpelling(r.material_name);
+    const matDensity = resolveDensity(densities, materialName);
 
     const tiers: {
       pack_size?: string | null;
@@ -158,6 +164,10 @@ export async function GET(request: NextRequest) {
           : null);
       const qa = qaPrice({
         material_name: materialName,
+        density: matDensity?.density ?? null,
+        density_unit: matDensity?.unit ?? null,
+        density_rank: matDensity?.rank ?? null,
+      density_kind: matDensity?.kind ?? null,
         price: t.price ?? null,
         unit_price: t.unit_price ?? null,
         pack_size: t.pack_size ?? null,

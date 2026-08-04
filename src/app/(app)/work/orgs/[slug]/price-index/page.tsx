@@ -18,6 +18,7 @@ import { getSupplierProfiles } from "@/lib/supplier-profiles";
 import { CasesSection } from "@/components/cases-section";
 import { loadOrgCases, caseCategory } from "@/lib/org-cases";
 import { loadMarketplaceCaseDims, fmtCaseDims } from "@/lib/marketplace-case-dims";
+import { loadMaterialDensities } from "@/lib/material-density";
 import { cn } from "@/lib/utils";
 import { aggregatorNameFromPayload, aggregatorNameOf } from "@/lib/aggregator-hosts";
 import { leadMarketKind, type MarketKind } from "@/lib/lead-market";
@@ -283,6 +284,9 @@ export default async function OrgPriceIndexPage({
   }
 
   const marketplaceDims = await loadMarketplaceCaseDims(admin);
+  // Cross-org by design: density is a physical property with a public citation,
+  // so a value sourced for one client is valid for every client's same material.
+  const densities = await loadMaterialDensities(admin);
 
   const { openRows: caseOpen, resolvedRows: caseResolved } = await loadOrgCases(admin, org.id);
   const quoteCasesOpen = caseOpen.filter((c) => caseCategory(c.type) === "quote");
@@ -367,7 +371,7 @@ export default async function OrgPriceIndexPage({
                 No {STATUSES.find((s) => s.value === status)?.label.toLowerCase()} marketplace prices yet.
               </p>
             ) : (
-              <MarketplaceFindingsList rows={marketplaceRows} canAct={canAct} slug={org.slug} orgClients={orgClients} tagsByMaterialName={tagsByMaterialName} dimsByPack={marketplaceDims} />
+              <MarketplaceFindingsList rows={marketplaceRows} canAct={canAct} slug={org.slug} orgClients={orgClients} tagsByMaterialName={tagsByMaterialName} dimsByPack={marketplaceDims} densities={densities} />
             )}
           </section>
         }
@@ -381,7 +385,7 @@ export default async function OrgPriceIndexPage({
             {aggregatorRows.length === 0 ? (
               <p className="text-sm text-muted-foreground py-4">No aggregator prices yet.</p>
             ) : (
-              <MarketplaceFindingsList rows={aggregatorRows} canAct={canAct} slug={org.slug} orgClients={orgClients} tagsByMaterialName={tagsByMaterialName} dimsByPack={marketplaceDims} />
+              <MarketplaceFindingsList rows={aggregatorRows} canAct={canAct} slug={org.slug} orgClients={orgClients} tagsByMaterialName={tagsByMaterialName} dimsByPack={marketplaceDims} densities={densities} />
             )}
           </section>
         }

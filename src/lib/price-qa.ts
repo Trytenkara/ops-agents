@@ -14,6 +14,7 @@
 // Never edits data. It flags, it does not fix.
 
 import { parsePackSize } from "@/lib/price-tiers";
+import { DENSITY_RANK_LABEL, rankDensitySource, resolveDensity, type DensityIndex, type DensityKind, type DensityRank } from "@/lib/material-density";
 
 export type QaVerdict = "pass" | "warn" | "needs_review";
 export type QaSeverity = "info" | "warn" | "error";
@@ -44,6 +45,10 @@ export interface QaInput {
   unit_of_measurement?: string | null;
   density?: number | null;
   density_unit?: string | null;
+  /** Where the density came from, so a $/kg that depends on one can be judged. */
+  density_rank?: DensityRank | null;
+  /** Bulk (a powder's fill density) or liquid, since only one of them fills a pack. */
+  density_kind?: DensityKind | null;
   source_url?: string | null;
   /** "low" for aggregator listings (Agent 05 sets price_trust on the pull). */
   price_trust?: string | null;
@@ -115,22 +120,22 @@ function expectedDensity(material: string | null | undefined): [number, number] 
  * a 26% error on glycerin, and a guessed comparison basis is a fabricated number.
  * Returns null instead, and the caller flags why.
  */
-export function packKg(input: QaInput): { kg: number | null; reason: string | null } {
+export function packKg(input: QaInput): { kg: number | null; reason: string | null; basis: "mass" | "density" | null } {
   const parsed = parsePackSize(input.pack_size);
   const size = positive(input.case_size) ?? parsed.case_size;
   const unit = input.unit_of_measurement || parsed.unit_of_measurement;
-  if (size == null || size <= 0 || !unit) return { kg: null, reason: "no_pack_size" };
+  if (size == null || size <= 0 || !unit) return { kg: null, reason: "no_pack_size", basis: null };
 
-  if (MASS_TO_KG[unit] != null) return { kg: size * MASS_TO_KG[unit], reason: null };
+  if (MASS_TO_KG[unit] != null) return { kg: size * MASS_TO_KG[unit], reason: null, basis: "mass" };
 
   if (VOLUME_TO_L[unit] != null) {
     const g = densityGml(input.density, input.density_unit);
-    if (g == null) return { kg: null, reason: "density_missing_for_volume_pack" };
-    return { kg: size * VOLUME_TO_L[unit] * g, reason: null };
+    if (g == null) return { kg: null, reason: "density_missing_for_volume_pack", basis: null };
+    return { kg: size * VOLUME_TO_L[unit] * g, reason: null, basis: "density" };
   }
 
   // ea / unit / ct / pc is a count, not a mass. Nothing to compare on.
-  return { kg: null, reason: "countable_pack" };
+  return { kg: null, reason: "countable_pack", basis: null };
 }
 
 function packClass(kg: number | null): PackClass {
@@ -201,9 +206,20 @@ export function qaPrice(input: QaInput): QaResult {
     add("density_implausible", `Density ~${g.toFixed(3)} g/mL is outside the expected ${range[0]}-${range[1]} for this material.`, "warn");
   }
 
-  const { kg, reason } = packKg(input);
+  const { kg, reason, basis } = packKg(input);
   if (price != null && reason === "density_missing_for_volume_pack") {
     add("density_missing_for_volume_pack", "Liquid pack with no density on file, so $/kg cannot be computed honestly.", "info");
+  }
+  // A $/kg that rests on a density is only as good as where the density came from.
+  // A pack already quoted in mass units rests on nothing, so it is not flagged.
+  if (price != null && kg != null && basis === "density" && g != null) {
+    const rank: DensityRank = input.density_rank ?? "unattributed";
+    const what = input.density_kind === "bulk" ? "bulk density" : "density";
+    add(
+      "converted_via_density",
+      `$/kg uses ${what} ${g.toFixed(3)} g/ml (${DENSITY_RANK_LABEL[rank]}), not a weight printed on the listing.`,
+      rank === "unattributed" ? "warn" : "info",
+    );
   }
 
   const cls = packClass(kg);
@@ -220,11 +236,20 @@ export function qaPrice(input: QaInput): QaResult {
   };
 }
 
-/** QA one price tier of a marketplace lead. Tier prices are USD by DB invariant (0068). */
-export function qaLeadTier(payload: any, tier: any): QaResult {
+/**
+ * QA one price tier of a marketplace lead. Tier prices are USD by DB invariant (0068).
+ * Pass the org's density index to give volumetric packs an honest $/kg; without it
+ * they stay uncomparable rather than being converted on a guess.
+ */
+export function qaLeadTier(payload: any, tier: any, densities?: DensityIndex): QaResult {
   const pull = payload?.marketplace_pull ?? {};
+  const d = densities ? resolveDensity(densities, payload?.material_name) : null;
   return qaPrice({
     material_name: payload?.material_name ?? null,
+    density: d?.density ?? null,
+    density_unit: d?.unit ?? null,
+    density_rank: d?.rank ?? null,
+    density_kind: d?.kind ?? null,
     price: tier?.price ?? null,
     unit_price: tier?.unit_price ?? null,
     pack_size: tier?.pack_size ?? null,
@@ -247,6 +272,7 @@ export function qaQuoteProfile(p: any): QaResult {
     unit_of_measurement: p?.unit_of_measurement ?? null,
     density: p?.density ?? null,
     density_unit: p?.density_unit ?? null,
+    density_rank: rankDensitySource(p?.density_source),
     source_url: p?.source_url ?? null,
   });
 }
