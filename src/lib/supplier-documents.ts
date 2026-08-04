@@ -79,6 +79,60 @@ export function classifyDocType(
   return "other";
 }
 
+// The parsed fields an operator may correct, per document type. This is the API
+// contract for the edit route (anything outside it is rejected), and it mirrors
+// what the extractor is asked for in document-extract.ts FIELD_HINTS.
+export const DOC_EDITABLE_FIELDS: Record<DocType, { key: string; label: string; kind: "text" | "number" | "date" }[]> = {
+  coa: [
+    { key: "material_name", label: "Material", kind: "text" },
+    { key: "lot_number", label: "Lot number", kind: "text" },
+    { key: "grade", label: "Grade", kind: "text" },
+    { key: "assay_percent", label: "Assay %", kind: "number" },
+    { key: "manufacture_date", label: "Manufactured", kind: "date" },
+    { key: "retest_or_expiry_date", label: "Retest / expiry", kind: "date" },
+  ],
+  certificate: [
+    { key: "certificate_type", label: "Type", kind: "text" },
+    { key: "issuer", label: "Issuer", kind: "text" },
+    { key: "certificate_number", label: "Number", kind: "text" },
+    { key: "valid_from", label: "Valid from", kind: "date" },
+    { key: "valid_until", label: "Valid until", kind: "date" },
+  ],
+  sds: [
+    { key: "product_name", label: "Product", kind: "text" },
+    { key: "manufacturer", label: "Manufacturer", kind: "text" },
+    { key: "cas_number", label: "CAS number", kind: "text" },
+    { key: "revision_date", label: "Revision date", kind: "date" },
+    { key: "hazard_summary", label: "Hazard summary", kind: "text" },
+  ],
+  tds: [
+    { key: "product_name", label: "Product", kind: "text" },
+    { key: "grade", label: "Grade", kind: "text" },
+    { key: "key_specs", label: "Key specs", kind: "text" },
+  ],
+  statement: [
+    { key: "statement_type", label: "Type", kind: "text" },
+    { key: "summary", label: "Summary", kind: "text" },
+  ],
+  testing: [
+    { key: "test_type", label: "Test type", kind: "text" },
+    { key: "result_summary", label: "Result", kind: "text" },
+    { key: "pass_fail", label: "Pass / fail", kind: "text" },
+  ],
+  price_sheet: [{ key: "note", label: "Note", kind: "text" }],
+  other: [{ key: "summary", label: "Summary", kind: "text" }],
+};
+
+// What to display and what to trust: the parse, with operator corrections on top.
+// Every consumer of parsed fields should read through this rather than touching
+// `extracted` directly, or a correction will appear on the bench and nowhere else.
+export function mergedDocFields(d: {
+  extracted?: Record<string, any> | null;
+  extracted_overrides?: Record<string, any> | null;
+}): Record<string, any> {
+  return { ...(d.extracted ?? {}), ...(d.extracted_overrides ?? {}) };
+}
+
 function dupKey(r: { source_message_id: string | null; file_name: string | null; doc_type: string }): string {
   return [r.source_message_id ?? "", (r.file_name ?? "").trim().toLowerCase(), r.doc_type].join("|");
 }
