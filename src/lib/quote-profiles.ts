@@ -174,6 +174,8 @@ export async function seedQuoteProfilesFromStaged(
   );
 
   let created = 0;
+  // Counts every write, not just inserts: see the same fix in supplier-profiles.
+  let touched = 0;
   for (const s of staged as any[]) {
     const key = `${(s.supplier_name ?? "").toLowerCase()}|${(s.material_name ?? "").toLowerCase()}`;
     const current = existingByKey.get(key);
@@ -187,7 +189,10 @@ export async function seedQuoteProfilesFromStaged(
         s.grade ? `Grade: ${s.grade}.` : null,
       ].filter(Boolean).join(" ");
       if (current) {
+        if ((generatedNotes || null) === (current.generated_notes ?? null)) continue;
         await admin.from("quote_profiles").update({ generated_notes: generatedNotes || null }).eq("id", current.id);
+        touched++;
+        if (touched >= limit) break;
         continue;
       }
       await insertQuoteProfile(admin, orgId, {
@@ -213,7 +218,8 @@ export async function seedQuoteProfilesFromStaged(
       });
       existingByKey.set(key, {} as QuoteProfile);
       created++;
-      if (created >= limit) break;
+      touched++;
+      if (touched >= limit) break;
     } catch {
       // skip duplicates
     }

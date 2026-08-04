@@ -218,6 +218,11 @@ export async function seedProfilesFromLeads(
   const existingById = new Map(existing.filter((p) => p.supplier_id).map((p) => [p.supplier_id!, p]));
   const existingByName = new Map(existing.map((p) => [(p.supplier_name ?? "").trim().toLowerCase(), p]));
   let created = 0;
+  // The cap has to count every supplier we WRITE, not just the ones we insert.
+  // Counting inserts only made this loop O(all suppliers in the org): once an
+  // org was fully profiled it issued one serial UPDATE per supplier, forever,
+  // which is what pushed the whole agent past its 800s ceiling.
+  let touched = 0;
   for (const info of bySupplier.values()) {
     const nameKey = info.name.toLowerCase();
     const current = info.supplierId ? existingById.get(info.supplierId) : existingByName.get(nameKey);
@@ -241,16 +246,23 @@ export async function seedProfilesFromLeads(
       const pocName = p.poc_name ?? contact.poc_name ?? null;
       const shippingAddress = p.hq_address ?? null;
       if (current) {
-        const { error: updateError } = await admin.from("supplier_profiles").update({
-          generated_notes: generatedNotes || null,
-          ...(shippingTerms && !current.shipping_terms ? { shipping_terms: shippingTerms } : {}),
+        const patch = {
           // Fill-only: an operator's entry always wins over enrichment.
+          ...((generatedNotes || null) !== (current.generated_notes ?? null) ? { generated_notes: generatedNotes || null } : {}),
+          ...(shippingTerms && !current.shipping_terms ? { shipping_terms: shippingTerms } : {}),
           ...(pocEmail && !current.poc_email ? { poc_email: pocEmail } : {}),
           ...(pocPhone && !current.poc_phone ? { poc_phone: pocPhone } : {}),
           ...(pocName && !current.poc_name ? { poc_name: pocName } : {}),
           ...(shippingAddress && !current.shipping_address ? { shipping_address: shippingAddress } : {}),
-        }).eq("id", current.id);
+        };
+        // Steady state is "nothing changed", so re-writing identical notes on
+        // every supplier every run is pure cost. Skip it and the cap is rarely
+        // reached at all.
+        if (!Object.keys(patch).length) continue;
+        const { error: updateError } = await admin.from("supplier_profiles").update(patch).eq("id", current.id);
         if (updateError) throw updateError;
+        touched++;
+        if (touched >= limit) break;
       } else {
         await upsertSupplierProfile(admin, orgId, info.supplierId, info.name, {
           supplier_type: marketKind,
@@ -263,7 +275,8 @@ export async function seedProfilesFromLeads(
         });
         if (nameKey) existingNames.add(nameKey);
         created++;
-        if (created >= limit) break;
+        touched++;
+        if (touched >= limit) break;
       }
     } catch {
       // skip duplicates
