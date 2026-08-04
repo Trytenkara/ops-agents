@@ -179,6 +179,12 @@ export function QuoteProfileCard({
   function handleSave() {
     startTransition(async () => {
       const { id, org_id, created_at, updated_at, ...updates } = profile;
+      // An operator-set density outranks every web source, but only if it says so.
+      // Left alone, a hand-corrected value keeps the URL of the page it replaced
+      // and the $/kg goes on claiming a citation it no longer has.
+      if (updates.density !== initial.density && updates.density != null) {
+        updates.density_source = "[operator] set by hand in Quote Validation";
+      }
       const res = await saveQuoteProfile(profile.id, orgId, updates as QuoteProfileUpdate);
       if (res.ok) {
         setEditing(false);
