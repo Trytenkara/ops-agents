@@ -39,6 +39,7 @@ for (let offset = 0; ; offset += 1000) {
     .from("leads_in_flight")
     .select("id, org_id, supplier_id, supplier_name, material_id, material_name, source, payload")
     .eq("status", "active")
+    .order("id") // paging without a total order silently skips and repeats rows
     .range(offset, offset + 999);
   if (error) throw new Error(error.message);
   if (!data?.length) break;
@@ -72,10 +73,14 @@ for (const l of targets.slice(0, limit)) {
     unit: null,
     enumerate_sellers: true,
   });
+  // A page whose sellers we cannot read is still retired, exactly as Agent 05
+  // retires it: the platform was never a supplier, so leaving the row in place
+  // just keeps a category link on the board. (Alibaba showrooms render their
+  // roster client-side and often come back empty; those need the Browserbase
+  // escalation, not a second read.)
   if (!result.sellers.length) {
     empty++;
-    console.log(`  0 sellers readable: ${l.supplier_name} × ${l.material_name} (${result.classification})`);
-    continue;
+    console.log(`  0 sellers readable, retiring: ${l.supplier_name} × ${l.material_name} (${result.classification})`);
   }
   const n = await expandAggregatorIndexPage({
     admin,
@@ -87,6 +92,6 @@ for (const l of targets.slice(0, limit)) {
   });
   split++;
   staged += n;
-  console.log(`  ${l.supplier_name} × ${l.material_name} → ${n} seller lead(s)`);
+  if (n) console.log(`  ${l.supplier_name} × ${l.material_name} → ${n} seller lead(s)`);
 }
-console.log(`split ${split} index pages into ${staged} seller leads · ${empty} unreadable (left in place)`);
+console.log(`retired ${split} index pages, staged ${staged} seller leads · ${empty} had no readable seller`);
