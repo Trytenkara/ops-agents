@@ -1,5 +1,6 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
+import { selectAllPaged } from "@/lib/supabase-paging";
 
 export interface QuoteProfile {
   id: string;
@@ -156,12 +157,16 @@ export async function seedQuoteProfilesFromStaged(
   limit = Infinity
 ): Promise<number> {
   if (limit <= 0) return 0;
-  const { data: staged } = await admin
-    .from("staged_quotes")
-    .select("supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, currency, case_type, case_dimensions, lead_time_days, moq_quantity, moq_unit, payment_terms, grade, source_attachment_url")
-    .eq("org_id", orgId)
-    .not("status", "eq", "dismissed");
-  if (!staged?.length) return 0;
+  const staged = await selectAllPaged<any>((from, to) =>
+    admin
+      .from("staged_quotes")
+      .select("supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, currency, case_type, case_dimensions, lead_time_days, moq_quantity, moq_unit, payment_terms, grade, source_attachment_url")
+      .eq("org_id", orgId)
+      .not("status", "eq", "dismissed")
+      .order("id")
+      .range(from, to)
+  );
+  if (!staged.length) return 0;
 
   const existing = await getQuoteProfiles(admin, orgId);
   const existingByKey = new Map(
@@ -271,14 +276,18 @@ export async function seedQuoteProfilesFromMarketplace(
   limit = Infinity
 ): Promise<number> {
   if (limit <= 0) return 0;
-  const { data: leads } = await admin
-    .from("leads_in_flight")
-    .select("supplier_id, supplier_name, material_id, material_name, payload")
-    .eq("org_id", orgId)
-    .eq("status", "active")
-    .eq("payload->marketplace_pull->>status", "pulled")
-    .or("payload->>site_type.in.(M,MS,A),payload->>supplier_role.eq.Marketplace");
-  if (!leads?.length) return 0;
+  const leads = await selectAllPaged<any>((from, to) =>
+    admin
+      .from("leads_in_flight")
+      .select("supplier_id, supplier_name, material_id, material_name, payload")
+      .eq("org_id", orgId)
+      .eq("status", "active")
+      .eq("payload->marketplace_pull->>status", "pulled")
+      .or("payload->>site_type.in.(M,MS,A),payload->>supplier_role.eq.Marketplace")
+      .order("id")
+      .range(from, to)
+  );
+  if (!leads.length) return 0;
 
   const existing = await getQuoteProfiles(admin, orgId);
   const profileKey = (value: { supplier_id?: string | null; supplier_name?: string | null; material_id?: string | null; material_name?: string | null }) =>

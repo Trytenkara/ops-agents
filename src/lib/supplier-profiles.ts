@@ -1,4 +1,5 @@
 import { SupabaseClient } from "@supabase/supabase-js";
+import { selectAllPaged } from "@/lib/supabase-paging";
 import { leadMarketKind, type MarketKind } from "@/lib/lead-market";
 
 export interface SupplierProfile {
@@ -179,12 +180,17 @@ export async function seedProfilesFromLeads(
   limit = Infinity
 ): Promise<number> {
   if (limit <= 0) return 0;
-  const { data: leads } = await admin
-    .from("leads_in_flight")
-    .select("supplier_id, supplier_name, payload, source")
-    .eq("org_id", orgId)
-    .eq("status", "active");
-  if (!leads?.length) return 0;
+  const leads = await selectAllPaged<{ supplier_id: string | null; supplier_name: string | null; payload: any; source: string | null }>(
+    (from, to) =>
+      admin
+        .from("leads_in_flight")
+        .select("supplier_id, supplier_name, payload, source")
+        .eq("org_id", orgId)
+        .eq("status", "active")
+        .order("id")
+        .range(from, to)
+  );
+  if (!leads.length) return 0;
 
   // Most leads carry only a supplier_name (no supplier_id), and the Supplier
   // Validation view groups by `supplier_id ?? supplier_name`, so we seed on the
