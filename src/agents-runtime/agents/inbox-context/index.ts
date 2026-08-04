@@ -81,6 +81,10 @@ interface Accum {
 const lc = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
 const iso = (ms: number | null) => (ms ? new Date(ms).toISOString() : null);
 const EMAIL_RE = /^[^@\s;,]+@[^@\s;,]+\.[^@\s;,]+$/;
+// A real Tenkara conversation id. The blocked-draft path parks a sentinel like
+// "blocked:agent-04-outreach-supplier-..." in thread_id; reading one just makes
+// Tenkara 500 (invalid uuid), which burned 126 of the ~320 reads a run gets.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function messageText(m: TenkaraMessage): string {
   const body = (m.body_text ?? "").trim();
@@ -215,9 +219,14 @@ registerAgent({
     const byThread = new Map<string, ThreadRef>();
     let noRecipient = 0;
     let outOfScope = 0;
+    let notAConversation = 0;
     for (const r of draftRows ?? []) {
       const row = r as any;
       const tid = row.thread_id as string;
+      if (!UUID_RE.test(tid)) {
+        if (!byThread.has(tid)) notAConversation++;
+        continue;
+      }
       const email = recipientOf(row.metadata);
       if (!email) {
         if (!byThread.has(tid)) noRecipient++;
@@ -268,6 +277,7 @@ registerAgent({
           walking: budgeted.length,
           droppedByCap: ranked.length - budgeted.length,
           noRecipient,
+          notAConversation,
           outOfScope,
           scope: ONLY_ORG_LABEL,
         },
