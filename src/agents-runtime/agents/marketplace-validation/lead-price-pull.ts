@@ -5,7 +5,8 @@ import { ensureMarketplaceCaseDims } from "@/lib/marketplace-case-dims-fill";
 import { neverMarketplaceHostOf } from "@/lib/marketplace-hosts";
 import { screenClonedListings } from "@/lib/clone-ring";
 import { aggregatorNameOf, isAggregatorIndexUrl, isAggregatorPlatformName } from "@/lib/aggregator-hosts";
-import { getOrgOperatorPool, getSupplierAssignments, resolveSupplierOperatorId } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, resolveOperatorId, type AssignmentContext } from "@/lib/operator-assignment";
+import { leadMarketKind } from "@/lib/lead-market";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -367,22 +368,18 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
 
   // Operator pool + assignments per org, for tagging the flag case.
   const orgIds = Array.from(new Set(leads.map((l) => l.org_id).filter(Boolean) as string[]));
-  const poolByOrg = new Map<string, any[]>();
-  const assignByOrg = new Map<string, Map<string, string>>();
+  const ctxByOrg = new Map<string, AssignmentContext>();
   for (const oid of orgIds) {
-    poolByOrg.set(oid, await getOrgOperatorPool(admin, oid).catch(() => []));
-    assignByOrg.set(oid, await getSupplierAssignments(admin, oid).catch(() => new Map()));
+    ctxByOrg.set(oid, await getOrgAssignmentContext(admin, oid));
   }
   const operatorFor = (l: LeadRow): string | null => {
     if (!l.org_id) return null;
+    const ctx = ctxByOrg.get(l.org_id);
+    if (!ctx) return null;
     // Marketplace leads usually have no supplier_id — fall back to the lead id so
     // the sticky-random default spreads across the org's pool instead of every
     // case piling onto pool[0] (mirrors the outreach agent + Leads-tab key).
-    return resolveSupplierOperatorId(
-      assignByOrg.get(l.org_id) ?? new Map(),
-      poolByOrg.get(l.org_id) ?? [],
-      l.supplier_id ?? l.id,
-    );
+    return resolveOperatorId(ctx, l.supplier_id ?? l.id, leadMarketKind((l.payload as any)?.site_type));
   };
 
   let processed = 0;

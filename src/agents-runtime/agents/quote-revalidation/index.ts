@@ -9,7 +9,7 @@ import { createTenkaraConversation, createTenkaraDraft, tenkaraEmailAccountIdFor
 import { bodyToHtml } from "@/lib/email-style";
 import { lintDraft } from "../outreach-qa/lint";
 import { postQrSummary } from "./slack-notifier";
-import { getOrgOperatorPool, getSupplierAssignments, resolveSupplierOperatorId } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, resolveOperatorId } from "@/lib/operator-assignment";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import { mirrorDraftAssignee } from "@/lib/draft-staging";
 
@@ -357,10 +357,9 @@ registerAgent({
             const ooo = ops.primary_user?.status === "out_of_office";
             assignedOperator = ooo ? (ops.backup_user_id ?? ops.primary_user_id) : ops.primary_user_id;
           }
-          // Manual supplier assignment wins; else the sticky-random owner.
-          const pool = await getOrgOperatorPool(admin, (oaOrg as any).id).catch(() => []);
-          const manual = await getSupplierAssignments(admin, (oaOrg as any).id).catch(() => new Map<string, string>());
-          const resolved = resolveSupplierOperatorId(manual, pool, r.group.supplier_id);
+          // Manual claim or sticky-random owner, per the client's assignment mode.
+          const assignmentCtx = await getOrgAssignmentContext(admin, (oaOrg as any).id);
+          const resolved = resolveOperatorId(assignmentCtx, r.group.supplier_id);
           if (resolved) assignedOperator = resolved;
         }
         // Mirror the Control Room operator onto the Tenkara conversation so the

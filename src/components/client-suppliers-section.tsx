@@ -39,6 +39,7 @@ export function ClientSuppliersSection({
   operatorOptions,
   operatorNames,
   canAct,
+  claimsIgnored,
 }: {
   suppliers: ClientSuppliers;
   orgId: string;
@@ -47,6 +48,7 @@ export function ClientSuppliersSection({
   operatorOptions?: { id: string; name: string }[];
   operatorNames?: Record<string, string>; // operator_id → name (for read-only display)
   canAct?: boolean;
+  claimsIgnored?: boolean;              // org on "auto, reassign all": auto beats a claim
 }) {
   const all: ClientSupplier[] = [
     ...suppliers.approved,
@@ -57,11 +59,19 @@ export function ClientSuppliersSection({
   const [status, setStatus] = useState<string>("all");
   const statusRows = status === "all" ? all : all.filter((s) => s.approval === status);
 
-  // The name shown in the Operator column: a manual claim wins, else the auto owner.
-  const operatorNameOf = (s: ClientSupplier): string | null => {
+  // Who the Operator column shows, and whether that came from the auto spread or
+  // an operator's claim. A claim wins, unless the org runs "auto, reassign all".
+  const ownerOf = (s: ClientSupplier): { name: string; auto: boolean } | null => {
     const claimed = assignments?.[s.id];
-    return (claimed ? operatorNames?.[claimed] ?? null : null) ?? autoNames?.[s.id] ?? null;
+    const claimName = claimed ? operatorNames?.[claimed] ?? null : null;
+    const autoName = autoNames?.[s.id] ?? null;
+    const order: { name: string | null; auto: boolean }[] = claimsIgnored
+      ? [{ name: autoName, auto: true }, { name: claimName, auto: false }]
+      : [{ name: claimName, auto: false }, { name: autoName, auto: true }];
+    const hit = order.find((o) => o.name);
+    return hit ? { name: hit.name!, auto: hit.auto } : null;
   };
+  const operatorNameOf = (s: ClientSupplier): string | null => ownerOf(s)?.name ?? null;
 
   const { filtered, controls } = useListFilter(statusRows, {
     searchText: (r) => `${r.name ?? ""} ${r.poc_email ?? ""} ${r.poc_name ?? ""} ${operatorNameOf(r) ?? ""}`,
@@ -138,11 +148,13 @@ export function ClientSuppliersSection({
                           assignedId={assignments?.[s.id] ?? null}
                           autoName={autoNames?.[s.id] ?? null}
                           options={operatorOptions ?? []}
+                          claimsIgnored={claimsIgnored}
                         />
-                      ) : assignments?.[s.id] ? (
-                        <Badge variant="outline">{operatorNames?.[assignments[s.id]] ?? "Assigned"}</Badge>
-                      ) : autoNames?.[s.id] ? (
-                        <Badge variant="outline">{autoNames[s.id]} <span className="text-muted-foreground">(auto)</span></Badge>
+                      ) : ownerOf(s) ? (
+                        <Badge variant="outline">
+                          {ownerOf(s)!.name}
+                          {ownerOf(s)!.auto ? <span className="text-muted-foreground"> (auto)</span> : null}
+                        </Badge>
                       ) : (
                         <span className="italic text-muted-foreground">Unassigned</span>
                       )}

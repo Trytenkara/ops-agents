@@ -1,6 +1,7 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getOrgOperatorPool, resolveSupplierOperatorId, getSupplierAssignments, type OperatorRef } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, resolveOperatorId, type AssignmentContext } from "@/lib/operator-assignment";
+import { leadMarketKind } from "@/lib/lead-market";
 import { classifyClient } from "../quote-revalidation/config";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import { compileWaitMs } from "@/lib/agent-timing";
@@ -164,13 +165,12 @@ registerAgent({
       }
     }
 
-    // Operator pool + manual assignments per org. A draft's operator is the
-    // supplier's manual assignment if ops claimed it, else sticky-random.
-    const poolByOrg = new Map<string, OperatorRef[]>();
-    const assignmentsByOrg = new Map<string, Map<string, string>>();
+    // Per-org assignment rules (mode, pool, claims). A draft's operator is the
+    // supplier's manual claim if ops claimed it, else sticky-random, and which of
+    // those wins is the client's assignment_mode.
+    const assignmentCtxByOrg = new Map<string, AssignmentContext>();
     for (const oid of orgIds) {
-      poolByOrg.set(oid, await getOrgOperatorPool(admin, oid).catch(() => []));
-      assignmentsByOrg.set(oid, await getSupplierAssignments(admin, oid).catch(() => new Map()));
+      assignmentCtxByOrg.set(oid, await getOrgAssignmentContext(admin, oid));
     }
 
     // 3. Filter to leads we can actually draft for.
@@ -436,14 +436,19 @@ registerAgent({
         // every material row of one supplier collapses to ONE operator, consistent
         // with the single consolidated thread we actually send. Fall back to lead
         // id only when there's no email (manual-contact leads). Else org primary.
-        assignedOperator:
-          lead.assigned_operator_id ??
-          resolveSupplierOperatorId(
-            assignmentsByOrg.get(lead.org_id) ?? new Map(),
-            poolByOrg.get(lead.org_id) ?? [],
-            lead.supplier_id ?? (hasEmail && email ? `e:${email.toLowerCase()}` : lead.id)
-          ) ??
-          org.primary_user_id,
+        assignedOperator: (() => {
+          const ctx = assignmentCtxByOrg.get(lead.org_id);
+          const auto = ctx
+            ? resolveOperatorId(
+                ctx,
+                lead.supplier_id ?? (hasEmail && email ? `e:${email.toLowerCase()}` : lead.id),
+                leadMarketKind(payload.site_type)
+              )
+            : null;
+          // "auto, reassign all" governs the lead-level claim too, so one setting
+          // decides the whole client instead of leaving Scout leads behind.
+          return (ctx?.config.mode === "auto_all" ? auto ?? lead.assigned_operator_id : lead.assigned_operator_id ?? auto) ?? org.primary_user_id;
+        })(),
       });
     }
 
