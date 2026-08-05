@@ -440,7 +440,7 @@ registerAgent({
           // Kind is left for resolveOperatorId to derive from ctx.supplierTypes
           // (nameHint below), not passed as a hard kindHint here: that map already
           // layers Agent 06's validated profile over the scanner's site_type guess,
-          // and a raw site_type passed as kindHint would short-circuit past it —
+          // and a raw site_type passed as kindHint would short-circuit past it,
           // exactly the outranking the leads page already does for the same reason.
           const auto = ctx
             ? resolveOperatorId(
