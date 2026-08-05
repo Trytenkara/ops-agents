@@ -20,7 +20,16 @@ const DOC_TYPE_TO_MET: Record<string, string> = {
 };
 
 const normName = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
-const supKey = (id: string | null | undefined, name: string | null | undefined) => id || `name:${normName(name)}`;
+
+// Null when the row identifies no supplier at all. Without this guard both sides
+// key on the literal string "name:" and every nameless document matches every
+// nameless quote: 12 unattributed documents (product catalogues, an image001.png)
+// ticked CoA on 2 quotes that have no supplier.
+function supKey(id: string | null | undefined, name: string | null | undefined): string | null {
+  if (id) return id;
+  const n = normName(name);
+  return n ? `name:${n}` : null;
+}
 
 export async function syncDocRequirementsMet(admin: Admin, orgId: string): Promise<{ updated: number }> {
   // Whether a document is required is the CLIENT's rule, held in Tenkara. This
@@ -47,6 +56,7 @@ export async function syncDocRequirementsMet(admin: Admin, orgId: string): Promi
   for (const d of (docs ?? []) as any[]) {
     if (d.supplier_issued === false) continue;
     const k = supKey(d.supplier_id, d.supplier_name);
+    if (!k) continue;
     if (!held.has(k)) held.set(k, new Set());
     held.get(k)!.add(d.doc_type);
   }
@@ -62,7 +72,8 @@ export async function syncDocRequirementsMet(admin: Admin, orgId: string): Promi
 
   let updated = 0;
   for (const p of (profiles ?? []) as any[]) {
-    const types = held.get(supKey(p.supplier_id, p.supplier_name));
+    const pKey = supKey(p.supplier_id, p.supplier_name);
+    const types = pKey ? held.get(pKey) : undefined;
     if (!types) continue;
 
     const patch: Record<string, boolean> = {};

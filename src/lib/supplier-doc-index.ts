@@ -41,11 +41,18 @@ function sameDocKey(d: QuoteDoc): string {
   return d.content_sha256 ?? `${(d.file_name ?? "").trim().toLowerCase()}|${d.doc_type}`;
 }
 
+// An empty supplier name must NOT produce the key "name:", or every unattributed
+// document (12 live rows: catalogues, an image001.png) would attach to every quote
+// whose supplier name is also blank.
+const nameKey = (name: string | null | undefined) => {
+  const n = (name ?? "").trim().toLowerCase();
+  return n ? `name:${n}` : null;
+};
+
 function keysFor(d: { supplier_id: string | null; supplier_name: string | null; material_id: string | null }): string[] {
-  const owners = [
-    d.supplier_id ? `id:${d.supplier_id}` : null,
-    d.supplier_name ? `name:${d.supplier_name.trim().toLowerCase()}` : null,
-  ].filter((x): x is string => !!x);
+  const owners = [d.supplier_id ? `id:${d.supplier_id}` : null, nameKey(d.supplier_name)].filter(
+    (x): x is string => !!x
+  );
   // A document with no material is supplier-level (a company certificate), so it
   // belongs to every quote for that supplier.
   return owners.flatMap((o) => (d.material_id ? [`${o}|m:${d.material_id}`] : [o]));
@@ -76,10 +83,9 @@ export function docsForQuote(
   quote: { supplier_id: string | null; supplier_name: string; material_id: string | null }
 ): QuoteDoc[] {
   if (!index) return [];
-  const owners = [
-    quote.supplier_id ? `id:${quote.supplier_id}` : null,
-    `name:${quote.supplier_name.trim().toLowerCase()}`,
-  ].filter((x): x is string => !!x);
+  const owners = [quote.supplier_id ? `id:${quote.supplier_id}` : null, nameKey(quote.supplier_name)].filter(
+    (x): x is string => !!x
+  );
   const keys = owners.flatMap((o) => (quote.material_id ? [`${o}|m:${quote.material_id}`, o] : [o]));
   const seen = new Set<string>();
   const out: QuoteDoc[] = [];
