@@ -4,7 +4,7 @@ import { ListPageHeader } from "@/components/list-page-header";
 import { ClientSuppliersSection } from "@/components/client-suppliers-section";
 import { TdbOverviewSubnav } from "@/components/tdb-overview-subnav";
 import { getClientSuppliers } from "@/lib/client-suppliers";
-import { getOrgAssignmentContext, autoOperatorBySupplier } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, autoOperatorBySupplier, overridesAuto } from "@/lib/operator-assignment";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { orgDisplayName } from "@/lib/org-display";
 
@@ -52,6 +52,7 @@ export default async function OrgSuppliersPage({ params }: { params: { slug: str
         operatorNames={operatorNames}
         canAct={canAct}
         claimsIgnored={ctx.config.mode === "auto_all"}
+        claimWinsIds={[...ctx.manual.keys()].filter((sid) => overridesAuto(ctx, ctx.manualAt.get(sid)))}
       />
     </div>
   );

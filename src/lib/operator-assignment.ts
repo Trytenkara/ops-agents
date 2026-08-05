@@ -33,13 +33,21 @@ export interface AssignmentConfig {
   // Market kinds the auto loop covers. A supplier of any other kind keeps its
   // claim and gets no derived owner.
   supplierTypes: MarketKind[];
+  // When auto_all was last chosen. A claim made after it is a deliberate
+  // correction of the spread and outranks it; older claims are what auto_all was
+  // asked to redo. Null on a pre-0095 org = every claim is older.
+  autoAllAt: string | null;
 }
 
 export const ALL_SUPPLIER_TYPES: MarketKind[] = ["marketplace", "aggregator", "direct"];
 
 // Used when the org row can't be read: the historical behavior, so a failed read
 // degrades to routing-as-before rather than routing nothing.
-export const DEFAULT_ASSIGNMENT_CONFIG: AssignmentConfig = { mode: "auto_new", supplierTypes: ALL_SUPPLIER_TYPES };
+export const DEFAULT_ASSIGNMENT_CONFIG: AssignmentConfig = {
+  mode: "auto_new",
+  supplierTypes: ALL_SUPPLIER_TYPES,
+  autoAllAt: null,
+};
 
 // FNV-1a plus a murmur3 avalanche finalizer. The finalizer matters: picking the
 // max hash across the pool amplifies any weakness in the mix into a permanently
@@ -120,7 +128,7 @@ export async function getOrgOperatorPool(
 export async function getOrgAssignmentConfig(admin: SupabaseClient, orgId: string): Promise<AssignmentConfig> {
   const { data } = await admin
     .from("orgs")
-    .select("assignment_mode, assignment_supplier_types")
+    .select("assignment_mode, assignment_supplier_types, assignment_auto_all_at")
     .eq("id", orgId)
     .maybeSingle();
   if (!data) return DEFAULT_ASSIGNMENT_CONFIG;
@@ -131,6 +139,7 @@ export async function getOrgAssignmentConfig(admin: SupabaseClient, orgId: strin
     supplierTypes: Array.isArray(types)
       ? (types.filter((t: string) => (ALL_SUPPLIER_TYPES as string[]).includes(t)) as MarketKind[])
       : ALL_SUPPLIER_TYPES,
+    autoAllAt: (data as any).assignment_auto_all_at ?? null,
   };
 }
 
@@ -214,18 +223,29 @@ export function supplierKind(
 // Manual supplier→operator assignments for an org (supplier_id → operator_id),
 // from the supplier_assignment table. These OVERRIDE the sticky-random default
 // when present — an operator explicitly claimed the supplier.
-export async function getSupplierAssignments(admin: SupabaseClient, orgId: string): Promise<Map<string, string>> {
+export async function getSupplierAssignments(
+  admin: SupabaseClient,
+  orgId: string
+): Promise<{ claims: Map<string, string>; claimedAt: Map<string, string> }> {
   // Paged: switching an org to manual mode writes a claim per supplier, so a
   // large client can hold more than PostgREST's 1000-row cap. A truncated read
   // here would silently hand those suppliers back to the auto spread.
-  const rows = await selectAllPaged<{ supplier_id: string; operator_id: string }>((from, to) =>
-    admin.from("supplier_assignment").select("supplier_id, operator_id").eq("org_id", orgId).order("supplier_id").range(from, to)
+  const rows = await selectAllPaged<{ supplier_id: string; operator_id: string; updated_at: string | null }>((from, to) =>
+    admin
+      .from("supplier_assignment")
+      .select("supplier_id, operator_id, updated_at")
+      .eq("org_id", orgId)
+      .order("supplier_id")
+      .range(from, to)
   );
-  const m = new Map<string, string>();
+  const claims = new Map<string, string>();
+  const claimedAt = new Map<string, string>();
   for (const r of rows) {
-    if (r.supplier_id && r.operator_id) m.set(r.supplier_id, r.operator_id);
+    if (!r.supplier_id || !r.operator_id) continue;
+    claims.set(r.supplier_id, r.operator_id);
+    if (r.updated_at) claimedAt.set(r.supplier_id, r.updated_at);
   }
-  return m;
+  return { claims, claimedAt };
 }
 
 // Everything needed to answer "who owns this supplier for this client".
@@ -237,6 +257,9 @@ export interface AssignmentContext {
   // The subset the auto spread draws from.
   autoPool: OperatorRef[];
   manual: Map<string, string>;
+  // When each claim was made, so auto_all can tell an override of its spread from
+  // the claims it was asked to redo.
+  manualAt: Map<string, string>;
   supplierTypes: Map<string, MarketKind>;
 }
 
@@ -244,14 +267,24 @@ export async function getOrgAssignmentContext(admin: SupabaseClient, orgId: stri
   const config = await getOrgAssignmentConfig(admin, orgId).catch(() => DEFAULT_ASSIGNMENT_CONFIG);
   const [pool, manual, supplierTypes] = await Promise.all([
     getOrgOperatorPool(admin, orgId).catch(() => [] as OperatorRef[]),
-    getSupplierAssignments(admin, orgId).catch(() => new Map<string, string>()),
+    getSupplierAssignments(admin, orgId).catch(() => ({
+      claims: new Map<string, string>(),
+      claimedAt: new Map<string, string>(),
+    })),
     // Only read when the org narrowed the scope; every supplier is in scope
     // otherwise and the map would go unused.
     config.supplierTypes.length < ALL_SUPPLIER_TYPES.length
       ? getOrgSupplierTypes(admin, orgId)
       : Promise.resolve(new Map<string, MarketKind>()),
   ]);
-  return { config, pool, autoPool: pool.filter((p) => p.autoAssignable), manual, supplierTypes };
+  return {
+    config,
+    pool,
+    autoPool: pool.filter((p) => p.autoAssignable),
+    manual: manual.claims,
+    manualAt: manual.claimedAt,
+    supplierTypes,
+  };
 }
 
 // Is this supplier inside the org's auto-assignment scope? An unknown kind counts
@@ -282,9 +315,21 @@ export function autoOperator(
   return pickSupplierOperator(ctx.autoPool, supplierId);
 }
 
+// Does a claim made at `at` beat the auto spread? Everywhere but auto_all a claim
+// always wins. Under auto_all only a claim made SINCE the org chose auto_all
+// counts: that is an ops lead correcting one supplier after the spread ran, which
+// must stick. Older claims are exactly what "reassign all" was asked to redo, and
+// they stay in the table, so switching back to auto_new restores them.
+export function overridesAuto(ctx: AssignmentContext, at: string | null | undefined): boolean {
+  if (ctx.config.mode !== "auto_all") return true;
+  const stamp = ctx.config.autoAllAt;
+  return !!at && (!stamp || at > stamp);
+}
+
 // The effective owner of a supplier for this client. In auto_all the derived
-// owner wins, but a claim still stands where auto declines to pick (out of
-// scope, empty pool), so nothing loses its operator on a mode change.
+// owner wins over a pre-existing claim, but a claim still stands where auto
+// declines to pick (out of scope, empty pool) or where it was made after the
+// spread, so nothing loses its operator on a mode change and edits hold.
 export function resolveOperatorId(
   ctx: AssignmentContext,
   supplierId: string | null | undefined,
@@ -293,7 +338,8 @@ export function resolveOperatorId(
 ): string | null {
   const claim = supplierId ? ctx.manual.get(supplierId) ?? null : null;
   const auto = autoOperator(ctx, supplierId, kindHint, nameHint)?.id ?? null;
-  return ctx.config.mode === "auto_all" ? auto ?? claim : claim ?? auto;
+  const claimWins = claim ? overridesAuto(ctx, supplierId ? ctx.manualAt.get(supplierId) : null) : false;
+  return claimWins ? claim : auto ?? claim;
 }
 
 // Sticky-random owner per supplier id, for tables that show the auto default

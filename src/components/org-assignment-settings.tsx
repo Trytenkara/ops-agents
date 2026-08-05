@@ -11,7 +11,7 @@ import type { MarketKind } from "@/lib/lead-market";
 const MODES: { value: AssignmentMode; label: string; hint: string }[] = [
   { value: "manual", label: "Manual", hint: "Nobody is auto-assigned. Current assignees are pinned as they are today, and new suppliers land unassigned until someone claims them" },
   { value: "auto_new", label: "Auto, new only", hint: "Existing assignees keep their suppliers; only suppliers nobody has claimed get spread across the auto loop" },
-  { value: "auto_all", label: "Auto, reassign all", hint: "The auto spread wins everywhere and overrides manual assignees (the claims are kept, not deleted, so switching back restores them)" },
+  { value: "auto_all", label: "Auto, reassign all", hint: "The auto spread runs over today's manual assignees (their claims are kept, not deleted, so switching back restores them). Assignments you edit afterwards stick" },
 ];
 
 const TYPES: { value: MarketKind; label: string }[] = [

@@ -52,9 +52,13 @@ export async function assignLeadOperator(orgId: string, leadId: string, operator
     }
   }
 
+  const now = new Date().toISOString();
   const { error } = await admin
     .from("leads_in_flight")
-    .update({ assigned_operator_id: operatorId, updated_at: new Date().toISOString() })
+    // assigned_operator_at, not updated_at: every enrichment pass moves updated_at,
+    // so it can't tell an operator's claim from an agent's touch, and auto_all
+    // needs that distinction to know which claims override its spread.
+    .update({ assigned_operator_id: operatorId, assigned_operator_at: operatorId ? now : null, updated_at: now })
     .eq("id", leadId)
     .eq("org_id", orgId);
   if (error) return { ok: false, error: error.message };

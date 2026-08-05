@@ -1,6 +1,6 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getOrgAssignmentContext, resolveOperatorId, type AssignmentContext } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, resolveOperatorId, overridesAuto, type AssignmentContext } from "@/lib/operator-assignment";
 import { leadMarketKind } from "@/lib/lead-market";
 import { classifyClient } from "../quote-revalidation/config";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
@@ -96,7 +96,7 @@ registerAgent({
     const internalOrgIds = eligibleOrgIds.filter((id) => isInternalById.get(id));
 
     const leadCols =
-      "id, org_id, supplier_id, assigned_operator_id, supplier_name, material_id, material_name, payload, confidence_score, outreach_approved_at";
+      "id, org_id, supplier_id, assigned_operator_id, assigned_operator_at, supplier_name, material_id, material_name, payload, confidence_score, outreach_approved_at";
     const fetchEnriched = (ids: string[], limit: number) => {
       if (!ids.length || limit <= 0) return Promise.resolve({ data: [] as any[], error: null as any });
       let query = admin
@@ -446,8 +446,10 @@ registerAgent({
               )
             : null;
           // "auto, reassign all" governs the lead-level claim too, so one setting
-          // decides the whole client instead of leaving Scout leads behind.
-          return (ctx?.config.mode === "auto_all" ? auto ?? lead.assigned_operator_id : lead.assigned_operator_id ?? auto) ?? org.primary_user_id;
+          // decides the whole client instead of leaving Scout leads behind. A claim
+          // made since that spread is a deliberate correction and still wins.
+          const claimWins = ctx ? overridesAuto(ctx, (lead as any).assigned_operator_at ?? null) : true;
+          return (claimWins ? lead.assigned_operator_id ?? auto : auto ?? lead.assigned_operator_id) ?? org.primary_user_id;
         })(),
       });
     }

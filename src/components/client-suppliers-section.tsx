@@ -40,6 +40,7 @@ export function ClientSuppliersSection({
   operatorNames,
   canAct,
   claimsIgnored,
+  claimWinsIds,
 }: {
   suppliers: ClientSuppliers;
   orgId: string;
@@ -49,7 +50,10 @@ export function ClientSuppliersSection({
   operatorNames?: Record<string, string>; // operator_id → name (for read-only display)
   canAct?: boolean;
   claimsIgnored?: boolean;              // org on "auto, reassign all": auto beats a claim
+  claimWinsIds?: string[];              // …except these, claimed since that spread ran
 }) {
+  const claimWins = new Set(claimWinsIds ?? []);
+  const autoBeatsClaim = (supplierId: string) => !!claimsIgnored && !claimWins.has(supplierId);
   const all: ClientSupplier[] = [
     ...suppliers.approved,
     ...suppliers.pending_review,
@@ -65,7 +69,7 @@ export function ClientSuppliersSection({
     const claimed = assignments?.[s.id];
     const claimName = claimed ? operatorNames?.[claimed] ?? null : null;
     const autoName = autoNames?.[s.id] ?? null;
-    const order: { name: string | null; auto: boolean }[] = claimsIgnored
+    const order: { name: string | null; auto: boolean }[] = autoBeatsClaim(s.id)
       ? [{ name: autoName, auto: true }, { name: claimName, auto: false }]
       : [{ name: claimName, auto: false }, { name: autoName, auto: true }];
     const hit = order.find((o) => o.name);
@@ -148,7 +152,7 @@ export function ClientSuppliersSection({
                           assignedId={assignments?.[s.id] ?? null}
                           autoName={autoNames?.[s.id] ?? null}
                           options={operatorOptions ?? []}
-                          claimsIgnored={claimsIgnored}
+                          claimsIgnored={autoBeatsClaim(s.id)}
                         />
                       ) : ownerOf(s) ? (
                         <Badge variant="outline">

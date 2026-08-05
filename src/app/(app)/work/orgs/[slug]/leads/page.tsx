@@ -13,7 +13,7 @@ import { leadMarketKind } from "@/lib/lead-market";
 import { computeLeadFlags } from "@/lib/lead-flags";
 import { getClientRequirements, dealbreakerCertNames } from "@/lib/tenkara-requirements";
 import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
-import { getOrgAssignmentContext, autoOperator } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, autoOperator, overridesAuto } from "@/lib/operator-assignment";
 
 import { orgDisplayName } from "@/lib/org-display";
 import { getSupplierProfiles } from "@/lib/supplier-profiles";
@@ -88,7 +88,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     const { data: page } = await admin
       .from("leads_in_flight")
       .select(
-        "id, org_id, supplier_name, supplier_id, assigned_operator_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, updated_at, orgs(slug, name)"
+        "id, org_id, supplier_name, supplier_id, assigned_operator_id, assigned_operator_at, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, updated_at, orgs(slug, name)"
       )
       .eq("org_id", org.id)
       .eq("status", "active")
@@ -184,10 +184,13 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     // kind sits outside the client's auto scope.
     const operator_auto_name = autoOperator(assignmentCtx, r.supplier_id ?? scoutAutoKey, market_kind)?.name ?? null;
     // Static label (rows without an assign control): a manual claim wins, except
-    // under "auto, reassign all", where the auto owner is who agents route to.
+    // under "auto, reassign all", where the auto owner is who agents route to —
+    // unless the claim was made after that spread, i.e. someone corrected it.
     const claimedName = operator_assigned_id ? operatorNameById.get(operator_assigned_id) ?? null : null;
-    const operator_name =
-      assignmentCtx.config.mode === "auto_all" ? operator_auto_name ?? claimedName : claimedName ?? operator_auto_name;
+    const claimedAt = r.supplier_id ? assignmentCtx.manualAt.get(r.supplier_id) ?? null : r.assigned_operator_at ?? null;
+    const operator_name = overridesAuto(assignmentCtx, claimedAt)
+      ? claimedName ?? operator_auto_name
+      : operator_auto_name ?? claimedName;
     const resolvedName = correctMaterialSpelling(
       (r.material_name && r.material_name.trim()) ||
         (r.material_id ? leadNames.get(r.material_id) ?? null : null)

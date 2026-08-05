@@ -53,10 +53,14 @@ export async function setOrgAssignmentSettings(input: {
     }
   }
 
-  const { error } = await admin
-    .from("orgs")
-    .update({ assignment_mode: input.mode, assignment_supplier_types: types })
-    .eq("id", input.orgId);
+  // Stamp only on the transition INTO auto_all. Re-saving the card (a scope edit,
+  // say) must not move the stamp, or every override made since would fall behind
+  // it and revert to the auto owner.
+  const enteringAutoAll = input.mode === "auto_all" && (before as any)?.assignment_mode !== "auto_all";
+  const patch: Record<string, unknown> = { assignment_mode: input.mode, assignment_supplier_types: types };
+  if (enteringAutoAll) patch.assignment_auto_all_at = new Date().toISOString();
+
+  const { error } = await admin.from("orgs").update(patch).eq("id", input.orgId);
   if (error) return { ok: false, error: error.message };
 
   await admin.from("audit_log").insert({
@@ -64,7 +68,7 @@ export async function setOrgAssignmentSettings(input: {
     action: "org.assignment_settings_set",
     target_table: "orgs",
     target_id: input.orgId,
-    diff: { from: before ?? null, to: { assignment_mode: input.mode, assignment_supplier_types: types }, pinned_assignees: frozen },
+    diff: { from: before ?? null, to: patch, pinned_assignees: frozen },
   });
   if (input.orgSlug) revalidatePath(`/work/orgs/${input.orgSlug}`);
   return { ok: true, frozen };
