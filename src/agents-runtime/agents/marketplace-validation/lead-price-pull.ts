@@ -410,17 +410,21 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     const platformAsSupplier = isAggregatorPlatformName(l.supplier_name, l.material_name);
     const staleIndexUrl = !platformAsSupplier && isAggregatorIndexUrl(url);
     let result;
-    const directoryHost = neverMarketplaceHostOf(url);
-    if (directoryHost) {
-      // Lead-source directory / RFQ relay — not a marketplace by host, so skip
-      // the read entirely and fall through to the terminal branch below.
+    const noCheckout = neverMarketplaceHostOf(url);
+    if (noCheckout) {
+      // No checkout by host, so skip the read entirely and fall through to the
+      // terminal branch below. A directory is never the supplier; a direct
+      // quote-desk catalogue IS the supplier and still goes to outreach.
       result = {
         classification: "not_marketplace" as const,
         market_kind: "marketplace" as const, aggregator: null,
         current_price: null, currency: null, pack_size: null, unit_price: null,
         tiers: [] as any[], moq: null, lead_time: null, shipping: null,
         source_url: url, source_citations: [] as any[],
-        notes: `${directoryHost} is a lead-source directory (no checkout) — used to find suppliers, never a marketplace price.`,
+        notes:
+          noCheckout.kind === "directory"
+            ? `${noCheckout.host} is a lead-source directory (no checkout) — used to find suppliers, never a marketplace price.`
+            : `${noCheckout.host} is a direct supplier's own catalogue with no checkout (orders route through a quote desk) — no marketplace price to publish; quote it through outreach.`,
         index_page: false, sellers: [] as any[],
       };
     } else {
@@ -450,7 +454,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     // Nothing readable on it. The platform is not a company, so the row can
     // never become a lead no matter what the page turned out to be. (Lead-source
     // directories keep their own terminal branch below, which says so precisely.)
-    if (platformAsSupplier && !directoryHost) {
+    if (platformAsSupplier && !noCheckout) {
       await admin
         .from("leads_in_flight")
         .update({

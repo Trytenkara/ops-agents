@@ -1,19 +1,25 @@
-// Lead-source directories, RFQ relays, and company-profile/data sites. Per ops
-// (Mildred/Sam): these platforms are for PULLING LEADS, never for pricing. No
-// price and no checkout option means it is not a marketplace, so a listing here
-// must never be published as a marketplace price and must never open an ops
-// signup ("log in to see price" on one of these fronts an inquiry form, not a
-// cart). Decided host-side rather than per page so it costs no fetch and cannot
-// be re-litigated by a reader that mistakes a registration wall for a checkout.
+// Hosts where checkout does not exist, so a listing must never be published as a
+// marketplace price and must never open an ops signup ("log in to see price"
+// here fronts an inquiry form, not a cart). Decided host-side rather than per
+// page so it costs no fetch and cannot be re-litigated by a reader that mistakes
+// a registration wall for a checkout.
 //
-// Two classes of host are deliberately NOT here:
-//  - Transactional B2B marketplaces (chemondis, ingredientsonline, ...) — some
-//    listings there really do check out, so they stay subject to the per-page
-//    checkout test in price-recheck.
-//  - Aggregators (alibaba, indiamart, made-in-china, dhgate, tradeindia, ...) —
-//    inquiry-only multi-seller platforms whose printed numbers we DO keep, in
-//    their own low-trust market kind. See lib/aggregator-hosts.ts.
-const NEVER_MARKETPLACE_HOSTS = [
+// Per ops the three market kinds are decided by two questions, in order:
+//   1. Can you check out?              yes → marketplace (price is real)
+//   2. Many suppliers, no checkout?     yes → aggregator (indicative ask, kept)
+//   3. One company, no checkout?        yes → direct supplier (no price at all)
+// Everything in this file is a "no" on 1, and the two lists below are the split
+// between 3 and the leads-only case. Aggregators (question 2) live in
+// lib/aggregator-hosts.ts because their printed numbers ARE kept.
+//
+// Transactional B2B marketplaces (chemondis, ingredientsonline, ...) are
+// deliberately absent: some listings there really do check out, so they stay
+// subject to the per-page checkout test in price-recheck.
+
+// Lead-source directories, RFQ relays, and company-profile/data sites. The
+// platform is never the supplier: these exist to FIND companies, and a row whose
+// supplier is the platform itself has to be fanned out or dropped, not quoted.
+const DIRECTORY_HOSTS = [
   // Chemical/ingredient lead-gen directories — every "price" routes to an inquiry.
   "knowde.com",
   "ulprospector.com",
@@ -21,11 +27,6 @@ const NEVER_MARKETPLACE_HOSTS = [
   "chemicalbook.com",
   "guidechem.com",
   "spotchemi.com",
-  // Distributor discovery portals. The product page prints no price and its
-  // "View pricing and place order" control is disabled until a human at the
-  // distributor approves a portal account; the live CTAs are "Request a quote"
-  // and "Request a sample". That is a quote desk with a catalogue, not a cart.
-  "azelis.com",
   // General B2B directories.
   "thomasnet.com",
   "kompass.com",
@@ -48,20 +49,44 @@ const NEVER_MARKETPLACE_HOSTS = [
   "bebee.com",
 ];
 
-export function isNeverMarketplaceHost(host: string | null | undefined): boolean {
-  if (!host) return false;
-  const h = host.toLowerCase().replace(/^www\./, "");
-  return NEVER_MARKETPLACE_HOSTS.some((d) => h === d || h.endsWith(`.${d}`));
+// One company's own catalogue with no checkout: a manufacturer or distributor
+// selling its own book of products through a quote desk. The supplier is real
+// and outreach treats it like any other direct supplier, there is simply no
+// price to publish. Azelis is the shape: the product page prints no price, its
+// "View pricing and place order" control is disabled until a human at the
+// distributor approves a portal account, and the live CTAs are "Request a quote"
+// and "Request a sample".
+const DIRECT_NO_CHECKOUT_HOSTS = ["azelis.com"];
+
+export type NoCheckoutKind = "directory" | "direct";
+
+function matches(list: string[], h: string): boolean {
+  return list.some((d) => h === d || h.endsWith(`.${d}`));
 }
 
-export function neverMarketplaceHostOf(url: string | null | undefined): string | null {
+function bareHost(url: string | null | undefined): string | null {
   if (!url) return null;
-  let host: string;
   try {
-    host = new URL(url).hostname;
+    return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
   } catch {
     return null;
   }
-  const h = host.replace(/^www\./, "").toLowerCase();
-  return isNeverMarketplaceHost(h) ? h : null;
+}
+
+export function isNeverMarketplaceHost(host: string | null | undefined): boolean {
+  if (!host) return false;
+  const h = host.toLowerCase().replace(/^www\./, "");
+  return matches(DIRECTORY_HOSTS, h) || matches(DIRECT_NO_CHECKOUT_HOSTS, h);
+}
+
+// Both kinds terminate the price pull; they differ in what the lead IS, so the
+// caller can say so instead of calling a distributor a directory.
+export function neverMarketplaceHostOf(
+  url: string | null | undefined
+): { host: string; kind: NoCheckoutKind } | null {
+  const h = bareHost(url);
+  if (!h) return null;
+  if (matches(DIRECTORY_HOSTS, h)) return { host: h, kind: "directory" };
+  if (matches(DIRECT_NO_CHECKOUT_HOSTS, h)) return { host: h, kind: "direct" };
+  return null;
 }
