@@ -90,6 +90,8 @@ async function getToken(): Promise<string | null> {
 }
 
 async function ziFetch(path: string, token: string, body: unknown, domain: string | null): Promise<any | null> {
+  // Contract allowance already spent this run — don't burn wall-clock re-hitting it.
+  if (isContactProviderTripped("zoominfo")) return null;
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), TIMEOUT_MS);
   try {
@@ -102,7 +104,7 @@ async function ziFetch(path: string, token: string, body: unknown, domain: strin
     if (!res.ok) {
       // 429 here is the contract allowance, which ZoomInfo enforces per-account
       // and does not refill until the term resets.
-      const outcome = res.status === 429 ? "quota" : res.status === 401 || res.status === 403 ? "auth" : "error";
+      const outcome = res.status === 429 || res.status === 402 ? "quota" : res.status === 401 || res.status === 403 ? "auth" : "error";
       recordContactApiCall({ provider: "zoominfo", outcome, units: 0, domain, detail: `HTTP ${res.status} on ${path.split("?")[0]}` });
       return null;
     }

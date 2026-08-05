@@ -1,4 +1,4 @@
-import { recordContactApiCall } from "@/lib/contact-provider-usage";
+import { recordContactApiCall, isContactProviderTripped } from "@/lib/contact-provider-usage";
 
 const BASE = "https://api.getprospect.com";
 const API_KEY = (globalThis as any).process?.env?.GETPROSPECT_API_KEY ?? "";
@@ -31,6 +31,8 @@ async function gpRequest(path: string, options: RequestInit, domain: string | nu
     (path.startsWith("/public/v1/insights/contacts?") && options.method === "POST") ||
     (path.startsWith("/v2/email-finder?") && options.method === "GET");
   if (!allowed || !isGetProspectConfigured()) return null;
+  // Monthly quota already hit this run — the insights endpoint just 402s for free.
+  if (isContactProviderTripped("getprospect")) return null;
 
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
@@ -47,7 +49,7 @@ async function gpRequest(path: string, options: RequestInit, domain: string | nu
     if (!response.ok) {
       // The account has a hard monthly quota with no overage path, so a 429 here
       // means dead until the reset, not "retry in a second".
-      const outcome = response.status === 429 ? "quota" : response.status === 401 || response.status === 403 ? "auth" : "error";
+      const outcome = response.status === 429 || response.status === 402 ? "quota" : response.status === 401 || response.status === 403 ? "auth" : "error";
       recordContactApiCall({ provider: "getprospect", outcome, units: 0, domain, detail: `HTTP ${response.status} on ${path.split("?")[0]}` });
       return null;
     }

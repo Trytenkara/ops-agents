@@ -37,6 +37,12 @@ export interface RawLead {
   // marketplace-trust penalty so a down-ranked lead sorts to the bottom of the
   // confidence-ordered enrichment/outreach queues. Null when never scored.
   confidence_score?: number | null;
+  // True when this lead's org is an internal test org (orgs.is_internal). Paid
+  // contact providers (Hunter/LeadMagic/ZoomInfo/GetProspect) are skipped for
+  // these so scarce credits go to real paying clients first; the free website
+  // scrape + Tenkara lookup still run. Threaded in by the caller (Tenkara/org
+  // metadata isn't on the lead row). Null/undefined = treat as real client.
+  is_internal?: boolean | null;
 }
 
 export interface WebsiteProbe {
@@ -919,6 +925,11 @@ function emailPatternCombos(fullName: string | null | undefined, host: string | 
 
 export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   const payload = lead.payload ?? {};
+  // Paid contact providers are real-clients-only: internal test orgs must not
+  // drain the shared credit pools ahead of paying clients (a Basic LeadMagic
+  // month is ~1 day of fleet volume). The free website crawl + Tenkara lookup,
+  // which do ~97% of contact finding, still run for every org.
+  const allowPaidProviders = !lead.is_internal;
   const website = (payload.supplier_website as string | null) || null;
   const scoutEmail = (payload.supplier_contact_email as string | null) || null;
   const scoutPhone = (payload.supplier_phone as string | null) || null;
@@ -1054,7 +1065,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // first among the paid providers because it's domain-first (we already have
   // the website) and the cheapest per lookup; ZoomInfo/GetProspect only fire if
   // Hunter also misses. Fallback-only — never runs once we have a direct email.
-  if (!email && isHunterConfigured()) {
+  if (!email && allowPaidProviders && isHunterConfigured()) {
     const hz = await enrichContactViaHunter({
       companyName: lead.supplier_name,
       website,
@@ -1077,7 +1088,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // sourcing POC, then Email Finder validates their address. Pay-per-result
   // (no charge on a miss), so it's cheap to try on the hard leads before we
   // reach for ZoomInfo. Fallback-only; soft-fails to leave the lead untouched.
-  if (!email && isLeadMagicConfigured()) {
+  if (!email && allowPaidProviders && isLeadMagicConfigured()) {
     const lm = await enrichPrimaryViaLeadMagic({
       companyName: lead.supplier_name,
       website,
@@ -1102,7 +1113,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // by design — it never runs when we already resolved a direct email, so
   // credits are spent only on the leads that would otherwise be dead ends.
   // Soft: any miss leaves the lead exactly as it was.
-  if (!email && isZoomInfoConfigured()) {
+  if (!email && allowPaidProviders && isZoomInfoConfigured()) {
     const zi = await enrichContactViaZoomInfo({
       companyName: lead.supplier_name,
       website,
@@ -1124,7 +1135,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // GetProspect is the final paid-data fallback after ZoomInfo misses. The
   // provider account has a hard monthly quota and no overage purchase path, so
   // an exhausted quota simply returns null and leaves the lead for human review.
-  if (!email && isGetProspectConfigured()) {
+  if (!email && allowPaidProviders && isGetProspectConfigured()) {
     const gp = await enrichContactViaGetProspect({
       companyName: lead.supplier_name,
       website,
@@ -1181,7 +1192,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     addExtraContact(tenkara_supplier.shipping_email, null, null, "tenkara");
     addExtraContact(tenkara_supplier.billing_email, null, null, "tenkara");
   }
-  if (multiContactOn && isHunterConfigured() && extraContacts.size < extraCap) {
+  if (multiContactOn && allowPaidProviders && isHunterConfigured() && extraContacts.size < extraCap) {
     const want = extraCap === Infinity ? 5 : Math.min(5, extraCap + 1);
     const hzs = await enrichContactsViaHunter({ companyName: lead.supplier_name, website }, want).catch(() => [] as Awaited<ReturnType<typeof enrichContactsViaHunter>>);
     for (const hz of hzs) {
@@ -1193,7 +1204,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
       }
     }
   }
-  if (multiContactOn && isLeadMagicConfigured() && extraContacts.size < extraCap) {
+  if (multiContactOn && allowPaidProviders && isLeadMagicConfigured() && extraContacts.size < extraCap) {
     const want = extraCap === Infinity ? 5 : Math.min(5, extraCap + 1);
     const lms = await enrichContactsViaLeadMagic({ companyName: lead.supplier_name, website }, want).catch(() => [] as Awaited<ReturnType<typeof enrichContactsViaLeadMagic>>);
     for (const lm of lms) {
@@ -1205,7 +1216,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
       }
     }
   }
-  if (multiContactOn && isZoomInfoConfigured() && extraContacts.size < extraCap) {
+  if (multiContactOn && allowPaidProviders && isZoomInfoConfigured() && extraContacts.size < extraCap) {
     const want = extraCap === Infinity ? 5 : Math.min(5, extraCap + 1);
     const zis = await enrichContactsViaZoomInfo({ companyName: lead.supplier_name, website }, want).catch(() => [] as Awaited<ReturnType<typeof enrichContactsViaZoomInfo>>);
     for (const zi of zis) {

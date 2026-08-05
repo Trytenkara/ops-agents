@@ -4,6 +4,7 @@ import { loadOrgStatuses, sourcingAllowed } from "@/lib/org-status";
 import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 import { assessMaterialRelevance, collectProductText, type RawLead } from "./enrich";
 import { enrichAndStageLead } from "./run-enrich";
+import { resetContactProviderBreaker } from "@/lib/contact-provider-usage";
 import { seedProfilesFromLeads } from "@/lib/supplier-profiles";
 import { seedQuoteProfilesFromStaged, syncQuoteProfilesFromMarketplace } from "@/lib/quote-profiles";
 import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
@@ -55,6 +56,9 @@ registerAgent({
   lanes: 2,
   async run(ctx) {
     const admin = createAdminClient();
+    // Warm lambdas keep module state across invocations, so clear any provider
+    // that tripped its circuit breaker on a previous run before this one starts.
+    resetContactProviderBreaker();
     const lane = Number(ctx.input?.lane ?? 1);
     // Once-per-tick work (profile seeding, profile filling, the relevance
     // backfill) belongs to the primary lane alone. None of it is partitioned, so
@@ -388,6 +392,9 @@ registerAgent({
         source: row.source,
         payload: row.payload ?? {},
         confidence_score: row.confidence_score,
+        // Gate paid contact providers to real clients: internal test orgs get the
+        // free scrape only, never the shared LeadMagic/ZoomInfo/Hunter credit pool.
+        is_internal: row.org_id ? (isInternalById.get(row.org_id) ?? false) : false,
       };
       const outcome = await enrichAndStageLead(lead, { admin, runId: ctx.runId, log: (m, meta) => ctx.log(m, meta) });
       if (outcome.status === "promoted") {
