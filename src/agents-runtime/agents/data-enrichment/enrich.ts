@@ -4,7 +4,6 @@ import { enrichContactViaZoomInfo, enrichContactsViaZoomInfo, isZoomInfoConfigur
 import { enrichContactViaHunter, enrichContactsViaHunter, isHunterConfigured } from "@/lib/hunter";
 import { enrichContactsViaLeadMagic, enrichPrimaryViaLeadMagic, isLeadMagicConfigured } from "@/lib/leadmagic";
 import { AGGREGATOR_HOSTS } from "@/lib/aggregator-hosts";
-import { neverMarketplaceHostOf } from "@/lib/marketplace-hosts";
 import {
   contactDomainKey,
   readContactDomainCache,
@@ -428,6 +427,17 @@ async function fetchPageText(url: string): Promise<{ ok: boolean; status: number
 }
 
 const ASSET_EXT_RE = /\.(png|jpe?g|gif|svg|webp|ico|css|js|woff2?)$/i;
+// A bundled asset reference ("swiper@7.0.5-bundle.min") satisfies the email
+// shape, so filter on the trailing label: a real address never ends in one of
+// these, and a real TLD is alphabetic.
+const NON_TLD = new Set([
+  "min", "js", "css", "map", "json", "html", "htm", "php", "bundle", "esm", "cjs", "umd",
+  "png", "jpg", "jpeg", "gif", "svg", "webp", "ico", "woff", "woff2", "ttf", "eot", "less", "scss",
+]);
+function hasRealTld(email: string): boolean {
+  const tld = email.split(".").pop()?.toLowerCase() ?? "";
+  return /^[a-z]{2,24}$/.test(tld) && !NON_TLD.has(tld);
+}
 const JUNK_EMAIL_RE = /(sentry|wixpress|example\.|your-?email|email@|name@|user@|domain\.com|@2x|\.png|\.jpg)/i;
 
 // Third-party service domains whose emails frequently appear embedded on corporate
@@ -485,7 +495,7 @@ export function extractEmails(html: string): string[] {
   const found = new Set<string>();
   const ok = (e: string) =>
     EMAIL_RE.test(e) && !JUNK_EMAIL_RE.test(e) && !ASSET_EXT_RE.test(e) &&
-    !isPlaceholderEmail(e) && !isThirdPartyServiceEmail(e) && !isAggregatorEmail(e);
+    !isPlaceholderEmail(e) && !isThirdPartyServiceEmail(e) && !isAggregatorEmail(e) && hasRealTld(e);
   for (const m of html.matchAll(/mailto:([^"'?>\s]+)/gi)) {
     const e = decodeURIComponent(m[1]).trim().toLowerCase();
     if (ok(e)) found.add(e);
@@ -1037,17 +1047,16 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // which do ~97% of contact finding, still run for every org.
   const allowPaidProviders = !lead.is_internal;
   const website = (payload.supplier_website as string | null) || null;
-  // Every paid provider is keyed on a corporate domain. A lead whose "website" is
-  // an Alibaba storefront or a directory profile has no such domain, so the
-  // lookup can only ever miss — measured 2026-08-05, 43% of the no-email residual
-  // was this shape and it took 25% of the LeadMagic spend. The free crawl still
-  // runs on these; only the billing is gated.
-  const ownDomain =
-    !!website &&
-    !isAggregatorDomain(hostOf(website)) &&
-    neverMarketplaceHostOf(website)?.kind !== "directory";
-  let paidEligible = allowPaidProviders && ownDomain;
-  const domainKey = ownDomain ? contactDomainKey(website) : null;
+  // Paid providers DO resolve aggregator storefronts, because they search by
+  // company name and not only by domain: hbderek.en.alibaba.com comes back as
+  // carl.export@derekchem.com. Measured over 30 days, LeadMagic hits 8.1% on
+  // aggregator hosts against 7.4% on real corporate domains, and ZoomInfo 8.2%
+  // against 18.5%. An earlier version of this gated them off those hosts as
+  // unresolvable; that was wrong and would have dropped the 166 real seller
+  // addresses found this way. Repeat spend on one domain is the actual waste,
+  // and the memo below is what bounds it.
+  let paidEligible = allowPaidProviders;
+  const domainKey = contactDomainKey(website);
   let cached: CachedContact | null = null;
   let cacheServed = false;
   const scoutEmail = (payload.supplier_contact_email as string | null) || null;
