@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { DocType } from "@/lib/supplier-documents";
+import { docxToText, workbookToText } from "@/lib/attachment-parser";
 
 // Parse key fields out of a supplier qualification document (CoA, certificate,
 // SDS, statement, ...). Counterpart to attachment-parser.ts, which extracts
@@ -52,11 +53,20 @@ function imageMediaType(ext: string): "image/png" | "image/jpeg" | "image/webp" 
   }
 }
 
-// Content-extractable formats. Excludes spreadsheets — CoAs/certs are PDFs,
-// images, or text, not xlsx.
+// Content-extractable formats. xlsx/xlsm/docx are flattened to text before they
+// reach the model (see extractDocumentFields); legacy binary .xls/.doc stay out
+// because exceljs can't read .xls and .doc isn't Office-XML.
 export function isDocExtractableExt(ext: string): boolean {
   const e = ext.toLowerCase();
-  return e === "pdf" || e === "txt" || e === "csv" || !!imageMediaType(e);
+  return (
+    e === "pdf" ||
+    e === "txt" ||
+    e === "csv" ||
+    e === "xlsx" ||
+    e === "xlsm" ||
+    e === "docx" ||
+    !!imageMediaType(e)
+  );
 }
 
 function extractJson(text: string): any | null {
@@ -108,6 +118,14 @@ export async function extractDocumentFields(
       contentBlock = { type: "document", source: { type: "base64", media_type: "application/pdf", data: buf.toString("base64") } };
     } else if (imageMediaType(e)) {
       contentBlock = { type: "image", source: { type: "base64", media_type: imageMediaType(e)!, data: buf.toString("base64") } };
+    } else if (e === "xlsx" || e === "xlsm") {
+      const text = (await workbookToText(buf)).slice(0, 100_000);
+      if (!text.trim()) return null;
+      contentBlock = { type: "text", text: "Document contents (spreadsheet exported to CSV):\n\n" + text };
+    } else if (e === "docx") {
+      const text = (await docxToText(buf)).slice(0, 100_000);
+      if (!text.trim()) return null;
+      contentBlock = { type: "text", text: "Document contents (Word document exported to text):\n\n" + text };
     } else {
       const text = buf.toString("utf-8").slice(0, 100_000);
       if (!text.trim()) return null;

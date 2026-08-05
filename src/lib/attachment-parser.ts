@@ -142,7 +142,7 @@ function cellToString(value: ExcelJS.CellValue): string {
 
 // Convert an xlsx/xlsm workbook into CSV text (one block per sheet) so Claude can
 // read it the same way it reads a plain CSV attachment.
-async function workbookToText(buf: Buffer): Promise<string> {
+export async function workbookToText(buf: Buffer): Promise<string> {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buf as any);
   const sheets: string[] = [];
@@ -166,7 +166,7 @@ async function workbookToText(buf: Buffer): Promise<string> {
 // word/document.xml; pricing usually arrives as a Word table, so we map table
 // cells to tabs and rows/paragraphs to newlines before stripping the XML tags,
 // which preserves enough layout for the extractor to align material↔price.
-async function docxToText(buf: Buffer): Promise<string> {
+export async function docxToText(buf: Buffer): Promise<string> {
   const zip = await JSZip.loadAsync(buf);
   const doc = zip.file("word/document.xml");
   if (!doc) return "";

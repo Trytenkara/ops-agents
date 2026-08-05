@@ -118,6 +118,28 @@ registerAgent({
       }
     }
 
+    // Pages Agent 05 read a price from. When the on-file URL was dead or wrong,
+    // the pull web_searches its way to the real product page and records it here
+    // rather than on the quote, so without this source the better page is the one
+    // page we never scan for documents.
+    const { data: findingRows } = await admin
+      .from("marketplace_check_findings")
+      .select("org_id, supplier_id, supplier_name, material_id, source_url, created_at")
+      .in("org_id", sourcingOrgIds)
+      .not("source_url", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(1000);
+    for (const r of (findingRows ?? []) as any[]) {
+      push({
+        pageUrl: r.source_url,
+        orgId: r.org_id,
+        supplierId: r.supplier_id ?? null,
+        supplierName: r.supplier_name ?? null,
+        materialId: r.material_id ?? null,
+        isInternal: isInternalById.get(r.org_id) ?? false,
+      });
+    }
+
     // Drop pages already checked recently. A page that yielded nothing is
     // recorded too, so the queue actually advances instead of re-fetching the
     // same misses every run.

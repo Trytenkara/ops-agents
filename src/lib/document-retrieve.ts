@@ -13,7 +13,7 @@ import { extractDocumentFields, isDocExtractableExt } from "@/lib/document-extra
 type Admin = ReturnType<typeof createAdminClient>;
 
 // A link is a candidate document only if BOTH its file type is one we can parse
-// (pdf/txt/csv/image — same set as the email extractor) AND its href or link
+// (same set as the email extractor: pdf/txt/csv/image/xlsx/docx) AND its href or link
 // text signals a qualification doc. The hint gate keeps us from vacuuming every
 // PDF on a page (catalogs, brochures, invoices) — only SDS/CoA/TDS-shaped links.
 const DOC_HINT_RE =

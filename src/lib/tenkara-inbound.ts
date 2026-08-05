@@ -469,11 +469,15 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     const attachments = await getTenkaraMessageAttachments(msg.conversation_id, msg.message_id);
     const nonInline = attachments.filter((a) => !a.is_inline);
     receivedAttachments = nonInline.map((a) => ({ name: a.filename ?? "attachment", pricingExtracted: false }));
+    // Bytes per attachment index, shared with the document pass below so a file
+    // that both passes want is pulled off Tenkara once, not twice.
+    const attBytes: (Buffer | null | undefined)[] = new Array(nonInline.length);
     for (let i = 0; i < nonInline.length; i++) {
       const att = nonInline[i];
       const ext = deriveExt(att.filename, att.content_type);
       if (!isPricingCandidateExt(ext, att.size_bytes)) continue;
       const buf = await downloadTenkaraAttachment(att);
+      attBytes[i] = buf;
       if (!buf) continue;
       const qs = await parseAttachmentBytes(buf, att.filename, ext);
       if (qs.length) receivedAttachments[i].pricingExtracted = true;
@@ -493,20 +497,26 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
         const docType = classifyDocType(att.filename, att.content_type, receivedAttachments[i]?.pricingExtracted ?? false);
 
         // Parse qualification fields out of the doc (CoA lot/assay/expiry, cert
-        // validity, ...). Skip price sheets (pricing handles those) and 'other'.
+        // validity, ...). Skip price sheets only, since the pricing pass above
+        // already read those. 'other' is still parsed: the classifier falls back
+        // to it whenever a filename doesn't announce its type, so skipping it
+        // silently dropped fields off documents that did carry them.
         // Per-doc best-effort so one bad file doesn't drop the rest.
         let extracted: Record<string, any> | null = null;
         let expiresOn: string | null = null;
         // Downloaded once and used twice: to parse fields, and to keep a copy.
         // Tenkara's download_url needs a bearer token, so the stored bytes are
         // the only thing an operator can actually open from the bench.
-        let bytes: Buffer | null = null;
-        try {
-          bytes = await downloadTenkaraAttachment(att);
-        } catch {
-          /* per-doc download best-effort */
+        let bytes: Buffer | null = attBytes[i] ?? null;
+        if (attBytes[i] === undefined) {
+          try {
+            bytes = await downloadTenkaraAttachment(att);
+            attBytes[i] = bytes;
+          } catch {
+            /* per-doc download best-effort */
+          }
         }
-        if (bytes && docType !== "price_sheet" && docType !== "other") {
+        if (bytes && docType !== "price_sheet") {
           const ext = deriveExt(att.filename, att.content_type);
           if (isDocExtractableExt(ext)) {
             try {
