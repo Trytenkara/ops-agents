@@ -72,6 +72,9 @@ for (const l of targets.slice(0, limit)) {
     case_size: null,
     unit: null,
     enumerate_sellers: true,
+    // This script only ever targets platform-as-supplier rows (see `targets`), so
+    // the row is known to be an index page before the page is read.
+    index_page_expected: true,
   });
   // A page whose sellers we cannot read is still retired, exactly as Agent 05
   // retires it: the platform was never a supplier, so leaving the row in place
@@ -89,6 +92,7 @@ for (const l of targets.slice(0, limit)) {
     lead: l,
     indexUrl,
     sellers: result.sellers,
+    retireParent: true,
   });
   split++;
   staged += n;

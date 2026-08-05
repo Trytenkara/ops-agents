@@ -145,9 +145,59 @@ const AGGREGATOR_INDEX_PATHS: Array<[host: string, re: RegExp]> = [
   ["go4worldbusiness.com", /^\/(suppliers|search)/i],
 ];
 
+// A seller's OWN storefront on the platform. This list is the inverse of the
+// index-path list above and is the one worth maintaining: each platform has a
+// single storefront convention that changes rarely, whereas its category/search
+// URL shapes are many and keep being added. So rather than trying to enumerate
+// every index shape (which silently missed pharmaoffer's singular
+// "/api-excipient-supplier/" and every host added after the patterns were
+// written), we recognize the narrow single-seller case and treat the rest of an
+// aggregator as possibly-an-index, letting the page itself settle it.
+const AGGREGATOR_SELLER_STOREFRONT: Array<[host: string, re: RegExp | null]> = [
+  // Vendor subdomains: xyz.en.alibaba.com, xyz.trustpass.alibaba.com,
+  // xyz.en.made-in-china.com. A bare/www/m/dir host is never one seller.
+  ["alibaba.com", null],
+  ["made-in-china.com", null],
+  // made-in-china.com/showroom/<vendor> is ONE vendor's shop (unlike
+  // alibaba.com/showroom/<material>, which is a search result).
+  ["made-in-china.com", /^\/showroom\//i],
+];
+
+const NON_SELLER_SUBDOMAINS = new Set(["", "www", "m", "dir", "www2", "us", "sale", "offer"]);
+
+// True when the URL is one seller's own storefront/product page on the platform,
+// so there is no roster on it to fan out.
+export function isAggregatorSellerStorefrontUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const host = normalizeHost(parsed.hostname);
+  if (!host) return false;
+  for (const [d, re] of AGGREGATOR_SELLER_STOREFRONT) {
+    if (host !== d && !host.endsWith(`.${d}`)) continue;
+    if (re) {
+      if (re.test(parsed.pathname)) return true;
+      continue;
+    }
+    // Vendor-subdomain form: strip the platform domain and any locale label
+    // ("en", "trustpass") and require a remaining label that names the vendor.
+    const labels = host.slice(0, Math.max(0, host.length - d.length - 1)).split(".");
+    const vendor = labels.filter((l) => l !== "en" && l !== "trustpass").join(".");
+    if (vendor && !NON_SELLER_SUBDOMAINS.has(vendor)) return true;
+  }
+  return false;
+}
+
 // Cross-platform: these hosts publish per-material roll-up pages as
-// "<material>-suppliers.html" / "china-suppliers/<material>.htm".
-const AGGREGATOR_ROLLUP_PATH = /(-|\/)(suppliers|manufacturers|exporters|wholesalers)(-|\/|\.|$)/i;
+// "<material>-suppliers.html" / "china-suppliers/<material>.htm". Singular is
+// allowed because Pharmaoffer writes "/api-excipient-supplier/<category>/<material>";
+// a seller's own storefront is excluded before this runs, so a vendor slug that
+// happens to contain "-supplier" cannot be caught by it.
+const AGGREGATOR_ROLLUP_PATH = /(-|\/)(suppliers?|manufacturers?|exporters?|wholesalers?|vendors?|distributors?)(-|\/|\.|$)/i;
 // ...but one seller's own listing can carry the same words in its product slug
 // ("/product-detail/hydroxyethyl-cellulose-hec-manufacturers-HECELLOSE_1600.html"),
 // so an explicit detail path always wins over the roll-up guess.
@@ -167,10 +217,36 @@ export function isAggregatorIndexUrl(url: string | null | undefined): boolean {
   if (!host) return false;
   if (!isAggregatorHost(host)) return false;
   if (AGGREGATOR_DETAIL_PATH.test(parsed.pathname)) return false;
+  if (isAggregatorSellerStorefrontUrl(url)) return false;
   if (AGGREGATOR_ROLLUP_PATH.test(parsed.pathname)) return true;
   return AGGREGATOR_INDEX_PATHS.some(
     ([d, re]) => (host === d || host.endsWith(`.${d}`)) && re.test(parsed.pathname),
   );
+}
+
+// Whether to ask the price reader for the page's seller roster. The URL patterns
+// above only ever produce a HINT: they are hand-maintained, so they lag every new
+// platform and every URL redesign. The page itself is the authority, and the
+// reader is already told to fall back to a normal price read when the page turns
+// out to be one seller's listing (INDEX_PAGE_RULES). So the question here is not
+// "is this an index page" but the cheaper "could it be", and we answer yes for
+// anything on an aggregator that is not provably one seller's own page.
+//
+// Erring toward yes costs output tokens on a page that reads normally anyway;
+// erring toward no silently loses every seller on the page, which is what the
+// allowlist was doing.
+export function shouldEnumerateAggregatorSellers(url: string | null | undefined): boolean {
+  if (!url) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (!isAggregatorHost(normalizeHost(parsed.hostname))) return false;
+  if (AGGREGATOR_DETAIL_PATH.test(parsed.pathname)) return false;
+  if (isAggregatorSellerStorefrontUrl(url)) return false;
+  return true;
 }
 
 // Which aggregator a lead's price came from, for display on the row. Agent 05

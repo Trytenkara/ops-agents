@@ -89,6 +89,11 @@ export default async function OrgPriceIndexPage({
       .select("id, supplier_name, material_name, source, payload, created_at")
       .eq("org_id", org.id)
       .not("payload->price_tiers", "is", null)
+      // A retired lead's price is not a price on file. Without this, deduped
+      // duplicates published a second row for the same supplier×material and
+      // retired aggregator umbrella rows published the platform's own search
+      // page as a supplier.
+      .eq("status", "active")
       .limit(1000),
     admin.from("material_client_tags").select("material_name, org_client_id").eq("org_id", org.id).not("org_client_id", "is", null),
     admin.from("org_clients").select("id, name").eq("org_id", org.id).order("name"),
@@ -188,6 +193,11 @@ export default async function OrgPriceIndexPage({
       : ((leadsRes.data ?? []) as any[]).flatMap((l: any) => {
           const tiers = Array.isArray(l.payload?.price_tiers) ? l.payload.price_tiers : [];
           if (!tiers.length) return [];
+          // Re-judged as having no checkout since these tiers were pulled, so the
+          // tiers are a stale artifact of the earlier read. Agent 05 stops
+          // re-checking the lead at that point, so nothing would ever refresh or
+          // clear them and the row would keep publishing indefinitely.
+          if (l.payload?.marketplace_pull?.status === "not_marketplace") return [];
           if (findingPairs.has(findingPairKey(l.supplier_name, l.material_name))) return [];
           const src = (l.payload?.source_url ?? l.payload?.supplier_website ?? null) as string | null;
           const aggregator =

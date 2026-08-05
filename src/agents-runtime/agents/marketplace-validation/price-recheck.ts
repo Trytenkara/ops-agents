@@ -25,11 +25,16 @@ export interface RecheckInput {
   // lead re-check path passes a cheaper model here since re-checks only compare
   // against a known baseline (lower stakes than a first-time extraction).
   model?: string;
-  // Set when the lead looks like an aggregator index page (the platform itself
-  // recorded as the supplier, or a category/search/showroom URL). Switches the
-  // reader from "find one price" to "list the individual sellers on this page"
+  // Set when the lead COULD be an aggregator index page. Switches the reader from
+  // "find one price" to "list the individual sellers on this page if it is one"
   // so the caller can split it into one lead per real company.
   enumerate_sellers?: boolean;
+  // Set only when something other than the page already says it IS an index page
+  // (the platform itself recorded as the supplier). Without that prior, a roster
+  // the model volunteers is not enough to blank the lead's price: enumerate_sellers
+  // is now set for most aggregator URLs, and a single seller's listing that also
+  // links a few "other sellers" would otherwise lose its own price.
+  index_page_expected?: boolean;
 }
 
 // One third-party company listed on an aggregator index page.
@@ -314,7 +319,9 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
       if (sellers.length >= 8) break;
     }
   }
-  const indexPage = input.enumerate_sellers === true && (parsed.index_page === true || sellers.length > 0);
+  const indexPage =
+    input.enumerate_sellers === true &&
+    (parsed.index_page === true || (input.index_page_expected === true && sellers.length > 0));
 
   const readUrl = typeof parsed.source_url === "string" ? parsed.source_url : input.product_url;
   // The curated host list is authoritative over the model's read: on a known

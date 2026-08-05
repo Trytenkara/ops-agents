@@ -4,7 +4,7 @@ import { convertToUsd } from "@/lib/fx";
 import { ensureMarketplaceCaseDims } from "@/lib/marketplace-case-dims-fill";
 import { neverMarketplaceHostOf } from "@/lib/marketplace-hosts";
 import { screenClonedListings } from "@/lib/clone-ring";
-import { aggregatorNameOf, isAggregatorIndexUrl, isAggregatorPlatformName } from "@/lib/aggregator-hosts";
+import { aggregatorNameOf, isAggregatorIndexUrl, isAggregatorPlatformName, shouldEnumerateAggregatorSellers } from "@/lib/aggregator-hosts";
 import { getOrgAssignmentContext, resolveOperatorId, type AssignmentContext } from "@/lib/operator-assignment";
 import { leadMarketKind } from "@/lib/lead-market";
 
@@ -178,8 +178,13 @@ export async function expandAggregatorIndexPage(opts: {
   lead: LeadRow;
   indexUrl: string;
   sellers: AggregatorSeller[];
+  // Retire the lead the sellers were read from. True when the platform itself was
+  // recorded as the supplier, so the row was never a company. False when a real
+  // company's link merely pointed at a category page: its sellers are new leads,
+  // but the company itself is still a lead and the caller re-points it instead.
+  retireParent: boolean;
 }): Promise<number> {
-  const { admin, log, runId, lead: l, indexUrl, sellers: read } = opts;
+  const { admin, log, runId, lead: l, indexUrl, sellers: read, retireParent } = opts;
   const aggregator = aggregatorNameOf(indexUrl);
   const { kept: sellers, screened } = screenClonedListings(read);
   if (screened.length) {
@@ -247,26 +252,28 @@ export async function expandAggregatorIndexPage(opts: {
     }
     // Retire the umbrella row. Terminal (not "dropped") because no operator
     // rejected it: it was never a supplier, and its sellers now stand in for it.
-    await admin
-      .from("leads_in_flight")
-      .update({
-        status: "terminal",
-        stage: "terminal",
-        drop_reason: "aggregator_index_page",
-        payload: {
-          ...(l.payload ?? {}),
-          site_type: "A",
+    if (retireParent) {
+      await admin
+        .from("leads_in_flight")
+        .update({
+          status: "terminal",
+          stage: "terminal",
           drop_reason: "aggregator_index_page",
-          aggregator_split: {
-            at: new Date().toISOString(),
-            index_url: indexUrl,
-            sellers_found: read.length,
-            sellers_staged: fresh.length,
-            sellers_screened: screened.length || undefined,
+          payload: {
+            ...(l.payload ?? {}),
+            site_type: "A",
+            drop_reason: "aggregator_index_page",
+            aggregator_split: {
+              at: new Date().toISOString(),
+              index_url: indexUrl,
+              sellers_found: read.length,
+              sellers_staged: fresh.length,
+              sellers_screened: screened.length || undefined,
+            },
           },
-        },
-      })
-      .eq("id", l.id);
+        })
+        .eq("id", l.id);
+    }
     await log(
       `Aggregator index page split into ${fresh.length} seller lead${fresh.length === 1 ? "" : "s"} (${read.length} read${sellers.length - fresh.length ? `, ${sellers.length - fresh.length} already on file` : ""}${screened.length ? `, ${screened.length} cloned listings screened` : ""}): ${l.supplier_name} × ${l.material_name}`,
       { step: "mp_aggregator_split", data: { lead_id: l.id, index_url: indexUrl, staged: fresh.length } },
@@ -430,8 +437,8 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   let sellersStaged = 0;
   let stoppedEarly = false;
 
-  const expandIndexPage = (l: LeadRow, indexUrl: string, sellers: AggregatorSeller[]) =>
-    expandAggregatorIndexPage({ admin, log, runId, lead: l, indexUrl, sellers });
+  const expandIndexPage = (l: LeadRow, indexUrl: string, sellers: AggregatorSeller[], retireParent: boolean) =>
+    expandAggregatorIndexPage({ admin, log, runId, lead: l, indexUrl, sellers, retireParent });
 
   const processOne = async (l: LeadRow): Promise<"pulled" | "flagged" | "pending" | "not_marketplace" | "expanded" | null> => {
     const url = listingUrl(l.payload)!;
@@ -448,6 +455,13 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     //    persist that repaired URL so the row stops linking to the category.
     const platformAsSupplier = isAggregatorPlatformName(l.supplier_name, l.material_name);
     const staleIndexUrl = !platformAsSupplier && isAggregatorIndexUrl(url);
+    // Ask for the seller roster on anything that could be an index page, not only
+    // when the supplier NAME gave it away. Keying on the name meant a category page
+    // the scout had attributed to one real company was never fanned out: measured
+    // 2026-08-05, 154 aggregator leads named the platform and were expanded, while
+    // 262 more sat on genuine multi-seller index URLs under a company's name and
+    // were never even asked. The page decides; the name and URL only trigger asking.
+    const enumerateSellers = platformAsSupplier || shouldEnumerateAggregatorSellers(url);
     let result;
     const noCheckout = neverMarketplaceHostOf(url);
     if (noCheckout) {
@@ -477,18 +491,67 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         unit: null,
         // Enumerating sellers is a harder read than a price check, so an
         // umbrella lead always goes to the full model even on a re-check.
-        model: isRecheck && !platformAsSupplier ? RECHECK_MODEL : undefined,
-        enumerate_sellers: platformAsSupplier,
+        model: isRecheck && !enumerateSellers ? RECHECK_MODEL : undefined,
+        enumerate_sellers: enumerateSellers,
+        index_page_expected: platformAsSupplier,
       });
     } catch (e: any) {
       result = { classification: "needs_review" as const, market_kind: (aggregatorNameOf(url) ? "aggregator" : "marketplace") as "marketplace" | "aggregator", aggregator: aggregatorNameOf(url), current_price: null, currency: null, pack_size: null, unit_price: null, tiers: [], moq: null, lead_time: null, shipping: null, source_url: url, source_citations: [], notes: `pull failed: ${e?.message ?? e}`, index_page: false, sellers: [], infra_failure: true };
     }
     }
 
-    // Index page confirmed: split it into its sellers and retire the umbrella.
+    // Index page confirmed: split it into its sellers.
     if (result.index_page && result.sellers.length > 0) {
-      sellersStaged += await expandIndexPage(l, url, result.sellers);
-      return "expanded";
+      if (platformAsSupplier) {
+        sellersStaged += await expandIndexPage(l, url, result.sellers, true);
+        return "expanded";
+      }
+      // A real company whose stored link turned out to be a category page. The
+      // sellers on it are new leads, but this row is a company an operator may
+      // already be working, so it survives the split and gets re-pointed at its
+      // own listing when the page names it.
+      const key = (s: string | null | undefined) => (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+      const self = key(l.supplier_name)
+        ? result.sellers.find((s) => {
+            const a = key(s.supplier_name);
+            const b = key(l.supplier_name);
+            return a && (a === b || a.startsWith(b) || b.startsWith(a));
+          })
+        : undefined;
+      sellersStaged += await expandIndexPage(l, url, result.sellers.filter((s) => s !== self), false);
+      if (self) {
+        const nextPayload = {
+          ...(l.payload ?? {}),
+          supplier_website: self.product_url,
+          source_url: self.product_url,
+          aggregator_index_url: url,
+          // Back to 'pending' so the next pass prices the company's own listing.
+          // Attempts carry over, so a URL that keeps resolving to a category page
+          // still runs out of retries instead of looping forever.
+          marketplace_pull: {
+            ...(l.payload?.marketplace_pull ?? {}),
+            status: "pending" as const,
+            reason: "index_page_self_listing_repaired",
+            source_url: self.product_url,
+            at: new Date().toISOString(),
+          },
+        };
+        const { error: selfErr } = await admin.from("leads_in_flight").update({ payload: nextPayload }).eq("id", l.id);
+        if (selfErr) {
+          await log(`Self-listing repair failed for ${l.id}: ${selfErr.message}`, { level: "error", step: "mp_aggregator_split", data: { lead_id: l.id } });
+          return null;
+        }
+        await log(`Re-pointed ${l.supplier_name} from an index page to its own listing on ${aggregatorNameOf(url) ?? "the platform"}: ${l.material_name}`, {
+          step: "mp_aggregator_split",
+          data: { lead_id: l.id, index_url: url, self_listing: self.product_url },
+        });
+        return "expanded";
+      }
+      // The page lists sellers but not this company, so there is nothing here to
+      // price. Fall through to the normal needs_review path: its backoff decides
+      // when to retry and opens an operator case if the link never resolves.
+      result.classification = "needs_review";
+      result.notes = `Stored link is a ${aggregatorNameOf(url) ?? "platform"} index page listing ${result.sellers.length} other seller${result.sellers.length === 1 ? "" : "s"}, not ${l.supplier_name ?? "this company"}; its sellers were staged as their own leads. ${result.notes ?? ""}`.trim();
     }
     // Nothing readable on it. The platform is not a company, so the row can
     // never become a lead no matter what the page turned out to be. (Lead-source
