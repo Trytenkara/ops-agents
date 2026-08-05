@@ -3,15 +3,22 @@ import { cn } from "@/lib/utils";
 
 // Every table gets the same framed-card treatment (ivory surface, crisp border,
 // consistent radius) so all tables across the platform read as one system.
-const Table = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableElement>>(
-  ({ className, ...props }, ref) => (
-    <div className="overflow-hidden rounded-lg border border-border bg-card">
-      <div className="relative w-full overflow-x-auto">
-        <table ref={ref} className={cn("w-full caption-bottom text-sm", className)} {...props} />
-      </div>
+// `viewport*` props address the scrolling box itself, so a long list can cap its
+// height (and stick its header) without every table growing the page.
+const Table = React.forwardRef<
+  HTMLTableElement,
+  React.HTMLAttributes<HTMLTableElement> & {
+    viewportClassName?: string;
+    viewportRef?: React.Ref<HTMLDivElement>;
+    onViewportScroll?: React.UIEventHandler<HTMLDivElement>;
+  }
+>(({ className, viewportClassName, viewportRef, onViewportScroll, ...props }, ref) => (
+  <div className="overflow-hidden rounded-lg border border-border bg-card">
+    <div ref={viewportRef} onScroll={onViewportScroll} className={cn("relative w-full overflow-x-auto", viewportClassName)}>
+      <table ref={ref} className={cn("w-full caption-bottom text-sm", className)} {...props} />
     </div>
-  )
-);
+  </div>
+));
 Table.displayName = "Table";
 
 const TableHeader = React.forwardRef<HTMLTableSectionElement, React.HTMLAttributes<HTMLTableSectionElement>>(

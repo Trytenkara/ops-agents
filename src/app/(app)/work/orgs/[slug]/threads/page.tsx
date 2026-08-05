@@ -11,6 +11,7 @@ import { PanelTabs } from "@/components/panel-tabs";
 import { CasesSection } from "@/components/cases-section";
 import { loadOrgCases, caseCategory } from "@/lib/org-cases";
 import { getOutreachTracker } from "@/lib/outreach-tracker";
+import { selectAllPaged } from "@/lib/supabase-paging";
 import { OutreachSummaryView } from "@/components/outreach-summary-view";
 
 export const dynamic = "force-dynamic";
@@ -48,14 +49,20 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
     hasAnyRole(session, ["admin", "ops_lead", "ops_operator"]) &&
     (seesAllOrgs(session) || (assigned?.includes(org.id) ?? false));
 
-  const { data: drafts } = await admin
-    .from("draft_references")
-    .select(
-      "id, subject, supplier_id, material_id, quote_id, status, email_client, created_at, metadata, assigned_operator, users:users!draft_references_assigned_operator_fkey(display_name, email, user_roles(role)), reviewer:users!draft_references_reviewer_fkey(display_name), agents(name, slug)"
-    )
-    .eq("org_id", org.id)
-    .order("created_at", { ascending: false })
-    .limit(200);
+  // PostgREST caps a response at 1000 rows and a plain .limit() truncated this
+  // to the newest 200, so older conversations were unreachable. Page through
+  // with a stable order (created_at + id) so every thread for the org loads.
+  const drafts = await selectAllPaged<any>((from, to) =>
+    admin
+      .from("draft_references")
+      .select(
+        "id, subject, supplier_id, material_id, quote_id, status, email_client, created_at, metadata, assigned_operator, users:users!draft_references_assigned_operator_fkey(display_name, email, user_roles(role)), reviewer:users!draft_references_reviewer_fkey(display_name), agents(name, slug)"
+      )
+      .eq("org_id", org.id)
+      .order("created_at", { ascending: false })
+      .order("id")
+      .range(from, to)
+  );
 
   const { openRows: caseOpen, resolvedRows: caseResolved } = await loadOrgCases(admin, org.id);
   const emailCasesOpen = caseOpen.filter((c) => caseCategory(c.type) === "email");
@@ -73,16 +80,11 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
     list.push({ id: alias.id, email: alias.email });
     aliasesByDraft.set(alias.draft_ref_id, list);
   }
-  // The fetch is capped, so tell operators exactly which window they're seeing
-  // (newest N threads and their date span). Older threads beyond the cap aren't
-  // shown; the range makes that explicit instead of silently truncating.
-  const THREADS_CAP = 200;
-  const capHit = rows.length >= THREADS_CAP;
   const dates = rows.map((d: any) => d.created_at).filter(Boolean).sort();
   const fmt = (s: string) => new Date(s).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
   const rangeNote =
     dates.length > 0
-      ? `Showing ${rows.length} thread${rows.length === 1 ? "" : "s"} — ${fmt(dates[0])} to ${fmt(dates[dates.length - 1])}${capHit ? ` (newest ${THREADS_CAP}; older threads not shown)` : ""}`
+      ? `Showing all ${rows.length} thread${rows.length === 1 ? "" : "s"}, ${fmt(dates[0])} to ${fmt(dates[dates.length - 1])}`
       : null;
   let supplierNames = new Map<string, string>();
   let materialNames = new Map<string, string>();

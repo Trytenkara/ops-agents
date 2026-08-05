@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
@@ -17,7 +17,8 @@ import { setThreadHidden } from "@/app/actions/drafts";
 import { attachAlternateEmail } from "@/app/actions/supplier-emails";
 import { Button } from "@/components/ui/button";
 import { filenameFor } from "@/lib/csv";
-import { useListFilter, byString, byDateDesc, byStringBlankLast } from "@/components/use-list-filter";
+import { useListFilter, usePersistedState, byString, byDateDesc, byStringBlankLast } from "@/components/use-list-filter";
+import { Select } from "@/components/ui/select";
 
 export type ThreadKind = "outbound" | "inbound" | "inquiry";
 
@@ -61,8 +62,19 @@ const FILTERS: { value: "all" | ThreadKind | "hidden"; label: string }[] = [
   { value: "hidden", label: "Hidden" },
 ];
 
+// Every thread for the org is loaded at once, so the table renders a window of
+// rows and grows it as the operator scrolls. Keeps a 900-row org responsive.
+const SCROLL_PAGE = 100;
+
+// An operator is identified by email where we have one (display names collide),
+// falling back to the name. Blank means the thread is unassigned.
+function assigneeKey(r: ThreadRow): string {
+  return (r.assignedEmail ?? r.assignedName ?? "").trim().toLowerCase() || "unassigned";
+}
+
 export function ThreadsList({ rows, slug, orgId, canAct = false }: { rows: ThreadRow[]; slug: string; orgId: string; canAct?: boolean }) {
   const [kind, setKind] = useState<"all" | ThreadKind | "hidden">("all");
+  const [assignee, setAssignee] = usePersistedState("threads:assignee", "all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [hiding, setHiding] = useState<string | null>(null);
   const [attaching, setAttaching] = useState<string | null>(null);
@@ -89,7 +101,31 @@ export function ThreadsList({ rows, slug, orgId, canAct = false }: { rows: Threa
     return c;
   }, [rows]);
 
-  const { filtered, controls } = useListFilter(byKind, {
+  const assigneeOptions = useMemo(() => {
+    const counts = new Map<string, { label: string; count: number }>();
+    for (const r of byKind) {
+      const key = assigneeKey(r);
+      const entry = counts.get(key) ?? { label: key === "unassigned" ? "Unassigned" : r.assignedName ?? r.assignedEmail ?? key, count: 0 };
+      entry.count++;
+      counts.set(key, entry);
+    }
+    const named = Array.from(counts.entries())
+      .filter(([key]) => key !== "unassigned")
+      .sort((a, b) => a[1].label.localeCompare(b[1].label));
+    const unassigned = counts.get("unassigned");
+    return [
+      { value: "all", label: `All assignees (${byKind.length})` },
+      ...named.map(([value, v]) => ({ value, label: `${v.label} (${v.count})` })),
+      ...(unassigned ? [{ value: "unassigned", label: `Unassigned (${unassigned.count})` }] : []),
+    ];
+  }, [byKind]);
+
+  const byAssignee = useMemo(
+    () => (assignee === "all" ? byKind : byKind.filter((r) => assigneeKey(r) === assignee)),
+    [byKind, assignee]
+  );
+
+  const { filtered, controls } = useListFilter(byAssignee, {
     searchText: (r) => `${r.subject ?? ""} ${r.supplierName ?? ""} ${r.materialName ?? ""} ${r.assignedName ?? ""} ${r.assignedEmail ?? ""}`,
     searchPlaceholder: "subject, supplier, material, assignee…",
     sorts: [
@@ -107,6 +143,16 @@ export function ThreadsList({ rows, slug, orgId, canAct = false }: { rows: Threa
     defaultSort: "newest",
     persistKey: "threads",
   });
+
+  // A persisted operator who has no threads in this view would otherwise leave
+  // the table permanently empty with no visible cause.
+  useEffect(() => {
+    if (assignee !== "all" && !assigneeOptions.some((o) => o.value === assignee)) setAssignee("all");
+  }, [assignee, assigneeOptions, setAssignee]);
+
+  const [visibleCount, setVisibleCount] = useState(SCROLL_PAGE);
+  useEffect(() => setVisibleCount(SCROLL_PAGE), [filtered]);
+  const visibleRows = filtered.slice(0, visibleCount);
 
   const selectable = canAct;
   const filteredIds = filtered.map((r) => r.id);
@@ -173,7 +219,20 @@ export function ThreadsList({ rows, slug, orgId, canAct = false }: { rows: Threa
 
       {actionMessage && <p className="text-xs text-amber-700 dark:text-amber-300">{actionMessage}</p>}
       <div className="flex flex-wrap items-end justify-between gap-3">
-        {controls}
+        <div className="flex flex-wrap items-end gap-3">
+          {controls}
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">Assigned to</span>
+            <Select
+              size="sm"
+              className="min-w-[13rem]"
+              ariaLabel="Filter by assigned operator"
+              value={assignee}
+              onValueChange={setAssignee}
+              options={assigneeOptions}
+            />
+          </label>
+        </div>
         <ListCsvButton
           filename={filenameFor(slug, "threads")}
           headers={["Kind", "Subject", "Supplier", "Material", "Status", "Assigned", "Staged"]}
@@ -196,8 +255,16 @@ export function ThreadsList({ rows, slug, orgId, canAct = false }: { rows: Threa
           />
         </>
       )}
-      <Table>
-        <TableHeader>
+      <Table
+        viewportClassName="max-h-[70vh] overflow-y-auto"
+        onViewportScroll={(e) => {
+          const el = e.currentTarget;
+          if (el.scrollHeight - el.scrollTop - el.clientHeight < 400) {
+            setVisibleCount((v) => (v >= filtered.length ? v : v + SCROLL_PAGE));
+          }
+        }}
+      >
+        <TableHeader className="sticky top-0 z-10 bg-card">
           <TableRow>
             {selectable && (
               <TableHead className="w-8">
@@ -221,7 +288,7 @@ export function ThreadsList({ rows, slug, orgId, canAct = false }: { rows: Threa
           </TableRow>
         </TableHeader>
         <TableBody>
-          {filtered.map((d) => (
+          {visibleRows.map((d) => (
             <TableRow key={d.id}>
               {selectable && (
                 <TableCell>
@@ -294,6 +361,13 @@ export function ThreadsList({ rows, slug, orgId, canAct = false }: { rows: Threa
           )}
         </TableBody>
       </Table>
+      {filtered.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {visibleRows.length < filtered.length
+            ? `Showing ${visibleRows.length} of ${filtered.length} threads. Scroll the table for more.`
+            : `Showing all ${filtered.length} thread${filtered.length === 1 ? "" : "s"}.`}
+        </p>
+      )}
     </div>
   );
 }

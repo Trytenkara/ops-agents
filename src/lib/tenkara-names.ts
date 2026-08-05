@@ -81,13 +81,17 @@ export async function resolveSupplierNamesWithFallback(ids: string[]): Promise<M
   if (missing.length === 0) return names;
   try {
     const admin = createAdminClient();
-    const { data } = await admin
-      .from("leads_in_flight")
-      .select("supplier_id, supplier_name")
-      .in("supplier_id", missing)
-      .not("supplier_name", "is", null);
-    for (const r of (data ?? []) as { supplier_id: string | null; supplier_name: string | null }[]) {
-      if (r.supplier_id && r.supplier_name && !names.has(r.supplier_id)) names.set(r.supplier_id, r.supplier_name);
+    // PostgREST puts `.in()` in the URL, so a few hundred UUIDs overflow the
+    // request-line limit. Ask in chunks.
+    for (let i = 0; i < missing.length; i += 200) {
+      const { data } = await admin
+        .from("leads_in_flight")
+        .select("supplier_id, supplier_name")
+        .in("supplier_id", missing.slice(i, i + 200))
+        .not("supplier_name", "is", null);
+      for (const r of (data ?? []) as { supplier_id: string | null; supplier_name: string | null }[]) {
+        if (r.supplier_id && r.supplier_name && !names.has(r.supplier_id)) names.set(r.supplier_id, r.supplier_name);
+      }
     }
   } catch {
     /* OA fallback is best-effort */
