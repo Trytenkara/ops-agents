@@ -37,7 +37,7 @@ export function MaterialMergePrompt({ flags }: { flags: MaterialMergeFlag[] }) {
       }
       const parts = [`Moved ${r.repointed ?? 0} lead(s)`];
       if (r.redundant) parts.push(`dropped ${r.redundant} already sourced under the surviving material`);
-      if (r.superseded) parts.push(`${r.superseded} staged draft(s) superseded — delete them in the Tenkara inbox`);
+      if (r.superseded) parts.push(`${r.superseded} staged draft(s) superseded, delete them in the Tenkara inbox`);
       if (r.regenerating) parts.push(`regenerating ${r.regenerating} email(s)`);
       setMsg(parts.join(" · ") + ".");
       router.refresh();
@@ -68,7 +68,7 @@ export function MaterialMergePrompt({ flags }: { flags: MaterialMergeFlag[] }) {
             {" looks like the same material as "}
             <span className="font-medium">{f.keep_name}</span>
             {f.keep_grades ? <span className="text-muted-foreground"> ({f.keep_grades})</span> : null}
-            {f.reason === "locant_variant" ? " — the names differ only by a chemical locant." : "."}
+            {f.reason === "locant_variant" ? " (the names differ only by a chemical locant)." : "."}
           </div>
           <div className="text-xs text-muted-foreground">
             {f.drop_lead_count ?? 0} lead(s) under the duplicate

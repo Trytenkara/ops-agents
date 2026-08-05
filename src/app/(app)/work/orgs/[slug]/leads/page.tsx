@@ -319,7 +319,6 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
       </div>
       <AgentRunsStrip runs={runStats} />
       <MaterialFlagsPrompt flags={materialFlags} />
-      <MaterialMergePrompt flags={mergeFlags} />
       {leadsNeedingName.length > 0 && (
         <div className="rounded-lg border border-red-300/60 bg-red-500/10 px-4 py-3 space-y-1">
           <div className="text-xs uppercase tracking-wider font-semibold text-red-800 dark:text-red-300">
@@ -335,7 +334,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           </p>
         </div>
       )}
-      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} marketplaceAccounts={marketplaceAccounts} enrichmentCases={enrichmentCases} supplierDocs={supplierDocs} />
+      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} marketplaceAccounts={marketplaceAccounts} enrichmentCases={enrichmentCases} supplierDocs={supplierDocs} mergePrompt={<MaterialMergePrompt flags={mergeFlags} />} />
     </div>
   );
 }

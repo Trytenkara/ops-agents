@@ -102,6 +102,7 @@ export function SupplierLeadsView({
   slug,
   orgId,
   operatorOptions,
+  banner = null,
 }: {
   rows: any[];
   profiles: SupplierProfile[];
@@ -110,6 +111,7 @@ export function SupplierLeadsView({
   slug: string;
   orgId: string;
   operatorOptions?: { id: string; name: string }[];
+  banner?: React.ReactNode;
 }) {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("leads");
@@ -404,6 +406,8 @@ export function SupplierLeadsView({
           />
         </div>
       </div>
+
+      {banner}
 
       {/* Supplier groups */}
       <div className="space-y-2">

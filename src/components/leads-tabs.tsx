@@ -53,6 +53,7 @@ export function LeadsTabs({
   marketplaceAccounts = [],
   enrichmentCases = null,
   supplierDocs,
+  mergePrompt = null,
 }: {
   rows: any[];
   removedRows?: any[];
@@ -69,6 +70,9 @@ export function LeadsTabs({
   marketplaceAccounts?: MarketplaceAccount[];
   enrichmentCases?: React.ReactNode;
   supplierDocs?: SupplierDocIndex;
+  // Sits under each tab's own filter row, so it reads as a note on the list
+  // being shown rather than a page-level banner above the tabs.
+  mergePrompt?: React.ReactNode;
 }) {
   const [clientFilter, setClientFilter] = useState("all");
 
@@ -229,9 +233,11 @@ export function LeadsTabs({
             slug={slug}
             orgId={orgId}
             operatorOptions={operatorOptions}
+            banner={mergePrompt}
           />
         </div>
       )}
+      {tab !== "suppliers" && mergePrompt}
       {tab === "all" && (
         <LeadsList rows={visibleRows} canAct={canAct} slug={slug} orgId={orgId} operatorOptions={operatorOptions} supplierDocs={supplierDocs} />
       )}

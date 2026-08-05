@@ -529,11 +529,17 @@ registerAgent({
       return !Number.isFinite(lastAt) || Date.now() - lastAt >= DUP_SCAN_INTERVAL_MS;
     })().catch(() => true);
 
-    if (!onlyMaterialId && dupScanDue && sourcingTenkaraOrgIds.size) {
+    // Scanned for EVERY mapped org, not just the ones sourcing is due for this
+    // run: a duplicate is a data problem that an operator should see whether or
+    // not the org is currently being scouted, and a paused org that later
+    // resumes would otherwise start by burning discovery on both records.
+    const dupScanTenkaraOrgIds = [...tenkaraOrgToOaOrg.keys()];
+
+    if (!onlyMaterialId && dupScanDue && dupScanTenkaraOrgIds.length) {
       try {
         const oaOrgName = new Map<string, string>();
         for (const r of (orgRows ?? []) as any[]) if (r.tenkara_org_id) oaOrgName.set(tenkaraOrgToOaOrg.get(r.tenkara_org_id)!, r.name);
-        const universe = await queryMaterialNamesAndGrades([...sourcingTenkaraOrgIds]);
+        const universe = await queryMaterialNamesAndGrades(dupScanTenkaraOrgIds);
         const byOrg = new Map<string, MergeMaterial[]>();
         for (const m of universe) {
           const oaId = m.tenkara_org_id ? tenkaraOrgToOaOrg.get(m.tenkara_org_id) : null;
