@@ -5,7 +5,7 @@
 // every existing lead with no re-run and no DB write.
 
 export interface LeadFlag {
-  code: "inactive_site" | "missing_cert" | "sample_only" | "dealbreaker_met" | "direct_contact";
+  code: "inactive_site" | "missing_cert" | "sample_only" | "dealbreaker_met" | "direct_contact" | "yielded_direct";
   label: string;
   // Most flags are caveats. A few are positive signals and must not be rendered
   // in warning colours; the renderer keys the badge variant off this.
@@ -74,18 +74,26 @@ function sampleOnly(payload: any): LeadFlag | null {
   return null;
 }
 
-// The seller replied from its own domain, so the lead left the marketplace track
-// and is now worked as a direct supplier. Positive signal, and the only place the
-// marketplace origin stays visible afterwards: site_type is now "N", so the
-// "via <platform>" sub-label on the row stops rendering.
+// The seller replied from its own domain, so this row is the direct supplier
+// split out of a marketplace listing. Positive signal, and the only place the
+// marketplace origin stays visible afterwards: site_type is "N" on this row, so
+// the "via <platform>" sub-label stops rendering.
 function directContact(payload: any): LeadFlag | null {
   if (payload?.aggregator_direct_contact !== true) return null;
   const platform = typeof payload?.aggregator === "string" ? payload.aggregator.trim() : "";
   return {
     code: "direct_contact",
-    label: platform ? `Direct contact, via ${platform}` : "Direct contact captured",
+    label: platform ? `Direct supplier, found via ${platform}` : "Direct contact captured",
     tone: "good",
   };
+}
+
+// The other half of that pair: this listing produced a direct supplier record,
+// which now owns the email thread. Said on the listing row so nobody reads its
+// silent inbox as "the seller never answered" and re-chases it.
+function yieldedDirect(payload: any): LeadFlag | null {
+  if (!payload?.yielded_direct_contact || !payload?.direct_lead_id) return null;
+  return { code: "yielded_direct", label: "Direct supplier record created", tone: "good" };
 }
 
 export function computeLeadFlags(payload: any, ctx: LeadFlagContext = {}): LeadFlag[] {
@@ -104,5 +112,7 @@ export function computeLeadFlags(payload: any, ctx: LeadFlagContext = {}): LeadF
   if (sample) flags.push(sample);
   const direct = directContact(payload);
   if (direct) flags.push(direct);
+  const yielded = yieldedDirect(payload);
+  if (yielded) flags.push(yielded);
   return flags;
 }

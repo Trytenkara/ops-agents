@@ -14,6 +14,7 @@ import { getTenkaraConversationMessages } from "@/lib/tenkara";
 import { postAgentAlert } from "@/lib/slack-alert";
 import { parseTaggedRecipient } from "@/lib/inquiry-reply-tag";
 import { isAggregatorEmail } from "@/agents-runtime/agents/data-enrichment/enrich";
+import { splitDirectLeadFromMarketplace, isMarketplaceLeadPayload } from "@/lib/marketplace-direct-split";
 import { upsertSupplierProfile } from "@/lib/supplier-profiles";
 import { getClientShipTo } from "@/lib/tenkara-client-settings";
 import { resolveMaterialGradeSpecs } from "@/lib/tenkara-names";
@@ -376,7 +377,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     .eq("id", ref.id);
 
   // 4. Pull lead context for a better reply (supplier/material/contact names).
-  const leadId = refMeta.lead_id as string | undefined;
+  let leadId = refMeta.lead_id as string | undefined;
   let leadRow: any = null;
   if (leadId) {
     const { data } = await admin
@@ -386,29 +387,38 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       .maybeSingle();
     leadRow = data;
     const leadPayload = (leadRow?.payload as any) ?? {};
-    const newPayload: Record<string, any> = {
-      ...leadPayload,
-      supplier_reply: {
-        replied_at: msg.received_at ?? new Date().toISOString(),
-        reply_message_id: msg.message_id,
-        reply_conversation_id: msg.conversation_id,
-        source: "tenkara_webhook",
-      },
-    };
-    // A seller we could only reach through a platform inquiry form has just told
-    // us its own address by replying. Capture it: from here the platform is only
-    // where we found this company, so the lead leaves the marketplace track and
-    // becomes an ordinary supplier for outreach (provenance fields stay put).
-    if (leadPayload.aggregator && !leadPayload.supplier_contact_email && !isAggregatorEmail(from.address)) {
-      newPayload.supplier_contact_email = from.address;
-      newPayload.site_type = "N";
-      newPayload.supplier_role = "Supplier";
-      newPayload.aggregator_direct_contact = true;
-      newPayload.needs_contact_resolution = false;
+    let escalatedRelay: { at: string; relay_from: string } | null = null;
+    // A seller on the marketplace track has just written to us from its own
+    // address, which makes it two things at once: the listing the price index
+    // publishes from, and a supplier that deals with us directly. Split the
+    // direct half onto its own lead and hand this conversation over to it, so
+    // the quote lands as a direct price and every later message belongs to the
+    // direct record instead of the listing.
+    if (isMarketplaceLeadPayload(leadPayload) && !isAggregatorEmail(from.address) && !leadPayload.direct_lead_id) {
+      const split = await splitDirectLeadFromMarketplace(admin, {
+        leadId,
+        contactEmail: from.address,
+        conversationId: msg.conversation_id,
+        draftRefId: ref.id,
+        trigger: "email_reply",
+      });
+      if (split.split) {
+        // Everything below (reply marker, captured price, staged detail) writes
+        // to leadId, and the draft keeps pointing at it for the next inbound.
+        leadId = split.directLeadId;
+        refMeta.lead_id = split.directLeadId;
+        const { data: directRow } = await admin
+          .from("leads_in_flight")
+          .select("payload, supplier_name, material_name")
+          .eq("id", leadId)
+          .maybeSingle();
+        if (directRow) leadRow = directRow;
+      }
     } else if (
       leadPayload.aggregator &&
       !leadPayload.supplier_contact_email &&
-      !leadPayload.direct_contact_escalated
+      !leadPayload.direct_contact_escalated &&
+      !leadPayload.direct_lead_id
     ) {
       // The seller answered, but through the platform's own relay address, so we
       // still have no channel of our own. A platform inquiry form is one-shot (no
@@ -416,7 +426,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       // retrying changes that: it needs an operator to read the reply and pull out
       // a real address. manual_outreach is the right case type because its
       // resolver (addSupplierEmailToCase) requeues the lead for normal outreach.
-      newPayload.direct_contact_escalated = { at: new Date().toISOString(), relay_from: from.address };
+      escalatedRelay = { at: new Date().toISOString(), relay_from: from.address };
       const sellerLabel = leadRow?.supplier_name ?? refMeta.supplier_name ?? "an aggregator seller";
       const { data: openCase } = await admin
         .from("cases")
@@ -448,7 +458,25 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
         );
       }
     }
-    await admin.from("leads_in_flight").update({ payload: newPayload }).eq("id", leadId);
+    // Reply marker last, and onto whichever lead now owns the conversation: the
+    // direct row when we just split, the original otherwise. Merged over a fresh
+    // read of that row rather than the pre-split payload.
+    const { data: ownerRow } = await admin.from("leads_in_flight").select("payload").eq("id", leadId).maybeSingle();
+    await admin
+      .from("leads_in_flight")
+      .update({
+        payload: {
+          ...(((ownerRow?.payload ?? leadRow?.payload) ?? {}) as Record<string, any>),
+          ...(escalatedRelay ? { direct_contact_escalated: escalatedRelay } : {}),
+          supplier_reply: {
+            replied_at: msg.received_at ?? new Date().toISOString(),
+            reply_message_id: msg.message_id,
+            reply_conversation_id: msg.conversation_id,
+            source: "tenkara_webhook",
+          },
+        },
+      })
+      .eq("id", leadId);
   }
 
   const MAX_REPLY_TURNS = 8;

@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAggregatorEmail } from "@/agents-runtime/agents/data-enrichment/enrich";
+import { splitDirectLeadFromMarketplace, isMarketplaceLeadPayload } from "@/lib/marketplace-direct-split";
 
 export async function resolveCase(caseId: string, resolutionNote: string) {
   const session = await getSession();
@@ -70,6 +71,49 @@ export async function addSupplierEmailToCase(caseId: string, email: string) {
   if (!lead) return { ok: false, error: "linked lead not found" } as const;
 
   const payload = (lead.payload ?? {}) as Record<string, any>;
+
+  // A marketplace or aggregator lead does not become a direct supplier just
+  // because we now hold an address: the listing is still a listing, and the
+  // price index publishes from it. Stand the direct supplier up as its own lead
+  // and leave this row on the marketplace track.
+  if (isMarketplaceLeadPayload(payload) && !isAggregatorEmail(clean)) {
+    const split = await splitDirectLeadFromMarketplace(admin, { leadId, contactEmail: clean, trigger: "operator" });
+    if (!split.split) return { ok: false, error: `could not create the direct lead (${split.reason})` } as const;
+    const { data: directLead } = await admin.from("leads_in_flight").select("payload").eq("id", split.directLeadId).maybeSingle();
+    await admin
+      .from("leads_in_flight")
+      .update({
+        payload: {
+          ...(((directLead?.payload ?? {}) as Record<string, any>)),
+          email_source: "manual_operator",
+          manual_email_added_by: session.userId,
+          manual_email_added_at: new Date().toISOString(),
+        },
+      })
+      .eq("id", split.directLeadId);
+
+    const { error: mpCaseErr } = await admin
+      .from("cases")
+      .update({
+        status: "resolved",
+        resolution_note: `Email added manually: ${clean} — staged as a direct supplier lead alongside the ${payload.aggregator ?? "marketplace"} listing`,
+        resolved_at: new Date().toISOString(),
+      })
+      .eq("id", caseId);
+    if (mpCaseErr) return { ok: false, error: mpCaseErr.message } as const;
+
+    await admin.from("audit_log").insert({
+      actor_user_id: session.userId,
+      action: "case.email_added",
+      target_table: "cases",
+      target_id: caseId,
+      diff: { supplier_contact_email: clean, lead_id: leadId, direct_lead_id: split.directLeadId },
+    });
+
+    revalidatePath(`/work/orgs/[slug]/cases`, "page");
+    return { ok: true } as const;
+  }
+
   const { drop_reason: _drop, ...restPayload } = payload;
   const mergedPayload = {
     ...restPayload,

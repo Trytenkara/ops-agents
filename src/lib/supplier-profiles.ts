@@ -114,6 +114,23 @@ export async function resolveSupplierIdByName(
   return data?.supplier_id ?? null;
 }
 
+// Read-only counterpart to upsertSupplierProfile's lookup: resolve the profile on
+// whichever key identifies this supplier, without creating one. Callers that only
+// want to know what we already hold must not seed a row as a side effect.
+export async function findSupplierProfile(
+  admin: SupabaseClient,
+  orgId: string,
+  supplierId: string | null,
+  supplierName: string | null
+): Promise<SupplierProfile | null> {
+  const name = (supplierName ?? "").trim();
+  if (!supplierId && !name) return null;
+  const { data } = supplierId
+    ? await admin.from("supplier_profiles").select(PROFILE_COLUMNS).eq("org_id", orgId).eq("supplier_id", supplierId).maybeSingle()
+    : await admin.from("supplier_profiles").select(PROFILE_COLUMNS).eq("org_id", orgId).is("supplier_id", null).ilike("supplier_name", name).maybeSingle();
+  return (data as SupplierProfile | null) ?? null;
+}
+
 export async function upsertSupplierProfile(
   admin: SupabaseClient,
   orgId: string,
@@ -211,7 +228,12 @@ export async function seedProfilesFromLeads(
     const nameKey = name.toLowerCase();
     const key = lead.supplier_id ?? nameKey;
     if (!key) continue; // neither id nor name — can't identify a supplier
-    if (bySupplier.has(key)) continue;
+    // First lead wins, except that a marketplace seller split out into its own
+    // direct lead has two rows under one name. The direct one is the supplier we
+    // actually deal with, so it drives the profile no matter which row we saw
+    // first; otherwise the card kept showing Aggregator against a direct thread.
+    const held = bySupplier.get(key);
+    if (held && !((lead.payload as any)?.aggregator_direct_contact === true && !(held.payload as any)?.aggregator_direct_contact)) continue;
     bySupplier.set(key, { supplierId: lead.supplier_id ?? null, name, payload: lead.payload ?? {}, source: lead.source ?? null });
   }
 
@@ -318,6 +340,35 @@ const CHECKLIST_FIELDS: (keyof SupplierProfile)[] = [
   "payment_info_verified",
   "payment_terms_confirmed",
 ];
+
+// The completeness fields a supplier can actually tell us, in plain words. Only
+// supplier_type is missing from the list, because it is ours to derive from where
+// we found them, not theirs to state. Used to turn "this profile is at 40%" into
+// an ask a first-contact email can carry.
+const PROFILE_ASK_CLAUSE: Partial<Record<keyof SupplierProfile, string>> = {
+  poc_email: "the best sales email to quote from",
+  poc_phone: "a direct phone number",
+  poc_name: "who we would be dealing with by name",
+  shipping_address: "the address the goods ship or are picked up from",
+  shipping_terms: "which shipping terms you can offer (EXW, FOB, DDP)",
+  shipping_email: "a logistics or shipping contact",
+  billing_email: "a billing or accounts-receivable email",
+  billing_poc_name: "a billing contact name",
+  payment_upfront_pct: "any deposit you require (0% is a fine answer)",
+};
+
+// Blank askable fields, worst-first by how much they hold the profile back. Empty
+// when the profile is already complete enough that asking would be noise.
+export function missingProfileAsks(p: SupplierProfile | null | undefined, belowPct = 80): string[] {
+  if (!p) return Object.values(PROFILE_ASK_CLAUSE) as string[];
+  if (profileCompleteness(p).pct >= belowPct) return [];
+  const out: string[] = [];
+  for (const [field, clause] of Object.entries(PROFILE_ASK_CLAUSE) as [keyof SupplierProfile, string][]) {
+    const v = p[field];
+    if (v == null || v === "" || v === false) out.push(clause);
+  }
+  return out;
+}
 
 export function profileCompleteness(p: SupplierProfile): {
   filled: number;

@@ -191,6 +191,12 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
     | undefined;
   const inquiryReplied = !!row.payload?.supplier_reply;
   const inquiryStuck = !!row.payload?.direct_contact_escalated;
+  // Once a seller is split out into its own direct lead, the reply state moves
+  // with the conversation, so this row would sit on "inquiry sent" forever and
+  // read like nobody answered. Say what actually happened instead.
+  const yieldedDirect = row.payload?.direct_lead_id
+    ? ((row.payload?.yielded_direct_contact ?? {}) as { email?: string })
+    : null;
   const rawPricing = row.payload?.pack_sizes_pricing as string | undefined;
   const moq = row.payload?.moq as string | undefined;
   const updatedAt = row.payload?.price_tiers_updated_at as string | undefined;
@@ -265,19 +271,28 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
                 price pull pending
               </Badge>
             )}
-            {inquiry && (
+            {yieldedDirect ? (
               <Badge
-                variant={inquiryStuck ? "danger" : inquiryReplied ? "success" : "accent"}
-                title={
-                  inquiryStuck
-                    ? "Seller replied through the platform relay, so we still have no direct address. Escalated to ops."
-                    : inquiryReplied
-                      ? "Seller replied to our platform inquiry."
-                      : `Inquiry submitted${inquiry.at ? ` ${relativeTime(inquiry.at)}` : ""}, awaiting a reply.`
-                }
+                variant="success"
+                title={`This seller answered from its own address, so it now has a separate direct supplier lead (${yieldedDirect.email ?? "own address"}) that owns the email thread and the quotes. This row stays the listing the price index publishes from.`}
               >
-                {inquiryStuck ? "inquiry needs contact" : inquiryReplied ? "inquiry replied" : "inquiry sent"}
+                direct supplier created
               </Badge>
+            ) : (
+              inquiry && (
+                <Badge
+                  variant={inquiryStuck ? "danger" : inquiryReplied ? "success" : "accent"}
+                  title={
+                    inquiryStuck
+                      ? "Seller replied through the platform relay, so we still have no direct address. Escalated to ops."
+                      : inquiryReplied
+                        ? "Seller replied to our platform inquiry."
+                        : `Inquiry submitted${inquiry.at ? ` ${relativeTime(inquiry.at)}` : ""}, awaiting a reply.`
+                  }
+                >
+                  {inquiryStuck ? "inquiry needs contact" : inquiryReplied ? "inquiry replied" : "inquiry sent"}
+                </Badge>
+              )
             )}
             <span className="text-xs text-muted-foreground">· {row.material_name ?? "—"}</span>
           </div>

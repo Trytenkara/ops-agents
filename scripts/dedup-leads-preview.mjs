@@ -1,5 +1,5 @@
 // Preview / apply canonical-name dedup on leads_in_flight (OA Supabase).
-// Groups ACTIVE leads by (material_id | normalizeCompanyName(supplier_name)) and,
+// Groups ACTIVE leads by (material_id | normalizeCompanyName(supplier_name) | market kind) and,
 // for any group with >1 row, keeps the "best" row and marks the rest as dropped.
 // Keep order: furthest stage, then highest confidence, then earliest created_at.
 //
@@ -48,16 +48,27 @@ function betterToKeep(a, b) {
 const main = async () => {
   await client.connect();
   const { rows } = await client.query(
-    `select id, material_id, material_name, supplier_name, stage, status, confidence_score, created_at
+    `select id, material_id, material_name, supplier_name, stage, status, confidence_score, created_at,
+            payload->>'site_type' as site_type,
+            payload->>'direct_lead_id' as direct_lead_id,
+            payload->>'origin_marketplace_lead_id' as origin_marketplace_lead_id
        from public.leads_in_flight
       where status = 'active'`
   );
+
+  // A marketplace seller that gave us its own email is deliberately TWO rows
+  // under one name: the listing (which the price index publishes from) and the
+  // direct supplier (which owns the email thread). Market kind is part of the
+  // key so this cleanup can never collapse that pair back into one row.
+  const marketKind = (r) =>
+    r.site_type === "M" || r.site_type === "MS" ? "marketplace" : r.site_type === "A" ? "aggregator" : "direct";
 
   const groups = new Map();
   for (const r of rows) {
     const norm = normalizeCompanyName(r.supplier_name);
     if (!r.material_id || !norm) continue; // unkeyable rows are never touched
-    const key = `${r.material_id}|${norm}`;
+    if (r.direct_lead_id || r.origin_marketplace_lead_id) continue; // half of an intentional split
+    const key = `${r.material_id}|${norm}|${marketKind(r)}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(r);
   }

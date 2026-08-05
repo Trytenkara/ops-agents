@@ -3,6 +3,7 @@ import { composeOutreachDraft, type DraftMaterial } from "./drafter";
 import { stageDraft } from "@/lib/draft-staging";
 import { tenkaraEmailAccountIdFor } from "@/lib/tenkara";
 import { resolveMaterialGradeSpecs, type MaterialGradeSpec } from "@/lib/tenkara-names";
+import { findSupplierProfile, missingProfileAsks } from "@/lib/supplier-profiles";
 
 // Short stable hash so a corrected/changed material set yields a NEW Tenkara
 // externalId (Tenkara is idempotent on externalId — reusing it would return the
@@ -109,6 +110,20 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
   // Unique subject reference so no two supplier threads share a subject.
   const reference = outreachReference(supplierId ?? email.toLowerCase(), materialNames);
 
+  // Marketplace sellers only: their whole record is scraped off a listing, so the
+  // bulk-pricing email is the one chance to ask for the setup details we do not
+  // have. Best-effort, and skipped once the profile is complete enough that the
+  // ask would just be noise.
+  let missingInfoAsks: string[] = [];
+  if (isMarketplace && orgId) {
+    try {
+      const profile = await findSupplierProfile(admin, orgId, supplierId ?? null, supplierName ?? null);
+      missingInfoAsks = missingProfileAsks(profile);
+    } catch (e: any) {
+      await log(`Profile completeness lookup failed: ${e?.message ?? e}`, { level: "warn", step: "outreach" });
+    }
+  }
+
   const draft = await composeOutreachDraft({
     mode,
     ghostBrand,
@@ -122,6 +137,7 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
     materials,
     signal: (primary.payload ?? {})?.signal ?? null,
     isMarketplace,
+    missingInfoAsks,
     reference,
   });
 

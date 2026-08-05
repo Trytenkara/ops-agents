@@ -40,6 +40,11 @@ export interface DraftInput {
   materials?: DraftMaterial[];
   signal: string | null; // how we found them — kept for telemetry, no longer changes copy
   isMarketplace?: boolean; // marketplace supplier → ask for bulk/wholesale pricing beyond listed retail
+  // Plain-word clauses for the supplier-profile fields still blank on our side
+  // (see missingProfileAsks). Only passed for marketplace suppliers, whose record
+  // is a scraped listing rather than anything they told us, so the bulk-pricing
+  // email is the natural place to ask them to fill the gaps. Empty → no ask.
+  missingInfoAsks?: string[];
   // Unique per-outreach reference (e.g. "SR-20260731-0042"). Prepended to the
   // subject so every supplier thread is distinct (operators were seeing
   // identical subjects across suppliers) and rides through on replies (Re: …),
@@ -159,6 +164,11 @@ function pickSubject(input: DraftInput): string {
   return tpl(mats[0].name);
 }
 
+function listClauses(clauses: string[]): string {
+  if (clauses.length === 1) return clauses[0];
+  return `${clauses.slice(0, -1).join(", ")}, and ${clauses[clauses.length - 1]}`;
+}
+
 function composeTemplateDraft(input: DraftInput): ComposedDraft {
   const senderOrg = input.mode === "ghost" ? input.ghostBrand! : input.clientOrgName;
   const mats = materialList(input);
@@ -172,6 +182,14 @@ function composeTemplateDraft(input: DraftInput): ComposedDraft {
 
   const gradeLine = gradeAsk(mats);
   const gradeBlock = gradeLine ? [gradeLine, ""] : [];
+
+  // Everything we hold on a marketplace seller came off their listing, so the
+  // record is thin where it matters for setting them up as a supplier. Ask once,
+  // in the same email as the pricing ask, rather than chasing it field by field.
+  const missingInfo = input.missingInfoAsks ?? [];
+  const missingInfoBlock = missingInfo.length
+    ? [`So we can set you up properly on our side, could you also confirm ${listClauses(missingInfo)}?`, ""]
+    : [];
 
   const body = (
     input.isMarketplace
@@ -189,6 +207,7 @@ function composeTemplateDraft(input: DraftInput): ComposedDraft {
           "We can arrange our own freight, so please quote EXW (Ex Works) if you can.",
           "",
           ...gradeBlock,
+          ...missingInfoBlock,
           "If you have a wholesale price list or catalog, please send it over. We evaluate suppliers across multiple raw materials and will share what you carry with the rest of our procurement team.",
           "",
           "Thanks,",
@@ -260,6 +279,7 @@ WHAT THE EMAIL MUST DO:
 - Ask for a product catalog or line card, noting we evaluate suppliers across multiple raw materials.
 - One material: write it inline as a sentence. Two or more: a short intro line, then a clean bullet list (one material per line), then the ask.
 - MARKETPLACE supplier: they already publish retail pricing, so instead ask for their bulk/wholesale rates and volume price breaks (larger pack sizes, pallet/ton quantities) beyond the listing.
+- MISSING DETAILS: when a "Details still missing on our side" list is given, ask for those items too, in ONE short sentence that names them, framed as helping us set them up as a supplier. Do not turn them into a bulleted form and do not invent items that are not on the list. When no list is given, do not ask for any of this.
 
 GHOST MODE: only ever name the sender org given. NEVER name any underlying client.
 
@@ -276,6 +296,9 @@ function buildUserMessage(input: DraftInput): string {
     `Supplier company: ${input.supplierCompanyName ?? "(unknown)"}`,
     `Supplier contact name: ${input.supplierContactName ?? "(unknown)"}`,
     `Marketplace supplier: ${input.isMarketplace ? "yes — ask for bulk/wholesale beyond listed retail" : "no"}`,
+    ...((input.missingInfoAsks ?? []).length
+      ? [`Details still missing on our side (ask for these in one sentence): ${(input.missingInfoAsks ?? []).join("; ")}`]
+      : []),
     `Materials we are sourcing (${mats.length}):`,
     ...mats.map((m) => `  - ${labelFor(m)}${gradeNote(m)}`),
     "",
