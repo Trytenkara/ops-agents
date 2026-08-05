@@ -32,7 +32,7 @@ export function bbClient() {
   return new Browserbase({ apiKey: API_KEY });
 }
 
-export async function createSession({ geolocation } = {}) {
+export async function createSession({ geolocation, viewport } = {}) {
   const bb = bbClient();
   const proxies = geolocation ? [{ type: "browserbase", geolocation }] : true;
   return bb.sessions.create({
@@ -41,6 +41,11 @@ export async function createSession({ geolocation } = {}) {
     browserSettings: {
       solveCaptchas: true,
       fingerprint: { devices: ["desktop"], operatingSystems: ["macos", "windows"] },
+      // Asking here rather than with page.setViewportSize() after connecting.
+      // Both work today, but a custom viewport is unsupported on Verified
+      // sessions, and a caller that screenshots a fixed clip cannot afford to
+      // find that out silently.
+      ...(viewport ? { viewport } : {}),
     },
   });
 }
