@@ -28,7 +28,11 @@ const MAX_LEADS_PER_RUN = 25;
 // re-runs over them (rule 4: don't give up on no-contact leads). Primary-lane
 // only. Modest cap + a cooldown in the RPC keeps re-tries from starving fresh
 // discovery or thrashing a genuinely-dead lead more than weekly.
-const REQUEUE_PARKED_PER_RUN = 15;
+//
+// Held under the claim's retry allowance (0093 reserves p_cap/5 = 5 per lane, so
+// 10 per pass across the two lanes). Re-queue faster than that and the retry tail
+// grows every pass, which is the state 0092 left the fleet in.
+const REQUEUE_PARKED_PER_RUN = 8;
 // Secondary lanes skip the profile seed/fill phases, so their whole invocation is
 // lead work and they can afford to finish the batch they claimed. That is where
 // most of the throughput comes from, not the lane count: measured over 24h the
