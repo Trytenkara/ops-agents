@@ -22,6 +22,12 @@ import type { DealbreakerSpec } from "@/lib/dealbreaker-fit";
 //     8s timeout each), so 25 keeps us comfortably under the 300s Vercel
 //     Hobby maxDuration even in worst-case all-timeout scenarios.
 const MAX_LEADS_PER_RUN = 25;
+// Per run, flip this many "parked" leads (enriched, live website, but no email —
+// invisible to the raw claim) back to stage='raw' so the full contact stack
+// re-runs over them (rule 4: don't give up on no-contact leads). Primary-lane
+// only. Modest cap + a cooldown in the RPC keeps re-tries from starving fresh
+// discovery or thrashing a genuinely-dead lead more than weekly.
+const REQUEUE_PARKED_PER_RUN = 15;
 // Secondary lanes skip the profile seed/fill phases, so their whole invocation is
 // lead work and they can afford to finish the batch they claimed. That is where
 // most of the throughput comes from, not the lane count: measured over 24h the
@@ -237,6 +243,27 @@ registerAgent({
             enrichment: { ...(payload.enrichment ?? {}), material_relevance: check },
           },
         }).eq("id", lead.id).eq("status", "active").in("stage", ["enriched", "ready_for_outreach"]);
+      }
+    }
+
+    // 0. RE-QUEUE parked no-email leads (primary lane only): flip a capped,
+    //    cooled-down batch of enriched-but-emailless leads back to stage='raw' so
+    //    the claim below re-runs the full contact stack over them. These are
+    //    otherwise invisible to the claim (it only sees stage='raw'), so without
+    //    this they never get another contact attempt (rule 4). Best-effort: a
+    //    failure here must never block the enrichment pass.
+    if (isPrimary) {
+      const { data: requeued, error: requeueErr } = await admin.rpc("requeue_parked_contact_leads", {
+        p_org_ids: sourcingOrgIds,
+        p_cap: REQUEUE_PARKED_PER_RUN,
+      });
+      if (requeueErr) {
+        await ctx.log(`Parked-lead re-queue failed: ${requeueErr.message}`, { level: "warn", step: "requeue_parked" });
+      } else if (typeof requeued === "number" && requeued > 0) {
+        await ctx.log(`Re-queued ${requeued} parked no-email leads for another contact pass`, {
+          step: "requeue_parked",
+          data: { count: requeued },
+        });
       }
     }
 

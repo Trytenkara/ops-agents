@@ -2,7 +2,7 @@ import { tenkaraQuery } from "@/lib/tenkara-readonly";
 import { enrichContactViaGetProspect, isGetProspectConfigured } from "@/lib/getprospect";
 import { enrichContactViaZoomInfo, enrichContactsViaZoomInfo, isZoomInfoConfigured } from "@/lib/zoominfo";
 import { enrichContactViaHunter, enrichContactsViaHunter, isHunterConfigured } from "@/lib/hunter";
-import { enrichContactViaLeadMagic, enrichContactsViaLeadMagic, isLeadMagicConfigured } from "@/lib/leadmagic";
+import { enrichContactsViaLeadMagic, enrichPrimaryViaLeadMagic, isLeadMagicConfigured } from "@/lib/leadmagic";
 import { AGGREGATOR_HOSTS } from "@/lib/aggregator-hosts";
 import { assessDealbreakerFit, type DealbreakerFit, type DealbreakerSpec } from "@/lib/dealbreaker-fit";
 
@@ -184,7 +184,7 @@ export interface ContactDiscovery {
   phone: string | null;        // best discovered/known phone
   contact_url: string | null;  // contact page / quote-form URL used as a channel
   pages_tried: number;         // how many pages we actually fetched
-  source: "scout" | "sourceready" | "discovered" | "path" | "tenkara" | "hunter" | "leadmagic" | "zoominfo" | "getprospect" | null;
+  source: "scout" | "sourceready" | "discovered" | "path" | "tenkara" | "hunter" | "leadmagic" | "zoominfo" | "getprospect" | "pattern_guess" | null;
   poc_name?: string | null;
   poc_title?: string | null;
 }
@@ -196,7 +196,7 @@ export interface AdditionalContact {
   email: string;
   name: string | null;
   title: string | null;
-  source: "discovered" | "tenkara" | "hunter" | "leadmagic" | "zoominfo" | "getprospect";
+  source: "discovered" | "tenkara" | "hunter" | "leadmagic" | "zoominfo" | "getprospect" | "pattern_guess";
 }
 
 export interface SupplierEnrichment {
@@ -294,6 +294,11 @@ export interface EnrichmentResult {
   // kept for the operator's reference on the manual-contact case. Null when the
   // resolved email is the supplier's own.
   aggregator_contact_email: string | null;
+  // How the primary email was obtained: "verified" for a scraped/provider/
+  // validated address, "guessed" for a synthesized pattern combo (name found but
+  // no verified email), null when there is no email. Operators see this on the
+  // draft; guessed drafts are always human-reviewed before send.
+  contact_confidence: "verified" | "guessed" | null;
 }
 
 const PROBE_TIMEOUT_MS = 8_000;
@@ -890,6 +895,28 @@ function isContactPath(s: string | null | undefined): boolean {
   return !!s && !EMAIL_RE.test(s) && /via |form|inquir|enquir|contact/i.test(s);
 }
 
+// Standard corporate email permutations for a person on a domain, most-likely
+// first. Used only as a last-resort guess (name found, no verified email) on the
+// supplier's OWN domain — the most-likely form becomes the primary To:, the rest
+// are CC'd, and every one is flagged `guessed` so the operator sees it before the
+// human-reviewed draft is sent. Never called on a marketplace/aggregator host.
+function emailPatternCombos(fullName: string | null | undefined, host: string | null): string[] {
+  if (!fullName || !host) return [];
+  const parts = fullName
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z\s.-]/g, "")
+    .split(/[\s.]+/)
+    .filter(Boolean);
+  const f = parts[0]?.replace(/[^a-z]/g, "") ?? "";
+  const l = parts.length > 1 ? parts[parts.length - 1].replace(/[^a-z]/g, "") : "";
+  const d = host.replace(/^www\./, "");
+  const out: string[] = [];
+  if (f && l) out.push(`${f}.${l}@${d}`, `${f[0]}${l}@${d}`, `${f}${l[0]}@${d}`, `${f}_${l}@${d}`);
+  if (f) out.push(`${f}@${d}`);
+  return Array.from(new Set(out)).filter((e) => EMAIL_RE.test(e));
+}
+
 export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   const payload = lead.payload ?? {};
   const website = (payload.supplier_website as string | null) || null;
@@ -1015,6 +1042,12 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // fallback (Hunter → ZoomInfo → GetProspect) actually lands the email.
   let zoomContactName: string | null = null;
   let zoomContactTitle: string | null = null;
+  // A POC name a provider found without a deliverable email (LeadMagic role-finder
+  // hits, email-finder misses). Kept only to seed the guessed-pattern fallback
+  // below; never used as a contact on its own.
+  let guessPersonName: string | null = null;
+  let guessPersonTitle: string | null = null;
+  let contactConfidence: "verified" | "guessed" | null = null;
 
   // Hunter.io (primary paid fallback): the web + Tenkara gave us no direct
   // email. One Domain Search returns the supplier's known POC addresses. Runs
@@ -1045,15 +1078,21 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // (no charge on a miss), so it's cheap to try on the hard leads before we
   // reach for ZoomInfo. Fallback-only; soft-fails to leave the lead untouched.
   if (!email && isLeadMagicConfigured()) {
-    const lm = await enrichContactViaLeadMagic({
+    const lm = await enrichPrimaryViaLeadMagic({
       companyName: lead.supplier_name,
       website,
     }).catch(() => null);
-    if (lm?.email && EMAIL_RE.test(lm.email) && !isAggregatorEmail(lm.email) && !isThirdPartyServiceEmail(lm.email)) {
-      email = lm.email.toLowerCase();
+    const lmEmail = lm?.contact?.email ?? null;
+    if (lmEmail && EMAIL_RE.test(lmEmail) && !isAggregatorEmail(lmEmail) && !isThirdPartyServiceEmail(lmEmail)) {
+      email = lmEmail.toLowerCase();
       contactSource = "leadmagic";
-      zoomContactName = lm.contactName;
-      zoomContactTitle = lm.title;
+      zoomContactName = lm?.contact?.contactName ?? null;
+      zoomContactTitle = lm?.contact?.title ?? null;
+    } else if (lm?.person && !guessPersonName) {
+      // Person found, no deliverable email — hold the name for the guessed-pattern
+      // fallback rather than discarding it.
+      guessPersonName = lm.person.name;
+      guessPersonTitle = lm.person.title;
     }
   }
 
@@ -1095,6 +1134,36 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
       contactSource = "getprospect";
       zoomContactName = gp.contactName;
       zoomContactTitle = gp.title;
+    }
+  }
+
+  // Any email resolved so far came from a scraped/validated source.
+  if (email) contactConfidence = "verified";
+
+  // Guessed-pattern fallback (rule 3): every scrape/DB/provider path missed a
+  // deliverable email, but a POC NAME is in hand (a paid provider found the person
+  // but couldn't validate an address). On the supplier's OWN corporate domain
+  // (never a marketplace/aggregator host), synthesize the standard email patterns:
+  // the most-likely form becomes the primary To:, the rest are CC'd. Flagged
+  // `guessed` end-to-end. Safe because outreach is always staged as a
+  // human-reviewed DRAFT (Agent 04 never auto-sends), and a catch-all/unknown
+  // domain cannot be verified anyway — a best-guess reviewed address beats leaving
+  // a named supplier permanently unreachable. Guessed values only ever land in
+  // recipient fields, never in body/subject copy (the fabrication guard's scope).
+  if (!email && website) {
+    const gName = zoomContactName ?? guessPersonName;
+    const gTitle = zoomContactTitle ?? guessPersonTitle;
+    const host = hostOf(website);
+    if (gName && host && !isAggregatorDomain(host)) {
+      const combos = emailPatternCombos(gName, host);
+      if (combos.length) {
+        email = combos[0];
+        contactSource = "pattern_guess";
+        contactConfidence = "guessed";
+        zoomContactName = gName;
+        zoomContactTitle = gTitle;
+        for (const cc of combos.slice(1)) addExtraContact(cc, gName, gTitle, "pattern_guess");
+      }
     }
   }
 
@@ -1260,5 +1329,6 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     outreach_ready,
     blocked_reason,
     aggregator_contact_email: email ? null : aggregatorEmail,
+    contact_confidence: email ? contactConfidence : null,
   };
 }

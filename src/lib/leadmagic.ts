@@ -171,3 +171,64 @@ export async function enrichContactViaLeadMagic(input: {
   const [best] = await enrichContactsViaLeadMagic(input, 1);
   return best ?? null;
 }
+
+// Primary-fallback variant that ALSO surfaces the POC name when the person is
+// found but no deliverable email validates. Same title walk and identical credit
+// cost as enrichContactViaLeadMagic (role-finder on each title, email-finder on
+// each named person) — it just doesn't throw the name away on an email miss, so
+// the guessed-pattern fallback in enrich.ts can synthesize an address on the
+// supplier's own domain (a human reviews the draft before send). `contact` is a
+// validated email when one lands; `person` is the FIRST role hit seen regardless.
+export async function enrichPrimaryViaLeadMagic(input: {
+  companyName: string | null;
+  website: string | null;
+}): Promise<{ contact: LeadMagicContact | null; person: { name: string; title: string | null } | null }> {
+  if (!isLeadMagicConfigured()) return { contact: null, person: null };
+  const domain = domainOf(input.website);
+  const companyName = input.companyName?.trim() || null;
+  if (!domain && !companyName) return { contact: null, person: null };
+
+  let person: { name: string; title: string | null } | null = null;
+  const seenNames = new Set<string>();
+
+  for (const title of TITLES) {
+    const role = await lmPost(
+      "/v1/people/role-finder",
+      { job_title: title, ...(domain ? { company_domain: domain } : {}), ...(companyName ? { company_name: companyName } : {}) },
+      domain
+    );
+    const { first, last, full } = nameParts(role);
+    if (role) recordContactApiCall({ provider: "leadmagic", outcome: full ? "hit" : "miss", units: full ? 2 : 0, domain, detail: `role-finder: ${title}` });
+    if (!full) continue;
+
+    if (!person) person = { name: full, title: role?.job_title ?? title };
+
+    const nameKey = full.toLowerCase();
+    if (seenNames.has(nameKey)) continue;
+    seenNames.add(nameKey);
+
+    const finder = await lmPost(
+      "/v1/people/email-finder",
+      {
+        ...(first ? { first_name: first } : {}),
+        ...(last ? { last_name: last } : {}),
+        ...(!first && !last ? { full_name: full } : {}),
+        ...(domain ? { domain } : {}),
+        ...(companyName ? { company_name: companyName } : {}),
+      },
+      domain
+    );
+    const valid = finder?.status === "valid";
+    if (finder) recordContactApiCall({ provider: "leadmagic", outcome: valid ? "hit" : "miss", units: valid ? 1 : 0, domain, detail: "email-finder" });
+    if (!valid) continue;
+
+    const email = String(finder?.email ?? "").trim().toLowerCase();
+    if (!email.includes("@")) continue;
+    return {
+      contact: { email, phone: null, contactName: full, title: role?.job_title ?? title, source: "leadmagic" },
+      person,
+    };
+  }
+
+  return { contact: null, person };
+}
