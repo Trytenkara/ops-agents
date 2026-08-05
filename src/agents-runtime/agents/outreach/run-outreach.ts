@@ -138,6 +138,7 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
     signal: (primary.payload ?? {})?.signal ?? null,
     isMarketplace,
     missingInfoAsks,
+    supplierCountry: (primary.payload ?? {})?.supplier_country ?? null,
     reference,
   });
 

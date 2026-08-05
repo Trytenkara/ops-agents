@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { OutreachMode } from "../quote-revalidation/config";
 import { sanitizeDraft } from "@/lib/email-style";
+import { isNonUsSupplier } from "@/lib/ships-to-us";
 import { correctMaterialSpelling } from "@/lib/material-spelling";
 
 // The initial RFQ. Language is generated per-email by the model so a campaign
@@ -45,6 +46,11 @@ export interface DraftInput {
   // is a scraped listing rather than anything they told us, so the bulk-pricing
   // email is the natural place to ask them to fill the gaps. Empty → no ask.
   missingInfoAsks?: string[];
+  // The supplier's country as discovery recorded it, used only to decide whether
+  // to pre-empt "we don't export to the US". Marketplace sellers get one shot at
+  // a useful answer, so a seller we know is abroad is told up front that we can
+  // collect at origin, which turns a would-be dead end into an EXW price.
+  supplierCountry?: string | null;
   // Unique per-outreach reference (e.g. "SR-20260731-0042"). Prepended to the
   // subject so every supplier thread is distinct (operators were seeing
   // identical subjects across suppliers) and rides through on replies (Re: …),
@@ -166,6 +172,7 @@ function pickSubject(input: DraftInput): string {
 
 function listClauses(clauses: string[]): string {
   if (clauses.length === 1) return clauses[0];
+  if (clauses.length === 2) return `${clauses[0]} and ${clauses[1]}`;
   return `${clauses.slice(0, -1).join(", ")}, and ${clauses[clauses.length - 1]}`;
 }
 
@@ -191,6 +198,15 @@ function composeTemplateDraft(input: DraftInput): ComposedDraft {
     ? [`So we can set you up properly on our side, could you also confirm ${listClauses(missingInfo)}?`, ""]
     : [];
 
+  // A marketplace seller we know is outside the US is told up front that not
+  // shipping to the US is fine, because the listing channel is effectively
+  // one-shot: "we don't export to the US" would otherwise end the thread, when
+  // what we actually need from them is a price at their works.
+  const offerCollection = !!input.isMarketplace && isNonUsSupplier(input.supplierCountry);
+  const exwLine = offerCollection
+    ? "We can arrange our own freight, so please quote EXW (Ex Works). If you do not ship to the United States, that is not a problem, we can collect from your works or your nearest port."
+    : "We can arrange our own freight, so please quote EXW (Ex Works) if you can.";
+
   const body = (
     input.isMarketplace
       ? [
@@ -204,7 +220,7 @@ function composeTemplateDraft(input: DraftInput): ComposedDraft {
           ...bulletBlock,
           `Beyond your published pricing, could you share your bulk and wholesale rates${multi ? " for these" : ""}? We're after volume price breaks (e.g. at larger pack sizes or full pallet/ton quantities), along with lead times and MOQs.`,
           "",
-          "We can arrange our own freight, so please quote EXW (Ex Works) if you can.",
+          exwLine,
           "",
           ...gradeBlock,
           ...missingInfoBlock,
@@ -279,6 +295,7 @@ WHAT THE EMAIL MUST DO:
 - Ask for a product catalog or line card, noting we evaluate suppliers across multiple raw materials.
 - One material: write it inline as a sentence. Two or more: a short intro line, then a clean bullet list (one material per line), then the ask.
 - MARKETPLACE supplier: they already publish retail pricing, so instead ask for their bulk/wholesale rates and volume price breaks (larger pack sizes, pallet/ton quantities) beyond the listing.
+- COLLECTION AT ORIGIN: when the input says the supplier is outside the US, fold into the same shipping sentence that if they do not ship to the United States we can collect from their works or nearest port, so an EXW price is still what we need. One clause, never a separate paragraph, and never when the input does not say they are outside the US.
 - MISSING DETAILS: when a "Details still missing on our side" list is given, ask for those items too, in ONE short sentence that names them, framed as helping us set them up as a supplier. Do not turn them into a bulleted form and do not invent items that are not on the list. When no list is given, do not ask for any of this.
 
 GHOST MODE: only ever name the sender org given. NEVER name any underlying client.
@@ -296,6 +313,9 @@ function buildUserMessage(input: DraftInput): string {
     `Supplier company: ${input.supplierCompanyName ?? "(unknown)"}`,
     `Supplier contact name: ${input.supplierContactName ?? "(unknown)"}`,
     `Marketplace supplier: ${input.isMarketplace ? "yes — ask for bulk/wholesale beyond listed retail" : "no"}`,
+    ...(input.isMarketplace && isNonUsSupplier(input.supplierCountry)
+      ? [`Supplier country: ${input.supplierCountry} (outside the US, so offer collection at origin)`]
+      : []),
     ...((input.missingInfoAsks ?? []).length
       ? [`Details still missing on our side (ask for these in one sentence): ${(input.missingInfoAsks ?? []).join("; ")}`]
       : []),

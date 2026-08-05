@@ -55,6 +55,10 @@ export interface ReplyInput {
   // City/state/ZIP of the client's ship-to, mirrored from Tenkara by Agent 12.
   // Null means we genuinely don't know it and the draft must defer.
   shipToRegion?: string | null;
+  // What this supplier has told us about shipping to the US ("no" = they said
+  // they cannot). Null when they never raised it. Drives the collect-at-origin
+  // ask; it never suppresses the reply.
+  shipsToUs?: "yes" | "no" | null;
 }
 
 export interface ComposedReply {
@@ -74,6 +78,7 @@ const SYSTEM = `You draft short, professional replies to suppliers on behalf of 
 - MATERIAL IDENTITY — a materially different product is NOT our material even if the name is similar (e.g. "paprika colorant / oleoresin" is not "paprika powder"; a technical grade is not a food grade if we asked for food grade). If what they offer is a different product than we requested, do not proceed as if it matches — ask a clarifying question or treat as a decline; do not request pricing on the wrong product.
 - GRADE SPEC — when the input gives a "Required grade", that grade is a client dealbreaker, not a preference. Anything else is the wrong product, however close it sounds (palm-derived MCT oil is not coconut-derived MCT oil; a technical grade is not a food grade). Never say we are open to, exploring, considering, or also interested in another grade, source, or derivation, and never widen the ask to "both" options. If the supplier offers a different grade or source, do not request pricing, MOQ, or terms on it: ask whether they can supply the required grade, and if they have already said they cannot, thank them and treat it as a decline. Ask about the required grade only, never invite them to propose alternatives. When only a "Target grade" is given it is a preference, so name it but you may ask what else they carry.
 - SHIPPING TERMS — when you ask for pricing, also cover shipping: tell them we can arrange our own shipping and prefer EXW (Ex Works) terms. If they can't do EXW that's fine, but still ask for their EXW price so we can compare. Fold this into the pricing ask naturally (EXW price for the stated quantity, plus MOQ and lead time).
+- NO US SHIPPING IS NOT A DEAD END. If the input says the supplier cannot ship to the United States, do NOT treat that as a decline and do NOT close the conversation. Say that is workable because we arrange our own freight, and ask for their EXW price at their works plus the nearest port or airport they can deliver to, so we can collect. If it fits naturally you may also ask whether they already supply a US distributor or can drop-ship on our behalf. Keep it to one or two sentences and stay on our material.
 - PAYMENT TERMS — when asking for pricing, also request payment terms (net-30, net-60, etc.) if the supplier hasn't already provided them. Fold this naturally into the pricing ask alongside MOQ and lead time.
 - ASK ONLY WHAT'S RELEVANT — do NOT ask for hazmat / DOT / dangerous-goods / special-handling details unless the material is actually hazardous or the supplier themselves raised it. For a non-hazardous material, never request hazmat classification. Do not hard-block or withhold a pricing ask because details are missing.
 - KEEP INQUIRING UNTIL COMPLETE. If the input lists "Still needed to complete this quote", those are approval-required details we do not have yet. When the supplier is engaged (not declining), ask for all of them in one concise, organized question. Never re-ask for something already provided, and never ask the supplier to pick or suggest a grade.
@@ -85,7 +90,7 @@ const SYSTEM = `You draft short, professional replies to suppliers on behalf of 
 - In ghost mode, only reference the ghost brand; never name the underlying client.
 - Attachments: if the input lists files the supplier attached to this reply, treat them as RECEIVED. NEVER tell the supplier an attachment didn't arrive / isn't coming through / is missing, and never ask them to resend or re-share it. Acknowledge it (e.g. "thanks, we've got your quote/price sheet") and, if pricing was already read from it, say you're reviewing it. Only ask for a specific document if it is genuinely not among the attached files.
 
-Also judge engagement: set "engaged" true when the supplier showed genuine interest or willingness IN OUR REQUESTED MATERIAL (gave pricing for it, asked a question about it, requested a sample/spec, said they can supply it, or otherwise moved that sourcing forward); false for a decline / "can't supply our material" / out-of-office / automated / off-topic message. A reply that declines our material and only pitches other materials we did not ask for is NOT engagement — set "engaged" false and do not introduce held materials.
+Also judge engagement: set "engaged" true when the supplier showed genuine interest or willingness IN OUR REQUESTED MATERIAL (gave pricing for it, asked a question about it, requested a sample/spec, said they can supply it, or otherwise moved that sourcing forward); false for a decline / "can't supply our material" / out-of-office / automated / off-topic message. A reply that declines our material and only pitches other materials we did not ask for is NOT engagement — set "engaged" false and do not introduce held materials. But a supplier who CAN supply our material and only says they cannot ship it to the United States IS engaged — set "engaged" true.
 
 If "Other materials we also source from this supplier" is provided AND engaged is true, ALSO briefly introduce those materials in the same reply — naturally ask whether they can supply/quote them too (one short sentence or a compact list, never a wall of items). List the exact material names you introduced in "introduced_materials". If engaged is false, do NOT introduce them and return "introduced_materials": [].
 
@@ -136,6 +141,9 @@ export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
     `Their reply subject: ${input.theirSubject ?? "(none)"}`,
     `Their message (snippet): ${input.theirPreview ?? "(not available)"}`,
     ...(input.shipToRegion ? [`Confirmed ship-to: ${input.shipToRegion}`] : []),
+    ...(input.shipsToUs === "no"
+      ? ["Shipping to the US: the supplier has said they cannot. Not a decline, ask for an EXW price at their works and the nearest port we can collect from."]
+      : []),
     ...(atts.length
       ? [
           "",

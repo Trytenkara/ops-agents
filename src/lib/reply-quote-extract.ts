@@ -38,6 +38,13 @@ export interface ReplyQuoteExtraction {
   quotes: ExtractedQuote[];
   details: ExtractedQuoteDetails;
   declined: boolean;
+  // Whether the supplier said they can ship to the US, when they said either way.
+  // Null = they did not raise it. Deliberately separate from `declined`: a
+  // supplier that cannot ship to the US but can supply the material is a live
+  // lead we buy at origin, not a decline.
+  shipsToUs: "yes" | "no" | null;
+  // Their own words behind that verdict, for the operator badge.
+  shipsToUsEvidence: string | null;
 }
 
 export interface ExtractedQuote {
@@ -65,6 +72,8 @@ Only extract facts the supplier ACTUALLY STATES in the text. Most replies won't 
 Return ONLY a JSON object (no prose):
 {
   "declined": false,
+  "ships_to_us": null,
+  "ships_to_us_evidence": null,
   "details": {
     "material_name": "material these details apply to, or null",
     "case_size": null,
@@ -126,6 +135,8 @@ Rules:
 - details: populate only values explicitly stated by the supplier. Case dimensions require length, width, height, unit, and case weight as separate fields. Never infer missing components.
 - contact/shipping/billing details: capture only the supplier's own business information they explicitly provide. Do not copy our buyer address/signature into these fields.
 - declined: true ONLY for a clear hard decline or explicit statement that they cannot supply the requested material. Out-of-office, automated, ambiguous, or substitute-only messages are not hard declines unless they clearly reject the requested material.
+- ships_to_us: "no" when the supplier says they cannot or do not ship, export, or deliver to the United States (including "domestic sales only", "we only supply within India", "no export"), "yes" when they say they can ship to the US or already export there, null when they do not raise it. Put the sentence you read it from in ships_to_us_evidence, verbatim and trimmed to one sentence, else null.
+- NOT SHIPPING TO THE US IS NOT A DECLINE. A supplier who can supply the material but cannot ship it to the US is still a supplier: we collect at origin. Set ships_to_us "no" and leave declined false. Only set declined true if they cannot supply the MATERIAL.
 - confidence "low" when the unit/case size is unclear or the figure might be an MOQ/sample price rather than a real quote.
 - NEVER invent materials, pack sizes, prices, contact details, addresses, or terms. If the reply states no price, quotes must be empty but details may still contain supplier-stated answers.`;
 
@@ -164,7 +175,7 @@ const EMPTY_DETAILS: ExtractedQuoteDetails = {
 };
 
 function extractJson(text: string): ReplyQuoteExtraction {
-  const empty = (): ReplyQuoteExtraction => ({ quotes: [], details: { ...EMPTY_DETAILS }, declined: false });
+  const empty = (): ReplyQuoteExtraction => ({ quotes: [], details: { ...EMPTY_DETAILS }, declined: false, shipsToUs: null, shipsToUsEvidence: null });
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start === -1 || end === -1 || end <= start) return empty();
@@ -182,6 +193,9 @@ function extractJson(text: string): ReplyQuoteExtraction {
         : [],
       details: { ...EMPTY_DETAILS, ...(parsed?.details && typeof parsed.details === "object" ? parsed.details : {}) },
       declined: parsed?.declined === true,
+      shipsToUs: parsed?.ships_to_us === "yes" || parsed?.ships_to_us === "no" ? parsed.ships_to_us : null,
+      shipsToUsEvidence:
+        typeof parsed?.ships_to_us_evidence === "string" ? parsed.ships_to_us_evidence.trim() || null : null,
     };
   } catch {
     return empty();
@@ -190,7 +204,7 @@ function extractJson(text: string): ReplyQuoteExtraction {
 
 export async function extractQuotesFromReplyText(body: string | null | undefined): Promise<ReplyQuoteExtraction> {
   const text = (body ?? "").trim();
-  if (text.length < 12) return { quotes: [], details: { ...EMPTY_DETAILS }, declined: false };
+  if (text.length < 12) return { quotes: [], details: { ...EMPTY_DETAILS }, declined: false, shipsToUs: null, shipsToUsEvidence: null };
   const res = await anthropic().messages.create({
     model: MODEL,
     max_tokens: 2000,

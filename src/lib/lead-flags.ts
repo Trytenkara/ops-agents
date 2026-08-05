@@ -1,3 +1,5 @@
+import { shipsToUsVerdict } from "@/lib/ships-to-us";
+
 // Advisory quality flags for a lead. These NEVER filter a lead out of the
 // pipeline — they are surfaced as badges so an operator sees a caveat while the
 // lead stays actionable. Computed as a pure function of the stored payload (plus
@@ -5,7 +7,7 @@
 // every existing lead with no re-run and no DB write.
 
 export interface LeadFlag {
-  code: "inactive_site" | "missing_cert" | "sample_only" | "dealbreaker_met" | "direct_contact" | "yielded_direct";
+  code: "inactive_site" | "missing_cert" | "sample_only" | "dealbreaker_met" | "direct_contact" | "yielded_direct" | "no_us_shipping";
   label: string;
   // Most flags are caveats. A few are positive signals and must not be rendered
   // in warning colours; the renderer keys the badge variant off this.
@@ -96,6 +98,16 @@ function yieldedDirect(payload: any): LeadFlag | null {
   return { code: "yielded_direct", label: "Direct supplier record created", tone: "good" };
 }
 
+// The supplier told us they cannot ship to the United States. Surfaced so an
+// operator does not read the thread as a dead end and drop the lead: the
+// distributor clients (California Chemicals and the like) buy at origin and move
+// their own freight, and a drop-ship arrangement never needs the supplier to
+// ship to the US at all. So the badge says what to do, not just what is wrong.
+function noUsShipping(payload: any): LeadFlag | null {
+  if (shipsToUsVerdict(payload) !== "no") return null;
+  return { code: "no_us_shipping", label: "No US shipping, buy at origin or drop-ship" };
+}
+
 export function computeLeadFlags(payload: any, ctx: LeadFlagContext = {}): LeadFlag[] {
   const flags: LeadFlag[] = [];
   const site = inactiveSite(payload);
@@ -114,5 +126,7 @@ export function computeLeadFlags(payload: any, ctx: LeadFlagContext = {}): LeadF
   if (direct) flags.push(direct);
   const yielded = yieldedDirect(payload);
   if (yielded) flags.push(yielded);
+  const noUs = noUsShipping(payload);
+  if (noUs) flags.push(noUs);
   return flags;
 }

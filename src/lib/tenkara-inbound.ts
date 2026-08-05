@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { stageDraft } from "@/lib/draft-staging";
 import { composeReply } from "@/lib/reply-drafter";
+import { shipsToUsVerdict, type ShipsToUsAnnotation } from "@/lib/ships-to-us";
 import { extractQuotesFromReplyText, type ExtractedQuote, type ReplyQuoteExtraction } from "@/lib/reply-quote-extract";
 import { insertStagedQuotes, type StagedQuoteInput, type StagedQuoteSource } from "@/lib/staged-quotes";
 import { normalizeToUsd } from "@/lib/fx";
@@ -511,6 +512,8 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       shipping_email: null, billing_email: null, billing_poc_name: null,
     },
     declined: false,
+    shipsToUs: null,
+    shipsToUsEvidence: null,
   };
   // Non-inline files the supplier attached to THIS reply. Surfaced to the reply
   // drafter so it acknowledges them instead of insisting the attachment "didn't
@@ -836,6 +839,32 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     // Reply drafting proceeds even when quote/profile persistence fails.
   }
 
+  // Whether they ship to the US, when they raised it. Recorded as an annotation
+  // and nothing more: a supplier who cannot ship to the US still sells at origin,
+  // which is exactly how the distributor clients buy, so this must never read as
+  // a reason to drop them. Best-effort, and only written when the verdict is new
+  // or has changed, so an operator sees the latest thing the supplier said.
+  if (bodyExtraction.shipsToUs && leadId) {
+    try {
+      const { data: geoRow } = await admin.from("leads_in_flight").select("payload").eq("id", leadId).maybeSingle();
+      const geoPayload = (geoRow?.payload ?? {}) as Record<string, any>;
+      if (shipsToUsVerdict(geoPayload) !== bodyExtraction.shipsToUs) {
+        const annotation: ShipsToUsAnnotation = {
+          verdict: bodyExtraction.shipsToUs,
+          said_at: msg.received_at ?? new Date().toISOString(),
+          source: "supplier_reply",
+          evidence: bodyExtraction.shipsToUsEvidence,
+        };
+        await admin
+          .from("leads_in_flight")
+          .update({ payload: { ...geoPayload, ships_to_us: annotation } })
+          .eq("id", leadId);
+      }
+    } catch {
+      // An annotation is advisory; losing it must not cost us the reply draft.
+    }
+  }
+
   // 5. Compose the reply. Pull the full thread from Tenkara for context so the
   // reply answers what they actually asked and doesn't repeat earlier messages.
   let orgName = "the client";
@@ -939,6 +968,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     heldMaterialNames,
     missingApprovalFields: bodyExtraction.declined ? [] : missingApprovalFields,
     shipToRegion: (await getClientShipTo(admin, ref.org_id))?.region ?? null,
+    shipsToUs: bodyExtraction.shipsToUs ?? shipsToUsVerdict(leadRow?.payload as any),
   });
 
   // Introduce held materials only when the supplier engaged and did not hard-decline.
