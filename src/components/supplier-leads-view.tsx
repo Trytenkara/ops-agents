@@ -104,6 +104,7 @@ export function SupplierLeadsView({
   orgId,
   operatorOptions,
   banner = null,
+  filters,
 }: {
   rows: any[];
   profiles: SupplierProfile[];
@@ -116,6 +117,9 @@ export function SupplierLeadsView({
   orgId: string;
   operatorOptions?: { id: string; name: string }[];
   banner?: React.ReactNode;
+  // Page-level filters (client, operator) rendered inline with this view's own
+  // dropdowns so the whole set reads as one filter bar.
+  filters?: React.ReactNode;
 }) {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("leads");
@@ -359,6 +363,7 @@ export function SupplierLeadsView({
 
       {/* Filters */}
       <div className="flex flex-wrap items-end gap-3">
+        {filters}
         <div className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">Search</span>
           <SearchSuggest

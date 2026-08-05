@@ -47,12 +47,16 @@ export function MarketplacePricing({
   slug,
   dimsByPack = {},
   kind = "marketplace",
+  filters,
 }: {
   rows: Row[];
   canAct: boolean;
   slug: string;
   dimsByPack?: Record<string, CaseDims>;
   kind?: Extract<MarketKind, "marketplace" | "aggregator">;
+  // Page-level filters (client, operator) rendered inline with this view's own
+  // dropdowns so the whole set reads as one filter bar.
+  filters?: React.ReactNode;
 }) {
   const isAggregatorTab = kind === "aggregator";
   const marketRows = rows.filter((r) => (r.market_kind ?? leadMarketKind(r.payload?.site_type)) === kind);
@@ -76,11 +80,14 @@ export function MarketplacePricing({
 
   if (marketRows.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground py-4">
-        {isAggregatorTab
-          ? "No aggregator leads yet. These appear when a listing is found on a multi-seller inquiry platform such as Alibaba, IndiaMART, or Made-in-China."
-          : "No marketplace leads yet. These appear when Scout finds suppliers with published website pricing (open checkout or checkout-after-signup)."}
-      </p>
+      <div className="space-y-4">
+        {filters && <div className="flex flex-wrap items-end gap-3">{filters}</div>}
+        <p className="text-sm text-muted-foreground py-4">
+          {isAggregatorTab
+            ? "No aggregator leads yet. These appear when a listing is found on a multi-seller inquiry platform such as Alibaba, IndiaMART, or Made-in-China."
+            : "No marketplace leads yet. These appear when Scout finds suppliers with published website pricing (open checkout or checkout-after-signup)."}
+        </p>
+      </div>
     );
   }
 
@@ -89,7 +96,7 @@ export function MarketplacePricing({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
-        <div className="flex flex-wrap items-end gap-3">{controls}</div>
+        <div className="flex flex-wrap items-end gap-3">{filters}{controls}</div>
         <a
           href={exportUrl}
           download

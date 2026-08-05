@@ -6,6 +6,7 @@ import {
   getOrgSupplierTypes,
   resolveOperatorId,
   supplierKind,
+  leadAutoKey,
   type AssignmentConfig,
 } from "@/lib/operator-assignment";
 import type { MarketKind } from "@/lib/lead-market";
@@ -110,7 +111,7 @@ export async function freezeDerivedOwners(
   const byOperator = new Map<string, string[]>();
   for (const l of scout) {
     // Same key outreach uses, so the frozen owner matches who was getting drafts.
-    const key = l.email ? `e:${l.email.trim().toLowerCase()}` : l.id;
+    const key = leadAutoKey({ supplierName: l.supplier_name, email: l.email, leadId: l.id });
     if (!wanted(key, l.supplier_name)) continue;
     const opId = resolveOperatorId(ctx, key, kindOf(key, l.supplier_name));
     if (!opId) continue;

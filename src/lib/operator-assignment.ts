@@ -177,8 +177,7 @@ export async function getOrgSupplierTypes(admin: SupabaseClient, orgId: string):
   for (const l of leads) {
     const kind = leadMarketKind(l.site_type);
     if (!kind) continue;
-    const email = String(l.email ?? "").trim().toLowerCase();
-    m.set(l.supplier_id ?? (email ? `e:${email}` : l.id), kind);
+    m.set(leadAutoKey({ supplierId: l.supplier_id, supplierName: l.supplier_name, email: l.email, leadId: l.id }), kind);
     if (l.supplier_name) m.set(nameKey(l.supplier_name), kind);
   }
 
@@ -207,6 +206,32 @@ export async function getOrgSupplierTypes(admin: SupabaseClient, orgId: string):
 // the whole book as "direct". Name is the only join key those rows share.
 export function nameKey(supplierName: string): string {
   return `name:${supplierName.trim().toLowerCase()}`;
+}
+
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// The sticky key for a lead the auto spread hashes on. supplier_id when we have
+// one, else the supplier's EMAIL so every material row of one supplier collapses
+// to the operator who owns its single consolidated outreach thread.
+//
+// supplier_contact_email is NOT always an address: marketplace leads park a prose
+// channel note there ("via IndiaMART inquiry", "via website"). Hashing those
+// collapsed 62 unrelated IndiaMART suppliers onto one key and so onto one
+// operator, which skewed Sierra's marketplace book 265/246/155/131/130 across a
+// 5-person pool that should have been ~185 each. Fall back to the supplier NAME,
+// not the lead id: the name is stable across a supplier's material rows, so
+// consolidation survives while unrelated suppliers separate.
+export function leadAutoKey(input: {
+  supplierId?: string | null;
+  supplierName?: string | null;
+  email?: string | null;
+  leadId: string;
+}): string {
+  if (input.supplierId) return input.supplierId;
+  const email = String(input.email ?? "").trim().toLowerCase();
+  if (EMAIL_SHAPE.test(email)) return `e:${email}`;
+  const name = String(input.supplierName ?? "").trim();
+  return name ? nameKey(name) : input.leadId;
 }
 
 export function supplierKind(

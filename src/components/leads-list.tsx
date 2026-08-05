@@ -57,6 +57,7 @@ export function LeadsList({
   operatorOptions,
   forceStage,
   supplierDocs,
+  filters,
 }: {
   rows: any[];
   canAct: boolean;
@@ -68,6 +69,9 @@ export function LeadsList({
   // When set (e.g. the "Not enriched" tab), lock the stage filter to this value
   // and hide the Stage dropdown — the tab already scopes the list.
   forceStage?: string;
+  // Page-level filters (client, operator) rendered inline with this list's own
+  // dropdowns so the whole set reads as one filter bar.
+  filters?: React.ReactNode;
 }) {
   const [importResult, setImportResult] = useState<EmailImportResult | null>(null);
   const [importing, startImport] = useTransition();
@@ -254,6 +258,7 @@ export function LeadsList({
     <div className="space-y-3">
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex flex-wrap items-end gap-3">
+          {filters}
           {controls}
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">Match</span>

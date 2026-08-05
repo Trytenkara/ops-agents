@@ -154,44 +154,53 @@ export function LeadsTabs({
   const dotFor = (status: string | null | undefined) =>
     status === "failure" ? "bg-destructive" : status === "partial" ? "bg-yellow-500" : "bg-emerald-500";
 
+  // These filter every tab, but they render inside the active tab's own filter
+  // row so an operator reads one filter bar instead of a stray row above the page.
+  const pageFilters = (orgClients.length > 0 || ownerNames.length > 0) && (
+    <>
+      {orgClients.length > 0 && (
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Client</span>
+          <Select
+            size="sm"
+            className="min-w-[10rem]"
+            ariaLabel="Filter by client"
+            value={clientFilter}
+            onValueChange={setClientFilter}
+            options={[{ value: "all", label: "All clients" }, ...orgClients.map((c) => ({ value: c.id, label: c.name }))]}
+          />
+        </label>
+      )}
+      {ownerNames.length > 0 && (
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Operator</span>
+          <Select
+            size="sm"
+            className="min-w-[10rem]"
+            ariaLabel="Filter by operator"
+            value={operatorFilter}
+            onValueChange={setOperatorFilter}
+            options={[
+              { value: "all", label: "All operators" },
+              ...(currentUserName && ownerNames.includes(currentUserName)
+                ? [{ value: currentUserName, label: `My leads (${currentUserName})` }]
+                : []),
+              ...ownerNames.filter((n) => n !== currentUserName).map((n) => ({ value: n, label: n })),
+              { value: "unassigned", label: "Unassigned" },
+            ]}
+          />
+        </label>
+      )}
+      {(clientFilter !== "all" || operatorFilter !== "all") && (
+        <span className="pb-1.5 text-xs text-muted-foreground">
+          {visibleRows.length} of {rows.length} leads
+        </span>
+      )}
+    </>
+  );
+
   return (
     <div className="space-y-4">
-      {(orgClients.length > 0 || ownerNames.length > 0) && (
-        <div className="flex items-center gap-2">
-          {orgClients.length > 0 && (
-            <Select
-              size="sm"
-              className="w-48"
-              ariaLabel="Filter by client"
-              value={clientFilter}
-              onValueChange={setClientFilter}
-              options={[{ value: "all", label: "All clients" }, ...orgClients.map((c) => ({ value: c.id, label: c.name }))]}
-            />
-          )}
-          {ownerNames.length > 0 && (
-            <Select
-              size="sm"
-              className="w-48"
-              ariaLabel="Filter by operator"
-              value={operatorFilter}
-              onValueChange={setOperatorFilter}
-              options={[
-                { value: "all", label: "All operators" },
-                ...(currentUserName && ownerNames.includes(currentUserName)
-                  ? [{ value: currentUserName, label: `My leads (${currentUserName})` }]
-                  : []),
-                ...ownerNames.filter((n) => n !== currentUserName).map((n) => ({ value: n, label: n })),
-                { value: "unassigned", label: "Unassigned" },
-              ]}
-            />
-          )}
-          {(clientFilter !== "all" || operatorFilter !== "all") && (
-            <span className="text-xs text-muted-foreground">
-              {visibleRows.length} of {rows.length} leads
-            </span>
-          )}
-        </div>
-      )}
       {/* Live sourcing pipeline — stage cards double as tabs. */}
       <div className="rounded-xl border border-border bg-gradient-to-br from-secondary/40 to-secondary/10 p-3">
         <div className="mb-2.5 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -270,12 +279,13 @@ export function LeadsTabs({
             orgId={orgId}
             operatorOptions={operatorOptions}
             banner={mergePrompt}
+            filters={pageFilters}
           />
         </div>
       )}
       {tab !== "suppliers" && mergePrompt}
       {tab === "all" && (
-        <LeadsList rows={visibleRows} canAct={canAct} slug={slug} orgId={orgId} operatorOptions={operatorOptions} supplierDocs={supplierDocs} />
+        <LeadsList rows={visibleRows} canAct={canAct} slug={slug} orgId={orgId} operatorOptions={operatorOptions} supplierDocs={supplierDocs} filters={pageFilters} />
       )}
       {(tab === "raw" || tab === "enriched" || tab === "ready" || tab === "held") && (
         <LeadsList
@@ -286,6 +296,7 @@ export function LeadsTabs({
           operatorOptions={operatorOptions}
           supplierDocs={supplierDocs}
           forceStage={PIPELINE.find((p) => p.key === tab)!.stage}
+          filters={pageFilters}
         />
       )}
       {tab === "removed" && (
@@ -317,10 +328,10 @@ export function LeadsTabs({
           <p className="text-sm text-muted-foreground py-4">No leads have been manually dropped for this client yet.</p>
         ))}
       {tab === "marketplace" && (
-        <MarketplacePricing rows={visibleRows} canAct={canAct} slug={slug} dimsByPack={dimsByPack} kind="marketplace" />
+        <MarketplacePricing rows={visibleRows} canAct={canAct} slug={slug} dimsByPack={dimsByPack} kind="marketplace" filters={pageFilters} />
       )}
       {tab === "aggregator" && (
-        <MarketplacePricing rows={visibleRows} canAct={canAct} slug={slug} dimsByPack={dimsByPack} kind="aggregator" />
+        <MarketplacePricing rows={visibleRows} canAct={canAct} slug={slug} dimsByPack={dimsByPack} kind="aggregator" filters={pageFilters} />
       )}
       {tab === "outreach" &&
         (trackerCount > 0 ? (

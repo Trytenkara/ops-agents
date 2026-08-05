@@ -13,7 +13,7 @@ import { leadMarketKind } from "@/lib/lead-market";
 import { computeLeadFlags } from "@/lib/lead-flags";
 import { getClientRequirements, dealbreakerCertNames } from "@/lib/tenkara-requirements";
 import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
-import { getOrgAssignmentContext, autoOperator, overridesAuto, resolveOperatorId, nameKey } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, autoOperator, overridesAuto, resolveOperatorId, nameKey, leadAutoKey } from "@/lib/operator-assignment";
 
 import { orgDisplayName } from "@/lib/org-display";
 import { getSupplierProfiles } from "@/lib/supplier-profiles";
@@ -171,12 +171,14 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     // cases the auto default is sticky-random over the pool — keyed by supplier_id
     // when present, else the EMAIL consolidation key so every material row of one
     // Scout supplier resolves to the SAME operator (matching the single consolidated
-    // outreach thread), falling back to the lead id only when there's no email.
+    // outreach thread), falling back to the supplier name when that field holds a
+    // channel note rather than an address.
     // Same key outreach uses, so the displayed owner matches who gets the drafts.
-    const scoutAutoKey = (() => {
-      const em = String(r.payload?.supplier_contact_email ?? "").trim().toLowerCase();
-      return em ? `e:${em}` : r.id;
-    })();
+    const scoutAutoKey = leadAutoKey({
+      supplierName: r.supplier_name,
+      email: r.payload?.supplier_contact_email,
+      leadId: r.id,
+    });
     const operator_assigned_id = r.supplier_id
       ? supplierAssignments.get(r.supplier_id) ?? null
       : r.assigned_operator_id ?? null;
@@ -270,9 +272,13 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   const profileOperators: Record<string, string> = {};
   for (const p of supplierProfiles) {
     const key = p.supplier_id ?? p.supplier_name.toLowerCase();
-    const email = String(p.poc_email ?? "").trim().toLowerCase();
     // Same key outreach consolidates on, so the card matches who gets the thread.
-    const autoKey = p.supplier_id ?? (email ? `e:${email}` : nameKey(p.supplier_name));
+    const autoKey = leadAutoKey({
+      supplierId: p.supplier_id,
+      supplierName: p.supplier_name,
+      email: p.poc_email,
+      leadId: nameKey(p.supplier_name),
+    });
     const kind = p.supplier_type ?? assignmentCtx.supplierTypes.get(nameKey(p.supplier_name)) ?? null;
     const opId = resolveOperatorId(assignmentCtx, autoKey, kind, p.supplier_name);
     const name = opId ? operatorNameById.get(opId) : null;
