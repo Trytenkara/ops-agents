@@ -23,7 +23,39 @@ type Admin = ReturnType<typeof createAdminClient>;
 const FIRST_PULL_CAP = 20; // brand-new marketplace leads with no price yet (Sonnet+web_fetch, ~25s each).
 const RECHECK_CAP = 50;    // already-pulled leads due for re-validation. Raised for FULL mode so the whole pool clears daily across the hourly runs (each run is still bounded by the 800s deadline; leftovers resume next run).
 const CONCURRENCY = 4;
-const MAX_PULL_ATTEMPTS = 3; // needs_review is retried across hourly runs up to this many times before a case is opened, so one flaky web_search result isn't a permanent escalation.
+const FLAG_AFTER_ATTEMPTS = 3; // needs_review is read this many times before a case is opened, so one flaky web_search result isn't a premature escalation. It does NOT stop the retries.
+
+// A lead is never given up on. Only a structural verdict ends a pull (price
+// found, or a host that has no checkout at all); every other outcome keeps the
+// lead in the queue forever, with the gap between reads widening so persistence
+// costs a bounded amount. Attempt 40 of a genuinely priceless page is one read a
+// month, not a nightly re-failure, and the day the page starts publishing a
+// price we are still there to see it.
+// A stored URL that cannot hold a price: no product page lives at /contact,
+// /about or a bare domain root, so reading one can only ever fail.
+const NON_PRODUCT_PATH = /^\/?(contact([-_]?us)?|about([-_]?us)?|home|index)?\/?$/i;
+function isNonProductUrl(u: string): boolean {
+  try {
+    return NON_PRODUCT_PATH.test(new URL(u).pathname);
+  } catch {
+    return false;
+  }
+}
+
+function sameSite(a: string, b: string): boolean {
+  try {
+    const reg = (h: string) => h.replace(/^www\./, "").toLowerCase().split(".").slice(-2).join(".");
+    return reg(new URL(a).hostname) === reg(new URL(b).hostname);
+  } catch {
+    return false;
+  }
+}
+
+const RETRY_BACKOFF_DAYS = [1, 1, 3, 7, 14, 30];
+function retryAfter(attempts: number): string {
+  const days = RETRY_BACKOFF_DAYS[Math.min(attempts, RETRY_BACKOFF_DAYS.length - 1)];
+  return new Date(Date.now() + days * 86400000).toISOString();
+}
 
 // Re-validation mode.
 //  FULL (default): re-verify EVERY marketplace lead DAILY so pricing/info is always
@@ -303,7 +335,14 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       .eq("status", "active")
       .in("org_id", orgIds)
       .or("payload->marketplace_pull.is.null,payload->marketplace_pull->>status.eq.pending")
+      // A retry is only due once its backoff has expired. Legacy rows carry no
+      // retry_after and are treated as due.
+      .or(`payload->marketplace_pull->>retry_after.is.null,payload->marketplace_pull->>retry_after.lte.${nowIso}`)
       .or(marketplaceFilter)
+      // Never-attempted leads sort first (no retry_after), so an ever-growing
+      // retry pool can never starve fresh discovery — the same guarantee
+      // migration 0088 gives the contact re-queue.
+      .order("payload->marketplace_pull->>retry_after", { ascending: true, nullsFirst: true })
       .order("created_at", { ascending: true })
       .limit(limit);
     if (error) {
@@ -442,7 +481,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         enumerate_sellers: platformAsSupplier,
       });
     } catch (e: any) {
-      result = { classification: "needs_review" as const, market_kind: (aggregatorNameOf(url) ? "aggregator" : "marketplace") as "marketplace" | "aggregator", aggregator: aggregatorNameOf(url), current_price: null, currency: null, pack_size: null, unit_price: null, tiers: [], moq: null, lead_time: null, shipping: null, source_url: url, source_citations: [], notes: `pull failed: ${e?.message ?? e}`, index_page: false, sellers: [] };
+      result = { classification: "needs_review" as const, market_kind: (aggregatorNameOf(url) ? "aggregator" : "marketplace") as "marketplace" | "aggregator", aggregator: aggregatorNameOf(url), current_price: null, currency: null, pack_size: null, unit_price: null, tiers: [], moq: null, lead_time: null, shipping: null, source_url: url, source_citations: [], notes: `pull failed: ${e?.message ?? e}`, index_page: false, sellers: [], infra_failure: true };
     }
     }
 
@@ -480,8 +519,19 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     // category page keeps showing "Alibaba search results" as its supplier link
     // even after the reader found the company's own listing. Promote the page it
     // actually read to be the lead's URL.
+    // The stored link is often not a product page at all: discovery saved the
+    // supplier's /contact page or bare homepage, the reader then searched and
+    // found the real listing, and until now that correction was thrown away and
+    // the same dead URL was read again on every retry. Promote it, so attempts
+    // compound instead of repeating. Only within the same site: a link to some
+    // other company's page is a different lead, not a repair.
+    const repairable = staleIndexUrl || isNonProductUrl(url);
     const repairedUrl =
-      staleIndexUrl && result.source_url && result.source_url !== url && !isAggregatorIndexUrl(result.source_url)
+      repairable &&
+      result.source_url &&
+      result.source_url !== url &&
+      !isAggregatorIndexUrl(result.source_url) &&
+      (staleIndexUrl || sameSite(url, result.source_url))
         ? result.source_url
         : null;
     const withRepairedUrl = (payload: any): any => {
@@ -648,9 +698,15 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     // permanent escalation "without information".
     const actionable = reason === "login_required" || reason === "link_broken";
     const priorAttempts = Number(l.payload?.marketplace_pull?.attempts ?? 0);
-    const attempts = gotPrice ? priorAttempts : priorAttempts + 1;
-    const escalate = !gotPrice && (actionable || attempts >= MAX_PULL_ATTEMPTS);
-    const retry = !gotPrice && !escalate;
+    // A failure that taught us nothing about the page (API 5xx, no JSON back, a
+    // read that ran out of tokens) is not an attempt and must not widen the
+    // backoff: retry it at full speed tomorrow.
+    const infraFailure = !gotPrice && result.infra_failure === true;
+    const attempts = gotPrice || infraFailure ? priorAttempts : priorAttempts + 1;
+    // Escalation opens the operator case; it no longer ends the lead's life.
+    // Actionable reasons (login wall, dead link) surface on the first hit,
+    // needs_review only once it has survived a few reads.
+    const escalate = !gotPrice && !infraFailure && (actionable || attempts >= FLAG_AFTER_ATTEMPTS);
 
     // Adaptive cadence (only meaningful on a successful pull). On a re-check, a
     // ≥1% move resets to daily and widens the ladder while it holds; a first pull
@@ -757,9 +813,14 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           ...aggregatorMark,
         }
       : preservedRecheckPull ?? {
-          status: retry ? ("pending" as const) : ("needs_manual_pull" as const),
+          // Always 'pending'. There is no terminal give-up state: `flagged` is a
+          // display flag for the operator queue, and the lead keeps its place in
+          // the retry rotation whether or not a human ever looks at it.
+          status: "pending" as const,
+          flagged: escalate,
           reason,
           attempts,
+          retry_after: retryAfter(attempts),
           source_url: result.source_url ?? url,
           last_notes: result.notes ?? null,
           at: new Date().toISOString(),
@@ -861,13 +922,15 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       return "pulled";
     }
 
-    if (retry) {
-      // Left in "pending" — no case opened. The query re-picks pending leads on
-      // the next hourly run until a price is found or attempts hit the cap.
-      await log(`Marketplace price inconclusive (${reason}) — retrying (attempt ${attempts}/${MAX_PULL_ATTEMPTS}): ${l.supplier_name} × ${l.material_name}`, {
-        step: "mp_retry",
-        data: { lead_id: l.id, reason, attempts },
-      });
+    if (!escalate) {
+      // No case opened yet. The lead stays pending and comes back around when
+      // its backoff expires.
+      await log(
+        infraFailure
+          ? `Marketplace pull did not complete (${result.notes ?? "no detail"}) — not counted as an attempt, retrying tomorrow: ${l.supplier_name} × ${l.material_name}`
+          : `Marketplace price inconclusive (${reason}) — attempt ${attempts}, retrying after ${pull.retry_after}: ${l.supplier_name} × ${l.material_name}`,
+        { step: "mp_retry", data: { lead_id: l.id, reason, attempts, infra_failure: infraFailure, retry_after: pull.retry_after } },
+      );
       return "pending";
     }
 
@@ -909,9 +972,9 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         },
       });
     }
-    await log(`Marketplace price needs manual pull (${reason}, ${attempts} attempts): ${l.supplier_name} × ${l.material_name}`, {
+    await log(`Marketplace price flagged for an operator (${reason}, ${attempts} attempts) — still retrying, next read after ${pull.retry_after}: ${l.supplier_name} × ${l.material_name}`, {
       step: "mp_flag",
-      data: { lead_id: l.id, reason, attempts },
+      data: { lead_id: l.id, reason, attempts, retry_after: pull.retry_after },
     });
     return "flagged";
   };

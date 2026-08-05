@@ -169,7 +169,9 @@ export async function getOutreachTracker(admin: Admin, orgId: string): Promise<O
     const p = (l.payload ?? {}) as any;
     if (p.outreach) marketplace.emailed++;
     else if (l.status === "dropped" && (l.drop_reason ?? p.drop_reason) === "manual_outreach_case") marketplace.manual++;
-    else if (p.marketplace_pull?.status === "needs_manual_pull") marketplace.needsPull++;
+    // `flagged` is the live signal; `needs_manual_pull` is the retired status
+    // still present on rows written before the pull switched to endless backoff.
+    else if (p.marketplace_pull?.flagged === true || p.marketplace_pull?.status === "needs_manual_pull") marketplace.needsPull++;
     else marketplace.pending++;
   }
 

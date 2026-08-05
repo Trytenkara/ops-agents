@@ -125,7 +125,11 @@ export async function GET(request: NextRequest) {
     const siteType: string | null = SITE_TYPE_LABEL[p.site_type] ?? p.site_type ?? null;
     const aggregator = kind === "aggregator" ? aggregatorNameFromPayload(p) : null;
     const pull = p.marketplace_pull as { status?: string; reason?: string } | undefined;
-    const pullStatus = PULL_STATUS_LABEL[pull?.status ?? ""] ?? (pull?.status ?? "Pending");
+    // A flagged lead is still retrying; the flag says a human could unblock it
+    // sooner, not that the fleet has stopped.
+    const pullStatus = pull?.flagged
+      ? "Needs manual pull"
+      : PULL_STATUS_LABEL[pull?.status ?? ""] ?? (pull?.status ?? "Pending");
     const pullReason: string | null = pull?.reason ?? null;
     const rawPricing: string | null = p.pack_sizes_pricing ?? null;
     const moq: string | null = p.moq ?? null;

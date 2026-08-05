@@ -14,7 +14,7 @@
 // LeadMagic outage, empty balance, or misconfiguration must NEVER block
 // enrichment or outreach.
 
-import { recordContactApiCall } from "@/lib/contact-provider-usage";
+import { recordContactApiCall, isContactProviderTripped } from "@/lib/contact-provider-usage";
 
 const BASE = "https://api.leadmagic.io";
 const API_KEY = process.env.LEADMAGIC_API_KEY ?? "";
@@ -59,6 +59,8 @@ function domainOf(website: string | null): string | null {
 
 async function lmPost(path: string, body: unknown, domain: string | null): Promise<any | null> {
   if (!isLeadMagicConfigured()) return null;
+  // Credit pool already exhausted this run — skip the wasted 402 round-trip.
+  if (isContactProviderTripped("leadmagic")) return null;
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
   try {
@@ -73,7 +75,10 @@ async function lmPost(path: string, body: unknown, domain: string | null): Promi
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      const outcome = res.status === 429 ? "quota" : res.status === 401 || res.status === 403 ? "auth" : "error";
+      // 402 = insufficient_credits (LeadMagic's exhaustion signal), 429 = rate
+      // cap. Both mean "pool is dry", so both map to quota (trips the breaker and
+      // fires the quota-wall alert); 401/403 are credential/scope failures.
+      const outcome = res.status === 429 || res.status === 402 ? "quota" : res.status === 401 || res.status === 403 ? "auth" : "error";
       recordContactApiCall({ provider: "leadmagic", outcome, units: 0, domain, detail: `HTTP ${res.status} on ${path}` });
       return null;
     }

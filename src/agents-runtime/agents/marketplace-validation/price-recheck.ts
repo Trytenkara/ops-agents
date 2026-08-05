@@ -73,6 +73,10 @@ export interface RecheckResult {
   // multi-seller index, and these are the individual companies listed on it.
   index_page: boolean;
   sellers: AggregatorSeller[];
+  // The read never happened: the API errored, the model returned no JSON, or it
+  // ran out of tokens mid-read. Nothing was learned about the page, so callers
+  // must not treat this as a verdict or let it advance a backoff.
+  infra_failure?: boolean;
 }
 
 const SYSTEM_PROMPT = `You are a B2B sourcing analyst checking whether a marketplace's current listed price for a material matches what we have on file.
@@ -228,6 +232,7 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
       notes: `Model returned no JSON: ${text.slice(0, 200)}`,
       index_page: false,
       sellers: [],
+      infra_failure: true,
     };
   }
 

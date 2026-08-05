@@ -36,10 +36,32 @@ const MAX_BUFFERED = 500;
 const buffer: ContactApiCall[] = [];
 
 export function recordContactApiCall(call: ContactApiCall): void {
+  // Circuit breaker: a `quota` outcome means the provider's credit pool is dry
+  // (429 rate-cap or 402 insufficient-credits). Every further call this run just
+  // 402s for free but wastes wall-clock and a claim slot, so trip the provider
+  // and let the waterfall fall straight through to the next one. `auth` is left
+  // out on purpose: ZoomInfo 401s on its search leg while its enrich leg still
+  // bills successfully, so an auth failure is not reliably terminal.
+  if (call.outcome === "quota") tripped.add(call.provider);
   buffer.push(call);
   if (buffer.length > MAX_BUFFERED) buffer.splice(0, buffer.length - MAX_BUFFERED);
 }
 
 export function drainContactApiCalls(): ContactApiCall[] {
   return buffer.splice(0, buffer.length);
+}
+
+// Per-run circuit breaker for exhausted providers. Warm serverless lambdas keep
+// module state across invocations, so this is reset explicitly at the start of
+// each Agent 06 run (see the enrichment runner) rather than living for the life
+// of the process — otherwise a provider tripped one run stays dark forever, even
+// after credits refill.
+const tripped = new Set<ContactProvider>();
+
+export function isContactProviderTripped(provider: ContactProvider): boolean {
+  return tripped.has(provider);
+}
+
+export function resetContactProviderBreaker(): void {
+  tripped.clear();
 }

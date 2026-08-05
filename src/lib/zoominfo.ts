@@ -8,7 +8,7 @@
 // credits, or misconfigured must NEVER block enrichment or outreach. Every call
 // is journaled to contact-provider-usage so a soft failure is not a silent one.
 
-import { recordContactApiCall } from "@/lib/contact-provider-usage";
+import { recordContactApiCall, isContactProviderTripped } from "@/lib/contact-provider-usage";
 
 const BASE =(process.env.ZOOMINFO_API_BASE ?? "https://api.zoominfo.com/gtm").replace(/\/+$/, "");
 const CLIENT_ID = process.env.ZOOMINFO_CLIENT_ID ?? "";
