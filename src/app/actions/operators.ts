@@ -1,11 +1,35 @@
 "use server";
 import { getSession, hasAnyRole, type AppRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { ASSIGNABLE_OPERATOR_ROLES } from "@/lib/operator-assignment";
+import { reassignIneligibleOwners } from "@/lib/reassign-owners";
 
 interface Result<T = void> { ok: boolean; error?: string; data?: T }
 
 const INVITABLE_BY_LEAD: AppRole[] = ["ops_operator", "account_manager"];
 const ALL_ROLES: AppRole[] = ["admin", "ops_lead", "ops_operator", "account_manager", "monitor"];
+const ASSIGNABLE = new Set<string>(ASSIGNABLE_OPERATOR_ROLES);
+
+// A role change, an org unassignment, or a deactivation can each leave an
+// operator still holding suppliers/threads/leads for an org they can no longer
+// work. Move that book onto whoever's left in the org's pool so nothing goes
+// stale on the removed person (see reassignIneligibleOwners for why a stamped
+// owner never self-heals).
+async function reassignAcrossOrgs(
+  admin: ReturnType<typeof createAdminClient>,
+  userId: string,
+  actorUserId: string,
+  orgIds?: string[]
+) {
+  const orgs =
+    orgIds ??
+    ((await admin.from("user_org_assignments").select("org_id").eq("user_id", userId)).data ?? []).map(
+      (r: any) => r.org_id as string
+    );
+  for (const orgId of orgs) {
+    await reassignIneligibleOwners(admin, orgId, [userId], actorUserId).catch(() => null);
+  }
+}
 
 function canInvite(actorRoles: AppRole[], targetRole: AppRole): boolean {
   if (actorRoles.includes("admin")) return true;
@@ -125,6 +149,13 @@ export async function changeUserRole(userId: string, newRole: AppRole): Promise<
     target_table: "users", target_id: userId,
     diff: { from: targetRoleList, to: [newRole] },
   });
+  // Losing ops_operator/ops_lead means every org this person is assigned to
+  // just lost an eligible owner (e.g. demoted to monitor/admin) — hand off
+  // whatever they were holding rather than leaving it stuck on them.
+  const wasAssignable = targetRoleList.some((r) => ASSIGNABLE.has(r));
+  if (wasAssignable && !ASSIGNABLE.has(newRole)) {
+    await reassignAcrossOrgs(admin, userId, session.userId);
+  }
   return { ok: true };
 }
 
@@ -147,6 +178,7 @@ export async function setOrgAssignments(userId: string, orgIds: string[]): Promi
     .from("user_org_assignments")
     .select("org_id, auto_assignable")
     .eq("user_id", userId);
+  const priorOrgIds = (priorRows ?? []).map((r: any) => r.org_id as string);
   const priorAuto = new Map((priorRows ?? []).map((r: any) => [r.org_id as string, r.auto_assignable !== false]));
 
   await admin.from("user_org_assignments").delete().eq("user_id", userId);
@@ -165,6 +197,13 @@ export async function setOrgAssignments(userId: string, orgIds: string[]): Promi
     actor_user_id: session.userId, action: "operator.org_assignments_changed",
     target_table: "users", target_id: userId, diff: { orgs: orgIds },
   });
+  // Orgs dropped from this person's list just lost them as an eligible owner —
+  // hand off whatever they held there so it doesn't go stale on someone no
+  // longer covering that client.
+  const droppedOrgIds = priorOrgIds.filter((id) => !orgIds.includes(id));
+  if (droppedOrgIds.length > 0 && ASSIGNABLE.has(role)) {
+    await reassignAcrossOrgs(admin, userId, session.userId, droppedOrgIds);
+  }
   return { ok: true };
 }
 
@@ -196,6 +235,9 @@ export async function deactivateUser(userId: string): Promise<Result> {
     actor_user_id: session.userId, action: "operator.deactivated",
     target_table: "users", target_id: userId,
   });
+  // A deactivated operator can't work anything — hand off whatever they held
+  // across every org they were assigned to.
+  await reassignAcrossOrgs(admin, userId, session.userId);
   return { ok: true };
 }
 

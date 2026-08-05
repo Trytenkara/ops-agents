@@ -1,7 +1,6 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getOrgAssignmentContext, resolveOperatorId, overridesAuto, leadAutoKey, type AssignmentContext } from "@/lib/operator-assignment";
-import { leadMarketKind } from "@/lib/lead-market";
 import { classifyClient } from "../quote-revalidation/config";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import { compileWaitMs } from "@/lib/agent-timing";
@@ -438,6 +437,11 @@ registerAgent({
         // id only when there's no email (manual-contact leads). Else org primary.
         assignedOperator: (() => {
           const ctx = assignmentCtxByOrg.get(lead.org_id);
+          // Kind is left for resolveOperatorId to derive from ctx.supplierTypes
+          // (nameHint below), not passed as a hard kindHint here: that map already
+          // layers Agent 06's validated profile over the scanner's site_type guess,
+          // and a raw site_type passed as kindHint would short-circuit past it —
+          // exactly the outranking the leads page already does for the same reason.
           const auto = ctx
             ? resolveOperatorId(
                 ctx,
@@ -447,7 +451,8 @@ registerAgent({
                   email: hasEmail ? email : null,
                   leadId: lead.id,
                 }),
-                leadMarketKind(payload.site_type)
+                null,
+                lead.supplier_name
               )
             : null;
           // "auto, reassign all" governs the lead-level claim too, so one setting

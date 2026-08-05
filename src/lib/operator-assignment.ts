@@ -41,6 +41,10 @@ export interface AssignmentConfig {
 
 export const ALL_SUPPLIER_TYPES: MarketKind[] = ["marketplace", "aggregator", "direct"];
 
+// Roles that can own a supplier/lead/thread. Shared with the operators actions
+// so a role change out of this set and a pool read agree on who counts as removed.
+export const ASSIGNABLE_OPERATOR_ROLES = ["ops_operator", "ops_lead"] as const;
+
 // Used when the org row can't be read: the historical behavior, so a failed read
 // degrades to routing-as-before rather than routing nothing.
 export const DEFAULT_ASSIGNMENT_CONFIG: AssignmentConfig = {
@@ -103,11 +107,11 @@ export async function getOrgOperatorPool(
   // clients too). Admins/monitors/account_managers are not assignable. When no
   // eligible operators are assigned to an org, the pool is empty and suppliers
   // stay unassigned (by design, until the ops team is added).
-  const ASSIGNABLE = new Set(["ops_operator", "ops_lead"]);
+  const ASSIGNABLE = new Set<string>(ASSIGNABLE_OPERATOR_ROLES);
   const isOperator = (u: any): boolean =>
     Array.isArray(u?.user_roles) && u.user_roles.some((r: any) => ASSIGNABLE.has(r?.role));
   const toRef = (u: any, autoAssignable: boolean): OperatorRef | null =>
-    u && u.status !== "out_of_office" && isOperator(u)
+    u && u.status !== "out_of_office" && !u.deactivated_at && isOperator(u)
       ? { id: u.id, name: u.display_name ?? u.email ?? "-", email: u.email ?? null, autoAssignable }
       : null;
 
@@ -115,7 +119,9 @@ export async function getOrgOperatorPool(
   // embed must name the relationship explicitly or PostgREST errors out.
   const { data: assigns } = await admin
     .from("user_org_assignments")
-    .select("auto_assignable, users:users!user_org_assignments_user_id_fkey(id, display_name, email, status, user_roles(role))")
+    .select(
+      "auto_assignable, users:users!user_org_assignments_user_id_fkey(id, display_name, email, status, deactivated_at, user_roles(role))"
+    )
     .eq("org_id", orgId);
   const pool = (assigns ?? [])
     .map((a: any) => toRef(a.users, a.auto_assignable !== false))
