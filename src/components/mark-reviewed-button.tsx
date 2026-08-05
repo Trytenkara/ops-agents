@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
 import { markDraftReviewed } from "@/app/actions/drafts";
 
-export function MarkReviewedButton({ draftId }: { draftId: string }) {
+export function MarkReviewedButton({ draftId, onDone }: { draftId: string; onDone?: () => void }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [err, setErr] = useState<string | null>(null);
@@ -16,7 +16,10 @@ export function MarkReviewedButton({ draftId }: { draftId: string }) {
           start(async () => {
             const res = await markDraftReviewed(draftId);
             if (!res.ok) setErr(res.error ?? "failed");
-            else router.refresh();
+            else {
+              router.refresh();
+              onDone?.();
+            }
           })
         }
       >

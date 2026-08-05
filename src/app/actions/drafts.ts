@@ -4,6 +4,7 @@ import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { getTenkaraConversationDetails } from "@/lib/tenkara";
+import { loadDraftDetail, type DraftDetail } from "@/lib/draft-detail";
 
 interface ActionResult {
   ok: boolean;
@@ -103,6 +104,24 @@ export async function setThreadHidden(draftId: string, hidden: boolean): Promise
     ok: true,
     warning: hidden ? "Hidden in Control Room only. The Tenkara conversation still exists and was not changed." : undefined,
   };
+}
+
+// Backs the side panel on the thread list: the same detail the /work/drafts/[id]
+// page renders, fetched without leaving the list.
+export async function getDraftDetail(
+  draftId: string
+): Promise<{ ok: true; detail: DraftDetail; canReview: boolean } | { ok: false; error: string }> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" };
+  const detail = await loadDraftDetail(draftId);
+  if (!detail) return { ok: false, error: "draft_not_found" };
+  if (!seesAllOrgs(session)) {
+    const assigned = await getAssignedOrgIds(session);
+    if (assigned !== null && (!detail.orgId || !assigned.includes(detail.orgId))) {
+      return { ok: false, error: "forbidden" };
+    }
+  }
+  return { ok: true, detail, canReview: hasAnyRole(session, ["admin", "ops_lead", "ops_operator"]) };
 }
 
 export async function markDraftReviewed(draftId: string): Promise<ActionResult> {

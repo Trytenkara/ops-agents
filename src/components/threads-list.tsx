@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/lib/utils";
@@ -16,6 +15,7 @@ import { rewriteDrafts } from "@/app/actions/rewrite-draft";
 import { setThreadHidden } from "@/app/actions/drafts";
 import { attachAlternateEmail } from "@/app/actions/supplier-emails";
 import { Button } from "@/components/ui/button";
+import { DraftPanel } from "@/components/draft-panel";
 import { filenameFor } from "@/lib/csv";
 import { useListFilter, usePersistedState, byString, byDateDesc, byStringBlankLast } from "@/components/use-list-filter";
 import { Select } from "@/components/ui/select";
@@ -80,6 +80,7 @@ export function ThreadsList({ rows, slug, orgId, canAct = false }: { rows: Threa
   const [attaching, setAttaching] = useState<string | null>(null);
   const [aliasEmail, setAliasEmail] = useState("");
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [openDraftId, setOpenDraftId] = useState<string | null>(null);
 
   const toggleOne = (id: string, checked: boolean) =>
     setSelected((prev) => {
@@ -342,7 +343,15 @@ export function ThreadsList({ rows, slug, orgId, canAct = false }: { rows: Threa
               <TableCell className="text-muted-foreground">{relativeTime(d.createdAt)}</TableCell>
               <TableCell>
                 <div className="flex items-center gap-2">
-                  {d.status !== "linked" && <Link href={`/work/drafts/${d.id}`} className="text-primary hover:underline text-sm">Open →</Link>}
+                  {d.status !== "linked" && (
+                    <button
+                      type="button"
+                      onClick={() => setOpenDraftId(d.id)}
+                      className="text-primary hover:underline text-sm"
+                    >
+                      Open →
+                    </button>
+                  )}
                   {canAct && d.status === "linked" && (
                     <Button size="sm" variant="ghost" disabled={hiding === d.id} onClick={() => hideThread(d.id, !d.hiddenLocally)}>
                       {hiding === d.id ? "…" : d.hiddenLocally ? "Unhide" : "Hide"}
@@ -368,6 +377,7 @@ export function ThreadsList({ rows, slug, orgId, canAct = false }: { rows: Threa
             : `Showing all ${filtered.length} thread${filtered.length === 1 ? "" : "s"}.`}
         </p>
       )}
+      {openDraftId && <DraftPanel draftId={openDraftId} onClose={() => setOpenDraftId(null)} />}
     </div>
   );
 }

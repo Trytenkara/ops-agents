@@ -16,11 +16,14 @@
 
 export const TENKARA_INBOX_BASE = "https://tenkara-inbox-nine.vercel.app";
 
-// Where an operator reviews/sends a Tenkara-staged draft. The agent stages it
-// under the client inbox → Pending Outreach; we link to the app (deep-linking to
-// a specific conversation can be added once the conversation route is confirmed).
-export function tenkaraInboxUrl(_conversationId?: string): string {
-  return TENKARA_INBOX_BASE;
+// Where an operator reviews/sends a Tenkara-staged draft. The app is a single
+// route and selects the conversation from the URL hash; when the id isn't in the
+// mailbox it currently has loaded, it fetches that conversation by id and
+// switches to its account. Without the hash the operator lands on the inbox root
+// and has to hunt for the thread.
+export function tenkaraInboxUrl(conversationId?: string | null): string {
+  if (!conversationId) return TENKARA_INBOX_BASE;
+  return `${TENKARA_INBOX_BASE}/#conversation=${encodeURIComponent(conversationId)}`;
 }
 
 export interface CreateTenkaraDraftInput {

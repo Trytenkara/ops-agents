@@ -6,7 +6,7 @@ import { rewriteDraft } from "@/app/actions/rewrite-draft";
 
 // Recompose this staged Tenkara draft with the current material name and upsert
 // it in place (overwrites the existing draft in the same conversation).
-export function RewriteDraftButton({ draftId }: { draftId: string }) {
+export function RewriteDraftButton({ draftId, onDone }: { draftId: string; onDone?: () => void }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
@@ -25,6 +25,7 @@ export function RewriteDraftButton({ draftId }: { draftId: string }) {
             else {
               setMsg(`Rewritten as “${res.materialName}”.`);
               router.refresh();
+              onDone?.();
             }
           })
         }
