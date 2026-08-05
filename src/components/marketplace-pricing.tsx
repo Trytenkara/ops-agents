@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useListFilter, byString } from "@/components/use-list-filter";
+import { dealbreakerFitRank } from "@/lib/dealbreaker-fit";
 import { leadMarketKind, type MarketKind } from "@/lib/lead-market";
 import { aggregatorNameFromPayload } from "@/lib/aggregator-hosts";
 import { saveLeadPriceTiers } from "@/app/actions/leads";
@@ -61,6 +62,13 @@ export function MarketplacePricing({
     sorts: [
       { value: "supplier", label: "Supplier (A–Z)", compare: byString((r: Row) => r.supplier_name) },
       { value: "material", label: "Material (A–Z)", compare: byString((r: Row) => r.material_name) },
+      {
+        value: "dealbreaker",
+        label: "Meets dealbreakers first",
+        compare: (a: Row, b: Row) =>
+          dealbreakerFitRank(a.payload) - dealbreakerFitRank(b.payload) ||
+          byString((r: Row) => r.supplier_name)(a, b),
+      },
     ],
     defaultSort: "supplier",
   });

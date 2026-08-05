@@ -16,6 +16,7 @@ import { profileCompleteness, type SupplierProfile } from "@/lib/supplier-profil
 import { UnlinkedMarketplaceLogins, type MarketplaceAccount } from "@/components/marketplace-logins";
 import { normalizeHost } from "@/lib/marketplace-accounts";
 import { deriveMatchTier } from "@/lib/lead-match-tier";
+import { dealbreakerFitRank } from "@/lib/dealbreaker-fit";
 import { leadMarketKind, MARKET_KIND_LABEL, MARKET_KIND_TITLE, MARKET_KIND_VARIANT, type MarketKind } from "@/lib/lead-market";
 import { relativeTime } from "@/lib/utils";
 
@@ -30,6 +31,13 @@ interface SupplierGroup {
   latestLead: string | null;
   accounts: MarketplaceAccount[];
   marketplaceHost: string;
+}
+
+// A supplier with no leads at all (profile seeded ahead of discovery) ranks with
+// the not-yet-judged, not below the suppliers we checked and ruled out.
+function bestFitRank(group: SupplierGroup): number {
+  if (group.leads.length === 0) return 1;
+  return group.leads.reduce((best, lead) => Math.min(best, dealbreakerFitRank(lead.payload)), Infinity);
 }
 
 // Sites this supplier is known by, so an agent-provisioned login (keyed only by
@@ -61,6 +69,7 @@ const SORT_OPTIONS = [
   { value: "operator", label: "Operator (A-Z)" },
   { value: "completeness", label: "Profile completeness" },
   { value: "newest", label: "Newest leads" },
+  { value: "dealbreaker", label: "Meets dealbreakers first" },
 ];
 
 const TYPE_FILTER: { value: string; label: string }[] = [
@@ -237,6 +246,10 @@ export function SupplierLeadsView({
         const bDate = b.latestLead ?? "";
         return bDate.localeCompare(aDate);
       }
+      case "dealbreaker":
+        // A supplier is ranked by its best lead: one material meeting the client's
+        // dealbreakers is enough to make the supplier worth working.
+        return bestFitRank(a) - bestFitRank(b) || b.leads.length - a.leads.length;
       default:
         return b.leads.length - a.leads.length;
     }

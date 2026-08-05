@@ -71,21 +71,14 @@ export function LeadsTabs({
   supplierDocs?: SupplierDocIndex;
 }) {
   const [clientFilter, setClientFilter] = useState("all");
-  const [fitFilter, setFitFilter] = useState("all");
 
-  // Only offer the dealbreaker filter once enrichment has actually judged something
-  // for this client. Most orgs configure no dealbreakers, and a client that has none
-  // should not carry a dropdown that can only ever return zero rows.
-  const anyFitJudged = rows.some((r: any) => r.payload?.enrichment?.dealbreaker_fit);
-
-  // Apply both filters before everything else — counts, stage cards, and the list
-  // all reflect the current selection.
-  const clientRows = clientFilter === "all"
+  // Applied before everything else — counts, stage cards, and the list all reflect
+  // the current selection. Dealbreaker fit is deliberately NOT here: it lives as a
+  // "Meets dealbreakers first" option in each tab's own Sort by control, so it
+  // orders a tab without hiding rows from the pipeline counts above.
+  const visibleRows = clientFilter === "all"
     ? rows
     : rows.filter((r: any) => r.material_id && tagsByMaterialId[r.material_id] === clientFilter);
-  const visibleRows = fitFilter === "meets"
-    ? clientRows.filter((r: any) => r.payload?.enrichment?.dealbreaker_fit?.verdict === "meets")
-    : clientRows;
 
   // Split the removed set: operator-dropped leads get their own tab; everything
   // else (auto-dropped, deduped, freight-filtered, suppressed) needs a human to
@@ -143,32 +136,17 @@ export function LeadsTabs({
 
   return (
     <div className="space-y-4">
-      {(orgClients.length > 0 || anyFitJudged) && (
+      {orgClients.length > 0 && (
         <div className="flex items-center gap-2">
-          {orgClients.length > 0 && (
-            <Select
-              size="sm"
-              className="w-48"
-              ariaLabel="Filter by client"
-              value={clientFilter}
-              onValueChange={setClientFilter}
-              options={[{ value: "all", label: "All clients" }, ...orgClients.map((c) => ({ value: c.id, label: c.name }))]}
-            />
-          )}
-          {anyFitJudged && (
-            <Select
-              size="sm"
-              className="w-56"
-              ariaLabel="Filter by dealbreaker fit"
-              value={fitFilter}
-              onValueChange={setFitFilter}
-              options={[
-                { value: "all", label: "Any dealbreaker fit" },
-                { value: "meets", label: "Meets dealbreakers" },
-              ]}
-            />
-          )}
-          {(clientFilter !== "all" || fitFilter !== "all") && (
+          <Select
+            size="sm"
+            className="w-48"
+            ariaLabel="Filter by client"
+            value={clientFilter}
+            onValueChange={setClientFilter}
+            options={[{ value: "all", label: "All clients" }, ...orgClients.map((c) => ({ value: c.id, label: c.name }))]}
+          />
+          {clientFilter !== "all" && (
             <span className="text-xs text-muted-foreground">
               {visibleRows.length} of {rows.length} leads
             </span>

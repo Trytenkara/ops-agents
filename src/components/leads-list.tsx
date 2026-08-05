@@ -5,6 +5,7 @@ import { Table, TableHeader, TableBody, TableRow, TableCell } from "@/components
 import { LeadRichRow, LeadRichHeaders, leadRichColSpan, leadMarketKind, humanizeSignal } from "@/components/lead-rich-row";
 import { aggregatorNameFromPayload } from "@/lib/aggregator-hosts";
 import { deriveMatchTier, matchTierRank } from "@/lib/lead-match-tier";
+import { dealbreakerFitRank } from "@/lib/dealbreaker-fit";
 import { useListFilter, byString, byDateDesc, byStringBlankLast, usePersistedState } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { docsForQuote, docsOnFileCell, docFieldsCell, docUrlsCell, type SupplierDocIndex } from "@/lib/supplier-doc-index";
@@ -134,6 +135,14 @@ export function LeadsList({
         label: "Confirmed first",
         compare: (a: any, b: any) =>
           matchTierRank(a) - matchTierRank(b) || byDateDesc((r: any) => r.created_at)(a, b),
+      },
+      {
+        value: "dealbreaker",
+        label: "Meets dealbreakers first",
+        compare: (a: any, b: any) =>
+          dealbreakerFitRank(a.payload) - dealbreakerFitRank(b.payload) ||
+          matchTierRank(a) - matchTierRank(b) ||
+          byDateDesc((r: any) => r.created_at)(a, b),
       },
       { value: "newest", label: "Newest", compare: byDateDesc((r: any) => r.created_at) },
       { value: "supplier", label: "Supplier (A–Z)", compare: byString((r: any) => r.supplier_name) },

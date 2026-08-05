@@ -93,6 +93,22 @@ export function hasDealbreakers(spec: DealbreakerSpec | null | undefined): boole
   return spec.requiredGrades.some((g) => g.trim()) || spec.requiredCerts.some((c) => c.trim());
 }
 
+// Sort rank for the verdict enrichment stored on a lead. Lower sorts first: an
+// evidenced match is what an operator wants at the top, then anything not yet
+// judged, then a supplier we did look at and could not support. Clients with no
+// dealbreakers configured carry no verdict at all and all rank the same, so the
+// sort degrades to its tie-breaker instead of reshuffling the list.
+export function dealbreakerFitRank(payload: any): number {
+  switch (payload?.enrichment?.dealbreaker_fit?.verdict) {
+    case "meets":
+      return 0;
+    case "unmet":
+      return 2;
+    default:
+      return 1;
+  }
+}
+
 // Returns null when the client configured no dealbreakers at all, so the payload
 // of the ~majority of orgs that set none stays untouched.
 export function assessDealbreakerFit(args: {
