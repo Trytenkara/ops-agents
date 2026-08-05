@@ -16,6 +16,7 @@ export const dynamic = "force-dynamic";
 // Human-readable labels for the agent-tracked conversation flow_status.
 const FLOW_STATUS_LABEL: Record<string, string> = {
   outreach_sent: "Outreach sent",
+  contacted: "Inquiry submitted",
   reply_received: "Reply received",
   responded: "We replied",
   awaiting_human: "Awaiting your input",

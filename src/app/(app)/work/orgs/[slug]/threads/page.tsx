@@ -26,7 +26,12 @@ const INBOUND_REPLY_KINDS = new Set([
 ]);
 
 function kindOf(d: any): ThreadKind {
-  return INBOUND_REPLY_KINDS.has(d.metadata?.draft_kind) ? "inbound" : "outbound";
+  const draftKind = d.metadata?.draft_kind;
+  // A form inquiry is outbound but is not an email: it was pasted into an
+  // aggregator's own web form and its thread_id is a synthetic "form-inquiry:<tag>",
+  // so labelling it like emailed outreach misrepresents both the channel and the id.
+  if (draftKind === "aggregator_form_inquiry") return "inquiry";
+  return INBOUND_REPLY_KINDS.has(draftKind) ? "inbound" : "outbound";
 }
 
 // Unified email-thread workspace: outbound RFQs + inbound supplier replies for

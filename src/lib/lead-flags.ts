@@ -5,7 +5,7 @@
 // every existing lead with no re-run and no DB write.
 
 export interface LeadFlag {
-  code: "inactive_site" | "missing_cert" | "sample_only" | "dealbreaker_met";
+  code: "inactive_site" | "missing_cert" | "sample_only" | "dealbreaker_met" | "direct_contact";
   label: string;
   // Most flags are caveats. A few are positive signals and must not be rendered
   // in warning colours; the renderer keys the badge variant off this.
@@ -74,6 +74,20 @@ function sampleOnly(payload: any): LeadFlag | null {
   return null;
 }
 
+// The seller replied from its own domain, so the lead left the marketplace track
+// and is now worked as a direct supplier. Positive signal, and the only place the
+// marketplace origin stays visible afterwards: site_type is now "N", so the
+// "via <platform>" sub-label on the row stops rendering.
+function directContact(payload: any): LeadFlag | null {
+  if (payload?.aggregator_direct_contact !== true) return null;
+  const platform = typeof payload?.aggregator === "string" ? payload.aggregator.trim() : "";
+  return {
+    code: "direct_contact",
+    label: platform ? `Direct contact, via ${platform}` : "Direct contact captured",
+    tone: "good",
+  };
+}
+
 export function computeLeadFlags(payload: any, ctx: LeadFlagContext = {}): LeadFlag[] {
   const flags: LeadFlag[] = [];
   const site = inactiveSite(payload);
@@ -88,5 +102,7 @@ export function computeLeadFlags(payload: any, ctx: LeadFlagContext = {}): LeadF
   }
   const sample = sampleOnly(payload);
   if (sample) flags.push(sample);
+  const direct = directContact(payload);
+  if (direct) flags.push(direct);
   return flags;
 }

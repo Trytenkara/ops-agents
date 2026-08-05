@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -181,6 +182,15 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
     needs_review: "no price found",
   };
   const sourceUrl = (row.payload?.source_url ?? row.payload?.supplier_website) as string | undefined;
+  // A platform inquiry is submitted into the aggregator's own web form, so nothing
+  // about it shows on the listing. Without this an operator cannot tell a seller we
+  // already contacted from one we have never touched. draft_reference_id is stamped
+  // on the lead at submit time, so the thread needs no extra query to link.
+  const inquiry = row.payload?.inquiry_submitted as
+    | { at?: string; platform?: string; draft_reference_id?: string }
+    | undefined;
+  const inquiryReplied = !!row.payload?.supplier_reply;
+  const inquiryStuck = !!row.payload?.direct_contact_escalated;
   const rawPricing = row.payload?.pack_sizes_pricing as string | undefined;
   const moq = row.payload?.moq as string | undefined;
   const updatedAt = row.payload?.price_tiers_updated_at as string | undefined;
@@ -255,8 +265,30 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
                 price pull pending
               </Badge>
             )}
+            {inquiry && (
+              <Badge
+                variant={inquiryStuck ? "danger" : inquiryReplied ? "success" : "accent"}
+                title={
+                  inquiryStuck
+                    ? "Seller replied through the platform relay, so we still have no direct address. Escalated to ops."
+                    : inquiryReplied
+                      ? "Seller replied to our platform inquiry."
+                      : `Inquiry submitted${inquiry.at ? ` ${relativeTime(inquiry.at)}` : ""}, awaiting a reply.`
+                }
+              >
+                {inquiryStuck ? "inquiry needs contact" : inquiryReplied ? "inquiry replied" : "inquiry sent"}
+              </Badge>
+            )}
             <span className="text-xs text-muted-foreground">· {row.material_name ?? "—"}</span>
           </div>
+          {inquiry?.draft_reference_id && (
+            <Link
+              href={`/work/drafts/${inquiry.draft_reference_id}`}
+              className="block text-xs text-primary hover:underline"
+            >
+              View inquiry thread →
+            </Link>
+          )}
           {sourceUrl && (
             <a
               href={sourceUrl}

@@ -405,6 +405,48 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       newPayload.supplier_role = "Supplier";
       newPayload.aggregator_direct_contact = true;
       newPayload.needs_contact_resolution = false;
+    } else if (
+      leadPayload.aggregator &&
+      !leadPayload.supplier_contact_email &&
+      !leadPayload.direct_contact_escalated
+    ) {
+      // The seller answered, but through the platform's own relay address, so we
+      // still have no channel of our own. A platform inquiry form is one-shot (no
+      // back-and-forth), so this thread cannot be continued and no amount of
+      // retrying changes that: it needs an operator to read the reply and pull out
+      // a real address. manual_outreach is the right case type because its
+      // resolver (addSupplierEmailToCase) requeues the lead for normal outreach.
+      newPayload.direct_contact_escalated = { at: new Date().toISOString(), relay_from: from.address };
+      const sellerLabel = leadRow?.supplier_name ?? refMeta.supplier_name ?? "an aggregator seller";
+      const { data: openCase } = await admin
+        .from("cases")
+        .select("id")
+        .eq("type", "manual_outreach")
+        .eq("status", "open")
+        .eq("metadata->>lead_id", leadId)
+        .maybeSingle();
+      if (!openCase) {
+        await admin.from("cases").insert({
+          org_id: ref.org_id,
+          type: "manual_outreach",
+          status: "open",
+          supplier_id: ref.supplier_id,
+          material_id: ref.material_id,
+          assigned_operator: ref.assigned_operator,
+          recommended_action: `${sellerLabel} replied via ${leadPayload.aggregator} (${from.address}) without giving a direct address. Read the reply and enter their own email to continue off-platform.`,
+          metadata: {
+            source: "aggregator-inquiry-no-direct-contact",
+            lead_id: leadId,
+            supplier_name: sellerLabel,
+            aggregator: leadPayload.aggregator,
+            relay_from: from.address,
+            reply_conversation_id: msg.conversation_id,
+          },
+        });
+        await postAgentAlert(
+          `:mailbox: *${sellerLabel}* replied through ${leadPayload.aggregator} instead of from its own address, so we still have no direct contact. Open the case and add their email to continue.`
+        );
+      }
     }
     await admin.from("leads_in_flight").update({ payload: newPayload }).eq("id", leadId);
   }

@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { filenameFor } from "@/lib/csv";
 import { useListFilter, byString, byDateDesc, byStringBlankLast } from "@/components/use-list-filter";
 
-export type ThreadKind = "outbound" | "inbound";
+export type ThreadKind = "outbound" | "inbound" | "inquiry";
 
 export type ThreadRow = {
   id: string;
@@ -45,6 +45,11 @@ export type ThreadRow = {
 const KIND_META: Record<ThreadKind, { label: string; variant: string; title: string }> = {
   outbound: { label: "Outbound RFQ", variant: "default", title: "Initial outreach email to a supplier." },
   inbound: { label: "Inbound reply", variant: "success", title: "A reply drafted for a supplier's incoming email." },
+  inquiry: {
+    label: "Platform inquiry",
+    variant: "warn",
+    title: "Sourcing inquiry submitted through an aggregator's own web form. There is no email thread until the seller replies.",
+  },
 };
 
 
@@ -52,6 +57,7 @@ const FILTERS: { value: "all" | ThreadKind | "hidden"; label: string }[] = [
   { value: "all", label: "All" },
   { value: "outbound", label: "Outbound RFQs" },
   { value: "inbound", label: "Inbound replies" },
+  { value: "inquiry", label: "Platform inquiries" },
   { value: "hidden", label: "Hidden" },
 ];
 

@@ -246,8 +246,18 @@ export async function seedProfilesFromLeads(
       const pocName = p.poc_name ?? contact.poc_name ?? null;
       const shippingAddress = p.hq_address ?? null;
       if (current) {
+        // supplier_type is otherwise frozen at first seed, so a seller that gave us
+        // its own email and left the marketplace track kept showing as Aggregator on
+        // the validation card while the leads tab called it Direct. Correct it, but
+        // only while the operator has not ticked marketplace_type_correct — once they
+        // have verified the kind, theirs wins like every other field here.
+        const staleMarketKind =
+          p.aggregator_direct_contact === true &&
+          marketKind !== current.supplier_type &&
+          !current.marketplace_type_correct;
         const patch = {
           // Fill-only: an operator's entry always wins over enrichment.
+          ...(staleMarketKind ? { supplier_type: marketKind } : {}),
           ...((generatedNotes || null) !== (current.generated_notes ?? null) ? { generated_notes: generatedNotes || null } : {}),
           ...(shippingTerms && !current.shipping_terms ? { shipping_terms: shippingTerms } : {}),
           ...(pocEmail && !current.poc_email ? { poc_email: pocEmail } : {}),

@@ -834,7 +834,10 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     const nextPayload: any = withRepairedUrl({ ...(l.payload ?? {}), marketplace_pull: pull });
     // site_type is what every reader classifies off (leadMarketKind), so move the
     // lead into the aggregator bucket here rather than only tagging the pull.
-    if (aggregatorName) nextPayload.site_type = "A";
+    // Never for a lead that already captured the seller's own email: the listing
+    // still lives on an aggregator host, so this would keep re-flipping it back to
+    // "A" on every recheck and silently undo the direct-contact reclassification.
+    if (aggregatorName && !l.payload?.aggregator_direct_contact) nextPayload.site_type = "A";
     const existingTiers = Array.isArray(l.payload?.price_tiers) ? l.payload.price_tiers : [];
     const operatorEdited = !!l.payload?.price_tiers_updated_by;
     let writtenTierPacks: string[] = [];
