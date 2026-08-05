@@ -14,6 +14,7 @@ import { DirectPricesOnFile, type DirectPriceRow } from "@/components/direct-pri
 import { PriceIndexTabs } from "@/components/price-index-tabs";
 import { QuoteValidationView } from "@/components/quote-validation-view";
 import { getQuoteProfiles } from "@/lib/quote-profiles";
+import { loadSupplierDocIndex } from "@/lib/supplier-doc-index";
 import { getOrgAssignmentContext, resolveOperatorId } from "@/lib/operator-assignment";
 import { getSupplierProfiles } from "@/lib/supplier-profiles";
 import { CasesSection } from "@/components/cases-section";
@@ -269,6 +270,9 @@ export default async function OrgPriceIndexPage({
   });
 
   const quoteProfiles = await getQuoteProfiles(admin, org.id).catch(() => []);
+  // Qualification documents captured for this org, so a quote can show and export
+  // the CoA/SDS/TDS behind it instead of just a "met" checkbox.
+  const supplierDocs = await loadSupplierDocIndex(admin, org.id).catch(() => ({}));
 
   // Quote Validation groups by supplier, and a quote itself carries no market
   // kind — so hand the view the supplier's kind. The validated supplier profile
@@ -352,6 +356,7 @@ export default async function OrgPriceIndexPage({
             orgId={org.id}
             supplierTypes={supplierTypes}
             supplierOperators={supplierOperators}
+            supplierDocs={supplierDocs}
           />
         }
         escalations={

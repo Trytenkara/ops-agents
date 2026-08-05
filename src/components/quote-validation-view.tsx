@@ -14,6 +14,14 @@ import { filenameFor } from "@/lib/csv";
 import { quoteCompleteness, type QuoteProfile } from "@/lib/quote-profiles";
 import { aggregatorNameOf } from "@/lib/aggregator-hosts";
 import { MARKET_KIND_LABEL, MARKET_KIND_TITLE, MARKET_KIND_VARIANT, type MarketKind } from "@/lib/lead-market";
+import {
+  docsForQuote,
+  docsOnFileCell,
+  docFieldsCell,
+  docExpiryCell,
+  docUrlsCell,
+  type SupplierDocIndex,
+} from "@/lib/supplier-doc-index";
 
 interface SupplierQuoteGroup {
   supplierName: string;
@@ -68,6 +76,7 @@ export function QuoteValidationView({
   orgId,
   supplierTypes = {},
   supplierOperators = {},
+  supplierDocs,
 }: {
   profiles: QuoteProfile[];
   canAct: boolean;
@@ -75,6 +84,7 @@ export function QuoteValidationView({
   orgId: string;
   supplierTypes?: SupplierTypeMap;
   supplierOperators?: SupplierOperatorMap;
+  supplierDocs?: SupplierDocIndex;
 }) {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("quotes");
@@ -184,11 +194,13 @@ export function QuoteValidationView({
     "Name Match", "INCI Match", "Grades Match", "Additional Grades",
     "Pre-Order COA Met", "Pre-Order SDS Met", "Pre-Order TDS Met", "Pre-Order Sample Met",
     "$/kg", "Pack Class", "QA Verdict", "QA Flags",
+    "Docs On File", "Doc Fields", "Earliest Doc Expiry", "Doc URLs",
     "Status", "Completeness %", "Checkout Link", "Purchasing Notes", "Operator Notes", "Generated Notes",
   ];
   const csvRows = profiles.map((q) => {
     const up = q.price != null && q.case_size && q.case_size > 0 ? (q.price / q.case_size).toFixed(4) : "";
     const qa = qaQuoteProfile(q);
+    const docs = docsForQuote(supplierDocs, q);
     return [
       q.supplier_name, kindOf(q), operatorFor(q) ?? "", q.material_name,
       q.price ?? "", q.case_size ?? "", q.unit_of_measurement ?? "", up, q.currency,
@@ -200,6 +212,7 @@ export function QuoteValidationView({
       q.preorder_coa_met ? "Yes" : "No", q.preorder_sds_met ? "Yes" : "No",
       q.preorder_tds_met ? "Yes" : "No", q.preorder_sample_met ? "Yes" : "No",
       qa.price_per_kg_usd ?? "", qa.pack_class, qa.verdict, qa.flags.map((f) => f.code).join("; "),
+      docsOnFileCell(docs), docFieldsCell(docs), docExpiryCell(docs), docUrlsCell(docs),
       q.approval_status, quoteCompleteness(q).pct,
       q.source_url ?? "", q.purchasing_notes ?? "", q.notes ?? "", q.generated_notes ?? "",
     ];
@@ -331,6 +344,7 @@ export function QuoteValidationView({
                       profile={q}
                       orgId={orgId}
                       canAct={canAct}
+                      docs={docsForQuote(supplierDocs, q)}
                     />
                   ))}
                   {canAct && (

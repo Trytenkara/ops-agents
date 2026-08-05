@@ -7,6 +7,7 @@ import { aggregatorNameFromPayload } from "@/lib/aggregator-hosts";
 import { deriveMatchTier, matchTierRank } from "@/lib/lead-match-tier";
 import { useListFilter, byString, byDateDesc, byStringBlankLast, usePersistedState } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
+import { docsForQuote, docsOnFileCell, docFieldsCell, docUrlsCell, type SupplierDocIndex } from "@/lib/supplier-doc-index";
 import { BulkRemoveBar } from "@/components/bulk-remove-bar";
 import { removeLeads, importEmailsFromCsv, type EmailImportResult } from "@/app/actions/leads";
 import { Select } from "@/components/ui/select";
@@ -54,12 +55,15 @@ export function LeadsList({
   orgId,
   operatorOptions,
   forceStage,
+  supplierDocs,
 }: {
   rows: any[];
   canAct: boolean;
   slug: string;
   orgId?: string;
   operatorOptions?: { id: string; name: string }[];
+  // Qualification documents captured for this org, keyed by supplier + material.
+  supplierDocs?: SupplierDocIndex;
   // When set (e.g. the "Not enriched" tab), lock the stage filter to this value
   // and hide the Stage dropdown — the tab already scopes the list.
   forceStage?: string;
@@ -180,12 +184,17 @@ export function LeadsList({
     "Supplier background", "Grades offered", "Certifications", "MOQ",
     "Returned price", "Operator", "Signal", "Source", "Match", "Stage", "Status",
     "Confidence", "Confidence reason", "Completeness", "Completeness reason",
-    "Source citations", "Notes", "Created",
+    "Source citations", "Notes", "Docs on file", "Doc fields", "Doc URLs", "Created",
   ];
   const csvRows = filtered.map((r: any) => {
     const p = r.payload ?? {};
     const citations: string[] = Array.isArray(p.source_citations) ? p.source_citations : [];
     const pack = leadPackBreakdown(p);
+    const docs = docsForQuote(supplierDocs, {
+      supplier_id: r.supplier_id ?? null,
+      supplier_name: r.supplier_name ?? "",
+      material_id: r.material_id ?? null,
+    });
     return [
       r.material_name ?? "",
       p.inci_name ?? "",
@@ -227,6 +236,7 @@ export function LeadsList({
         : "",
       citations.join("; "),
       p.scout_notes ?? p.scout_rationale ?? "",
+      docsOnFileCell(docs), docFieldsCell(docs), docUrlsCell(docs),
       r.created_at ?? "",
     ];
   });

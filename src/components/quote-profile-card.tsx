@@ -10,6 +10,8 @@ import { saveQuoteProfile } from "@/app/actions/quote-profiles";
 import type { QuoteProfile, QuoteProfileUpdate } from "@/lib/quote-profiles";
 import { quoteCompleteness } from "@/lib/quote-profiles";
 import { qaQuoteProfile } from "@/lib/price-qa";
+import { DocumentRow } from "@/components/document-row";
+import type { QuoteDoc } from "@/lib/supplier-doc-index";
 
 const STATUS_META: Record<string, { label: string; variant: "success" | "warn" | "secondary" }> = {
   draft: { label: "Draft", variant: "secondary" },
@@ -148,10 +150,12 @@ export function QuoteProfileCard({
   profile: initial,
   orgId,
   canAct,
+  docs = [],
 }: {
   profile: QuoteProfile;
   orgId: string;
   canAct: boolean;
+  docs?: QuoteDoc[];
 }) {
   const [profile, setProfile] = useState(initial);
   const [editing, setEditing] = useState(false);
@@ -440,6 +444,25 @@ export function QuoteProfileCard({
               <ReqRow label="TDS" prefix="postorder_tds" profile={profile} editing={editing} onCheck={handleCheckChange} hasDealbreaker hasRequestedMet={false} />
             </tbody>
           </table>
+        </div>
+
+        {/* Documents captured for this quote */}
+        <div className="mt-4 border-t pt-3">
+          <h4 className="text-xs uppercase tracking-wider font-semibold text-muted-foreground mb-2">
+            Documents {docs.length > 0 && <span className="text-muted-foreground/70">({docs.length})</span>}
+          </h4>
+          {docs.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              Nothing captured for this supplier and material yet. Agent 09 reads documents off the product page hourly;
+              inbound email attachments land here too.
+            </p>
+          ) : (
+            <ul className="divide-y divide-border rounded-lg border border-border">
+              {docs.map((d) => (
+                <DocumentRow key={d.id} doc={d} />
+              ))}
+            </ul>
+          )}
         </div>
 
         {/* Notes */}

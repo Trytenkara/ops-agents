@@ -4,6 +4,7 @@ import { useState, Fragment } from "react";
 import { Select } from "@/components/ui/select";
 import { cn, relativeTime } from "@/lib/utils";
 import { LeadsList } from "@/components/leads-list";
+import type { SupplierDocIndex } from "@/lib/supplier-doc-index";
 import { MarketplacePricing } from "@/components/marketplace-pricing";
 import { OutreachTrackerPanel } from "@/components/outreach-tracker-panel";
 import { SupplierLeadsView } from "@/components/supplier-leads-view";
@@ -51,6 +52,7 @@ export function LeadsTabs({
   supplierProfiles = [],
   marketplaceAccounts = [],
   enrichmentCases = null,
+  supplierDocs,
 }: {
   rows: any[];
   removedRows?: any[];
@@ -66,6 +68,7 @@ export function LeadsTabs({
   supplierProfiles?: SupplierProfile[];
   marketplaceAccounts?: MarketplaceAccount[];
   enrichmentCases?: React.ReactNode;
+  supplierDocs?: SupplierDocIndex;
 }) {
   const [clientFilter, setClientFilter] = useState("all");
 
@@ -228,7 +231,7 @@ export function LeadsTabs({
         </div>
       )}
       {tab === "all" && (
-        <LeadsList rows={visibleRows} canAct={canAct} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
+        <LeadsList rows={visibleRows} canAct={canAct} slug={slug} orgId={orgId} operatorOptions={operatorOptions} supplierDocs={supplierDocs} />
       )}
       {(tab === "raw" || tab === "enriched" || tab === "ready" || tab === "held") && (
         <LeadsList
@@ -237,6 +240,7 @@ export function LeadsTabs({
           slug={slug}
           orgId={orgId}
           operatorOptions={operatorOptions}
+          supplierDocs={supplierDocs}
           forceStage={PIPELINE.find((p) => p.key === tab)!.stage}
         />
       )}

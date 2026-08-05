@@ -5,6 +5,7 @@ import { getSession, hasAnyRole } from "@/lib/auth";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { ListPageHeader } from "@/components/list-page-header";
 import { LeadsTabs } from "@/components/leads-tabs";
+import { loadSupplierDocIndex } from "@/lib/supplier-doc-index";
 import { SuppliersCsvUpload } from "@/components/suppliers-csv-upload";
 import { resolveMaterialGrades, resolveSupplierMarketplace, resolveMaterialNames } from "@/lib/tenkara-names";
 import { correctMaterialSpelling } from "@/lib/material-spelling";
@@ -246,6 +247,10 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   // Supplier profiles for the supplier-centric view (approval tracking)
   const supplierProfiles = await getSupplierProfiles(admin, org.id).catch(() => []);
 
+  // Qualification documents captured for this org, so the leads download carries
+  // the CoA/SDS/TDS facts and not just the lead's own fields.
+  const supplierDocs = await loadSupplierDocIndex(admin, org.id).catch(() => ({}));
+
   // Marketplace logins (host, credentials, lifecycle status, who created them) —
   // both the accounts the fleet provisioned to pull gated prices and the ones
   // ops entered by hand in the Supplier Validation tab.
@@ -324,7 +329,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           </p>
         </div>
       )}
-      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} marketplaceAccounts={marketplaceAccounts} enrichmentCases={enrichmentCases} />
+      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} marketplaceAccounts={marketplaceAccounts} enrichmentCases={enrichmentCases} supplierDocs={supplierDocs} />
     </div>
   );
 }
