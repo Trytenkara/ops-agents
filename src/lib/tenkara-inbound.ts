@@ -3,6 +3,7 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 import { stageDraft } from "@/lib/draft-staging";
 import { composeReply } from "@/lib/reply-drafter";
 import { shipsToUsVerdict, type ShipsToUsAnnotation } from "@/lib/ships-to-us";
+import { stageReferredSuppliers } from "@/lib/referred-suppliers";
 import { extractQuotesFromReplyText, type ExtractedQuote, type ReplyQuoteExtraction } from "@/lib/reply-quote-extract";
 import { insertStagedQuotes, type StagedQuoteInput, type StagedQuoteSource } from "@/lib/staged-quotes";
 import { normalizeToUsd } from "@/lib/fx";
@@ -514,6 +515,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     declined: false,
     shipsToUs: null,
     shipsToUsEvidence: null,
+    referrals: [],
   };
   // Non-inline files the supplier attached to THIS reply. Surfaced to the reply
   // drafter so it acknowledges them instead of insisting the attachment "didn't
@@ -862,6 +864,57 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       }
     } catch {
       // An annotation is advisory; losing it must not cost us the reply draft.
+    }
+  }
+
+  // Suppliers who cannot help often name someone who can. Stage those as leads of
+  // their own on this material, deduped against everything already active, so they
+  // enrich and get emailed through the normal path rather than dying in a thread
+  // nobody re-reads. Best-effort: a failure here never costs us the reply.
+  if (bodyExtraction.referrals.length && ref.org_id && ref.material_id) {
+    try {
+      const result = await stageReferredSuppliers(admin, {
+        orgId: ref.org_id,
+        materialId: ref.material_id,
+        materialName: leadRow?.material_name ?? (refMeta.material_name as string | undefined) ?? null,
+        referrals: bodyExtraction.referrals,
+        fromLeadId: leadId ?? ref.id,
+        fromSupplierName: leadRow?.supplier_name ?? (refMeta.supplier_name as string | undefined) ?? null,
+        conversationId: msg.conversation_id,
+        assignedOperatorId: ref.assigned_operator ?? null,
+      });
+      if ((result.staged.length || result.duplicates.length) && leadId) {
+        const { data: refRow } = await admin.from("leads_in_flight").select("payload").eq("id", leadId).maybeSingle();
+        const refPayload = (refRow?.payload ?? {}) as Record<string, any>;
+        await admin
+          .from("leads_in_flight")
+          .update({
+            payload: {
+              ...refPayload,
+              referrals_given: [
+                ...(Array.isArray(refPayload.referrals_given) ? refPayload.referrals_given : []),
+                {
+                  at: new Date().toISOString(),
+                  conversation_id: msg.conversation_id,
+                  staged: result.staged,
+                  already_known: result.duplicates,
+                },
+              ],
+            },
+          })
+          .eq("id", leadId);
+      }
+      if (result.staged.length) {
+        await postAgentAlert(
+          `:seedling: *${leadRow?.supplier_name ?? "A supplier"}* referred us to ${result.staged
+            .map((s) => `*${s.name}*`)
+            .join(", ")} for ${leadRow?.material_name ?? "this material"}. Staged as new lead${
+            result.staged.length > 1 ? "s" : ""
+          }, contact finding will pick ${result.staged.length > 1 ? "them" : "it"} up.`
+        );
+      }
+    } catch {
+      // A referral is a bonus, not the point of the webhook.
     }
   }
 

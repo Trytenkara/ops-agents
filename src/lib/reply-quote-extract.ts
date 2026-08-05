@@ -45,6 +45,19 @@ export interface ReplyQuoteExtraction {
   shipsToUs: "yes" | "no" | null;
   // Their own words behind that verdict, for the operator badge.
   shipsToUsEvidence: string | null;
+  // Other COMPANIES this supplier pointed us at (a manufacturer they buy from, a
+  // sister concern, their US distributor). These become new leads of their own.
+  referrals: ReferredSupplier[];
+}
+
+export interface ReferredSupplier {
+  company_name: string;
+  website: string | null;
+  email: string | null;
+  contact_name: string | null;
+  phone: string | null;
+  // How the supplier described them, so an operator can see why we have this lead.
+  note: string | null;
 }
 
 export interface ExtractedQuote {
@@ -74,6 +87,7 @@ Return ONLY a JSON object (no prose):
   "declined": false,
   "ships_to_us": null,
   "ships_to_us_evidence": null,
+  "referrals": [],
   "details": {
     "material_name": "material these details apply to, or null",
     "case_size": null,
@@ -116,6 +130,16 @@ Return ONLY a JSON object (no prose):
       "confidence": "high | medium | low",
       "notes": "anything ambiguous not captured by a field above: sample vs bulk, unclear unit, etc."
     }
+  ],
+  "referrals": [
+    {
+      "company_name": "the OTHER company they told us to contact",
+      "website": "their site if given, else null",
+      "email": "their email if given, else null",
+      "contact_name": "a person at that company if given, else null",
+      "phone": "their phone if given, else null",
+      "note": "how the supplier described them, one short phrase"
+    }
   ]
 }
 
@@ -137,6 +161,7 @@ Rules:
 - declined: true ONLY for a clear hard decline or explicit statement that they cannot supply the requested material. Out-of-office, automated, ambiguous, or substitute-only messages are not hard declines unless they clearly reject the requested material.
 - ships_to_us: "no" when the supplier says they cannot or do not ship, export, or deliver to the United States (including "domestic sales only", "we only supply within India", "no export"), "yes" when they say they can ship to the US or already export there, null when they do not raise it. Put the sentence you read it from in ships_to_us_evidence, verbatim and trimmed to one sentence, else null.
 - NOT SHIPPING TO THE US IS NOT A DECLINE. A supplier who can supply the material but cannot ship it to the US is still a supplier: we collect at origin. Set ships_to_us "no" and leave declined false. Only set declined true if they cannot supply the MATERIAL.
+- referrals: ONLY a different company the supplier explicitly points us to for this material or one like it (the manufacturer they buy from, a sister or group company, their distributor, "try X, they make it"). Requires a real company NAME in their text. NEVER the supplier's own company, NEVER our own company, NEVER a courier/bank/certifying body/marketplace they merely mention, and NEVER an inferred or "typical" supplier. A different MATERIAL they pitch is not a referral. If they name nobody, return an empty array. Do not put their own contact details on a referral: those belong in details.
 - confidence "low" when the unit/case size is unclear or the figure might be an MOQ/sample price rather than a real quote.
 - NEVER invent materials, pack sizes, prices, contact details, addresses, or terms. If the reply states no price, quotes must be empty but details may still contain supplier-stated answers.`;
 
@@ -174,8 +199,10 @@ const EMPTY_DETAILS: ExtractedQuoteDetails = {
   billing_poc_name: null,
 };
 
+const str = (v: any): string | null => (typeof v === "string" ? v.trim() || null : null);
+
 function extractJson(text: string): ReplyQuoteExtraction {
-  const empty = (): ReplyQuoteExtraction => ({ quotes: [], details: { ...EMPTY_DETAILS }, declined: false, shipsToUs: null, shipsToUsEvidence: null });
+  const empty = (): ReplyQuoteExtraction => ({ quotes: [], details: { ...EMPTY_DETAILS }, declined: false, shipsToUs: null, shipsToUsEvidence: null, referrals: [] });
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start === -1 || end === -1 || end <= start) return empty();
@@ -196,6 +223,18 @@ function extractJson(text: string): ReplyQuoteExtraction {
       shipsToUs: parsed?.ships_to_us === "yes" || parsed?.ships_to_us === "no" ? parsed.ships_to_us : null,
       shipsToUsEvidence:
         typeof parsed?.ships_to_us_evidence === "string" ? parsed.ships_to_us_evidence.trim() || null : null,
+      referrals: Array.isArray(parsed?.referrals)
+        ? parsed.referrals
+            .map((r: any) => ({
+              company_name: typeof r?.company_name === "string" ? r.company_name.trim() : "",
+              website: str(r?.website),
+              email: str(r?.email)?.toLowerCase() ?? null,
+              contact_name: str(r?.contact_name),
+              phone: str(r?.phone),
+              note: str(r?.note),
+            }))
+            .filter((r: ReferredSupplier) => r.company_name.length > 1)
+        : [],
     };
   } catch {
     return empty();
@@ -204,7 +243,7 @@ function extractJson(text: string): ReplyQuoteExtraction {
 
 export async function extractQuotesFromReplyText(body: string | null | undefined): Promise<ReplyQuoteExtraction> {
   const text = (body ?? "").trim();
-  if (text.length < 12) return { quotes: [], details: { ...EMPTY_DETAILS }, declined: false, shipsToUs: null, shipsToUsEvidence: null };
+  if (text.length < 12) return { quotes: [], details: { ...EMPTY_DETAILS }, declined: false, shipsToUs: null, shipsToUsEvidence: null, referrals: [] };
   const res = await anthropic().messages.create({
     model: MODEL,
     max_tokens: 2000,
