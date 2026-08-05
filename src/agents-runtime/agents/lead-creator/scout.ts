@@ -293,7 +293,7 @@ async function probeUrl(url: string): Promise<boolean> {
       method: "HEAD",
       redirect: "follow",
       signal: controller.signal,
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; TackleBox-Scout/1.0)" },
+      headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" },
     });
     // Some hosts 405 on HEAD but serve GET. Treat any non-5xx as alive.
     if (res.status >= 200 && res.status < 500) return true;
