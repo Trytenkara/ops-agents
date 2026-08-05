@@ -21,6 +21,11 @@ import { leadMarketKind, MARKET_KIND_LABEL, MARKET_KIND_TITLE, MARKET_KIND_VARIA
 import { relativeTime } from "@/lib/utils";
 
 interface SupplierGroup {
+  // Identity of the group itself, distinct from supplierId: a supplier with no
+  // supplier_id is grouped by its lowercased name. Reused as the React key, which
+  // must not collide — two groups sharing a key leave ghost cards behind on a
+  // re-sort, so the list appears not to sort at all.
+  key: string;
   supplierName: string;
   supplierId: string | null;
   profile: SupplierProfile | null;
@@ -124,7 +129,9 @@ export function SupplierLeadsView({
   // Group leads by supplier
   const groupMap = new Map<string, SupplierGroup>();
   for (const lead of rows) {
-    const key = lead.supplier_id ?? lead.supplier_name ?? "unknown";
+    // Lowercased so a lead and a profile for the same unlinked supplier land in one
+    // group instead of two cards for the same company.
+    const key = lead.supplier_id ?? lead.supplier_name?.toLowerCase() ?? "unknown";
     let group = groupMap.get(key);
     if (!group) {
       const profile = lead.supplier_id
@@ -133,6 +140,7 @@ export function SupplierLeadsView({
       const mk = (lead.market_kind as MarketKind | null) ?? leadMarketKind(lead.payload?.site_type);
       const leadKind = mk === "marketplace" || mk === "aggregator" || mk === "direct" ? mk : null;
       group = {
+        key,
         supplierName: lead.supplier_name ?? "Unknown",
         supplierId: lead.supplier_id ?? null,
         profile,
@@ -159,6 +167,7 @@ export function SupplierLeadsView({
     const key = p.supplier_id ?? p.supplier_name.toLowerCase();
     if (!groupMap.has(key)) {
       groupMap.set(key, {
+        key,
         supplierName: p.supplier_name,
         supplierId: p.supplier_id,
         profile: p,
@@ -399,7 +408,7 @@ export function SupplierLeadsView({
       {/* Supplier groups */}
       <div className="space-y-2">
         {groups.map((g) => {
-          const key = g.supplierId ?? g.supplierName;
+          const key = g.key;
           const isExpanded = expandedSupplier === key;
           const isShowingLeads = showLeadsFor === key;
           const comp = g.profile ? profileCompleteness(g.profile) : null;
