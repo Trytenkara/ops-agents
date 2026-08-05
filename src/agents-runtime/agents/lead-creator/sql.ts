@@ -72,6 +72,33 @@ export async function queryMaterialsForOrgs(tenkaraOrgIds: string[]): Promise<Ma
   );
 }
 
+// Name + grades for every material in the given Tenkara orgs — the universe the
+// duplicate-material detector compares within. Grades come back sorted so the
+// set comparison is order-independent. Kept separate from queryMaterialsForOrgs
+// because duplicate detection needs the grades and none of the sourcing columns.
+export async function queryMaterialNamesAndGrades(
+  tenkaraOrgIds: string[]
+): Promise<{ id: string; name: string | null; grades: string[]; created_at: string; tenkara_org_id: string | null }[]> {
+  if (!tenkaraOrgIds.length) return [];
+  return tenkaraQuery(
+    `select m.id::text as id,
+            coalesce(nullif(btrim(m.name), ''), nullif(btrim(m.trade_name), '')) as name,
+            coalesce(
+              (select array_agg(g->>'grade_name' order by g->>'grade_name')
+                 from jsonb_array_elements(coalesce(m.grade, '[]'::jsonb)) g
+                where nullif(btrim(g->>'grade_name'), '') is not null),
+              '{}'
+            ) as grades,
+            m.created_at,
+            u.organization_id::text as tenkara_org_id
+       from public.materials m
+       join public.users u on u.id = m.user_id
+      where u.organization_id = any($1::uuid[])
+      limit 5000`,
+    [tenkaraOrgIds]
+  );
+}
+
 // Fetch specific materials by id (for an on-demand single-material discovery
 // run triggered from the dashboard, ignoring the recency window).
 export async function queryMaterialsByIds(ids: string[]): Promise<MaterialRow[]> {

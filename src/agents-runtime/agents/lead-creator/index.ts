@@ -1,6 +1,6 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { queryRecentMaterials, queryMaterialsByIds, queryMaterialsForOrgs, findCandidatesForMaterial, existingQuotesForMaterials, type CandidateSupplier, type MaterialRow } from "./sql";
+import { queryRecentMaterials, queryMaterialsByIds, queryMaterialsForOrgs, queryMaterialNamesAndGrades, findCandidatesForMaterial, existingQuotesForMaterials, type CandidateSupplier, type MaterialRow } from "./sql";
 import { scoutSuppliersForMaterial, scoreScoutConfidence, describeScoutConfidence, scoutCompleteness, type ScoutSupplier } from "./scout";
 import { toCsv } from "@/lib/csv";
 import { getSourcingExclusions, exclusionReason, normalizeCompanyName, type SourcingExclusions } from "@/lib/tenkara-sourcing-exclusions";
@@ -10,6 +10,7 @@ import { uploadCsvAndSign } from "@/lib/storage";
 import { onlyOrgNames } from "@/lib/org-scope";
 import { normalizeStatus, sourcingAllowed } from "@/lib/org-status";
 import { flagMaterialNames, correctName } from "@/lib/material-name-flags";
+import { flagDuplicateMaterials, type MergeMaterial } from "@/lib/material-merge-flags";
 import { materialLabel } from "@/lib/material-label";
 import { sourceReadyEnabled, sourceReadyUnlockEnabled, fireSourceReadyDiscovery } from "./sourceready";
 import { importYetiEnabled, fireImportYetiDiscovery } from "./importyeti";
@@ -505,6 +506,73 @@ registerAgent({
       if (totalFlagged) await ctx.log(`Flagged ${totalFlagged} misspelled material name(s) → #control-room-feedback`, { step: "spelling" });
     } catch (e: any) {
       await ctx.log(`Material-name spelling check failed: ${e?.message ?? e}`, { level: "warn", step: "spelling" });
+    }
+
+    // 3b-ii-b. Flag duplicate material records (two rows for one substance, e.g.
+    // "Butylene Glycol" + "Butylene Glycol 1,3"). Left split, both get scouted
+    // and the same supplier is found — and emailed — twice for one chemical.
+    // Compares across the org's WHOLE material set, not just this run's slice,
+    // since the duplicate is usually an older record — which is also why this
+    // can't be gated on the recency window. Instead it's time-throttled: the
+    // extra Tenkara query is a flaky-pooler risk on the run's critical path, and
+    // a duplicate that has sat for months doesn't need catching within the hour.
+    // Best-effort throughout.
+    const DUP_SCAN_INTERVAL_MS = 6 * 3600 * 1000;
+    const dupScanDue = await (async () => {
+      const { data } = await admin
+        .from("agent_state")
+        .select("value")
+        .eq("agent_id", ctx.agentId)
+        .eq("key", "duplicate_scan")
+        .maybeSingle();
+      const lastAt = Date.parse(((data?.value as any) ?? {}).at ?? "");
+      return !Number.isFinite(lastAt) || Date.now() - lastAt >= DUP_SCAN_INTERVAL_MS;
+    })().catch(() => true);
+
+    if (!onlyMaterialId && dupScanDue && sourcingTenkaraOrgIds.size) {
+      try {
+        const oaOrgName = new Map<string, string>();
+        for (const r of (orgRows ?? []) as any[]) if (r.tenkara_org_id) oaOrgName.set(tenkaraOrgToOaOrg.get(r.tenkara_org_id)!, r.name);
+        const universe = await queryMaterialNamesAndGrades([...sourcingTenkaraOrgIds]);
+        const byOrg = new Map<string, MergeMaterial[]>();
+        for (const m of universe) {
+          const oaId = m.tenkara_org_id ? tenkaraOrgToOaOrg.get(m.tenkara_org_id) : null;
+          if (!oaId) continue;
+          if (!byOrg.has(oaId)) byOrg.set(oaId, []);
+          byOrg.get(oaId)!.push({ id: m.id, name: m.name, grades: m.grades ?? [], created_at: m.created_at });
+        }
+        let dupFlagged = 0;
+        for (const [oaId, mats] of byOrg) {
+          dupFlagged += await flagDuplicateMaterials(admin, oaId, mats, oaOrgName.get(oaId) ?? "client");
+        }
+        // Only bank the throttle marker on a scan that actually completed, so a
+        // Tenkara timeout retries next run instead of parking for 6h.
+        await admin
+          .from("agent_state")
+          .upsert({ agent_id: ctx.agentId, key: "duplicate_scan", value: { at: new Date().toISOString() } }, { onConflict: "agent_id,key" });
+        if (dupFlagged) await ctx.log(`Flagged ${dupFlagged} duplicate material pair(s) → #control-room-feedback`, { step: "duplicates" });
+      } catch (e: any) {
+        await ctx.log(`Duplicate-material check failed: ${e?.message ?? e}`, { level: "warn", step: "duplicates" });
+      }
+    }
+
+    // 3b-ii-c. Drop materials an operator has already merged away. Their leads
+    // now live under the survivor, so re-scouting them would rebuild the very
+    // duplicate the merge just resolved. Fail-open: a query error changes nothing.
+    try {
+      const { data: mergedRows } = await admin
+        .from("material_merge_flags")
+        .select("drop_material_id")
+        .eq("status", "applied");
+      const mergedAway = new Set((mergedRows ?? []).map((r: any) => r.drop_material_id as string));
+      if (mergedAway.size) {
+        const before = materials.length;
+        materials = materials.filter((m) => !mergedAway.has(m.id));
+        const skipped = before - materials.length;
+        if (skipped) await ctx.log(`Skipped ${skipped} material(s) merged into another record`, { step: "duplicates" });
+      }
+    } catch (e: any) {
+      await ctx.log(`Merged-material skip lookup failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "duplicates" });
     }
 
     // 3b-iii. Applied spelling overrides (org → lower(wrong)→correct), used to

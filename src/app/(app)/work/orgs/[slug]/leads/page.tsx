@@ -23,6 +23,7 @@ import { loadOrgCases, caseCategory } from "@/lib/org-cases";
 import { AgentRunsStrip, type RunStat } from "@/components/agent-runs-strip";
 import { RunNowButton } from "@/components/run-now-button";
 import { MaterialFlagsPrompt, type MaterialFlag } from "@/components/material-flags-prompt";
+import { MaterialMergePrompt, type MaterialMergeFlag } from "@/components/material-merge-prompt";
 import { getOutreachTracker } from "@/lib/outreach-tracker";
 import { DensityToggle } from "@/components/density-toggle";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -67,6 +68,14 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     .eq("status", "pending")
     .order("created_at", { ascending: false });
   const materialFlags = (flagRows ?? []) as MaterialFlag[];
+
+  const { data: mergeRows } = await admin
+    .from("material_merge_flags")
+    .select("id, keep_name, keep_grades, drop_name, drop_grades, reason, drop_lead_count, shared_supplier_count")
+    .eq("org_id", org.id)
+    .eq("status", "pending")
+    .order("created_at", { ascending: false });
+  const mergeFlags = (mergeRows ?? []) as MaterialMergeFlag[];
 
   // PostgREST hard-caps a single response at 1000 rows, so a plain .limit() can't
   // return every active lead (a busy org runs to ~1k+ across all its materials).
@@ -310,6 +319,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
       </div>
       <AgentRunsStrip runs={runStats} />
       <MaterialFlagsPrompt flags={materialFlags} />
+      <MaterialMergePrompt flags={mergeFlags} />
       {leadsNeedingName.length > 0 && (
         <div className="rounded-lg border border-red-300/60 bg-red-500/10 px-4 py-3 space-y-1">
           <div className="text-xs uppercase tracking-wider font-semibold text-red-800 dark:text-red-300">
