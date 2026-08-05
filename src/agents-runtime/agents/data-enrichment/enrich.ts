@@ -14,6 +14,7 @@ import {
   type CachedContact,
 } from "@/lib/contact-domain-cache";
 import { assessDealbreakerFit, type DealbreakerFit, type DealbreakerSpec } from "@/lib/dealbreaker-fit";
+import { readContactsFromPages } from "./contact-read";
 
 // Pre-outreach enrichment building blocks. No LLM, no email — those land
 // when Agent 04 (Outreach) and Agent 08 (Email Scanner) ship.
@@ -320,7 +321,11 @@ const PROBE_TIMEOUT_MS = 8_000;
 const FETCH_TIMEOUT_MS = 7_000;
 const MAX_PAGES = 7; // homepage + up to 6 follow-ups → always ≥3 tried before blocking
 const MAX_BODY_BYTES = 700_000;
-const UA = "Mozilla/5.0 (compatible; TackleBox-Enrich/1.0)";
+// Identifying as a bot gets the crawl 403'd by exactly the hosts whose contact
+// blocks we want (EC21, most Chinese B2B directories, anything behind a WAF's
+// default bot rule). The fetch is a plain public-page read either way.
+const UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Order matters: contact/quote pages first so we find a channel fast. The team /
 // leadership pages come last: they rarely carry a direct inbox, but they are
@@ -619,6 +624,11 @@ export async function discoverContacts(website: string, maxPages = MAX_PAGES): P
   homepage_html: string;
   homepage_final_url: string | null;
   people: { name: string; title: string | null }[];
+  // Pages that actually returned 2xx, kept so a failed pattern match can be
+  // re-read instead of thrown away. Blocked/dead pages are excluded: a WAF
+  // challenge body is not a supplier page.
+  pages: { url: string; html: string }[];
+  blocked: boolean;
 }> {
   const base = normalizeBase(website);
   const emails = new Set<string>();
@@ -627,6 +637,8 @@ export async function discoverContacts(website: string, maxPages = MAX_PAGES): P
   let contactUrl: string | null = null;
   let pagesTried = 0;
   let anyOk = false;
+  let blocked = false;
+  const okPages: { url: string; html: string }[] = [];
   let homepageHtml = "";
   let homepageFinalUrl: string | null = null;
 
@@ -652,7 +664,13 @@ export async function discoverContacts(website: string, maxPages = MAX_PAGES): P
     const page = await fetchPageText(url);
     pagesTried++;
     if (!page) continue;
-    if (page.ok) anyOk = true;
+    // 403/429 is a refusal, not an answer. Recording it as "no contact here"
+    // is what let blocked hosts look identical to hosts that publish nothing.
+    if (page.status === 403 || page.status === 429 || page.status === 401) blocked = true;
+    if (page.ok) {
+      anyOk = true;
+      okPages.push({ url: page.finalUrl, html: page.html });
+    }
 
     // Capture homepage HTML for legitimacy analysis (first page = homepage).
     if (pagesTried === 1) {
@@ -697,6 +715,8 @@ export async function discoverContacts(website: string, maxPages = MAX_PAGES): P
     any_ok: anyOk,
     homepage_html: homepageHtml,
     homepage_final_url: homepageFinalUrl,
+    pages: okPages,
+    blocked,
     people: Array.from(people.values()),
   };
 }
@@ -1187,6 +1207,23 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
         if (!contactSource) contactSource = "discovered";
       }
       crawledPeople = d.people;
+
+      // The patterns found nothing on pages that loaded fine. That is the
+      // signature of a layout the pattern list does not cover, not of a page
+      // with no contact block, so read the text instead of matching it. Gated
+      // this narrowly because the crawl already answers the common cases: this
+      // only ever runs on the residual.
+      if (!email && !phone && !crawledPeople.length && d.pages.length) {
+        const read = await readContactsFromPages(lead.supplier_name ?? "", d.pages).catch(() => null);
+        if (read) {
+          if (read.email && !isAggregatorEmail(read.email) && !isThirdPartyServiceEmail(read.email) && !isPlaceholderEmail(read.email)) {
+            email = read.email;
+            contactSource = "discovered";
+          }
+          if (read.phone) phone = read.phone;
+          if (read.poc_name) crawledPeople = [{ name: read.poc_name, title: read.poc_title }];
+        }
+      }
     }
   }
 
