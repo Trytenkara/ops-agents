@@ -44,6 +44,7 @@ export function LeadsTabs({
   slug,
   orgId,
   operatorOptions,
+  currentUserName = null,
   tracker,
   runs = [],
   orgClients = [],
@@ -61,6 +62,7 @@ export function LeadsTabs({
   slug: string;
   orgId?: string;
   operatorOptions?: { id: string; name: string }[];
+  currentUserName?: string | null;
   tracker: OutreachTracker;
   runs?: RunStat[];
   orgClients?: { id: string; name: string }[];
@@ -75,14 +77,26 @@ export function LeadsTabs({
   mergePrompt?: React.ReactNode;
 }) {
   const [clientFilter, setClientFilter] = useState("all");
+  // Operators asked to work only their own book: a client's full lead set runs to
+  // thousands and an operator owns a fraction of it.
+  const [operatorFilter, setOperatorFilter] = useState("all");
+  // Owners actually present in this lead set, not the whole pool: a filter that
+  // only ever returns zero rows is noise.
+  const ownerNames = [...new Set(rows.map((r: any) => r.operator_name).filter(Boolean) as string[])].sort();
 
   // Applied before everything else — counts, stage cards, and the list all reflect
   // the current selection. Dealbreaker fit is deliberately NOT here: it lives as a
   // "Meets dealbreakers first" option in each tab's own Sort by control, so it
   // orders a tab without hiding rows from the pipeline counts above.
-  const visibleRows = clientFilter === "all"
+  const byClient = clientFilter === "all"
     ? rows
     : rows.filter((r: any) => r.material_id && tagsByMaterialId[r.material_id] === clientFilter);
+  const visibleRows =
+    operatorFilter === "all"
+      ? byClient
+      : operatorFilter === "unassigned"
+        ? byClient.filter((r: any) => !r.operator_name)
+        : byClient.filter((r: any) => r.operator_name === operatorFilter);
 
   // Split the removed set: operator-dropped leads get their own tab; everything
   // else (auto-dropped, deduped, freight-filtered, suppressed) needs a human to
@@ -140,17 +154,36 @@ export function LeadsTabs({
 
   return (
     <div className="space-y-4">
-      {orgClients.length > 0 && (
+      {(orgClients.length > 0 || ownerNames.length > 0) && (
         <div className="flex items-center gap-2">
-          <Select
-            size="sm"
-            className="w-48"
-            ariaLabel="Filter by client"
-            value={clientFilter}
-            onValueChange={setClientFilter}
-            options={[{ value: "all", label: "All clients" }, ...orgClients.map((c) => ({ value: c.id, label: c.name }))]}
-          />
-          {clientFilter !== "all" && (
+          {orgClients.length > 0 && (
+            <Select
+              size="sm"
+              className="w-48"
+              ariaLabel="Filter by client"
+              value={clientFilter}
+              onValueChange={setClientFilter}
+              options={[{ value: "all", label: "All clients" }, ...orgClients.map((c) => ({ value: c.id, label: c.name }))]}
+            />
+          )}
+          {ownerNames.length > 0 && (
+            <Select
+              size="sm"
+              className="w-48"
+              ariaLabel="Filter by operator"
+              value={operatorFilter}
+              onValueChange={setOperatorFilter}
+              options={[
+                { value: "all", label: "All operators" },
+                ...(currentUserName && ownerNames.includes(currentUserName)
+                  ? [{ value: currentUserName, label: `My leads (${currentUserName})` }]
+                  : []),
+                ...ownerNames.filter((n) => n !== currentUserName).map((n) => ({ value: n, label: n })),
+                { value: "unassigned", label: "Unassigned" },
+              ]}
+            />
+          )}
+          {(clientFilter !== "all" || operatorFilter !== "all") && (
             <span className="text-xs text-muted-foreground">
               {visibleRows.length} of {rows.length} leads
             </span>

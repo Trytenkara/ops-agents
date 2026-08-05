@@ -359,7 +359,7 @@ registerAgent({
           }
           // Manual claim or sticky-random owner, per the client's assignment mode.
           const assignmentCtx = await getOrgAssignmentContext(admin, (oaOrg as any).id);
-          const resolved = resolveOperatorId(assignmentCtx, r.group.supplier_id);
+          const resolved = resolveOperatorId(assignmentCtx, r.group.supplier_id, null, r.group.supplier_name);
           if (resolved) assignedOperator = resolved;
         }
         // Mirror the Control Room operator onto the Tenkara conversation so the

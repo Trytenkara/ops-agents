@@ -21,8 +21,8 @@ export default async function OrgSuppliersPage({ params }: { params: { slug: str
   // Sticky-random default owner per supplier (shown as the "Auto" fallback).
   // Empty for an org on manual mode, or for suppliers outside its auto scope.
   const ctx = await getOrgAssignmentContext(admin, org.id);
-  const allIds = [...suppliers.approved, ...suppliers.pending_review, ...suppliers.denied, ...suppliers.draft].map((s) => s.id);
-  const owners = autoOperatorBySupplier(ctx, allIds);
+  const all = [...suppliers.approved, ...suppliers.pending_review, ...suppliers.denied, ...suppliers.draft];
+  const owners = autoOperatorBySupplier(ctx, all.map((s) => ({ id: s.id, name: s.name })));
   const autoNames: Record<string, string> = {};
   for (const [sid, op] of Object.entries(owners)) autoNames[sid] = op.name;
 

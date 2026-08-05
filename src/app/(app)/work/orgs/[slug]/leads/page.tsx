@@ -334,7 +334,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           </p>
         </div>
       )}
-      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} marketplaceAccounts={marketplaceAccounts} enrichmentCases={enrichmentCases} supplierDocs={supplierDocs} mergePrompt={<MaterialMergePrompt flags={mergeFlags} />} />
+      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} currentUserName={assignmentCtx.pool.find((op) => op.id === session.userId)?.name ?? null} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} marketplaceAccounts={marketplaceAccounts} enrichmentCases={enrichmentCases} supplierDocs={supplierDocs} mergePrompt={<MaterialMergePrompt flags={mergeFlags} />} />
     </div>
   );
 }

@@ -77,6 +77,7 @@ export function QuoteValidationView({
   orgId,
   supplierTypes = {},
   supplierOperators = {},
+  currentUserName = null,
   supplierDocs,
   clientRules = {},
 }: {
@@ -86,6 +87,7 @@ export function QuoteValidationView({
   orgId: string;
   supplierTypes?: SupplierTypeMap;
   supplierOperators?: SupplierOperatorMap;
+  currentUserName?: string | null;
   supplierDocs?: SupplierDocIndex;
   clientRules?: ClientDocRules;
 }) {
@@ -93,6 +95,7 @@ export function QuoteValidationView({
   const [sort, setSort] = useState("quotes");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [ownerFilter, setOwnerFilter] = useState("all");
   const [expandedSupplier, setExpandedSupplier] = useState<string | null>(null);
   const [showAddQuote, setShowAddQuote] = useState(false);
 
@@ -152,6 +155,21 @@ export function QuoteValidationView({
       ...g,
       quotes: g.quotes.filter((q) => kindOf(q) === typeFilter),
     })).filter((g) => g.quotes.length > 0);
+  }
+
+  // Owner filter, so an operator can work their own book instead of the client's
+  // whole validation queue. Options come off the suppliers actually listed.
+  const ownerNames = [...new Set(Array.from(groupMap.values()).map((g) => g.operatorName).filter(Boolean) as string[])].sort();
+  const ownerOptions = [
+    { value: "all", label: "All operators" },
+    ...(currentUserName && ownerNames.includes(currentUserName)
+      ? [{ value: currentUserName, label: `My suppliers (${currentUserName})` }]
+      : []),
+    ...ownerNames.filter((n) => n !== currentUserName).map((n) => ({ value: n, label: n })),
+    { value: "unassigned", label: "Unassigned" },
+  ];
+  if (ownerFilter !== "all") {
+    groups = groups.filter((g) => (ownerFilter === "unassigned" ? !g.operatorName : g.operatorName === ownerFilter));
   }
 
   // Sort
@@ -260,6 +278,9 @@ export function QuoteValidationView({
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">Status</span>
           <Select size="sm" className="min-w-[10rem]" ariaLabel="Status" value={statusFilter} onValueChange={setStatusFilter} options={STATUS_FILTER} />
+          {ownerNames.length > 0 && (
+            <Select size="sm" className="min-w-[11rem]" ariaLabel="Operator" value={ownerFilter} onValueChange={setOwnerFilter} options={ownerOptions} />
+          )}
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">Sort</span>

@@ -311,14 +311,24 @@ export default async function OrgPriceIndexPage({
   for (const l of (leadsRes.data ?? []) as any[]) {
     if (l.supplier_id && l.supplier_name) supplierNameById.set(l.supplier_id, l.supplier_name);
   }
+  for (const q of quoteProfiles) {
+    if (q.supplier_id && q.supplier_name) supplierNameById.set(q.supplier_id, q.supplier_name);
+  }
   const supplierOperators: Record<string, string> = {};
   for (const sid of new Set(quoteProfiles.map((q) => q.supplier_id).filter(Boolean) as string[])) {
-    const opId = resolveOperatorId(assignmentCtx, sid, (supplierTypes[`id:${sid}`] as MarketKind | undefined) ?? null);
+    // Name matters as much as id here: a supplier that never got a supplier_id on
+    // a lead is only classifiable by name, and an unclassified one reads as
+    // "direct" and falls out of a marketplace-only scope.
+    const sname = supplierNameById.get(sid) ?? null;
+    const hint =
+      (supplierTypes[`id:${sid}`] as MarketKind | undefined) ??
+      (sname ? (supplierTypes[`name:${sname.toLowerCase()}`] as MarketKind | undefined) : undefined) ??
+      null;
+    const opId = resolveOperatorId(assignmentCtx, sid, hint, sname);
     const name = opId ? operatorNameById.get(opId) : null;
     if (!name) continue;
     supplierOperators[`id:${sid}`] = name;
     // Quotes staged before their supplier was linked carry only a name.
-    const sname = supplierNameById.get(sid);
     if (sname) supplierOperators[`name:${sname.toLowerCase()}`] = name;
   }
 
@@ -370,6 +380,7 @@ export default async function OrgPriceIndexPage({
             orgId={org.id}
             supplierTypes={supplierTypes}
             supplierOperators={supplierOperators}
+            currentUserName={assignmentCtx.pool.find((op) => op.id === session.userId)?.name ?? null}
             supplierDocs={supplierDocs}
             clientRules={clientRules}
           />

@@ -2,14 +2,8 @@
 import { revalidatePath } from "next/cache";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { selectAllPaged } from "@/lib/supabase-paging";
-import { getClientSuppliers } from "@/lib/client-suppliers";
-import {
-  getOrgAssignmentContext,
-  resolveOperatorId,
-  ALL_SUPPLIER_TYPES,
-  type AssignmentMode,
-} from "@/lib/operator-assignment";
+import { freezeDerivedOwners } from "@/lib/freeze-assignments";
+import { ALL_SUPPLIER_TYPES, type AssignmentMode } from "@/lib/operator-assignment";
 import type { MarketKind } from "@/lib/lead-market";
 
 interface Result {
@@ -19,103 +13,6 @@ interface Result {
 }
 
 const MODES: AssignmentMode[] = ["manual", "auto_new", "auto_all"];
-
-// Switching to manual has to leave today's owners exactly where they are, or an
-// org would come back from the switch with every supplier unassigned. So before
-// the mode flips, write the CURRENT derived owner into supplier_assignment for
-// every supplier that has no claim yet: the auto spread's answer becomes the
-// explicit one, and turning auto off changes nothing visible.
-async function freezeDerivedOwners(
-  admin: ReturnType<typeof createAdminClient>,
-  orgId: string,
-  actorUserId: string
-): Promise<number> {
-  const ctx = await getOrgAssignmentContext(admin, orgId);
-  if (ctx.config.mode === "manual") return 0;
-
-  const supplierIds = new Set<string>();
-  const collect = async (table: "leads_in_flight" | "draft_references") => {
-    const rows = await selectAllPaged<{ supplier_id: string | null }>((from, to) =>
-      admin.from(table).select("supplier_id").eq("org_id", orgId).not("supplier_id", "is", null).order("supplier_id").range(from, to)
-    ).catch(() => []);
-    for (const r of rows) if (r.supplier_id) supplierIds.add(r.supplier_id);
-  };
-  await collect("leads_in_flight");
-  await collect("draft_references");
-
-  // The Suppliers tab lists the client's Tenkara suppliers, including ones with
-  // no lead yet. They show an auto owner today, so they get frozen too.
-  const { data: org } = await admin.from("orgs").select("tenkara_org_id").eq("id", orgId).maybeSingle();
-  const tenkaraSuppliers = await getClientSuppliers(org?.tenkara_org_id ?? null).catch(() => null);
-  if (tenkaraSuppliers) {
-    for (const s of [
-      ...tenkaraSuppliers.approved,
-      ...tenkaraSuppliers.pending_review,
-      ...tenkaraSuppliers.denied,
-      ...tenkaraSuppliers.draft,
-    ]) {
-      supplierIds.add(s.id);
-    }
-  }
-
-  const claims = [...supplierIds]
-    .filter((sid) => !ctx.manual.has(sid))
-    .map((sid) => ({ supplier_id: sid, operator_id: resolveOperatorId(ctx, sid) }))
-    .filter((r): r is { supplier_id: string; operator_id: string } => !!r.operator_id);
-
-  let frozen = 0;
-  for (let i = 0; i < claims.length; i += 500) {
-    const chunk = claims.slice(i, i + 500).map((c) => ({
-      supplier_id: c.supplier_id,
-      org_id: orgId,
-      operator_id: c.operator_id,
-      assigned_by: actorUserId,
-      updated_at: new Date().toISOString(),
-    }));
-    const { error } = await admin
-      .from("supplier_assignment")
-      .upsert(chunk, { onConflict: "supplier_id,org_id", ignoreDuplicates: true });
-    if (error) throw new Error(error.message);
-    frozen += chunk.length;
-  }
-
-  // Scout leads carry their operator on the lead, not on a supplier, so they need
-  // the same treatment or their outreach falls back to the org's primary. Grouped
-  // by operator to keep this a handful of updates instead of one per lead.
-  const scout = await selectAllPaged<{ id: string; email: string | null }>((from, to) =>
-    admin
-      .from("leads_in_flight")
-      .select("id, email:payload->>supplier_contact_email")
-      .eq("org_id", orgId)
-      .eq("status", "active")
-      .is("supplier_id", null)
-      .is("assigned_operator_id", null)
-      .order("id")
-      .range(from, to)
-  ).catch(() => []);
-  const byOperator = new Map<string, string[]>();
-  for (const l of scout) {
-    // Same key outreach uses, so the frozen owner matches who was getting drafts.
-    const key = l.email ? `e:${l.email.trim().toLowerCase()}` : l.id;
-    const opId = resolveOperatorId(ctx, key);
-    if (!opId) continue;
-    const ids = byOperator.get(opId) ?? [];
-    ids.push(l.id);
-    byOperator.set(opId, ids);
-  }
-  for (const [opId, ids] of byOperator) {
-    for (let i = 0; i < ids.length; i += 500) {
-      const { error } = await admin
-        .from("leads_in_flight")
-        .update({ assigned_operator_id: opId, updated_at: new Date().toISOString() })
-        .in("id", ids.slice(i, i + 500));
-      if (error) throw new Error(error.message);
-      frozen += Math.min(500, ids.length - i);
-    }
-  }
-
-  return frozen;
-}
 
 export async function setOrgAssignmentSettings(input: {
   orgId: string;
@@ -136,13 +33,22 @@ export async function setOrgAssignmentSettings(input: {
     .eq("id", input.orgId)
     .maybeSingle();
 
+  const beforeTypes: MarketKind[] = Array.isArray((before as any)?.assignment_supplier_types)
+    ? ((before as any).assignment_supplier_types as string[]).filter((t): t is MarketKind =>
+        (ALL_SUPPLIER_TYPES as string[]).includes(t)
+      )
+    : ALL_SUPPLIER_TYPES;
+  const dropped = beforeTypes.filter((t) => !types.includes(t));
+
   let frozen = 0;
-  if (input.mode === "manual" && (before as any)?.assignment_mode !== "manual") {
+  const goingManual = input.mode === "manual" && (before as any)?.assignment_mode !== "manual";
+  if (goingManual || dropped.length > 0) {
     try {
-      frozen = await freezeDerivedOwners(admin, input.orgId, session.userId);
+      // Going manual pins everything; narrowing pins only what is leaving scope.
+      frozen = await freezeDerivedOwners(admin, input.orgId, session.userId, goingManual ? null : dropped);
     } catch (e: any) {
-      // Flipping to manual without the snapshot would silently unassign the
-      // client's whole book, so fail the whole change instead.
+      // Making the change without the snapshot would silently unassign the
+      // suppliers it affects, so fail the whole change instead.
       return { ok: false, error: `could not pin current assignees: ${e.message}` };
     }
   }

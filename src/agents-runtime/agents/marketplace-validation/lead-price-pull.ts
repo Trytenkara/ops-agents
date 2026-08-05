@@ -425,7 +425,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     // Marketplace leads usually have no supplier_id — fall back to the lead id so
     // the sticky-random default spreads across the org's pool instead of every
     // case piling onto pool[0] (mirrors the outreach agent + Leads-tab key).
-    return resolveOperatorId(ctx, l.supplier_id ?? l.id, leadMarketKind((l.payload as any)?.site_type));
+    return resolveOperatorId(ctx, l.supplier_id ?? l.id, leadMarketKind((l.payload as any)?.site_type), (l as any).supplier_name ?? null);
   };
 
   let processed = 0;
