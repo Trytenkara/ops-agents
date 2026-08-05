@@ -197,7 +197,7 @@ export function QuoteValidationView({
     "Name Match", "INCI Match", "Grades Match", "Additional Grades",
     "Pre-Order COA Met", "Pre-Order SDS Met", "Pre-Order TDS Met", "Pre-Order Sample Met",
     "$/kg", "Pack Class", "QA Verdict", "QA Flags",
-    "Docs On File", "Doc Fields", "Earliest Doc Expiry", "Doc URLs",
+    "Docs On File", "Doc Fields", "Earliest Doc Expiry", "Doc Downloads",
     "Status", "Completeness %", "Checkout Link", "Purchasing Notes", "Operator Notes", "Generated Notes",
   ];
   const csvRows = profiles.map((q) => {

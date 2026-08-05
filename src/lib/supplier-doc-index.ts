@@ -145,11 +145,30 @@ export function docExpiryCell(docs: QuoteDoc[]): string {
   return earliest < new Date().toISOString().slice(0, 10) ? `${earliest} (EXPIRED)` : earliest;
 }
 
-// Where the file came from. A stored-only document (email attachment) has no
-// public URL, so say so rather than emitting an empty cell that reads as "none".
+// Absolute because the cell is clicked from a spreadsheet, where a relative path
+// has nothing to resolve against. The browser knows its own origin; SSR of this
+// client component falls back to the configured one.
+function appOrigin(): string {
+  if (typeof window !== "undefined") return window.location.origin;
+  return process.env.NEXT_PUBLIC_APP_URL ?? "";
+}
+
+// Where an operator opens the file. Our own copy wins over the supplier's URL:
+// suppliers replace and remove files at the same address (3 TDS links died within
+// four days of capture), and the download route mints a signed URL for the private
+// bucket. Only rows captured before byte storage fall back to the supplier link.
+// Plain URLs, one per document in the same order as docsOnFileCell, so a
+// spreadsheet still auto-links them.
 export function docUrlsCell(docs: QuoteDoc[]): string {
+  const origin = appOrigin();
   return docs
-    .map((d) => (/^https?:\/\//i.test(d.source_url ?? "") ? d.source_url! : d.storage_path ? "(stored copy, no public URL)" : ""))
+    .map((d) =>
+      d.storage_path
+        ? `${origin}/api/supplier-documents/${d.id}`
+        : /^https?:\/\//i.test(d.source_url ?? "")
+          ? d.source_url!
+          : "(no stored copy)"
+    )
     .filter(Boolean)
     .join("; ");
 }

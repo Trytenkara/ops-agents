@@ -193,7 +193,7 @@ export function LeadsList({
     "Supplier background", "Grades offered", "Certifications", "MOQ",
     "Returned price", "Operator", "Signal", "Source", "Match", "Stage", "Status",
     "Confidence", "Confidence reason", "Completeness", "Completeness reason",
-    "Source citations", "Notes", "Docs on file", "Doc fields", "Doc URLs", "Created",
+    "Source citations", "Notes", "Docs on file", "Doc fields", "Doc downloads", "Created",
   ];
   const csvRows = filtered.map((r: any) => {
     const p = r.payload ?? {};
