@@ -16,7 +16,8 @@ export interface ExtractedQuote {
   supplier_name: string | null;
   material_name: string | null;
   price: number | null; // per-case price, currency-stripped
-  case_size: number | null;
+  case_size: number | null; // quantity the document stated the price covers; null when unstated
+  unit_price_gap_reason: string | null; // why case_size (and so unit_price) is null
   unit_of_measurement: string | null;
   currency: string | null;
   grade: string | null; // supplier-stated material grade, never guessed
@@ -40,7 +41,8 @@ Return ONLY a JSON object (no prose):
       "supplier_name": "string or null (the supplier/company issuing the quote)",
       "material_name": "string (the material/product name)",
       "price": 99.99,                 // numeric, currency symbols stripped; the price for one case/unit as listed
-      "case_size": 25,                // numeric quantity the price covers (e.g. 25 for a 25 kg bag); null if unclear
+      "case_size": 25,                // quantity the document says the price covers; null if it never says
+      "unit_price_gap_reason": null,  // why case_size is null, in one sentence; null when case_size is set
       "unit_of_measurement": "kg",    // the unit case_size is in (kg, lb, L, each, ...)
       "currency": "USD",
       "grade": "USP",                 // the material grade IF the supplier states one, else null
@@ -63,7 +65,12 @@ Rules:
 - moq_quantity / moq_unit: the stated minimum order quantity and its unit. Null if not stated. Do not confuse MOQ with case_size — MOQ is the smallest total order accepted.
 - payment_terms: stated payment/credit terms ("Net 30", "50% deposit", "prepaid"). Null if not stated. NEVER assume.
 - These per-supplier fields (lead_time_*, moq_*, payment_terms) usually apply document-wide — repeat them on each quote line unless the document differentiates.
-- ALWAYS populate case_size and unit_of_measurement so a PER-UNIT price (price / case_size) can be computed. If the price is already per-unit, set case_size = 1 and unit_of_measurement to that unit. Only leave case_size null if there is genuinely no quantity context at all.
+- case_size is the quantity THE PRICE APPLIES TO, and only the document can tell you that. If the price is already per-unit, set case_size = 1 and unit_of_measurement to that unit. If a line ties the price to a quantity ("USD 250 / 25kg drum"), that quantity is case_size.
+- A PACKAGING line is NOT a price basis. Quote sheets routinely list price, incoterm, and packing as independent rows; a "Packing: 25kg PP bag" line does not mean the listed price is the price of one bag. Never divide a price by a pack/packing/drum/bag spec to manufacture a per-unit figure, and never treat MOQ, a container size, or a tier threshold as the basis.
+- When the document does not state what quantity the price covers: set case_size = null, keep price exactly as listed, and write unit_price_gap_reason explaining the ambiguity in one operator-readable sentence. A blank per-unit price is correct here; a guessed one gets published as a real number.
+- unit_price_gap_reason must be null whenever case_size is populated.
+- Sanity-check yourself: if your line implies a per-unit price that is wildly out of line with the same document's other lines or with the same supplier's stated per-unit price, you have almost certainly picked the wrong basis. Set case_size = null and explain instead.
+- If the document identifies itself as a sample, template, specimen, or dummy quotation, set confidence "low" and say so in notes. It is not a real quote.
 - Capture EVERY pack size and EVERY tiered price break as its OWN line. If a material is offered in multiple pack sizes (e.g. 50 lb and 55 lb), output one line per pack size. If there are volume price breaks (e.g. $X/lb at 100 lb, $Y/lb at 500 lb), output one line per break and put the quantity threshold in notes (e.g. "tier: >=500 lb"). This is how available pack sizes per material get recorded.
 - confidence "low" when the unit/case size is guessed or the figure might be an MOQ/sample price rather than a real quote.
 - Never invent materials, pack sizes, or prices. If the document has no extractable price lines, return {"quotes": []}.`;
@@ -248,6 +255,7 @@ export async function parseAttachmentBytes(
         material_name: q.material_name ?? null,
         price: typeof q.price === "number" ? q.price : q.price == null ? null : Number(q.price) || null,
         case_size: typeof q.case_size === "number" ? q.case_size : q.case_size == null ? null : Number(q.case_size) || null,
+        unit_price_gap_reason: typeof q.unit_price_gap_reason === "string" ? q.unit_price_gap_reason.trim() || null : null,
         unit_of_measurement: q.unit_of_measurement ?? null,
         currency: q.currency ?? "USD",
         grade: q.grade ?? null,

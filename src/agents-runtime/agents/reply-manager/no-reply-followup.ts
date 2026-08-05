@@ -79,8 +79,8 @@ function buildFollowupBody(opts: { contactName: string | null; material: string 
   const mat = opts.material ? ` for ${opts.material}` : "";
   const opener =
     opts.n === 1
-      ? `Just following up on my note below — would you be able to share pricing${mat}?`
-      : `Circling back one more time on pricing${mat} — I'd still love to get a quote from you.`;
+      ? `Just following up on my note below. Would you be able to share pricing${mat}?`
+      : `Circling back one more time on pricing${mat}. I'd still love to get a quote from you.`;
   return [
     greeting,
     "",

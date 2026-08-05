@@ -84,7 +84,21 @@ export function StagedQuoteRow({
       <TableCell className="text-right align-top">{fmtMoney(r.price, r.currency)}</TableCell>
       <TableCell className="text-right align-top">{fmt(r.case_size)}</TableCell>
       <TableCell className="align-top">{r.unit_of_measurement ?? "—"}</TableCell>
-      <TableCell className="text-right align-top">{fmtMoney(r.unit_price, r.currency)}</TableCell>
+      {/* A blank per-unit price is a deliberate outcome, not missing data: the
+          supplier never said what quantity their price covers, so the reason is
+          shown on hover rather than a guessed number in the cell. */}
+      <TableCell className="text-right align-top">
+        {r.unit_price == null && r.unit_price_gap_reason ? (
+          <span
+            className="cursor-help text-muted-foreground underline decoration-dotted underline-offset-4"
+            title={r.unit_price_gap_reason}
+          >
+            —
+          </span>
+        ) : (
+          fmtMoney(r.unit_price, r.currency)
+        )}
+      </TableCell>
       <TableCell className="align-top text-xs">
         {fmtDims(r.case_dimensions) ? (
           <span className="inline-flex flex-col gap-0.5">

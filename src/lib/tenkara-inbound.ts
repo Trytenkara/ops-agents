@@ -565,6 +565,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
         materialName: q.material_name ?? leadRow?.material_name ?? null,
         price: q.price,
         caseSize: q.case_size,
+        unitPriceGapReason: q.unit_price_gap_reason ?? null,
         unitOfMeasurement: q.unit_of_measurement,
         currency: q.currency,
         grade: q.grade,
@@ -646,18 +647,31 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     const threadMaterial = normalizeMaterial(leadRow?.material_name);
     const detailMaterialMatches = !statedMaterial || !threadMaterial || statedMaterial === threadMaterial || statedMaterial.includes(threadMaterial) || threadMaterial.includes(statedMaterial);
     const hasQuoteDetails = detailMaterialMatches && [d.case_size, d.unit_of_measurement, d.case_type, d.case_length, d.case_width, d.case_height, d.dimensions_unit, d.case_weight, d.lead_time_days, d.lead_time_text, d.moq_quantity, d.moq_unit, d.payment_terms].some((value) => value != null && value !== "");
-    if (hasQuoteDetails && ref.org_id && ref.supplier_id && ref.material_id) {
+    // Supplier identity here cannot be an id equality test: discovery hands most
+    // leads over name-only, so both the draft pointer and the staged quote row
+    // are routinely name-only too (1 of 34 staged rows carries a supplier_id).
+    // Requiring ref.supplier_id AND matching it against staged_quotes.supplier_id
+    // meant this merge never ran for ~3 of every 4 reply threads, so lead time,
+    // MOQ, terms and case dims the supplier stated in prose were dropped.
+    const replySupplierName = leadRow?.supplier_name ?? (refMeta.supplier_name as string | undefined) ?? from.name ?? null;
+    const supplierKey = (value: string | null | undefined) => (value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "").trim();
+    const wantSupplierKey = supplierKey(replySupplierName);
+    if (hasQuoteDetails && ref.org_id && ref.material_id && (ref.supplier_id || wantSupplierKey)) {
       const { data: quoteRows, error: quoteReadError } = await admin
         .from("staged_quotes")
-        .select("id, raw_extract, case_dimensions, dim_source")
+        .select("id, raw_extract, case_dimensions, dim_source, supplier_id, supplier_name")
         .eq("org_id", ref.org_id)
-        .eq("supplier_id", ref.supplier_id)
         .eq("material_id", ref.material_id)
         .not("status", "eq", "dismissed")
         .order("created_at", { ascending: false })
-        .limit(1);
+        .limit(20);
       if (quoteReadError) throw quoteReadError;
-      let quote = quoteRows?.[0] ?? null;
+      let quote =
+        (quoteRows ?? []).find(
+          (q: any) =>
+            (!!ref.supplier_id && q.supplier_id === ref.supplier_id) ||
+            (!!wantSupplierKey && supplierKey(q.supplier_name) === wantSupplierKey)
+        ) ?? null;
       if (!quote) {
         const { data: inserted, error: insertError } = await admin
           .from("staged_quotes")
@@ -667,7 +681,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
             source_conversation_id: msg.conversation_id,
             source_message_id: msg.message_id,
             supplier_id: ref.supplier_id,
-            supplier_name: leadRow?.supplier_name ?? from.name ?? null,
+            supplier_name: replySupplierName,
             material_id: ref.material_id,
             material_name: leadRow?.material_name ?? d.material_name ?? null,
             price: null,
@@ -675,7 +689,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
             raw_extract: { detail_intake: true },
             status: "pending_review",
           })
-          .select("id, raw_extract, case_dimensions, dim_source")
+          .select("id, raw_extract, case_dimensions, dim_source, supplier_id, supplier_name")
           .single();
         if (insertError) throw insertError;
         quote = inserted;
@@ -725,12 +739,15 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       if (upfront) profilePatch.payment_upfront_pct = Number(upfront[1]);
       profilePatch.payment_completion = d.payment_terms;
     }
-    if (Object.keys(profilePatch).length && ref.org_id && ref.supplier_id) {
+    // Same name-only reality as the quote merge above: a supplier_profiles row
+    // keys on org + (supplier_id OR name), so an absent id must not drop the
+    // contact/shipping/billing details the supplier just gave us.
+    if (Object.keys(profilePatch).length && ref.org_id && (ref.supplier_id || replySupplierName)) {
       const profile = await upsertSupplierProfile(
         admin,
         ref.org_id,
         ref.supplier_id,
-        leadRow?.supplier_name ?? from.name ?? ref.supplier_id,
+        replySupplierName ?? ref.supplier_id!,
       );
       const { error: profileUpdateError } = await admin.from("supplier_profiles").update(profilePatch).eq("id", profile.id);
       if (profileUpdateError) throw profileUpdateError;

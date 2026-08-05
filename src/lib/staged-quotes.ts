@@ -25,6 +25,7 @@ export interface StagedQuoteInput {
   materialName?: string | null;
   price: number | null;
   caseSize: number | null;
+  unitPriceGapReason?: string | null;
   unitOfMeasurement: string | null;
   currency?: string | null;
   grade?: string | null;
@@ -62,6 +63,44 @@ function dupKey(r: {
   ].join("|");
 }
 
+// Suppliers reply on-thread, so their client appends the whole prior exchange.
+// Extraction reads that quoted history and re-emits quotes we already captured
+// from the message where they first arrived (one $4.53/lb quote became four rows;
+// a "sorry, forgot the attachment" email with no new quote duplicated all six of
+// a supplier's products). Deduping per-message cannot catch it: the echo carries
+// a different message id. So the echo key is scoped to the CONVERSATION.
+//
+// Deliberately not a blanket "ignore quoted text" rule: some replies arrive as a
+// Fwd where the quoted body is the only copy of the price. Keep extracting
+// everything, then drop lines identical to what the thread already holds. A
+// differing price/basis is new information and still lands as its own row.
+function echoKey(r: {
+  source_conversation_id: string | null;
+  material_name: string | null;
+  price: number | null;
+  currency: string | null;
+  unit_of_measurement: string | null;
+  case_size: number | null;
+}): string | null {
+  if (!r.source_conversation_id) return null;
+  // Echoes are rarely byte-identical: suppliers' own product lines pick up
+  // "(Product Code 300902)" style suffixes between sends, so compare on the
+  // material name with parentheticals and punctuation stripped.
+  const material = (r.material_name ?? "")
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  return [
+    r.source_conversation_id,
+    material,
+    r.price ?? "",
+    (r.currency ?? "").trim().toUpperCase(),
+    (r.unit_of_measurement ?? "").trim().toLowerCase(),
+    r.case_size ?? "",
+  ].join("|");
+}
+
 export async function insertStagedQuotes(
   admin: Admin,
   rows: StagedQuoteInput[]
@@ -80,6 +119,25 @@ export async function insertStagedQuotes(
       .select("source_message_id, source_attachment_name, material_name, price")
       .in("source_message_id", messageIds);
     for (const r of (data ?? []) as any[]) existingKeys.add(dupKey(r));
+  }
+
+  // Everything the thread already holds, so a re-quote of it is recognised as an
+  // echo. Dismissed rows are excluded: ops rejecting a line should not stop the
+  // supplier re-quoting it later.
+  const conversationIds = Array.from(
+    new Set(rows.map((r) => r.sourceConversationId).filter((x): x is string => !!x))
+  );
+  const existingEchoKeys = new Set<string>();
+  if (conversationIds.length) {
+    const { data } = await admin
+      .from("staged_quotes")
+      .select("source_conversation_id, material_name, price, currency, unit_of_measurement, case_size")
+      .in("source_conversation_id", conversationIds)
+      .not("status", "eq", "dismissed");
+    for (const r of (data ?? []) as any[]) {
+      const k = echoKey(r);
+      if (k) existingEchoKeys.add(k);
+    }
   }
 
   // Guard against re-staging quotes for supplier+material combos that are
@@ -117,10 +175,20 @@ export async function insertStagedQuotes(
         .join(" ");
     } else if (norm.status === "unconvertible") {
       confidence = "needs_review";
-      extractionNotes = [`${norm.note} — confirm currency/price before approving.`, extractionNotes]
+      extractionNotes = [`${norm.note}. Confirm currency/price before approving.`, extractionNotes]
         .filter(Boolean)
         .join(" ");
     }
+
+    // unit_price is generated from price / case_size, so a null case_size is how
+    // an unknown price basis reaches the UI as a blank cell. Guarantee the blank
+    // always carries a why: the extractor supplies one when it recognises the
+    // ambiguity, and this covers the case where it just returned no case_size.
+    const gapReason =
+      price != null && r.caseSize == null
+        ? r.unitPriceGapReason?.trim() ||
+          "Supplier did not state what quantity this price covers, so no per-unit price could be derived."
+        : null;
 
     const key = dupKey({
       source_message_id: r.sourceMessageId ?? null,
@@ -129,6 +197,18 @@ export async function insertStagedQuotes(
       price,
     });
     if (existingKeys.has(key)) {
+      result.skippedDuplicates++;
+      continue;
+    }
+    const echo = echoKey({
+      source_conversation_id: r.sourceConversationId ?? null,
+      material_name: r.materialName ?? null,
+      price,
+      currency,
+      unit_of_measurement: r.unitOfMeasurement ?? null,
+      case_size: r.caseSize,
+    });
+    if (echo && existingEchoKeys.has(echo)) {
       result.skippedDuplicates++;
       continue;
     }
@@ -162,6 +242,7 @@ export async function insertStagedQuotes(
       material_name: r.materialName ?? null,
       price,
       case_size: r.caseSize,
+      unit_price_gap_reason: gapReason,
       unit_of_measurement: r.unitOfMeasurement,
       currency,
       grade: r.grade ?? null,
@@ -183,6 +264,7 @@ export async function insertStagedQuotes(
       continue;
     }
     existingKeys.add(key);
+    if (echo) existingEchoKeys.add(echo);
     result.inserted++;
   }
   return result;

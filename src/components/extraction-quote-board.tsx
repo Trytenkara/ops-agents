@@ -175,6 +175,15 @@ export function ExtractionQuoteBoard({ rows, slug, showDocs = false }: { rows: a
                     {fmt(r.unit_price)}
                     {r.currency && r.currency !== "USD" && <span className="ml-1 text-xs text-muted-foreground">{r.currency}</span>}
                   </span>
+                ) : r.unit_price_gap_reason ? (
+                  // Blank because the supplier never stated the price basis, not
+                  // because extraction dropped it. Hover explains which.
+                  <span
+                    className="cursor-help text-muted-foreground underline decoration-dotted underline-offset-4"
+                    title={r.unit_price_gap_reason}
+                  >
+                    —
+                  </span>
                 ) : (
                   "—"
                 )}

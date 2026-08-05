@@ -44,7 +44,8 @@ export interface ExtractedQuote {
   supplier_name: string | null;
   material_name: string | null;
   price: number | null; // per-case price, currency-stripped
-  case_size: number | null;
+  case_size: number | null; // quantity the supplier stated the price covers; null when unstated
+  unit_price_gap_reason: string | null; // why case_size (and so unit_price) is null
   unit_of_measurement: string | null;
   currency: string | null;
   grade: string | null; // supplier-stated material grade, never guessed
@@ -93,7 +94,8 @@ Return ONLY a JSON object (no prose):
       "supplier_name": "string or null (the supplier/company)",
       "material_name": "string (the material/product the price is for)",
       "price": 99.99,                 // numeric, currency symbols stripped; price for one case/unit as stated
-      "case_size": 25,                // numeric quantity the price covers (e.g. 25 for a 25 kg bag); null if unclear
+      "case_size": 25,                // quantity the supplier says the price covers; null if they never said
+      "unit_price_gap_reason": null,  // why case_size is null, in one sentence; null when case_size is set
       "unit_of_measurement": "kg",    // the unit case_size is in (kg, lb, L, each, ...)
       "currency": "USD",
       "grade": "USP",                 // the material grade IF the supplier states one, else null
@@ -112,7 +114,10 @@ Rules:
 - price must be numeric or null. Strip currency symbols and codes, commas.
 - currency: the ISO 4217 code the price is stated in ("USD", "EUR", "GBP", "INR", "CNY", ...). Infer from the symbol/locale (€→EUR, £→GBP, ₹ or "Rs"/"Rs."→INR, ¥→CNY or JPY by supplier, $→USD unless clearly CAD/AUD/etc.). We convert to USD ourselves — report the currency AS STATED, do NOT convert. CURRENCY IS HIGH-STAKES: a price reported in the wrong currency gets published as a wildly wrong USD number (₹149 shown as $149 is ~85x too high). Do NOT default to USD just because there is no symbol — many suppliers (Indian, Chinese, Pakistani, etc.) quote in domestic currency. If you cannot positively confirm the currency, return null (better a blank than a wrong currency) and note the ambiguity.
 - grade: only populate if the supplier EXPLICITLY names a grade/spec for the material (e.g. "USP", "EP", "Food grade", "Industrial", "SCI 80"). NEVER infer or guess a "typical" grade — if they don't state one, return null.
-- Populate case_size and unit_of_measurement so a PER-UNIT price (price / case_size) can be computed. If the price is already per-unit, set case_size = 1 and unit_of_measurement to that unit. Only leave case_size null if there is genuinely no quantity context.
+- case_size is the quantity THE PRICE APPLIES TO, and only the supplier can tell you that. If the price is already per-unit, set case_size = 1 and unit_of_measurement to that unit. If the supplier ties the price to a quantity ("$250 per 25kg drum"), that quantity is case_size.
+- A PACKAGING line is NOT a price basis. Suppliers routinely state price, incoterm, and packing as three independent facts ("USD 2900 / 20ft FOB MUNDRA / PACKING - 25KG PP BAG" quotes a container, not a $2,900 bag). Never divide a price by a pack/packing/drum/bag spec to manufacture a per-unit figure. Do not treat MOQ, a container size, or a tier threshold as the basis either.
+- When you cannot tell from the supplier's own words what quantity the price covers: set case_size = null, keep price exactly as stated, and write unit_price_gap_reason explaining the ambiguity in one operator-readable sentence (e.g. "Supplier stated USD 2900 with a 20ft container and a 25kg bag packing line; which one the price covers is not stated."). A blank per-unit price is correct here. A guessed one gets published as a real number, so guessing is the more expensive error.
+- unit_price_gap_reason must be null whenever case_size is populated.
 - Capture EVERY pack size and EVERY tiered price break as its OWN line; put quantity thresholds in notes (e.g. "tier: >=500 lb").
 - lead_time_days: only when the supplier states a lead/delivery time. Normalize to days (1 week = 7, "2-3 weeks" = 21 using the upper bound, "1 month" = 30). Keep the exact original wording in lead_time_text. If no lead time is stated, both are null. NEVER guess a "typical" lead time.
 - moq_quantity / moq_unit: the supplier's stated minimum order quantity and its unit. Null if not stated. Do not confuse MOQ with case_size — MOQ is the smallest total order they'll accept.
@@ -166,7 +171,15 @@ function extractJson(text: string): ReplyQuoteExtraction {
   try {
     const parsed = JSON.parse(text.slice(start, end + 1));
     return {
-      quotes: Array.isArray(parsed?.quotes) ? parsed.quotes.filter((q: any) => q && (q.price != null || q.material_name)) : [],
+      quotes: Array.isArray(parsed?.quotes)
+        ? parsed.quotes
+            .filter((q: any) => q && (q.price != null || q.material_name))
+            .map((q: any) => ({
+              ...q,
+              unit_price_gap_reason:
+                typeof q.unit_price_gap_reason === "string" ? q.unit_price_gap_reason.trim() || null : null,
+            }))
+        : [],
       details: { ...EMPTY_DETAILS, ...(parsed?.details && typeof parsed.details === "object" ? parsed.details : {}) },
       declined: parsed?.declined === true,
     };

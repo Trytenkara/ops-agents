@@ -4,6 +4,7 @@ import { bodyToHtml } from "@/lib/email-style";
 import { lintDraft, type Finding } from "@/agents-runtime/agents/outreach-qa/lint";
 import { approvedContactsFor } from "@/lib/contact-guard";
 import { postAgentAlert } from "@/lib/slack-alert";
+import { resolveSupplierIdByName as resolveTenkaraSupplierId } from "@/lib/tenkara-supplier-linker";
 
 // Shared draft → QA building block. Every intake agent (02 expiries,
 // 04 new-material outreach) and the Tenkara inbound webhook composes its own
@@ -86,8 +87,23 @@ export interface StageDraftResult {
 }
 
 export async function stageDraft(input: StageDraftInput): Promise<StageDraftResult> {
-  const { admin, agentId, runId, orgId, supplierId, materialId, quoteId, to, subject, body, assignedOperator } = input;
+  const { admin, agentId, runId, orgId, materialId, quoteId, to, subject, body, assignedOperator } = input;
   const callerMeta = input.metadata ?? {};
+
+  // draft_references.supplier_id is the key the inbound-reply path merges quote
+  // details and supplier profiles on, but discovery hands most leads over
+  // name-only, so the pointer was written with a null id and the reply had
+  // nothing to merge onto. Resolve the name against Tenkara's supplier table at
+  // staging time. Best-effort: a miss keeps the previous null behaviour.
+  let supplierId = input.supplierId ?? null;
+  if (!supplierId) {
+    const name = input.supplierCompany ?? (callerMeta.supplier_name as string | undefined) ?? null;
+    try {
+      supplierId = await resolveTenkaraSupplierId(name);
+    } catch {
+      supplierId = null;
+    }
+  }
 
   // Allowlist for the anti-fabrication guard: per-brand/org approved contact
   // values plus the recipient's own address (echoing that back is legitimate).
