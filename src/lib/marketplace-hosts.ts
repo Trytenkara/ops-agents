@@ -47,6 +47,11 @@ const DIRECTORY_HOSTS = [
   "linkedin.com",
   "volza.com",
   "bebee.com",
+  // Market-intelligence and supplier-discovery platforms: numbers on the page are
+  // published market data or an inquiry, never a seller's transactable price.
+  "tridge.com",
+  "specialchem.com",
+  "accio.com",
 ];
 
 // One company's own catalogue with no checkout: a manufacturer or distributor
@@ -56,7 +61,23 @@ const DIRECTORY_HOSTS = [
 // "View pricing and place order" control is disabled until a human at the
 // distributor approves a portal account, and the live CTAs are "Request a quote"
 // and "Request a sample".
-const DIRECT_NO_CHECKOUT_HOSTS = ["azelis.com"];
+//
+// The rest were sorted out of the parked backlog on 2026-08-04 and each one was
+// then challenged by a second pass that went looking for a cart (/cart,
+// /checkout, shop-platform fingerprints) and failed to find one. That pass
+// overturned half the first-round calls, so only survivors are listed here; a
+// host whose store is merely switched off stays out, because it can come back.
+const DIRECT_NO_CHECKOUT_HOSTS = [
+  "azelis.com",
+  "dkshdiscover.com", // DKSH: the "cart" is a quote basket, "we will contact you"
+  "itwreagents.com", // "Recommended prices only. For prices and orders contact your local distributor."
+  "chemicalsunited.com",
+  "powerockpharma.com",
+  "nutriavenue.com",
+  "hqorganics.com", // "Add to quote", every variant prints $0.00
+  "davisco.co.in",
+  "partner.birkengold.com", // partner portal only; the consumer shop is a different host
+];
 
 export type NoCheckoutKind = "directory" | "direct";
 

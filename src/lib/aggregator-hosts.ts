@@ -24,6 +24,20 @@ const AGGREGATORS: Array<[host: string, name: string]> = [
   ["tradekey.com", "TradeKey"],
   ["globalsources.com", "Global Sources"],
   ["go4worldbusiness.com", "Go4WorldBusiness"],
+  // Sorted out of the parked backlog on 2026-08-04: each lists named third-party
+  // sellers and relays every order through an inquiry form, so the printed number
+  // is one of those sellers' asks.
+  ["echemi.com", "Echemi"],
+  ["pharmaoffer.com", "Pharmaoffer"],
+  ["pharmacompass.com", "PharmaCompass"],
+  ["ingredientsnetwork.com", "Ingredients Network"],
+  ["nxtingredients.com", "NXT Ingredients"],
+  ["nutrada.com", "Nutrada"],
+  ["gather.tracegains.com", "TraceGains Gather"],
+  ["globaltradeplaza.com", "Global Trade Plaza"],
+  ["usetorg.com", "Usetorg"],
+  ["globy.com", "Globy"],
+  ["recycleblu.com", "RecycleBlu"],
 ];
 
 export const AGGREGATOR_HOSTS: string[] = AGGREGATORS.map(([h]) => h);
