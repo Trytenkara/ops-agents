@@ -124,7 +124,7 @@ export async function GET(request: NextRequest) {
     const sourceUrl: string | null = p.source_url ?? p.supplier_website ?? null;
     const siteType: string | null = SITE_TYPE_LABEL[p.site_type] ?? p.site_type ?? null;
     const aggregator = kind === "aggregator" ? aggregatorNameFromPayload(p) : null;
-    const pull = p.marketplace_pull as { status?: string; reason?: string } | undefined;
+    const pull = p.marketplace_pull as { status?: string; reason?: string; flagged?: boolean } | undefined;
     // A flagged lead is still retrying; the flag says a human could unblock it
     // sooner, not that the fleet has stopped.
     const pullStatus = pull?.flagged
