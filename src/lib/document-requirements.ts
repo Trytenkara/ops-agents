@@ -31,6 +31,17 @@ function supKey(id: string | null | undefined, name: string | null | undefined):
   return n ? `name:${n}` : null;
 }
 
+// A CoA, SDS or TDS describes ONE product, so the match has to include the
+// material. Keying on supplier alone made a Lotioncrafter SDS for one material
+// tick "SDS met" on its Black Pepper, Jojoba Oil and Isopropyl Myristate quotes
+// too: 22 of 46 ticks were for a material we hold no document for.
+function matchKey(
+  row: { supplier_id: string | null; supplier_name: string | null; material_id: string | null }
+): string | null {
+  const sup = supKey(row.supplier_id, row.supplier_name);
+  return sup && row.material_id ? `${sup}|m:${row.material_id}` : null;
+}
+
 export async function syncDocRequirementsMet(admin: Admin, orgId: string): Promise<{ updated: number }> {
   // Whether a document is required is the CLIENT's rule, held in Tenkara. This
   // used to gate on quote_profiles.preorder_*_required, which nothing ever wrote:
@@ -47,7 +58,7 @@ export async function syncDocRequirementsMet(admin: Admin, orgId: string): Promi
   // cannot satisfy a client requirement. Null (every pre-0078 row) counts.
   const { data: docs } = await admin
     .from("supplier_documents")
-    .select("supplier_id, supplier_name, doc_type, supplier_issued")
+    .select("supplier_id, supplier_name, material_id, doc_type, supplier_issued")
     .eq("org_id", orgId)
     .in("doc_type", Object.keys(DOC_TYPE_TO_MET))
     .limit(5000);
@@ -55,7 +66,7 @@ export async function syncDocRequirementsMet(admin: Admin, orgId: string): Promi
   const held = new Map<string, Set<string>>();
   for (const d of (docs ?? []) as any[]) {
     if (d.supplier_issued === false) continue;
-    const k = supKey(d.supplier_id, d.supplier_name);
+    const k = matchKey(d);
     if (!k) continue;
     if (!held.has(k)) held.set(k, new Set());
     held.get(k)!.add(d.doc_type);
@@ -65,14 +76,14 @@ export async function syncDocRequirementsMet(admin: Admin, orgId: string): Promi
   const { data: profiles } = await admin
     .from("quote_profiles")
     .select(
-      "id, supplier_id, supplier_name, preorder_coa_required, preorder_sds_required, preorder_tds_required, preorder_coa_met, preorder_sds_met, preorder_tds_met"
+      "id, supplier_id, supplier_name, material_id, preorder_coa_required, preorder_sds_required, preorder_tds_required, preorder_coa_met, preorder_sds_met, preorder_tds_met"
     )
     .eq("org_id", orgId)
     .limit(5000);
 
   let updated = 0;
   for (const p of (profiles ?? []) as any[]) {
-    const pKey = supKey(p.supplier_id, p.supplier_name);
+    const pKey = matchKey(p);
     const types = pKey ? held.get(pKey) : undefined;
     if (!types) continue;
 
