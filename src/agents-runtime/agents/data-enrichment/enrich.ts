@@ -11,6 +11,7 @@ import {
   recordContactCacheHit,
   writeContactDomainCache,
   paidLookupSuppressed,
+  CACHE_TTL_DAYS,
   type CachedContact,
 } from "@/lib/contact-domain-cache";
 import { assessDealbreakerFit, type DealbreakerFit, type DealbreakerSpec } from "@/lib/dealbreaker-fit";
@@ -599,7 +600,7 @@ function hasQuoteForm(html: string): boolean {
 // bots we still try ≥3 pages before declaring the channels invalid.
 // Also returns the homepage HTML + finalUrl so the caller can run legitimacy
 // analysis without an extra network round-trip.
-export async function discoverContacts(website: string): Promise<{
+export async function discoverContacts(website: string, maxPages = MAX_PAGES): Promise<{
   emails: string[];
   phones: string[];
   contact_url: string | null;
@@ -632,7 +633,7 @@ export async function discoverContacts(website: string): Promise<{
   const queue: string[] = [base, ...CONTACT_PATHS.map((p) => new URL(p, base).toString())];
   let enqueuedLinks = false;
 
-  while (queue.length && pagesTried < MAX_PAGES) {
+  while (queue.length && pagesTried < maxPages) {
     const url = queue.shift()!;
     const k = keyOf(url);
     if (seen.has(k)) continue;
@@ -1048,6 +1049,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   let paidEligible = allowPaidProviders && ownDomain;
   const domainKey = ownDomain ? contactDomainKey(website) : null;
   let cached: CachedContact | null = null;
+  let cacheServed = false;
   const scoutEmail = (payload.supplier_contact_email as string | null) || null;
   const scoutPhone = (payload.supplier_phone as string | null) || null;
 
@@ -1098,10 +1100,35 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
 
   // If we're missing a direct email or a phone, go fetch — persistently. This is
   // also the auto-resolve path when the only email we had was a marketplace one.
+  // Per-domain memo, read BEFORE the crawl. Read after it (as this first
+  // shipped) the cache never served anything: a domain we hold an email for is
+  // usually a domain the crawl can still read, so the crawl re-found the same
+  // address and the memo was only ever consulted on the leads it had nothing
+  // for. Measured 0 reuses in 1,145 enrichments against a 4,015-domain seed.
+  //
+  // A hit does not skip the site visit entirely: the homepage HTML feeds
+  // legitimacy and marketplace-trust scoring, which every lead needs on its own
+  // payload. It caps the visit at that one page instead of seven.
+  if (!email && domainKey) {
+    cached = await readContactDomainCache(domainKey);
+    const fresh =
+      !!cached?.resolved_at && Date.now() - new Date(cached.resolved_at).getTime() < CACHE_TTL_DAYS * 86400000;
+    if (cached?.email && fresh) {
+      email = cached.email;
+      contactSource = (cached.source as ContactDiscovery["source"]) ?? "discovered";
+      if (!phone && cached.phone) phone = cached.phone;
+      if (!contactUrl && cached.contact_url) contactUrl = cached.contact_url;
+      cacheServed = true;
+      await recordContactCacheHit(domainKey);
+    } else if (paidLookupSuppressed(cached)) {
+      paidEligible = false;
+    }
+  }
+
   let legitimacy_check: LegitimacyCheck | null = null;
   let crawledPeople: { name: string; title: string | null }[] = [];
-  if (website && (!email || !phone)) {
-    const d = await discoverContacts(website).catch(() => null);
+  if (website && (!email || !phone || cacheServed)) {
+    const d = await discoverContacts(website, cacheServed ? 1 : MAX_PAGES).catch(() => null);
     if (d) {
       pagesTried = d.pages_tried;
       listingHtml = d.homepage_html ?? "";
@@ -1165,24 +1192,6 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     if (tenkEmail) {
       email = tenkEmail;
       contactSource = "tenkara";
-    }
-  }
-
-  // Per-domain memo. The same supplier arrives as many leads (7,801 enrichment
-  // attempts over 4,893 distinct domains in one week), so a domain already
-  // resolved is reused instead of re-crawled into the paid waterfall, and a
-  // domain that recently resolved to nothing is not paid for again until its
-  // backoff elapses. Never terminal: the free crawl above always ran.
-  if (!email && domainKey) {
-    cached = await readContactDomainCache(domainKey);
-    if (cached?.email) {
-      email = cached.email;
-      contactSource = (cached.source as ContactDiscovery["source"]) ?? "discovered";
-      if (!phone && cached.phone) phone = cached.phone;
-      if (!contactUrl && cached.contact_url) contactUrl = cached.contact_url;
-      await recordContactCacheHit(domainKey);
-    } else if (paidLookupSuppressed(cached)) {
-      paidEligible = false;
     }
   }
 
@@ -1470,6 +1479,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
       source: contactSource,
       confidence: contactConfidence,
       priorMissCount: cached?.miss_count ?? 0,
+      keepResolvedAt: cacheServed ? cached?.resolved_at ?? null : null,
     });
   }
 

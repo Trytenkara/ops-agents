@@ -28,8 +28,14 @@ export interface CachedContact {
   source: string | null;
   confidence: string | null;
   miss_count: number;
+  resolved_at: string | null;
   retry_after: string | null;
 }
+
+// How long a resolved address is reused before the crawl is allowed to re-read
+// the domain. Bounded because inboxes get retired and staff leave; a cached hit
+// that never expires would outlive the address it points at.
+export const CACHE_TTL_DAYS = 30;
 
 // Days before a domain that resolved to nothing is worth paying to look up again.
 const MISS_BACKOFF_DAYS = [1, 3, 7, 14, 30];
@@ -58,7 +64,7 @@ export async function readContactDomainCache(domain: string): Promise<CachedCont
     const admin = createAdminClient();
     const { data } = await admin
       .from("contact_domain_cache")
-      .select("domain, email, phone, contact_url, poc_name, poc_title, source, confidence, miss_count, retry_after")
+      .select("domain, email, phone, contact_url, poc_name, poc_title, source, confidence, miss_count, resolved_at, retry_after")
       .eq("domain", domain)
       .maybeSingle();
     return (data as CachedContact | null) ?? null;
@@ -84,6 +90,9 @@ export async function writeContactDomainCache(input: {
   source: string | null;
   confidence: string | null;
   priorMissCount: number;
+  // Set when this run only replayed a cached hit. Keeps the original resolution
+  // timestamp so replaying it cannot roll the TTL forward forever.
+  keepResolvedAt?: string | null;
 }): Promise<void> {
   const now = new Date().toISOString();
   // A guessed-pattern email is a synthesis of a name and a domain, not a
@@ -105,7 +114,7 @@ export async function writeContactDomainCache(input: {
         source: isHit ? input.source : null,
         confidence: isHit ? input.confidence : null,
         miss_count: missCount,
-        resolved_at: isHit ? now : null,
+        resolved_at: isHit ? input.keepResolvedAt ?? now : null,
         last_attempt_at: now,
         retry_after: isHit ? null : backoffFrom(missCount),
         updated_at: now,
