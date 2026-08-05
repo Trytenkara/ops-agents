@@ -16,8 +16,9 @@ export interface OrgItem {
   isInternal?: boolean;
 }
 
-// Sidebar shows a capped quick-list (alphabetical); the full A→Z set lives on
-// the searchable /clients page so the nav stays usable at hundreds of clients.
+// Sidebar shows a capped quick-list (the operator's most-visited orgs); the full
+// A→Z set lives on the searchable /clients page so the nav stays usable at
+// hundreds of clients.
 const CLIENT_CAP = 5;
 
 export function Shell({

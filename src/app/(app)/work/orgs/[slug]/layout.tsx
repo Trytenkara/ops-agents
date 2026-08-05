@@ -2,6 +2,8 @@ import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { OrgSubnav } from "@/components/org-subnav";
 import { orgDisplayName } from "@/lib/org-display";
+import { getSession } from "@/lib/auth";
+import { recordOrgVisit } from "@/lib/org-visits";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +27,9 @@ export default async function OrgLayout({
   const admin = createAdminClient();
   const { data: org } = await admin.from("orgs").select("id, slug, name, display_name, is_internal").eq("slug", params.slug).maybeSingle();
   if (!org) notFound();
+
+  const session = await getSession();
+  if (session) await recordOrgVisit(session.userId, org.id);
 
   const base = `/work/orgs/${org.slug}`;
 
