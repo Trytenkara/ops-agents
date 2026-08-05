@@ -13,7 +13,7 @@ import { leadMarketKind } from "@/lib/lead-market";
 import { computeLeadFlags } from "@/lib/lead-flags";
 import { getClientRequirements, dealbreakerCertNames } from "@/lib/tenkara-requirements";
 import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
-import { getOrgAssignmentContext, autoOperator, overridesAuto } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, autoOperator, overridesAuto, resolveOperatorId, nameKey } from "@/lib/operator-assignment";
 
 import { orgDisplayName } from "@/lib/org-display";
 import { getSupplierProfiles } from "@/lib/supplier-profiles";
@@ -181,8 +181,15 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
       ? supplierAssignments.get(r.supplier_id) ?? null
       : r.assigned_operator_id ?? null;
     // Empty when the client runs manual assignment, or when this lead's market
-    // kind sits outside the client's auto scope.
-    const operator_auto_name = autoOperator(assignmentCtx, r.supplier_id ?? scoutAutoKey, market_kind)?.name ?? null;
+    // kind sits outside the client's auto scope. The validated profile outranks
+    // market_kind here (same precedence Supplier Validation renders its badge
+    // with): site_type is null on most leads, so trusting it alone classified a
+    // known marketplace as "direct" and dropped it out of a marketplace-only
+    // scope, leaving 937 marketplace suppliers on the old assignees. The name is
+    // the join key — this org carries no supplier_id on any lead.
+    const profileKind = r.supplier_name ? assignmentCtx.supplierTypes.get(nameKey(r.supplier_name)) ?? null : null;
+    const operator_auto_name =
+      autoOperator(assignmentCtx, r.supplier_id ?? scoutAutoKey, profileKind ?? market_kind, r.supplier_name)?.name ?? null;
     // Static label (rows without an assign control): a manual claim wins, except
     // under "auto, reassign all", where the auto owner is who agents route to —
     // unless the claim was made after that spread, i.e. someone corrected it.
@@ -254,6 +261,23 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
 
   // Supplier profiles for the supplier-centric view (approval tracking)
   const supplierProfiles = await getSupplierProfiles(admin, org.id).catch(() => []);
+
+  // Supplier Validation lists a card per PROFILE, including suppliers with no
+  // active lead behind them. Those cards took their owner from a lead, so every
+  // profile-only supplier read "Unassigned" no matter what the org's assignment
+  // settings said. Derive one here, keyed the way the view groups (supplier_id
+  // else lowercased name), and prefer the profile's own validated supplier_type.
+  const profileOperators: Record<string, string> = {};
+  for (const p of supplierProfiles) {
+    const key = p.supplier_id ?? p.supplier_name.toLowerCase();
+    const email = String(p.poc_email ?? "").trim().toLowerCase();
+    // Same key outreach consolidates on, so the card matches who gets the thread.
+    const autoKey = p.supplier_id ?? (email ? `e:${email}` : nameKey(p.supplier_name));
+    const kind = p.supplier_type ?? assignmentCtx.supplierTypes.get(nameKey(p.supplier_name)) ?? null;
+    const opId = resolveOperatorId(assignmentCtx, autoKey, kind, p.supplier_name);
+    const name = opId ? operatorNameById.get(opId) : null;
+    if (name) profileOperators[key] = name;
+  }
 
   // Qualification documents captured for this org, so the leads download carries
   // the CoA/SDS/TDS facts and not just the lead's own fields.
@@ -337,7 +361,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           </p>
         </div>
       )}
-      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} currentUserName={assignmentCtx.pool.find((op) => op.id === session.userId)?.name ?? null} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} marketplaceAccounts={marketplaceAccounts} enrichmentCases={enrichmentCases} supplierDocs={supplierDocs} mergePrompt={<MaterialMergePrompt flags={mergeFlags} />} />
+      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} currentUserName={assignmentCtx.pool.find((op) => op.id === session.userId)?.name ?? null} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} profileOperators={profileOperators} marketplaceAccounts={marketplaceAccounts} enrichmentCases={enrichmentCases} supplierDocs={supplierDocs} mergePrompt={<MaterialMergePrompt flags={mergeFlags} />} />
     </div>
   );
 }

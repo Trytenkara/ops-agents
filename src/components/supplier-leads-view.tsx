@@ -97,6 +97,7 @@ const STATUS_FILTER = [
 export function SupplierLeadsView({
   rows,
   profiles,
+  profileOperators = {},
   marketplaceAccounts = [],
   canAct,
   slug,
@@ -106,6 +107,9 @@ export function SupplierLeadsView({
 }: {
   rows: any[];
   profiles: SupplierProfile[];
+  // Derived owner per supplier, for cards whose supplier has no active lead to
+  // read one off. Keyed like the groups below: supplier_id else lowercased name.
+  profileOperators?: Record<string, string>;
   marketplaceAccounts?: MarketplaceAccount[];
   canAct: boolean;
   slug: string;
@@ -159,6 +163,7 @@ export function SupplierLeadsView({
     }
     group.leads.push(lead);
     if (!group.operatorName && lead.operator_name) group.operatorName = lead.operator_name;
+    if (!group.operatorName) group.operatorName = profileOperators[key] ?? null;
     if (!group.latestLead || (lead.created_at && lead.created_at > group.latestLead)) {
       group.latestLead = lead.created_at;
     }
@@ -173,7 +178,7 @@ export function SupplierLeadsView({
         supplierName: p.supplier_name,
         supplierId: p.supplier_id,
         profile: p,
-        operatorName: null,
+        operatorName: profileOperators[key] ?? null,
         leads: [],
         marketKind: p.supplier_type,
         latestLead: null,

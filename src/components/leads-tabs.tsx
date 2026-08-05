@@ -51,6 +51,7 @@ export function LeadsTabs({
   tagsByMaterialId = {},
   dimsByPack = {},
   supplierProfiles = [],
+  profileOperators = {},
   marketplaceAccounts = [],
   enrichmentCases = null,
   supplierDocs,
@@ -69,6 +70,7 @@ export function LeadsTabs({
   tagsByMaterialId?: Record<string, string>; // tenkara_material_id → org_client_id
   dimsByPack?: Record<string, CaseDims>;
   supplierProfiles?: SupplierProfile[];
+  profileOperators?: Record<string, string>;
   marketplaceAccounts?: MarketplaceAccount[];
   enrichmentCases?: React.ReactNode;
   supplierDocs?: SupplierDocIndex;
@@ -261,6 +263,7 @@ export function LeadsTabs({
           <SupplierLeadsView
             rows={visibleRows}
             profiles={supplierProfiles}
+            profileOperators={profileOperators}
             marketplaceAccounts={marketplaceAccounts}
             canAct={canAct}
             slug={slug}
