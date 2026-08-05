@@ -4,6 +4,7 @@ import { enrichContactViaZoomInfo, enrichContactsViaZoomInfo, isZoomInfoConfigur
 import { enrichContactViaHunter, enrichContactsViaHunter, isHunterConfigured } from "@/lib/hunter";
 import { enrichContactViaLeadMagic, enrichContactsViaLeadMagic, isLeadMagicConfigured } from "@/lib/leadmagic";
 import { AGGREGATOR_HOSTS } from "@/lib/aggregator-hosts";
+import { assessDealbreakerFit, type DealbreakerFit, type DealbreakerSpec } from "@/lib/dealbreaker-fit";
 
 // Pre-outreach enrichment building blocks. No LLM, no email — those land
 // when Agent 04 (Outreach) and Agent 08 (Email Scanner) ship.
@@ -24,6 +25,13 @@ export interface RawLead {
   // which surface suppliers on a loose keyword/shipment match and can drag in
   // wrong-industry companies. Null when unknown.
   source?: string | null;
+  // Tenkara materials.id for this lead. Present so the dealbreaker spec below can
+  // be resolved per material; null on legacy rows that never had it set.
+  material_id?: string | null;
+  // The client's dealbreaker specs for this lead's material, resolved once per
+  // batch by the caller (Tenkara lives in a different database, so enrichment
+  // never fetches it per lead). Null when the client configured none.
+  dealbreaker_spec?: DealbreakerSpec | null;
   payload: Record<string, any> | null;
   // Lead-creation confidence (0..1), if scored. Enrichment lowers it by any
   // marketplace-trust penalty so a down-ranked lead sorts to the bottom of the
@@ -271,6 +279,10 @@ export interface EnrichmentResult {
   marketplace_trust: MarketplaceTrustCheck | null;
   // Non-null only for source=importyeti/sourceready leads (the backstop's scope).
   material_relevance: MaterialRelevanceCheck | null;
+  // Whether the evidence we hold shows this supplier can meet the client's
+  // dealbreaker grades/certs. Null when the client set no dealbreakers. Advisory:
+  // an "unmet" verdict never blocks the lead (see lib/dealbreaker-fit.ts).
+  dealbreaker_fit: DealbreakerFit | null;
   completeness_score: number; // 0..1
   // The factors that produced completeness_score, in scoring order.
   completeness_factors: CompletenessFactor[];
@@ -1175,13 +1187,26 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // Material-relevance backstop: advisory, and only for the customs/directory
   // discovery sources whose loose matching can drag in wrong-industry companies.
   const isDiscoverySource = lead.source === "importyeti" || lead.source === "sourceready";
+  const productText = collectProductText(payload);
   const material_relevance: MaterialRelevanceCheck | null = isDiscoverySource
     ? assessMaterialRelevance({
         materialName: lead.material_name,
         inci: (payload.inci_name as string | null) ?? null,
-        productText: collectProductText(payload),
+        productText,
       })
     : null;
+
+  // Dealbreaker fit. Runs for every source (unlike the relevance backstop): a
+  // client's hard spec applies no matter how the supplier was found. Uses the
+  // certs parsed off the supplier's own site as well as the discovery text, so a
+  // lead that arrived with no grade data can still resolve to "meets" once we
+  // have read the homepage.
+  const dealbreaker_fit = assessDealbreakerFit({
+    spec: lead.dealbreaker_spec ?? null,
+    evidenceText: productText,
+    parsedCerts: legitimacy_check?.certifications ?? null,
+    scoutCerts: (payload.certifications as string | null) ?? null,
+  });
   // A small negative completeness factor when there's genuinely zero material-token
   // overlap, so the unverified lead sorts down. Recomputed from scratch each run, so
   // re-enriching never stacks the penalty (idempotent).
@@ -1229,6 +1254,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     legitimacy_check,
     marketplace_trust,
     material_relevance,
+    dealbreaker_fit,
     completeness_score,
     completeness_factors,
     outreach_ready,

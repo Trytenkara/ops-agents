@@ -9,6 +9,9 @@ import { seedQuoteProfilesFromStaged, seedQuoteProfilesFromMarketplace } from "@
 import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
 import { fillProfilesFromKnownSources } from "@/lib/supplier-profile-fill";
 import { runSupplierWebFill } from "./web-fill-run";
+import { resolveMaterialGradeSpecs } from "@/lib/tenkara-names";
+import { getClientRequirements, dealbreakerCertNames } from "@/lib/tenkara-requirements";
+import type { DealbreakerSpec } from "@/lib/dealbreaker-fit";
 
 // v1 trim (vs. full spec):
 //   - pre-outreach only. Reply-driven enrichment lands when Agent 08
@@ -79,8 +82,9 @@ registerAgent({
     let marketplaceQuoteBudget = MARKETPLACE_QUOTE_RESERVE;
     let seededSuppliers = 0;
     let seededQuotes = 0;
-    const { data: orgMeta } = await admin.from("orgs").select("id, is_internal").in("id", allSourcingOrgIds);
+    const { data: orgMeta } = await admin.from("orgs").select("id, is_internal, tenkara_org_id").in("id", allSourcingOrgIds);
     const isInternalById = new Map((orgMeta ?? []).map((o: any) => [o.id, !!o.is_internal]));
+    const tenkaraOrgIdByOrg = new Map((orgMeta ?? []).map((o: any) => [o.id, o.tenkara_org_id as string | null]));
     // Empty on secondary lanes, which no-ops every seed and fill loop below.
     const seedOrder = (isPrimary ? [...allSourcingOrgIds] : []).sort(
       (a, b) => Number(isInternalById.get(a) ?? false) - Number(isInternalById.get(b) ?? false)
@@ -285,13 +289,70 @@ registerAgent({
     const blockedReasons: Record<string, number> = {};
     const startedAt = Date.now();
 
-    type LeadRow = { id: string; supplier_id: string | null; supplier_name: string | null; material_name: string | null; source: string | null; payload: any; confidence_score: number | null; prev_attempt_at: string | null };
+    type LeadRow = { id: string; org_id: string | null; supplier_id: string | null; supplier_name: string | null; material_name: string | null; material_id: string | null; source: string | null; payload: any; confidence_score: number | null; prev_attempt_at: string | null };
+
+    // Resolve the client's DEALBREAKER specs once for the whole batch. Both sources
+    // live in Tenkara, a different database, so this cannot be a join in the claim
+    // and must not be a per-lead query either: it is two reads per batch (one for
+    // every distinct material, one per distinct org) shared across 25 leads.
+    //
+    // Best-effort throughout. A Tenkara hiccup must not fail enrichment, so a
+    // failed lookup leaves the spec null and the verdict simply isn't recorded.
+    const specsByMaterial = new Map<string, DealbreakerSpec>();
+    // Cert dealbreakers apply org-wide, so they still bind on a lead whose
+    // material_id was never resolved (no grade spec to look up).
+    const certsByOrg = new Map<string, string[]>();
+    {
+      const rows = leads as LeadRow[];
+      const materialIds = Array.from(new Set(rows.map((r) => r.material_id).filter((v): v is string => !!v)));
+      const orgIds = Array.from(new Set(rows.map((r) => r.org_id).filter((v): v is string => !!v)));
+
+      const gradeSpecs = materialIds.length
+        ? await resolveMaterialGradeSpecs(materialIds).catch(() => new Map())
+        : new Map();
+
+      for (const orgId of orgIds) {
+        const tenkaraId = tenkaraOrgIdByOrg.get(orgId) ?? null;
+        if (!tenkaraId) continue;
+        const items = await getClientRequirements(tenkaraId).catch(() => []);
+        certsByOrg.set(orgId, dealbreakerCertNames(items));
+      }
+
+      for (const row of rows) {
+        if (!row.material_id) continue;
+        // `required` is the dealbreaker grades comma-joined; multiple grades on one
+        // material are conjunctive facets, so split them back apart.
+        const required = gradeSpecs.get(row.material_id)?.required ?? null;
+        const requiredGrades = required
+          ? String(required).split(",").map((s: string) => s.trim()).filter(Boolean)
+          : [];
+        const requiredCerts = row.org_id ? certsByOrg.get(row.org_id) ?? [] : [];
+        if (!requiredGrades.length && !requiredCerts.length) continue;
+        specsByMaterial.set(row.material_id, { requiredGrades, requiredCerts });
+      }
+      if (specsByMaterial.size) {
+        await ctx.log(`Dealbreaker specs resolved for ${specsByMaterial.size} of ${materialIds.length} materials in batch`, {
+          step: "dealbreakers",
+          data: { materials_with_specs: specsByMaterial.size, materials_in_batch: materialIds.length },
+        });
+      }
+    }
+
+    function dealbreakerSpecFor(row: LeadRow): DealbreakerSpec | null {
+      const byMaterial = row.material_id ? specsByMaterial.get(row.material_id) : undefined;
+      if (byMaterial) return byMaterial;
+      const certs = row.org_id ? certsByOrg.get(row.org_id) ?? [] : [];
+      return certs.length ? { requiredGrades: [], requiredCerts: certs } : null;
+    }
+
     async function processLead(row: LeadRow): Promise<void> {
       const lead: RawLead = {
         id: row.id,
         supplier_id: row.supplier_id,
         supplier_name: row.supplier_name,
         material_name: row.material_name,
+        material_id: row.material_id,
+        dealbreaker_spec: dealbreakerSpecFor(row),
         source: row.source,
         payload: row.payload ?? {},
         confidence_score: row.confidence_score,

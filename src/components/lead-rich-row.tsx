@@ -568,8 +568,16 @@ export function LeadRichRow({
             </Badge>
           )}
           {Array.isArray(r.flags) &&
-            r.flags.map((f: { code: string; label: string }) => (
-              <Badge key={f.code} variant="warn" title="Advisory flag; lead stays in the pipeline">
+            r.flags.map((f: { code: string; label: string; tone?: "warn" | "good" }) => (
+              <Badge
+                key={f.code}
+                variant={f.tone === "good" ? "success" : "warn"}
+                title={
+                  f.tone === "good"
+                    ? "Advisory signal; the client's dealbreaker specs were found in this supplier's product text"
+                    : "Advisory flag; lead stays in the pipeline"
+                }
+              >
                 {f.label}
               </Badge>
             ))}

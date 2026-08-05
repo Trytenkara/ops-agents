@@ -11,7 +11,7 @@ import { resolveMaterialGrades, resolveSupplierMarketplace, resolveMaterialNames
 import { correctMaterialSpelling } from "@/lib/material-spelling";
 import { leadMarketKind } from "@/lib/lead-market";
 import { computeLeadFlags } from "@/lib/lead-flags";
-import { getClientRequirements } from "@/lib/tenkara-requirements";
+import { getClientRequirements, dealbreakerCertNames } from "@/lib/tenkara-requirements";
 import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
 import { getOrgAssignmentContext, autoOperator } from "@/lib/operator-assignment";
 
@@ -148,11 +148,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   // the flag simply doesn't fire.
   const dealbreakerCerts = org.tenkara_org_id
     ? await getClientRequirements(org.tenkara_org_id)
-        .then((items) =>
-          items
-            .filter((it) => it.kind === "certification" && it.dealbreaker && it.detail)
-            .flatMap((it) => it.detail!.split(",").map((s) => s.trim()).filter(Boolean))
-        )
+        .then(dealbreakerCertNames)
         .catch(() => [] as string[])
     : ([] as string[]);
 

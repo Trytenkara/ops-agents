@@ -5,8 +5,11 @@
 // every existing lead with no re-run and no DB write.
 
 export interface LeadFlag {
-  code: "inactive_site" | "missing_cert" | "sample_only";
+  code: "inactive_site" | "missing_cert" | "sample_only" | "dealbreaker_met";
   label: string;
+  // Most flags are caveats. A few are positive signals and must not be rendered
+  // in warning colours; the renderer keys the badge variant off this.
+  tone?: "warn" | "good";
 }
 
 export interface LeadFlagContext {
@@ -39,6 +42,24 @@ function missingCert(payload: any, dealbreakerCerts: string[]): LeadFlag | null 
   return { code: "missing_cert", label: `Missing required cert: ${missing.join(", ")}` };
 }
 
+// Enrichment checked the client's dealbreaker grades/certs against the evidence
+// held for this supplier and found support for ALL of them. See lib/dealbreaker-fit.ts.
+//
+// Deliberately the POSITIVE side of the verdict. Badging the negative was tried
+// and measured against live data first: it fires on 41% of a real client's leads
+// even when restricted to partial matches, because most raw listings name the
+// material and never name its grade, so "not evidenced" is the default state and
+// says nothing about the supplier. "Meets" is the scarce, actionable signal (6-14%
+// per org) and it points an operator at the leads worth working first. The full
+// tri-state verdict is still recorded on the payload for sorting.
+function dealbreakerMet(payload: any): LeadFlag | null {
+  const fit = payload?.enrichment?.dealbreaker_fit;
+  if (!fit || fit.verdict !== "meets") return null;
+  const satisfied = Array.isArray(fit.satisfied) ? fit.satisfied.filter(Boolean) : [];
+  if (!satisfied.length) return null;
+  return { code: "dealbreaker_met", label: `Meets dealbreakers: ${satisfied.join(", ")}`, tone: "good" };
+}
+
 // Supplier appears to sell sample / trial sizes only, not commercial volume.
 // Deliberately conservative — an explicit phrase, never an inference from a size
 // number — so it doesn't misfire on suppliers that merely offer a sample too.
@@ -57,8 +78,14 @@ export function computeLeadFlags(payload: any, ctx: LeadFlagContext = {}): LeadF
   const flags: LeadFlag[] = [];
   const site = inactiveSite(payload);
   if (site) flags.push(site);
-  const cert = missingCert(payload, ctx.dealbreakerCerts ?? []);
-  if (cert) flags.push(cert);
+  // A "meets" verdict already checked the dealbreaker certs against site-parsed
+  // certs, which missingCert cannot see, so it supersedes rather than contradicts.
+  const db = dealbreakerMet(payload);
+  if (db) flags.push(db);
+  else {
+    const cert = missingCert(payload, ctx.dealbreakerCerts ?? []);
+    if (cert) flags.push(cert);
+  }
   const sample = sampleOnly(payload);
   if (sample) flags.push(sample);
   return flags;

@@ -136,6 +136,16 @@ export async function getClientRequirements(orgTenkaraId: string | null | undefi
   return [...parseRequirements(row.pre_order_requirements, "pre_order"), ...parseRequirements(row.post_order_requirements, "post_order")];
 }
 
+// The individual certification names the client marked as a dealbreaker. Their
+// names arrive comma-joined in `detail`, so split them back out; a supplier must
+// hold ALL of them.
+export function dealbreakerCertNames(items: RequirementItem[]): string[] {
+  const names = items
+    .filter((it) => it.kind === "certification" && it.dealbreaker && it.detail)
+    .flatMap((it) => it.detail!.split(",").map((s) => s.trim()).filter(Boolean));
+  return Array.from(new Set(names));
+}
+
 // The labels a supplier should be asked to provide, deduped across phases.
 // Drives the follow-up email ask. Excludes pure specs (e.g. shelf life).
 export function requestedDocLabels(items: RequirementItem[]): string[] {

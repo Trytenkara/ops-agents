@@ -161,6 +161,11 @@ export async function enrichAndStageLead(
       legitimacy_check: result.legitimacy_check,
       marketplace_trust: result.marketplace_trust,
       material_relevance: result.material_relevance,
+      // Advisory dealbreaker verdict. Deliberately NOT mirrored to a root-level
+      // payload flag and NOT folded into completeness: an "unmet" here is absence
+      // of evidence, not a failed spec, so it must not down-rank the lead. The
+      // whole enrichment block is rebuilt each run, so this stays idempotent.
+      dealbreaker_fit: result.dealbreaker_fit,
       aggregator_contact_email: result.aggregator_contact_email,
       completeness_score: result.completeness_score,
       completeness_factors: result.completeness_factors,
