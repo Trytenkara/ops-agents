@@ -22,6 +22,7 @@ import {
   docUrlsCell,
   type SupplierDocIndex,
 } from "@/lib/supplier-doc-index";
+import type { ClientDocRules } from "@/lib/tenkara-requirements";
 
 interface SupplierQuoteGroup {
   supplierName: string;
@@ -77,6 +78,7 @@ export function QuoteValidationView({
   supplierTypes = {},
   supplierOperators = {},
   supplierDocs,
+  clientRules = {},
 }: {
   profiles: QuoteProfile[];
   canAct: boolean;
@@ -85,6 +87,7 @@ export function QuoteValidationView({
   supplierTypes?: SupplierTypeMap;
   supplierOperators?: SupplierOperatorMap;
   supplierDocs?: SupplierDocIndex;
+  clientRules?: ClientDocRules;
 }) {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("quotes");
@@ -345,6 +348,7 @@ export function QuoteValidationView({
                       orgId={orgId}
                       canAct={canAct}
                       docs={docsForQuote(supplierDocs, q)}
+                      clientRules={clientRules}
                     />
                   ))}
                   {canAct && (

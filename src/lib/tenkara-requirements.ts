@@ -151,3 +151,30 @@ export function requestedDocLabels(items: RequirementItem[]): string[] {
   }
   return out;
 }
+
+// The client's standard-document rules, flattened for a per-quote display. Keyed
+// `<phase>:<key>` (e.g. "pre_order:coa"). This is the ONLY source of truth for
+// whether a document is required and whether missing it disqualifies the vendor:
+// it is a client-level setting held in Tenkara, not something ops decides per
+// quote. quote_profiles carries its own preorder_*_required/_dealbreaker columns
+// which nothing mirrors into, so they read false for every one of the 939 live
+// rows while McGinley's real settings make CoA, SDS and TDS hard dealbreakers.
+export interface ClientDocRule {
+  required: boolean;
+  dealbreaker: boolean;
+  detail: string | null;
+}
+
+export type ClientDocRules = Record<string, ClientDocRule>;
+
+export function clientDocRules(items: RequirementItem[]): ClientDocRules {
+  const rules: ClientDocRules = {};
+  for (const it of items) {
+    rules[`${it.phase}:${it.key}`] = {
+      required: it.requested,
+      dealbreaker: it.dealbreaker,
+      detail: it.detail,
+    };
+  }
+  return rules;
+}

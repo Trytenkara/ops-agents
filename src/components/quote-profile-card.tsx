@@ -12,6 +12,7 @@ import { quoteCompleteness } from "@/lib/quote-profiles";
 import { qaQuoteProfile } from "@/lib/price-qa";
 import { DocumentRow } from "@/components/document-row";
 import type { QuoteDoc } from "@/lib/supplier-doc-index";
+import type { ClientDocRule, ClientDocRules } from "@/lib/tenkara-requirements";
 
 const STATUS_META: Record<string, { label: string; variant: "success" | "warn" | "secondary" }> = {
   draft: { label: "Draft", variant: "secondary" },
@@ -99,50 +100,58 @@ function CompletenessBar({ pct }: { pct: number }) {
   );
 }
 
+// Required and Dealbreaker are the client's rules, set by the client in Tenkara
+// (user_supplier_settings), identical for every quote in the org. They are shown
+// read-only here: ops does not decide what a client requires. "Met" is the only
+// operator field, and it also auto-ticks from a document we actually hold.
 function ReqRow({
   label,
   prefix,
+  rule,
   profile,
   editing,
   onCheck,
-  hasDealbreaker = true,
-  hasRequestedMet = true,
+  hasMet = true,
 }: {
   label: string;
   prefix: string;
+  rule: ClientDocRule | undefined;
   profile: QuoteProfile;
   editing: boolean;
   onCheck: (field: string, value: boolean) => void;
-  hasDealbreaker?: boolean;
-  hasRequestedMet?: boolean;
+  hasMet?: boolean;
 }) {
-  const req = (profile as any)[`${prefix}_required`] as boolean;
-  const db = hasDealbreaker ? (profile as any)[`${prefix}_dealbreaker`] as boolean : false;
-  const rq = hasRequestedMet ? (profile as any)[`${prefix}_requested`] as boolean : false;
-  const met = hasRequestedMet ? (profile as any)[`${prefix}_met`] as boolean : false;
+  const met = hasMet ? ((profile as any)[`${prefix}_met`] as boolean) : false;
 
   return (
     <tr className="text-xs">
-      <td className="pr-4 py-1 font-medium">{label}</td>
-      <td className="px-3 py-1">
-        <Checkbox label="" checked={req} field={`${prefix}_required`} editing={editing} onChange={onCheck} />
+      <td className="pr-4 py-1 font-medium">
+        {label}
+        {rule?.detail && <span className="ml-1.5 text-muted-foreground">({rule.detail})</span>}
       </td>
-      {hasDealbreaker && (
+      <td className="px-3 py-1">
+        <ClientRuleMark on={!!rule?.required} />
+      </td>
+      <td className="px-3 py-1">
+        <ClientRuleMark on={!!rule?.dealbreaker} />
+      </td>
+      {hasMet && (
         <td className="px-3 py-1">
-          <Checkbox label="" checked={db} field={`${prefix}_dealbreaker`} editing={editing} onChange={onCheck} />
+          <Checkbox label="" checked={met} field={`${prefix}_met`} editing={editing} onChange={onCheck} />
         </td>
       )}
-      {hasRequestedMet && (
-        <>
-          <td className="px-3 py-1">
-            <Checkbox label="" checked={rq} field={`${prefix}_requested`} editing={editing} onChange={onCheck} />
-          </td>
-          <td className="px-3 py-1">
-            <Checkbox label="" checked={met} field={`${prefix}_met`} editing={editing} onChange={onCheck} />
-          </td>
-        </>
-      )}
     </tr>
+  );
+}
+
+function ClientRuleMark({ on }: { on: boolean }) {
+  return (
+    <span
+      className={on ? "text-foreground" : "text-muted-foreground/40"}
+      title={on ? "Required by the client in Tenkara" : "Not required by the client"}
+    >
+      {on ? "Yes" : "-"}
+    </span>
   );
 }
 
@@ -151,11 +160,13 @@ export function QuoteProfileCard({
   orgId,
   canAct,
   docs = [],
+  clientRules = {},
 }: {
   profile: QuoteProfile;
   orgId: string;
   canAct: boolean;
   docs?: QuoteDoc[];
+  clientRules?: ClientDocRules;
 }) {
   const [profile, setProfile] = useState(initial);
   const [editing, setEditing] = useState(false);
@@ -406,21 +417,24 @@ export function QuoteProfileCard({
           <h4 className="text-xs uppercase tracking-wider font-semibold text-muted-foreground mb-2">
             Pre-Order Requirements
           </h4>
+          <p className="mb-2 text-[11px] text-muted-foreground">
+            Required and Dealbreaker are the client&apos;s settings in Tenkara. Met is the only field ops sets, and it ticks
+            itself when a matching document is on file.
+          </p>
           <table className="text-sm">
             <thead>
               <tr className="text-[10px] uppercase tracking-wider text-muted-foreground">
                 <th className="pr-4 text-left font-medium"></th>
                 <th className="px-3 text-left font-medium">Required</th>
                 <th className="px-3 text-left font-medium">Dealbreaker</th>
-                <th className="px-3 text-left font-medium">Requested</th>
                 <th className="px-3 text-left font-medium">Met</th>
               </tr>
             </thead>
             <tbody>
-              <ReqRow label="COA" prefix="preorder_coa" profile={profile} editing={editing} onCheck={handleCheckChange} />
-              <ReqRow label="SDS" prefix="preorder_sds" profile={profile} editing={editing} onCheck={handleCheckChange} />
-              <ReqRow label="TDS" prefix="preorder_tds" profile={profile} editing={editing} onCheck={handleCheckChange} />
-              <ReqRow label="Sample" prefix="preorder_sample" profile={profile} editing={editing} onCheck={handleCheckChange} />
+              <ReqRow label="COA" prefix="preorder_coa" rule={clientRules["pre_order:coa"]} profile={profile} editing={editing} onCheck={handleCheckChange} />
+              <ReqRow label="SDS" prefix="preorder_sds" rule={clientRules["pre_order:sds"]} profile={profile} editing={editing} onCheck={handleCheckChange} />
+              <ReqRow label="TDS" prefix="preorder_tds" rule={clientRules["pre_order:tds"]} profile={profile} editing={editing} onCheck={handleCheckChange} />
+              <ReqRow label="Sample" prefix="preorder_sample" rule={clientRules["pre_order:sample"]} profile={profile} editing={editing} onCheck={handleCheckChange} />
             </tbody>
           </table>
         </div>
@@ -439,9 +453,9 @@ export function QuoteProfileCard({
               </tr>
             </thead>
             <tbody>
-              <ReqRow label="COA" prefix="postorder_coa" profile={profile} editing={editing} onCheck={handleCheckChange} hasDealbreaker hasRequestedMet={false} />
-              <ReqRow label="SDS" prefix="postorder_sds" profile={profile} editing={editing} onCheck={handleCheckChange} hasDealbreaker hasRequestedMet={false} />
-              <ReqRow label="TDS" prefix="postorder_tds" profile={profile} editing={editing} onCheck={handleCheckChange} hasDealbreaker hasRequestedMet={false} />
+              <ReqRow label="COA" prefix="postorder_coa" rule={clientRules["post_order:coa"]} profile={profile} editing={editing} onCheck={handleCheckChange} hasMet={false} />
+              <ReqRow label="SDS" prefix="postorder_sds" rule={clientRules["post_order:sds"]} profile={profile} editing={editing} onCheck={handleCheckChange} hasMet={false} />
+              <ReqRow label="TDS" prefix="postorder_tds" rule={clientRules["post_order:tds"]} profile={profile} editing={editing} onCheck={handleCheckChange} hasMet={false} />
             </tbody>
           </table>
         </div>

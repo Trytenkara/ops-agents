@@ -1,4 +1,5 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
+import { getClientRequirements } from "@/lib/tenkara-requirements";
 
 // Tick a quote profile's pre-order document requirements from the documents we
 // actually hold. Those checkboxes were operator-toggled and nothing wrote them,
@@ -22,6 +23,16 @@ const normName = (s: string | null | undefined) => (s ?? "").trim().toLowerCase(
 const supKey = (id: string | null | undefined, name: string | null | undefined) => id || `name:${normName(name)}`;
 
 export async function syncDocRequirementsMet(admin: Admin, orgId: string): Promise<{ updated: number }> {
+  // Whether a document is required is the CLIENT's rule, held in Tenkara. This
+  // used to gate on quote_profiles.preorder_*_required, which nothing ever wrote:
+  // false on all 939 live rows, so this function could never tick anything while
+  // McGinley's real settings make CoA, SDS and TDS hard dealbreakers. If the
+  // Tenkara read fails we fall back to the local column rather than ticking
+  // requirements the client never asked for.
+  const { data: orgRow } = await admin.from("orgs").select("tenkara_org_id").eq("id", orgId).maybeSingle();
+  const items = await getClientRequirements((orgRow as any)?.tenkara_org_id).catch(() => []);
+  const clientRequires = new Set(items.filter((i) => i.phase === "pre_order" && i.requested).map((i) => i.key));
+
   // supplier_issued=false is a third-party reference sheet scraped off the web.
   // It is real chemistry but it is not this vendor issuing a document, so it
   // cannot satisfy a client requirement. Null (every pre-0078 row) counts.
@@ -59,7 +70,7 @@ export async function syncDocRequirementsMet(admin: Admin, orgId: string): Promi
       const reqCol = metCol.replace("_met", "_required");
       // Only a requirement the client actually asked for. Ticking "met" on
       // something never required would read as a decision nobody made.
-      if (!p[reqCol]) continue;
+      if (!clientRequires.has(docType) && !p[reqCol]) continue;
       if (p[metCol]) continue;
       if (types.has(docType)) patch[metCol] = true;
     }
