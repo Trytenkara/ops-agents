@@ -11,7 +11,7 @@ export async function setOrgDefaultOperators(input: {
 }): Promise<Result> {
   const session = await getSession();
   if (!session) return { ok: false, error: "unauthenticated" };
-  if (!hasAnyRole(session, ["admin", "ops_lead"])) return { ok: false, error: "forbidden" };
+  if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator"])) return { ok: false, error: "forbidden" };
 
   if (input.primaryUserId && input.primaryUserId === input.backupUserId) {
     return { ok: false, error: "primary and backup can't be the same person" };

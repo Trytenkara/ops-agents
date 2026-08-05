@@ -125,7 +125,7 @@ export async function setOrgAssignmentSettings(input: {
 }): Promise<Result> {
   const session = await getSession();
   if (!session) return { ok: false, error: "unauthenticated" };
-  if (!hasAnyRole(session, ["admin", "ops_lead"])) return { ok: false, error: "forbidden" };
+  if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator"])) return { ok: false, error: "forbidden" };
   if (!MODES.includes(input.mode)) return { ok: false, error: "unknown mode" };
   const types = input.supplierTypes.filter((t) => ALL_SUPPLIER_TYPES.includes(t));
 
@@ -174,7 +174,7 @@ export async function setOperatorAutoAssignable(input: {
 }): Promise<Result> {
   const session = await getSession();
   if (!session) return { ok: false, error: "unauthenticated" };
-  if (!hasAnyRole(session, ["admin", "ops_lead"])) return { ok: false, error: "forbidden" };
+  if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator"])) return { ok: false, error: "forbidden" };
 
   const admin = createAdminClient();
   const { error } = await admin

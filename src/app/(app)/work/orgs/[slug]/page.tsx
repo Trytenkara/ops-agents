@@ -96,7 +96,8 @@ export default async function OrgOverview({ params }: { params: { slug: string }
         status: ops.backup_user.status,
       }
     : null;
-  const canEditAssignment = hasAnyRole(session, ["admin", "ops_lead"]);
+  const canEditSourcing = hasAnyRole(session, ["admin", "ops_lead"]);
+  const canEditAssignment = hasAnyRole(session, ["admin", "ops_lead", "ops_operator"]);
 
   const assignmentOperators = (membersRes.data ?? [])
     .map((m: any) => {
@@ -135,21 +136,21 @@ export default async function OrgOverview({ params }: { params: { slug: string }
             orgId={org.id}
             orgName={orgDisplayName(org)}
             initial={(org.sourcing_status ?? "off") as any}
-            canEdit={canEditAssignment}
+            canEdit={canEditSourcing}
           />
           <OrgTenkaraInbox
             orgId={org.id}
             orgName={orgDisplayName(org)}
             initialAccountId={org.tenkara_email_account_id ?? null}
             initialEmail={org.tenkara_email_address ?? null}
-            canEdit={canEditAssignment}
+            canEdit={canEditSourcing}
           />
           {(org.bounce_alert_status ?? "none") !== "none" && (
             <OrgBounceAlert
               orgId={org.id}
               orgName={orgDisplayName(org)}
               status={(org.bounce_alert_status ?? "none") as any}
-              canEdit={canEditAssignment}
+              canEdit={canEditSourcing}
             />
           )}
         </CardContent>
