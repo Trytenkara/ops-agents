@@ -823,6 +823,32 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     }
 
     if (gotPrice) {
+      // An open escalation is a request for a human to pull this price by hand.
+      // Once the agent gets it, that request is answered, so close it — otherwise
+      // the queue fills with work that is already done and operators stop trusting it.
+      const openCases = admin
+        .from("cases")
+        .update({
+          status: "resolved",
+          resolved_at: new Date().toISOString(),
+          resolution_note: `Auto-pulled by Agent 05: $${result.current_price}${result.pack_size ? ` / ${result.pack_size}` : ""}`,
+        })
+        .eq("org_id", l.org_id)
+        .eq("type", "marketplace_price_pull")
+        .in("status", ["open", "in_progress"]);
+      // lead_id as well as the id pair: a case raised before its supplier was
+      // linked carries a null supplier_id, and `eq.null` would match nothing.
+      const { data: answered } = await (l.supplier_id && l.material_id
+        ? openCases.or(`metadata->>lead_id.eq.${l.id},and(supplier_id.eq.${l.supplier_id},material_id.eq.${l.material_id})`)
+        : openCases.eq("metadata->>lead_id", l.id)
+      ).select("id");
+      if (answered?.length) {
+        await log(`Closed ${answered.length} price-pull escalation(s) now that a price landed: ${l.supplier_name} × ${l.material_name}`, {
+          step: "mp_case_resolved",
+          data: { lead_id: l.id, case_ids: answered.map((c: any) => c.id) },
+        });
+      }
+
       const moved = isRecheck && cadence?.stable_streak === 0 && priorPrice != null;
       const verb = isRecheck ? (moved ? `re-checked (moved from $${priorPrice})` : "re-checked (unchanged)") : "pulled";
       await log(
