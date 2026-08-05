@@ -21,6 +21,11 @@ const NEVER_MARKETPLACE_HOSTS = [
   "chemicalbook.com",
   "guidechem.com",
   "spotchemi.com",
+  // Distributor discovery portals. The product page prints no price and its
+  // "View pricing and place order" control is disabled until a human at the
+  // distributor approves a portal account; the live CTAs are "Request a quote"
+  // and "Request a sample". That is a quote desk with a catalogue, not a cart.
+  "azelis.com",
   // General B2B directories.
   "thomasnet.com",
   "kompass.com",
