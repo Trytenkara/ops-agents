@@ -4,6 +4,15 @@ import { enrichContactViaZoomInfo, enrichContactsViaZoomInfo, isZoomInfoConfigur
 import { enrichContactViaHunter, enrichContactsViaHunter, isHunterConfigured } from "@/lib/hunter";
 import { enrichContactsViaLeadMagic, enrichPrimaryViaLeadMagic, isLeadMagicConfigured } from "@/lib/leadmagic";
 import { AGGREGATOR_HOSTS } from "@/lib/aggregator-hosts";
+import { neverMarketplaceHostOf } from "@/lib/marketplace-hosts";
+import {
+  contactDomainKey,
+  readContactDomainCache,
+  recordContactCacheHit,
+  writeContactDomainCache,
+  paidLookupSuppressed,
+  type CachedContact,
+} from "@/lib/contact-domain-cache";
 import { assessDealbreakerFit, type DealbreakerFit, type DealbreakerSpec } from "@/lib/dealbreaker-fit";
 
 // Pre-outreach enrichment building blocks. No LLM, no email — those land
@@ -309,12 +318,22 @@ export interface EnrichmentResult {
 
 const PROBE_TIMEOUT_MS = 8_000;
 const FETCH_TIMEOUT_MS = 7_000;
-const MAX_PAGES = 4; // homepage + up to 3 follow-ups → always ≥3 tried before blocking
+const MAX_PAGES = 7; // homepage + up to 6 follow-ups → always ≥3 tried before blocking
 const MAX_BODY_BYTES = 700_000;
 const UA = "Mozilla/5.0 (compatible; TackleBox-Enrich/1.0)";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-// Order matters: contact/quote pages first so we find a channel fast.
-const CONTACT_PATHS = ["/contact", "/contact-us", "/contactus", "/sales", "/get-a-quote", "/request-a-quote", "/rfq", "/about", "/about-us"];
+// Order matters: contact/quote pages first so we find a channel fast. The team /
+// leadership pages come last: they rarely carry a direct inbox, but they are
+// where a POC NAME comes from, and a name on the supplier's own domain is enough
+// to build the guessed-pattern draft.
+const CONTACT_PATHS = [
+  "/contact", "/contact-us", "/contactus", "/contact.html", "/sales",
+  "/get-a-quote", "/request-a-quote", "/rfq", "/enquiry", "/reach-us",
+  // German/EU sites: an Impressum is a legal requirement and always prints a
+  // real address, an email and a named managing director.
+  "/impressum", "/kontakt",
+  "/about", "/about-us", "/company", "/team", "/our-team", "/leadership",
+];
 
 function hostOf(url: string): string | null {
   try {
@@ -435,6 +454,32 @@ function isThirdPartyServiceEmail(email: string): boolean {
   return THIRD_PARTY_SERVICE_DOMAINS.has(domain);
 }
 
+// Cloudflare Email Address Obfuscation replaces every mailto on a page with a
+// hex blob, so a site behind it reads as having no email at all. The encoding is
+// a plain XOR: first byte is the key. Decoding it is the single highest-yield
+// crawl fix, because Cloudflare is in front of a large share of supplier sites.
+function decodeCfEmails(html: string): string[] {
+  const out: string[] = [];
+  for (const m of html.matchAll(/(?:data-cfemail=["']|\/cdn-cgi\/l\/email-protection#)([0-9a-f]{8,})/gi)) {
+    const hex = m[1];
+    const key = parseInt(hex.slice(0, 2), 16);
+    let s = "";
+    for (let i = 2; i < hex.length; i += 2) s += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16) ^ key);
+    if (EMAIL_RE.test(s)) out.push(s.toLowerCase());
+  }
+  return out;
+}
+
+// Sites that write "sales (at) acme (dot) com" to dodge scrapers are publishing a
+// real inbox; normalize the spellings back into an address before extraction.
+function deobfuscateEmailText(html: string): string {
+  return html
+    .replace(/&#(?:64|x40);/gi, "@")
+    .replace(/&#(?:46|x2e);/gi, ".")
+    .replace(/\s*(?:\(|\[|&#40;)?\s*(?:at|AT)\s*(?:\)|\]|&#41;)?\s*/g, (m) => (/[([]|&#40;/.test(m) ? "@" : m))
+    .replace(/\s*(?:\(|\[|&#40;)?\s*(?:dot|DOT)\s*(?:\)|\]|&#41;)?\s*/g, (m) => (/[([]|&#40;/.test(m) ? "." : m));
+}
+
 export function extractEmails(html: string): string[] {
   const found = new Set<string>();
   const ok = (e: string) =>
@@ -444,11 +489,65 @@ export function extractEmails(html: string): string[] {
     const e = decodeURIComponent(m[1]).trim().toLowerCase();
     if (ok(e)) found.add(e);
   }
-  for (const m of html.matchAll(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi)) {
+  for (const e of decodeCfEmails(html)) {
+    if (ok(e)) found.add(e);
+  }
+  for (const m of deobfuscateEmailText(html).matchAll(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi)) {
     const e = m[0].trim().toLowerCase();
     if (ok(e)) found.add(e);
   }
   return Array.from(found).slice(0, 8);
+}
+
+// Named people on the supplier's own site, for the guessed-pattern fallback.
+//
+// Measured 2026-08-05: of 2,744 no-email leads that DO have their own corporate
+// domain, zero carried a POC name, so the guessed-pattern rule (which needs a
+// name plus a domain) could never fire on any of them. The names are on the
+// about / team / impressum pages we now crawl; this reads them out.
+//
+// Deliberately conservative: a name is only taken when it sits directly against a
+// commercial job title, because a false name becomes a wrong guessed address.
+// That is tolerable but not free, since every guessed contact is staged as a
+// human-reviewed draft.
+const PERSON_TITLE_RE =
+  /(chief\s+executive(\s+officer)?|managing\s+director|general\s+manager|sales\s+(manager|director|head)|head\s+of\s+sales|export\s+(manager|director)|business\s+development\s+(manager|director)|purchase\s+manager|co[-\s]?founder|founder|proprietor|owner|president|geschäftsführer|ceo|cfo|coo|cmo)/i;
+const NAME_TOKEN = "[A-ZÀ-Þ][a-zà-ÿ'’-]{1,19}";
+const NAME_RE = new RegExp(`${NAME_TOKEN}(?:\\s+${NAME_TOKEN}){1,2}`);
+const NAME_STOPWORDS =
+  /^(contact|about|our|the|home|privacy|terms|cookie|all|rights|read|more|get|quote|send|inquiry|customer|service|new|view|learn|sign|log|add|buy)\b/i;
+
+export function extractPeople(html: string): { name: string; title: string | null }[] {
+  const text = html
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]+>/g, " | ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/[ \t]+/g, " ");
+  const out = new Map<string, { name: string; title: string | null }>();
+  // "Jane Doe, Sales Director" and "Sales Director: Jane Doe" (either order, with
+  // an optional tag boundary between them from the strip above).
+  // The separator is generous because the tag strip above turns "</h3><span>"
+  // into several pipes, but it is length-capped so a name and a title on
+  // unrelated parts of the page can never be paired up.
+  const SEP = "[\\s|:,·–-]{1,8}";
+  const patterns = [
+    new RegExp(`(${NAME_RE.source})${SEP}(${PERSON_TITLE_RE.source})`, "gi"),
+    new RegExp(`(${PERSON_TITLE_RE.source})${SEP}(${NAME_RE.source})`, "gi"),
+  ];
+  for (let i = 0; i < patterns.length; i++) {
+    for (const m of text.matchAll(patterns[i])) {
+      const raw = (i === 0 ? m[1] : m[m.length - 1]) ?? "";
+      const title = (i === 0 ? m[2] : m[1]) ?? null;
+      const name = raw.trim().replace(/\s+/g, " ");
+      // Re-test the name in isolation: the combined pattern is case-insensitive,
+      // so an all-caps heading can slip through the capitalization requirement.
+      if (!new RegExp(`^${NAME_RE.source}$`).test(name)) continue;
+      if (NAME_STOPWORDS.test(name)) continue;
+      const k = name.toLowerCase();
+      if (!out.has(k)) out.set(k, { name, title: title ? title.trim() : null });
+    }
+  }
+  return Array.from(out.values()).slice(0, 3);
 }
 
 function digits(s: string): string {
@@ -508,10 +607,12 @@ export async function discoverContacts(website: string): Promise<{
   any_ok: boolean;
   homepage_html: string;
   homepage_final_url: string | null;
+  people: { name: string; title: string | null }[];
 }> {
   const base = normalizeBase(website);
   const emails = new Set<string>();
   const phones = new Set<string>();
+  const people = new Map<string, { name: string; title: string | null }>();
   let contactUrl: string | null = null;
   let pagesTried = 0;
   let anyOk = false;
@@ -550,6 +651,9 @@ export async function discoverContacts(website: string): Promise<{
 
     for (const e of extractEmails(page.html)) emails.add(e);
     for (const p of extractPhones(page.html)) phones.add(p);
+    for (const person of extractPeople(page.html)) {
+      if (!people.has(person.name.toLowerCase())) people.set(person.name.toLowerCase(), person);
+    }
     if (!contactUrl && hasQuoteForm(page.html) && /contact|sales|quote|enquir|inquir/i.test(page.finalUrl)) {
       contactUrl = page.finalUrl;
     }
@@ -582,6 +686,7 @@ export async function discoverContacts(website: string): Promise<{
     any_ok: anyOk,
     homepage_html: homepageHtml,
     homepage_final_url: homepageFinalUrl,
+    people: Array.from(people.values()),
   };
 }
 
@@ -931,6 +1036,18 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // which do ~97% of contact finding, still run for every org.
   const allowPaidProviders = !lead.is_internal;
   const website = (payload.supplier_website as string | null) || null;
+  // Every paid provider is keyed on a corporate domain. A lead whose "website" is
+  // an Alibaba storefront or a directory profile has no such domain, so the
+  // lookup can only ever miss — measured 2026-08-05, 43% of the no-email residual
+  // was this shape and it took 25% of the LeadMagic spend. The free crawl still
+  // runs on these; only the billing is gated.
+  const ownDomain =
+    !!website &&
+    !isAggregatorDomain(hostOf(website)) &&
+    neverMarketplaceHostOf(website)?.kind !== "directory";
+  let paidEligible = allowPaidProviders && ownDomain;
+  const domainKey = ownDomain ? contactDomainKey(website) : null;
+  let cached: CachedContact | null = null;
   const scoutEmail = (payload.supplier_contact_email as string | null) || null;
   const scoutPhone = (payload.supplier_phone as string | null) || null;
 
@@ -982,6 +1099,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // If we're missing a direct email or a phone, go fetch — persistently. This is
   // also the auto-resolve path when the only email we had was a marketplace one.
   let legitimacy_check: LegitimacyCheck | null = null;
+  let crawledPeople: { name: string; title: string | null }[] = [];
   if (website && (!email || !phone)) {
     const d = await discoverContacts(website).catch(() => null);
     if (d) {
@@ -1032,6 +1150,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
         contactUrl = d.contact_url;
         if (!contactSource) contactSource = "discovered";
       }
+      crawledPeople = d.people;
     }
   }
 
@@ -1046,6 +1165,24 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     if (tenkEmail) {
       email = tenkEmail;
       contactSource = "tenkara";
+    }
+  }
+
+  // Per-domain memo. The same supplier arrives as many leads (7,801 enrichment
+  // attempts over 4,893 distinct domains in one week), so a domain already
+  // resolved is reused instead of re-crawled into the paid waterfall, and a
+  // domain that recently resolved to nothing is not paid for again until its
+  // backoff elapses. Never terminal: the free crawl above always ran.
+  if (!email && domainKey) {
+    cached = await readContactDomainCache(domainKey);
+    if (cached?.email) {
+      email = cached.email;
+      contactSource = (cached.source as ContactDiscovery["source"]) ?? "discovered";
+      if (!phone && cached.phone) phone = cached.phone;
+      if (!contactUrl && cached.contact_url) contactUrl = cached.contact_url;
+      await recordContactCacheHit(domainKey);
+    } else if (paidLookupSuppressed(cached)) {
+      paidEligible = false;
     }
   }
 
@@ -1065,7 +1202,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // first among the paid providers because it's domain-first (we already have
   // the website) and the cheapest per lookup; ZoomInfo/GetProspect only fire if
   // Hunter also misses. Fallback-only — never runs once we have a direct email.
-  if (!email && allowPaidProviders && isHunterConfigured()) {
+  if (!email && paidEligible && isHunterConfigured()) {
     const hz = await enrichContactViaHunter({
       companyName: lead.supplier_name,
       website,
@@ -1088,7 +1225,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // sourcing POC, then Email Finder validates their address. Pay-per-result
   // (no charge on a miss), so it's cheap to try on the hard leads before we
   // reach for ZoomInfo. Fallback-only; soft-fails to leave the lead untouched.
-  if (!email && allowPaidProviders && isLeadMagicConfigured()) {
+  if (!email && paidEligible && isLeadMagicConfigured()) {
     const lm = await enrichPrimaryViaLeadMagic({
       companyName: lead.supplier_name,
       website,
@@ -1113,7 +1250,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // by design — it never runs when we already resolved a direct email, so
   // credits are spent only on the leads that would otherwise be dead ends.
   // Soft: any miss leaves the lead exactly as it was.
-  if (!email && allowPaidProviders && isZoomInfoConfigured()) {
+  if (!email && paidEligible && isZoomInfoConfigured()) {
     const zi = await enrichContactViaZoomInfo({
       companyName: lead.supplier_name,
       website,
@@ -1135,7 +1272,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // GetProspect is the final paid-data fallback after ZoomInfo misses. The
   // provider account has a hard monthly quota and no overage purchase path, so
   // an exhausted quota simply returns null and leaves the lead for human review.
-  if (!email && allowPaidProviders && isGetProspectConfigured()) {
+  if (!email && paidEligible && isGetProspectConfigured()) {
     const gp = await enrichContactViaGetProspect({
       companyName: lead.supplier_name,
       website,
@@ -1162,8 +1299,13 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // a named supplier permanently unreachable. Guessed values only ever land in
   // recipient fields, never in body/subject copy (the fabrication guard's scope).
   if (!email && website) {
-    const gName = zoomContactName ?? guessPersonName;
-    const gTitle = zoomContactTitle ?? guessPersonTitle;
+    // Name priority: whoever a paid provider named, else a name the cache already
+    // holds for this domain, else a named person read off the supplier's own
+    // about / team / impressum page. The last of these is free and is the only
+    // source that fires at all on the 2,744 own-domain leads no provider covers.
+    const crawled = crawledPeople[0] ?? null;
+    const gName = zoomContactName ?? guessPersonName ?? cached?.poc_name ?? crawled?.name ?? null;
+    const gTitle = zoomContactTitle ?? guessPersonTitle ?? cached?.poc_title ?? crawled?.title ?? null;
     const host = hostOf(website);
     if (gName && host && !isAggregatorDomain(host)) {
       const combos = emailPatternCombos(gName, host);
@@ -1192,7 +1334,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     addExtraContact(tenkara_supplier.shipping_email, null, null, "tenkara");
     addExtraContact(tenkara_supplier.billing_email, null, null, "tenkara");
   }
-  if (multiContactOn && allowPaidProviders && isHunterConfigured() && extraContacts.size < extraCap) {
+  if (multiContactOn && paidEligible && isHunterConfigured() && extraContacts.size < extraCap) {
     const want = extraCap === Infinity ? 5 : Math.min(5, extraCap + 1);
     const hzs = await enrichContactsViaHunter({ companyName: lead.supplier_name, website }, want).catch(() => [] as Awaited<ReturnType<typeof enrichContactsViaHunter>>);
     for (const hz of hzs) {
@@ -1204,7 +1346,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
       }
     }
   }
-  if (multiContactOn && allowPaidProviders && isLeadMagicConfigured() && extraContacts.size < extraCap) {
+  if (multiContactOn && paidEligible && isLeadMagicConfigured() && extraContacts.size < extraCap) {
     const want = extraCap === Infinity ? 5 : Math.min(5, extraCap + 1);
     const lms = await enrichContactsViaLeadMagic({ companyName: lead.supplier_name, website }, want).catch(() => [] as Awaited<ReturnType<typeof enrichContactsViaLeadMagic>>);
     for (const lm of lms) {
@@ -1216,7 +1358,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
       }
     }
   }
-  if (multiContactOn && allowPaidProviders && isZoomInfoConfigured() && extraContacts.size < extraCap) {
+  if (multiContactOn && paidEligible && isZoomInfoConfigured() && extraContacts.size < extraCap) {
     const want = extraCap === Infinity ? 5 : Math.min(5, extraCap + 1);
     const zis = await enrichContactsViaZoomInfo({ companyName: lead.supplier_name, website }, want).catch(() => [] as Awaited<ReturnType<typeof enrichContactsViaZoomInfo>>);
     for (const zi of zis) {
@@ -1313,6 +1455,22 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   let blocked_reason: string | null = null;
   if (!outreach_ready) {
     blocked_reason = !website && !scoutEmail && !scoutPhone ? "no_contact_channels" : "all_contact_channels_invalid";
+  }
+
+  // Memoize whatever this cost to learn, hit or miss, so the next lead on this
+  // domain starts from the answer instead of the waterfall.
+  if (domainKey) {
+    await writeContactDomainCache({
+      domain: domainKey,
+      email,
+      phone,
+      contact_url: contactUrl,
+      poc_name: zoomContactName ?? cached?.poc_name ?? null,
+      poc_title: zoomContactTitle ?? cached?.poc_title ?? null,
+      source: contactSource,
+      confidence: contactConfidence,
+      priorMissCount: cached?.miss_count ?? 0,
+    });
   }
 
   const contact: ContactDiscovery = {
