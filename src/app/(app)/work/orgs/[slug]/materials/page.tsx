@@ -8,9 +8,28 @@ import { TdbOverviewSubnav } from "@/components/tdb-overview-subnav";
 import { ListPageHeader } from "@/components/list-page-header";
 import { DensityToggle } from "@/components/density-toggle";
 import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
+import { resolveMaterialGradeSpecs, type MaterialGradeSpec } from "@/lib/tenkara-names";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
+
+function gradeTokens(s: string | null | undefined): string[] {
+  return (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+}
+
+// Rank a quote against the material's grade spec: 0 = states a grade that meets
+// the spec, 1 = states no grade, 2 = states a different grade. A quote with no
+// grade is unknown rather than a miss, so it never sorts below a known mismatch.
+// A dealbreaker grade is the bar when the client set one, otherwise the full
+// grade list stands in as a soft target.
+function gradeRank(quoteGrade: string | null, spec: MaterialGradeSpec | undefined): number {
+  const target = spec?.required ?? spec?.all ?? null;
+  if (!target) return 1;
+  const stated = new Set(gradeTokens(quoteGrade));
+  if (stated.size === 0) return 1;
+  const named = target.split(",").map(gradeTokens).filter((t) => t.length > 0);
+  return named.some((t) => t.every((tok) => stated.has(tok))) ? 0 : 2;
+}
 
 export default async function OrgMaterialsPage({ params }: { params: { slug: string } }) {
   const session = await getSession();
@@ -40,6 +59,21 @@ export default async function OrgMaterialsPage({ params }: { params: { slug: str
   for (const q of quoteRows ?? []) {
     if (!q.material_id) continue;
     (quotesByMaterial[q.material_id] ??= []).push(q);
+  }
+
+  // Float the quotes that already show the material's grade spec to the top of
+  // each drill-down, newest-first within each rank (sort is stable and the rows
+  // arrive in created_at order). Best-effort: a Tenkara resolve failure leaves
+  // the plain date order.
+  const quotedMaterialIds = Object.keys(quotesByMaterial);
+  if (quotedMaterialIds.length > 0) {
+    const gradeSpecs = await resolveMaterialGradeSpecs(quotedMaterialIds).catch(
+      () => new Map<string, MaterialGradeSpec>()
+    );
+    for (const [materialId, list] of Object.entries(quotesByMaterial)) {
+      const spec = gradeSpecs.get(materialId);
+      list.sort((a, b) => gradeRank(a.grade, spec) - gradeRank(b.grade, spec));
+    }
   }
 
   // Existing saved quotes from the Tenkara DB (production quotes already in the system).
