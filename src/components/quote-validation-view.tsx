@@ -189,7 +189,7 @@ export function QuoteValidationView({
 
   // CSV export
   const csvHeaders = [
-    "Supplier", "Type", "Operator", "Material", "Price", "Case Size", "Units", "Unit Price", "Currency",
+    "Supplier", "Type", "Operator", "Material", "Price", "Pack / tier", "Case Size", "Units", "Unit Price", "Currency",
     "Case Type", "Case Width", "Case Height", "Case Length", "Case Weight",
     "Density", "Density Unit", "Density Source",
     "Quote Expiry", "Lead Time Days",
@@ -206,7 +206,7 @@ export function QuoteValidationView({
     const docs = docsForQuote(supplierDocs, q);
     return [
       q.supplier_name, kindOf(q), operatorFor(q) ?? "", q.material_name,
-      q.price ?? "", q.case_size ?? "", q.unit_of_measurement ?? "", up, q.currency,
+      q.price ?? "", q.pack_size ?? "", q.case_size ?? "", q.unit_of_measurement ?? "", up, q.currency,
       q.case_type ?? "", q.case_width ?? "", q.case_height ?? "", q.case_length ?? "", q.case_weight ?? "",
       q.density ?? "", q.density != null ? (q.density_unit ?? "") : "", q.density_source ?? "",
       q.quote_expiry ?? "", q.lead_time_days ?? "",

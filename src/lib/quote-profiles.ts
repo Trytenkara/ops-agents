@@ -12,6 +12,10 @@ export interface QuoteProfile {
   price: number | null;
   case_size: number | null;
   unit_of_measurement: string | null;
+  // Raw pack label off the listing ("25 KG (55 LB)"). Identifies which rung of a
+  // supplier's price ladder this quote is, and survives a pack string case_size
+  // can't parse.
+  pack_size: string | null;
   currency: string;
   case_type: string | null;
   case_width: number | null;
@@ -70,7 +74,7 @@ export interface QuoteProfile {
 
 const PROFILE_COLUMNS = `
   id, org_id, supplier_id, supplier_name, material_id, material_name,
-  price, case_size, unit_of_measurement, currency,
+  price, case_size, unit_of_measurement, pack_size, currency,
   case_type, case_width, case_height, case_length, case_dimensions_unit, case_weight,
   quote_expiry, lead_time_days,
   min_inventory, min_inventory_unit, max_inventory, max_inventory_unit,
@@ -169,9 +173,15 @@ export async function seedQuoteProfilesFromStaged(
   if (!staged.length) return 0;
 
   const existing = await getQuoteProfiles(admin, orgId);
-  const existingByKey = new Map(
-    existing.map((p) => [`${p.supplier_name?.toLowerCase()}|${p.material_name?.toLowerCase()}`, p])
-  );
+  // A reply-driven quote belongs on the packless profile, never on one of a
+  // marketplace ladder's tier rows — those are public listing prices this
+  // supplier never negotiated.
+  const existingByKey = new Map<string, QuoteProfile>();
+  for (const p of existing) {
+    const key = `${p.supplier_name?.toLowerCase()}|${p.material_name?.toLowerCase()}`;
+    const prev = existingByKey.get(key);
+    if (!prev || (prev.pack_size && !p.pack_size)) existingByKey.set(key, p);
+  }
 
   let created = 0;
   // Counts every write, not just inserts: see the same fix in supplier-profiles.
@@ -235,15 +245,22 @@ export async function seedQuoteProfilesFromStaged(
 
 // Leading "<number> <unit>" of a pack string, e.g. "1.25 Lb" → {size:1.25, unit:"lb"}.
 // Single-letter units (g/l/G) are excluded — "5G" is ambiguous (gram vs gallon).
+// A vulgar fraction is accepted ("1/2 KG" → 0.5 kg): sub-kilo rungs on a ladder
+// are written that way, and failing them left the tier with no unit at all, which
+// blocks every $/kg comparison downstream.
 const PACK_RE =
-  /^\s*(\d+(?:\.\d+)?)\s*(kg|mg|lbs?|pounds?|oz|ounces?|fl\s?oz|ml|kl|gal|gallons?|liters?|litres?|mt|tons?|tonnes?)\b/i;
+  /^\s*(\d+(?:\.\d+)?)(?:\s*\/\s*(\d+(?:\.\d+)?))?\s*(kg|mg|lbs?|pounds?|oz|ounces?|fl\s?oz|ml|kl|gal|gallons?|liters?|litres?|mt|tons?|tonnes?)\b/i;
 export function parsePackSize(pack: string | null | undefined): { size: number | null; unit: string | null } {
   if (!pack) return { size: null, unit: null };
   const m = pack.match(PACK_RE);
   if (!m) return { size: null, unit: null };
-  const n = parseFloat(m[1]);
+  const numerator = parseFloat(m[1]);
+  const denominator = m[2] != null ? parseFloat(m[2]) : 1;
+  if (!Number.isFinite(numerator) || numerator <= 0) return { size: null, unit: null };
+  if (!Number.isFinite(denominator) || denominator <= 0) return { size: null, unit: null };
+  const n = numerator / denominator;
   if (!Number.isFinite(n) || n <= 0) return { size: null, unit: null };
-  return { size: n, unit: m[2].toLowerCase().replace(/\s+/g, " ") };
+  return { size: n, unit: m[3].toLowerCase().replace(/\s+/g, " ") };
 }
 
 // "Ships in 3-5 business days" → 5 (upper bound of a range); weeks → ×7.
@@ -267,21 +284,58 @@ export function parseMoq(text: string | null | undefined): { qty: number | null;
   return { qty: n, unit: m[2].toLowerCase().replace(/\s+/g, " ") };
 }
 
-// Seed quote profiles for MARKETPLACE leads directly from the price we already
-// web-fetched (leads_in_flight.payload.marketplace_pull), so marketplace
-// suppliers fill in without waiting for an email reply. Direct suppliers keep
-// the reply-driven staged_quotes path. Create-only: never overwrites a profile
-// that already exists for that supplier+material (a staged/negotiated quote or
-// an operator edit wins). dimsMap resolves the outer-case estimate from the
-// pack size (marketplace_case_dims cache); Level-2 fields (lead time, MOQ) come
-// from the listing when the extractor captured them, else stay null.
-export async function seedQuoteProfilesFromMarketplace(
+// Sync quote profiles for MARKETPLACE leads from the prices we already
+// web-fetched (leads_in_flight.payload), so marketplace suppliers fill in without
+// waiting for an email reply. Direct suppliers keep the reply-driven staged_quotes
+// path.
+//
+// One profile per PACK TIER, not per supplier: a listing's ladder is a set of
+// distinct quotes (25 KG at $276 is not the same offer as 1/2 KG at $10), and
+// collapsing it to the headline threw away everything an operator actually
+// negotiates against.
+//
+// Idempotent re-sync, not create-only: a marketplace price is a public fact that
+// moves, so every pass re-reads it. Only the fields the listing owns are written,
+// and an existing non-null is never blanked by a listing that stopped reporting
+// the value — so operator corrections and the whole qualifying/document/approval
+// side of the profile survive untouched.
+const LISTING_NOTE_PREFIX = "Auto-filled from marketplace listing";
+
+interface MarketplaceTier {
+  pack: string | null;
+  price: number;
+}
+
+// The ladder if we have one, else the single headline price as a one-rung ladder.
+// A rung with no usable price is dropped rather than written as a null quote.
+function marketplaceTiers(payload: any): MarketplaceTier[] {
+  const mp = payload?.marketplace_pull ?? {};
+  const raw = Array.isArray(payload?.price_tiers) && payload.price_tiers.length
+    ? payload.price_tiers
+    : [{ pack_size: mp.pack_size ?? null, price: mp.price }];
+  const out: MarketplaceTier[] = [];
+  const seen = new Set<string>();
+  for (const t of raw as any[]) {
+    const price = t?.price != null ? Number(t.price) : null;
+    if (price == null || !Number.isFinite(price) || price <= 0) continue;
+    const pack = typeof t?.pack_size === "string" && t.pack_size.trim() ? t.pack_size.trim() : null;
+    const key = (pack ?? "").toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ pack, price });
+  }
+  return out;
+}
+
+const packKeyOf = (pack: string | null | undefined) => (pack ?? "").trim().toLowerCase();
+
+export async function syncQuoteProfilesFromMarketplace(
   admin: SupabaseClient,
   orgId: string,
   dimsMap: Record<string, CaseDims>,
   limit = Infinity
-): Promise<number> {
-  if (limit <= 0) return 0;
+): Promise<{ created: number; updated: number }> {
+  if (limit <= 0) return { created: 0, updated: 0 };
   const leads = await selectAllPaged<any>((from, to) =>
     admin
       .from("leads_in_flight")
@@ -293,40 +347,57 @@ export async function seedQuoteProfilesFromMarketplace(
       .order("id")
       .range(from, to)
   );
-  if (!leads.length) return 0;
+  if (!leads.length) return { created: 0, updated: 0 };
 
   const existing = await getQuoteProfiles(admin, orgId);
-  const profileKey = (value: { supplier_id?: string | null; supplier_name?: string | null; material_id?: string | null; material_name?: string | null }) =>
+  const identityKey = (value: { supplier_id?: string | null; supplier_name?: string | null; material_id?: string | null; material_name?: string | null }) =>
     value.supplier_id && value.material_id
       ? `id:${value.supplier_id}:${value.material_id}`
       : `name:${(value.supplier_name ?? "").trim().toLowerCase()}|${(value.material_name ?? "").trim().toLowerCase()}`;
-  const existingKeys = new Set(existing.map(profileKey));
+  const byIdentity = new Map<string, QuoteProfile[]>();
+  for (const p of existing) {
+    const key = identityKey(p);
+    const bucket = byIdentity.get(key);
+    if (bucket) bucket.push(p);
+    else byIdentity.set(key, [p]);
+  }
 
   let created = 0;
+  let updated = 0;
+  let writes = 0;
   for (const l of leads as any[]) {
-    const key = profileKey(l);
-    if (existingKeys.has(key)) continue;
     const mp = l.payload?.marketplace_pull ?? {};
-    const price = mp.price != null ? Number(mp.price) : null;
-    const currency = String(mp.currency ?? "").trim().toUpperCase();
-    if (price == null || !Number.isFinite(price) || price <= 0 || currency !== "USD") continue;
-    existingKeys.add(key);
-    const pack = typeof mp.pack_size === "string" ? mp.pack_size : null;
-    const { size, unit } = parsePackSize(pack);
-    const dims = resolveCaseDims(dimsMap, pack);
+    // Never publish a number we couldn't confirm as USD — a foreign figure read as
+    // dollars is worse than no quote at all.
+    if (String(mp.currency ?? "").trim().toUpperCase() !== "USD") continue;
+    const tiers = marketplaceTiers(l.payload);
+    if (!tiers.length) continue;
+
+    const rows = byIdentity.get(identityKey(l)) ?? [];
     const leadTime = parseLeadTimeDays(mp.lead_time);
     const moq = parseMoq(mp.moq);
     const src = typeof mp.source_url === "string" ? mp.source_url : null;
-    try {
-      await insertQuoteProfile(admin, orgId, {
-        supplier_id: l.supplier_id ?? null,
-        supplier_name: l.supplier_name ?? "",
-        material_id: l.material_id ?? null,
-        material_name: l.material_name ?? "",
-        price,
+    const claimed = new Set<string>();
+
+    for (const tier of tiers) {
+      if (writes >= limit) return { created, updated };
+      const key = packKeyOf(tier.pack);
+      let target = key ? rows.find((p) => packKeyOf(p.pack_size) === key) : undefined;
+      // Pre-0087 rows carry no pack label. Adopt one instead of inserting beside
+      // it, so the tier it was really quoting keeps its operator work; prefer the
+      // rung whose price matches.
+      if (!target) {
+        target =
+          rows.find((p) => !p.pack_size && !claimed.has(p.id) && p.price != null && Number(p.price) === tier.price) ??
+          rows.find((p) => !p.pack_size && !claimed.has(p.id));
+      }
+
+      const { size, unit } = parsePackSize(tier.pack);
+      const dims = resolveCaseDims(dimsMap, tier.pack);
+      const listed = {
+        pack_size: tier.pack,
         case_size: size,
         unit_of_measurement: unit,
-        currency: "USD",
         case_type: dims?.case_type ?? null,
         case_width: dims?.width ?? null,
         case_height: dims?.height ?? null,
@@ -336,15 +407,58 @@ export async function seedQuoteProfilesFromMarketplace(
         min_inventory: moq.qty,
         min_inventory_unit: moq.unit,
         source_url: src,
-        purchasing_notes: `Auto-filled from marketplace listing${pack ? ` (${pack})` : ""}`,
-      });
-      created++;
-      if (created >= limit) break;
-    } catch {
-      // skip duplicates
+      };
+
+      if (!target) {
+        try {
+          const inserted = await insertQuoteProfile(admin, orgId, {
+            supplier_id: l.supplier_id ?? null,
+            supplier_name: l.supplier_name ?? "",
+            material_id: l.material_id ?? null,
+            material_name: l.material_name ?? "",
+            price: tier.price,
+            currency: "USD",
+            ...listed,
+            purchasing_notes: `${LISTING_NOTE_PREFIX}${tier.pack ? ` (${tier.pack})` : ""}`,
+          });
+          rows.push(inserted);
+          byIdentity.set(identityKey(l), rows);
+          claimed.add(inserted.id);
+          created++;
+          writes++;
+        } catch {
+          // Unique-index collision: another pass already wrote this tier.
+        }
+        continue;
+      }
+
+      claimed.add(target.id);
+      const patch: QuoteProfileUpdate = {};
+      // The listing owns the price outright — refreshing it is the point of the
+      // re-sync.
+      if (target.price == null || Number(target.price) !== tier.price) patch.price = tier.price;
+      if (String(target.currency ?? "").toUpperCase() !== "USD") patch.currency = "USD";
+      for (const [field, next] of Object.entries(listed) as [keyof typeof listed, any][]) {
+        const current = (target as any)[field];
+        // Fill a blank or move one non-null to another, but never blank a value the
+        // listing has simply gone quiet about.
+        if (next == null) continue;
+        const same = typeof next === "number" ? current != null && Number(current) === next : current === next;
+        if (same) continue;
+        (patch as any)[field] = next;
+      }
+      if (!Object.keys(patch).length) continue;
+      try {
+        const fresh = await updateQuoteProfile(admin, target.id, patch);
+        Object.assign(target, fresh);
+        updated++;
+        writes++;
+      } catch {
+        // Row moved or collided under us; the next pass retries.
+      }
     }
   }
-  return created;
+  return { created, updated };
 }
 
 const QUOTING_FIELDS: (keyof QuoteProfile)[] = [

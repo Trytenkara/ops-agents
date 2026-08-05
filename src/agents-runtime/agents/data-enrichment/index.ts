@@ -5,7 +5,7 @@ import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier
 import { assessMaterialRelevance, collectProductText, type RawLead } from "./enrich";
 import { enrichAndStageLead } from "./run-enrich";
 import { seedProfilesFromLeads } from "@/lib/supplier-profiles";
-import { seedQuoteProfilesFromStaged, seedQuoteProfilesFromMarketplace } from "@/lib/quote-profiles";
+import { seedQuoteProfilesFromStaged, syncQuoteProfilesFromMarketplace } from "@/lib/quote-profiles";
 import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
 import { fillProfilesFromKnownSources } from "@/lib/supplier-profile-fill";
 import { runSupplierWebFill } from "./web-fill-run";
@@ -75,13 +75,17 @@ registerAgent({
     // rows that already have profiles. Real/paying clients seed before internal
     // test orgs when the shared budget is scarce.
     const SUPPLIER_SEED_CAP = 200;
-    const QUOTE_SEED_CAP = 200;
-    const MARKETPLACE_QUOTE_RESERVE = 50;
+    // The marketplace reserve now covers a whole price ladder per lead, not one
+    // headline row, and it also pays for re-syncing prices that moved. At 50 the
+    // initial fan-out of an established org's backlog would take days to drain.
+    const QUOTE_SEED_CAP = 300;
+    const MARKETPLACE_QUOTE_RESERVE = 150;
     let supplierBudget = SUPPLIER_SEED_CAP;
     let stagedQuoteBudget = QUOTE_SEED_CAP - MARKETPLACE_QUOTE_RESERVE;
     let marketplaceQuoteBudget = MARKETPLACE_QUOTE_RESERVE;
     let seededSuppliers = 0;
     let seededQuotes = 0;
+    let refreshedQuotes = 0;
     const { data: orgMeta } = await admin.from("orgs").select("id, is_internal, tenkara_org_id").in("id", allSourcingOrgIds);
     const isInternalById = new Map((orgMeta ?? []).map((o: any) => [o.id, !!o.is_internal]));
     const tenkaraOrgIdByOrg = new Map((orgMeta ?? []).map((o: any) => [o.id, o.tenkara_org_id as string | null]));
@@ -107,22 +111,23 @@ registerAgent({
           stagedQuoteBudget -= n;
         }
         if (marketplaceQuoteBudget > 0) {
-          const n = await seedQuoteProfilesFromMarketplace(admin, orgId, caseDimsMap, marketplaceQuoteBudget);
-          seededQuotes += n;
-          marketplaceQuoteBudget -= n;
+          const { created, updated } = await syncQuoteProfilesFromMarketplace(admin, orgId, caseDimsMap, marketplaceQuoteBudget);
+          seededQuotes += created;
+          refreshedQuotes += updated;
+          marketplaceQuoteBudget -= created + updated;
         }
       } catch (e: any) {
         await ctx.log(`Profile seed failed for org ${orgId}: ${e?.message ?? e}`, { level: "warn", step: "seed-profiles" });
       }
     }
-    if (seededSuppliers || seededQuotes) {
-      await ctx.log(`Seeded ${seededSuppliers} supplier + ${seededQuotes} quote profiles`, {
+    if (seededSuppliers || seededQuotes || refreshedQuotes) {
+      await ctx.log(`Seeded ${seededSuppliers} supplier + ${seededQuotes} quote profiles, refreshed ${refreshedQuotes} marketplace quote prices`, {
         step: "seed-profiles",
-        data: { supplier_profiles: seededSuppliers, quote_profiles: seededQuotes },
+        data: { supplier_profiles: seededSuppliers, quote_profiles: seededQuotes, quote_profiles_refreshed: refreshedQuotes },
       });
     }
-    const seedNote = seededSuppliers || seededQuotes
-      ? ` · seeded ${seededSuppliers} supplier + ${seededQuotes} quote profiles`
+    const seedNote = seededSuppliers || seededQuotes || refreshedQuotes
+      ? ` · seeded ${seededSuppliers} supplier + ${seededQuotes} quote profiles${refreshedQuotes ? ` · refreshed ${refreshedQuotes} quote prices` : ""}`
       : "";
 
     // Creating the profile row is only half the job: the validation card is

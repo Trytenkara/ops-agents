@@ -216,6 +216,11 @@ export function QuoteProfileCard({
           <div className="flex items-center gap-3 flex-wrap">
             <CardTitle className="text-base">{profile.material_name}</CardTitle>
             <span className="text-xs text-muted-foreground">from {profile.supplier_name}</span>
+            {/* A supplier has one card per pack tier, so the rung has to be on the
+                card or two quotes for the same material look like duplicates. */}
+            {profile.pack_size && (
+              <span className="rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground">{profile.pack_size}</span>
+            )}
             {profile.source_url && (
               <a
                 href={profile.source_url}
