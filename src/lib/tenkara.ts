@@ -396,6 +396,10 @@ export interface TenkaraMessage {
   body_text: string | null;
   body_html: string | null;
   sent_at: string | null;
+  // Non-inline files on the message. Inline images are signature logos; a
+  // non-zero count here means real files (a quote PDF, a price spreadsheet, a
+  // CoA) that are worth extracting even when the message itself is superseded.
+  attachmentCount: number;
 }
 
 // Read a conversation's full message history from Tenkara (GET
@@ -460,6 +464,9 @@ export async function getTenkaraConversationDetails(
       body_text: m.body_text ?? null,
       body_html: m.body_html ?? null,
       sent_at: m.sent_at ?? null,
+      attachmentCount: Array.isArray(m.attachments)
+        ? m.attachments.filter((a: any) => !a?.is_inline).length
+        : 0,
     }));
     return {
       found: true,

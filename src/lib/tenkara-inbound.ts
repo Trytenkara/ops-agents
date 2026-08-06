@@ -119,7 +119,19 @@ async function resolveInboundOrg(admin: Admin, msg: InboundMessage): Promise<{ o
   return { orgId, accountKey: accountId ?? toEmail!, replyTag };
 }
 
-export async function handleInboundReply(admin: Admin, msg: InboundMessage): Promise<InboundResult> {
+export interface InboundOptions {
+  // Capture pricing and documents off this message, then stop before composing a
+  // reply. For a message a newer one from the same sender already superseded:
+  // its quote PDF and its CoA still need reading, but answering it would reply to
+  // a conversation that has already moved on.
+  extractOnly?: boolean;
+}
+
+export async function handleInboundReply(
+  admin: Admin,
+  msg: InboundMessage,
+  opts: InboundOptions = {}
+): Promise<InboundResult> {
   let inboundOrg: { orgId: string; accountKey: string; replyTag: string | null } | null = null;
   try {
     inboundOrg = await resolveInboundOrg(admin, msg);
@@ -367,16 +379,21 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     // Matched on the plus-tag we gave a platform inquiry form. Audit flag only.
     reply_tag_match: replyTagMatch || undefined,
   };
-  await admin
-    .from("draft_references")
-    .update({
-      metadata: {
-        ...refMeta,
-        flow_status: flowAt("reply_received"),
-        reply_detected: replyDetected,
-      },
-    })
-    .eq("id", ref.id);
+  // An extract-only pass must not claim the thread's reply_detected slot: it is
+  // reading a message a newer one already superseded, and the newest message is
+  // what the thread's state should reflect.
+  if (!opts.extractOnly) {
+    await admin
+      .from("draft_references")
+      .update({
+        metadata: {
+          ...refMeta,
+          flow_status: flowAt("reply_received"),
+          reply_detected: replyDetected,
+        },
+      })
+      .eq("id", ref.id);
+  }
 
   // 4. Pull lead context for a better reply (supplier/material/contact names).
   // Only the originating cold_outbound ref carries lead_id; followups and prior
@@ -932,6 +949,10 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     } catch {
       // A referral is a bonus, not the point of the webhook.
     }
+  }
+
+  if (opts.extractOnly) {
+    return { status: 200, body: { reply_detected: true, drafted: false, reason: "extract_only", quotes_staged: quotesStaged } };
   }
 
   // 5. Compose the reply. Pull the full thread from Tenkara for context so the

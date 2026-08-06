@@ -210,6 +210,8 @@ export async function runThreadReconcile(deps: ReconcileDeps, admin: Admin): Pro
 
     const inbound = details.messages.filter((m) => m.is_outbound === false && m.id);
     let unseen: typeof inbound = [];
+    // Message ids to capture pricing/documents from without composing a reply.
+    let extractOnly = new Set<string>();
     if (inbound.length > 0) {
       const { data: known, error: ledgerError } = await admin
         .from("inbound_message_ledger")
@@ -242,9 +244,17 @@ export async function runThreadReconcile(deps: ReconcileDeps, admin: Admin): Pro
       const superseded = unseen.filter(
         (m) => (m.sent_at ?? "") !== newestPerSender.get((m.from_email ?? "").toLowerCase())
       );
-      if (superseded.length > 0) {
+      // A superseded message still has to be READ if it carries files: the quote
+      // PDF, price sheet or CoA attached to it is just as real as the one on the
+      // newest message, and nothing else will ever open it. Those get an
+      // extract-only pass (pricing and documents captured, no reply composed).
+      // Prose-only superseded messages need no pass at all, because the drafter
+      // already pulls the whole thread as context when it answers the newest one.
+      const toExtract = superseded.filter((m) => m.attachmentCount > 0);
+      const proseOnly = superseded.filter((m) => m.attachmentCount === 0);
+      if (proseOnly.length > 0) {
         await admin.from("inbound_message_ledger").upsert(
-          superseded.map((m) => ({
+          proseOnly.map((m) => ({
             message_id: m.id as string,
             conversation_id: liveId,
             sender_email: m.from_email,
@@ -252,9 +262,14 @@ export async function runThreadReconcile(deps: ReconcileDeps, admin: Admin): Pro
           })),
           { onConflict: "message_id", ignoreDuplicates: true }
         );
-        result.superseded += superseded.length;
-        unseen = unseen.filter((m) => !superseded.includes(m));
       }
+      // Only the prose-only ones are truly skipped; the rest still get read, and
+      // are counted by `replayed` like any other processed message.
+      result.superseded += proseOnly.length;
+      // Oldest first, so the newest message is drafted last and its reply_detected
+      // stamp is the one that sticks.
+      unseen = [...toExtract, ...unseen.filter((m) => !superseded.includes(m))];
+      extractOnly = new Set(toExtract.map((m) => m.id as string));
     }
 
     let replayedHere = 0;
@@ -312,7 +327,7 @@ export async function runThreadReconcile(deps: ReconcileDeps, admin: Admin): Pro
           received_at: m.sent_at,
           to_email: m.to?.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] ?? null,
           email_account_id: details.emailAccountId,
-        });
+        }, { extractOnly: extractOnly.has(messageId) });
         body = res.body ?? {};
         if (res.status >= 400) {
           outcome = "error";
