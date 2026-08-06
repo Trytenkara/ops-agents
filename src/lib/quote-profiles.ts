@@ -106,6 +106,10 @@ export async function getQuoteProfiles(
       .select(PROFILE_COLUMNS)
       .eq("org_id", orgId)
       .order("supplier_name")
+      // created_at, not id: the id is a random uuid, so ordering by it scattered
+      // a newly added quote anywhere in its supplier's list. Oldest first puts a
+      // manual add at the bottom where the operator just created it.
+      .order("created_at")
       .order("id")
       .range(from, from + PAGE - 1);
     if (error) throw error;

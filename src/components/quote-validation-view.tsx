@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -110,6 +110,36 @@ export function QuoteValidationView({
   const [ownerFilter, setOwnerFilter] = useState("all");
   const [expandedSupplier, setExpandedSupplier] = useState<string | null>(null);
   const [showAddQuote, setShowAddQuote] = useState(false);
+  // Quote cards are collapsed to one summary row each by default, so a supplier
+  // with a dozen quotes is a scannable list instead of pages of scrolling. The
+  // full card, every field intact, is one click away.
+  const [openQuotes, setOpenQuotes] = useState<Set<string>>(new Set());
+  const [justAdded, setJustAdded] = useState<string | null>(null);
+
+  const toggleQuote = (id: string) =>
+    setOpenQuotes((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+
+  // A quote created by hand opens itself and scrolls into view: it lands at the
+  // bottom of its supplier (oldest first), which is otherwise off screen.
+  function handleCreated(profileId: string, supplierKeyForGroup: string) {
+    setExpandedSupplier(supplierKeyForGroup);
+    setOpenQuotes((prev) => new Set(prev).add(profileId));
+    setJustAdded(profileId);
+    setTimeout(() => setJustAdded((id) => (id === profileId ? null : id)), 8000);
+  }
+
+  // The ref callback is a new closure each render, so React re-invokes it on
+  // every keystroke in the filters. Scroll only the first time we see the node.
+  const scrolledTo = useRef<Element | null>(null);
+  const scrollIntoViewOnce = (el: HTMLDivElement | null) => {
+    if (!el || scrolledTo.current === el) return;
+    scrolledTo.current = el;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+  };
 
   const kindOf = (q: QuoteProfile): MarketKind | "unclassified" =>
     quoteMarketKind(q, supplierTypes) ?? "unclassified";
@@ -280,7 +310,12 @@ export function QuoteValidationView({
 
       {/* Add quote form */}
       {showAddQuote && canAct && (
-        <AddQuoteForm orgId={orgId} suppliers={supplierList} onClose={() => setShowAddQuote(false)} />
+        <AddQuoteForm
+          orgId={orgId}
+          suppliers={supplierList}
+          onClose={() => setShowAddQuote(false)}
+          onCreated={(profileId, s) => handleCreated(profileId, s.id ?? s.name)}
+        />
       )}
 
       {/* Filters */}
@@ -384,24 +419,53 @@ export function QuoteValidationView({
                 </div>
               </div>
 
-              {/* Expanded: quote cards */}
+              {/* Expanded: quote cards, each collapsed to a summary row */}
               {isExpanded && (
-                <div className="border-t px-4 py-4 space-y-4 bg-muted/20">
+                <div className="border-t px-4 py-4 space-y-2 bg-muted/20">
+                  {g.quotes.length > 1 && (
+                    <div className="flex justify-end">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          setOpenQuotes((prev) => {
+                            const next = new Set(prev);
+                            const allOpen = g.quotes.every((q) => next.has(q.id));
+                            for (const q of g.quotes) {
+                              if (allOpen) next.delete(q.id);
+                              else next.add(q.id);
+                            }
+                            return next;
+                          })
+                        }
+                      >
+                        {g.quotes.every((q) => openQuotes.has(q.id)) ? "Collapse all" : "Expand all"}
+                      </Button>
+                    </div>
+                  )}
                   {g.quotes.map((q) => (
-                    <QuoteProfileCard
+                    <div
                       key={q.id}
-                      profile={q}
-                      orgId={orgId}
-                      canAct={canAct}
-                      docs={docsForQuote(supplierDocs, q)}
-                      clientRules={clientRules}
-                    />
+                      ref={q.id === justAdded ? scrollIntoViewOnce : undefined}
+                      className={q.id === justAdded ? "rounded-lg ring-2 ring-primary" : undefined}
+                    >
+                      <QuoteProfileCard
+                        profile={q}
+                        orgId={orgId}
+                        canAct={canAct}
+                        docs={docsForQuote(supplierDocs, q)}
+                        clientRules={clientRules}
+                        collapsed={!openQuotes.has(q.id)}
+                        onToggleCollapsed={() => toggleQuote(q.id)}
+                      />
+                    </div>
                   ))}
                   {canAct && (
                     <AddQuoteForSupplier
                       orgId={orgId}
                       supplierName={g.supplierName}
                       supplierId={g.supplierId}
+                      onCreated={(profileId) => handleCreated(profileId, key)}
                     />
                   )}
                 </div>
@@ -428,10 +492,12 @@ function AddQuoteForm({
   orgId,
   suppliers,
   onClose,
+  onCreated,
 }: {
   orgId: string;
   suppliers: SupplierChoice[];
   onClose: () => void;
+  onCreated: (profileId: string, supplier: SupplierChoice) => void;
 }) {
   const [picked, setPicked] = useState("");
   const [newSupplierName, setNewSupplierName] = useState("");
@@ -449,13 +515,16 @@ function AddQuoteForm({
       return;
     }
     startCreate(async () => {
+      const supplierIdForQuote = isNew ? null : selected?.id ?? null;
       const res = await createQuoteProfile(orgId, {
-        supplier_id: isNew ? null : selected?.id ?? null,
+        supplier_id: supplierIdForQuote,
         supplier_name: supplierName,
         material_name: materialName.trim(),
       });
-      if (res.ok) onClose();
-      else setError(res.error ?? "Failed to create");
+      if (res.ok) {
+        if (res.profileId) onCreated(res.profileId, { id: supplierIdForQuote, name: supplierName });
+        onClose();
+      } else setError(res.error ?? "Failed to create");
     });
   }
 
@@ -506,10 +575,12 @@ function AddQuoteForSupplier({
   orgId,
   supplierName,
   supplierId,
+  onCreated,
 }: {
   orgId: string;
   supplierName: string;
   supplierId: string | null;
+  onCreated: (profileId: string) => void;
 }) {
   const [show, setShow] = useState(false);
   const [materialName, setMaterialName] = useState("");
@@ -534,6 +605,7 @@ function AddQuoteForSupplier({
       if (res.ok) {
         setShow(false);
         setMaterialName("");
+        if (res.profileId) onCreated(res.profileId);
       }
     });
   }

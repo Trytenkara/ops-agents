@@ -161,17 +161,25 @@ export function QuoteProfileCard({
   canAct,
   docs = [],
   clientRules = {},
+  collapsed = false,
+  onToggleCollapsed,
 }: {
   profile: QuoteProfile;
   orgId: string;
   canAct: boolean;
   docs?: QuoteDoc[];
   clientRules?: ClientDocRules;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
 }) {
   const [profile, setProfile] = useState(initial);
   const [editing, setEditing] = useState(false);
   const [pending, startTransition] = useTransition();
   const [saved, setSaved] = useState(false);
+
+  // Collapsing is display only: every field below is still rendered from the same
+  // profile the moment the row is opened, and nothing is dropped from the record.
+  const isCollapsed = !!onToggleCollapsed && collapsed && !editing;
 
   const comp = quoteCompleteness(profile);
   const status = STATUS_META[profile.approval_status] ?? STATUS_META.draft;
@@ -211,10 +219,22 @@ export function QuoteProfileCard({
 
   return (
     <Card>
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3 flex-wrap">
-            <CardTitle className="text-base">{profile.material_name}</CardTitle>
+      <CardHeader className={isCollapsed ? "py-2" : "pb-2"}>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 flex-wrap min-w-0">
+            {onToggleCollapsed ? (
+              <button
+                type="button"
+                onClick={onToggleCollapsed}
+                aria-expanded={!isCollapsed}
+                className="flex items-center gap-2 min-w-0 text-left hover:opacity-70 transition-opacity"
+              >
+                <span className="text-xs text-muted-foreground w-2">{isCollapsed ? ">" : "v"}</span>
+                <CardTitle className="text-base truncate">{profile.material_name}</CardTitle>
+              </button>
+            ) : (
+              <CardTitle className="text-base">{profile.material_name}</CardTitle>
+            )}
             <span className="text-xs text-muted-foreground">from {profile.supplier_name}</span>
             {/* A supplier has one card per pack tier, so the rung has to be on the
                 card or two quotes for the same material look like duplicates. */}
@@ -244,7 +264,17 @@ export function QuoteProfileCard({
             {profile.is_hazardous && <Badge variant="warn">Hazardous</Badge>}
             {profile.is_refrigerated && <Badge variant="info">Refrigerated</Badge>}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3 shrink-0">
+            {isCollapsed && (
+              <>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {profile.price != null ? `$${profile.price}` : <span className="italic">no price</span>}
+                </span>
+                <div className="w-20">
+                  <CompletenessBar pct={comp.pct} />
+                </div>
+              </>
+            )}
             {canAct && !editing && (
               <Button variant="outline" size="sm" onClick={() => setEditing(true)}>Edit</Button>
             )}
@@ -259,8 +289,9 @@ export function QuoteProfileCard({
             {saved && <span className="text-xs text-green-600">Saved</span>}
           </div>
         </div>
-        <CompletenessBar pct={comp.pct} />
+        {!isCollapsed && <CompletenessBar pct={comp.pct} />}
       </CardHeader>
+      {!isCollapsed && (
       <CardContent>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {/* Quoting */}
@@ -528,6 +559,7 @@ export function QuoteProfileCard({
           </div>
         )}
       </CardContent>
+      )}
     </Card>
   );
 }
