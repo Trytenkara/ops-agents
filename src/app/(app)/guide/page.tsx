@@ -54,17 +54,19 @@ const AGENTS: { id: string; name: string; does: string; feeds: string }[] = [
   { id: "01", name: "Ping", does: "Infrastructure heartbeat: verifies the fleet is alive.", feeds: "—" },
   { id: "02", name: "Quote Revalidation", does: "Drafts re-quote emails for expiring and expired quotes, one per supplier.", feeds: "Agent Quotes · Direct prices" },
   { id: "03", name: "Lead Creator", does: "Finds candidate suppliers: the existing supplier graph, a rotating web scout, ImportYeti and SourceReady.", feeds: "Agent Supplier Leads · Raw" },
-  { id: "06", name: "Enrichment", does: "Works the contact waterfall (site scrape → Tenkara → paid providers) and seeds the validation profiles.", feeds: "Agent Supplier Leads · Enriched" },
+  { id: "06", name: "Enrichment", does: "Works the contact waterfall (site crawl → Tenkara → paid providers) and seeds the validation profiles. With a name but no address it builds the standard patterns on the supplier's own domain and labels them guessed.", feeds: "Agent Supplier Leads · Enriched" },
   { id: "04", name: "Outreach", does: "Composes the first sourcing email per supplier, CC'ing every contact on one thread. Staged, never auto-sent.", feeds: "Email Thread Tracker" },
-  { id: "05", name: "Marketplace Re-check", does: "Reads the live product page for current pricing and tier ladders; flags anything it cannot read rather than guessing.", feeds: "Agent Quotes · Marketplace prices" },
+  { id: "05", name: "Marketplace Re-check", does: "Reads the live product page for current pricing and tier ladders; flags anything it cannot read rather than guessing. Splits an aggregator index page into one lead per seller, and closes its own price-pull case once a price lands.", feeds: "Agent Quotes · Marketplace prices" },
   { id: "07", name: "Escalation", does: "Opens cases for leads stale >14 days and nudges Slack about work waiting on you.", feeds: "Overview · Open cases" },
   { id: "08", name: "Email Scanner", does: "Handles inbound supplier replies from the Tenkara webhook: extracts prices, files documents, stages a response.", feeds: "Platform Data · Materials / Email Thread Tracker" },
-  { id: "10", name: "Draft QA", does: "Lints every draft as it is staged; hard-blocks a draft with fabricated contact details.", feeds: "Email Thread Tracker (quality)" },
+  { id: "09", name: "Document Retrieval", does: "Collects the SDS, CoA, TDS and certificates suppliers already publish on their own pages, and ticks off the client's document requirements it can evidence.", feeds: "Agent Supplier Leads · documents" },
+  { id: "10", name: "Draft QA", does: "Lints every draft as it is staged. Two findings hard-block it: an unverified contact detail, and copy that invites a grade other than the one the client marked a dealbreaker.", feeds: "Email Thread Tracker (quality)" },
   { id: "11", name: "Lead Scanner CSV Push", does: "Per-supplier CSV handoff of dropped leads. Built, currently kill-switched.", feeds: "Exports (paused)" },
-  { id: "12", name: "Client Profile", does: "Researches and maintains the client summary and rep sheet.", feeds: "Client Profile" },
+  { id: "12", name: "Client Profile", does: "Researches and maintains the client summary and rep sheet, mirrors the client's Tenkara settings (ship-to, exclusions, requirements), and re-judges existing leads when those requirements change.", feeds: "Client Profile" },
   { id: "13", name: "Inbox Context", does: "Reads our Tenkara threads and records where each supplier conversation stands.", feeds: "02" },
   { id: "14", name: "QA Watchdog", does: "Data-integrity sweep; flags what fell through the cracks to Slack.", feeds: "— (alerts)" },
-  { id: "15", name: "Reply Manager", does: "Owns the conversation after the first email: nudges silence, answers replies, chases the price.", feeds: "Email Thread Tracker" },
+  { id: "15", name: "Reply Manager", does: "Chases the threads that went quiet: two nudges then a calling escalation. Also re-reads tracked threads to recover any supplier reply the webhook never delivered. Replies themselves are handled by Agent 08.", feeds: "Email Thread Tracker" },
+  { id: "16", name: "FX Refresh", does: "Restates published USD prices from the stored native price when exchange rates move, so a currency swing is never mistaken for a supplier price change.", feeds: "Agent Quotes · prices" },
   { id: "—", name: "Fleet Summary", does: "Daily digest of how every agent ran.", feeds: "— (Slack)" },
 ];
 
@@ -150,9 +152,13 @@ export default function OperatorsGuidePage() {
       <Section title="The agent fleet">
         <p className="text-sm text-muted-foreground">
           These agents do the collecting. They run on a schedule and <strong>never write back to Tenkara</strong>: everything
-          funnels to review queues where an operator makes the call. They also never invent data, so an unreadable price or an
-          unverifiable contact comes back flagged with its reason instead of a plausible-looking number. Which agents touch a
-          client depends on that client&apos;s sourcing status, set on its Overview tab.
+          funnels to review queues where an operator makes the call. They also never invent data: an unreadable price comes
+          back flagged with its reason instead of a plausible-looking number, and a draft that states a contact detail we
+          could not verify is blocked before it is created. The one deliberate exception is labelled as such: where we have a
+          person&apos;s name but no address, enrichment builds the standard email patterns on that supplier&apos;s own domain
+          (never a marketplace domain) and marks them <span className="text-foreground">guessed</span>, so you can see what is
+          confirmed and what is a best guess before you send. Which agents touch a client depends on that client&apos;s
+          sourcing status, set on its Overview tab.
         </p>
         <div className="overflow-hidden rounded-lg border border-border">
           <table className="w-full text-sm">
