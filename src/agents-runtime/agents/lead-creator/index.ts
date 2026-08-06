@@ -13,7 +13,7 @@ import { flagMaterialNames, correctName } from "@/lib/material-name-flags";
 import { flagDuplicateMaterials, type MergeMaterial } from "@/lib/material-merge-flags";
 import { materialLabel } from "@/lib/material-label";
 import { sourceReadyEnabled, sourceReadyUnlockEnabled, fireSourceReadyDiscovery } from "./sourceready";
-import { importYetiEnabled, fireImportYetiDiscovery } from "./importyeti";
+import { importYetiEnabled, runImportYetiDiscovery, ImportYetiUnavailableError } from "./importyeti";
 import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 
 const EMPTY_OVERRIDES = new Map<string, string>();
@@ -78,9 +78,9 @@ function advancePageCursor(
   if (dry >= DISCOVERY_MAX_DRY_PAGES) return { page: 1, count: curCount, dry: 0 };
   return { page: prevPage + 1, count: curCount, dry };
 }
-// ImportYeti discovery mirrors SourceReady: fired per material (bounded per run)
-// to a Gamut webhook that pulls US-customs suppliers and stages source='importyeti'
-// leads out-of-band. Inert unless IMPORTYETI_WEBHOOK_URL + _SECRET are set.
+// ImportYeti discovery runs in-process (bounded per material per run): pulls
+// US-customs suppliers and stages source='importyeti' leads inline. Inert
+// unless IMPORTYETI_API_KEY is set.
 const IMPORTYETI_MAX_MATERIALS_PER_RUN = envInt("IMPORTYETI_MAX_MATERIALS_PER_RUN", 25);
 
 // v1 trims (vs. full spec):
@@ -1112,11 +1112,11 @@ registerAgent({
         );
       }
 
-      // 5d. ImportYeti discovery — mirror of 5c. Fires a signed webhook to the
-      //     Gamut agent that holds the ImportYeti API key; it pulls US-customs
-      //     suppliers, stages source='importyeti' leads, and resolves their
-      //     contacts out-of-band. Same gating (new/backlog materials only) and
-      //     per-run cap. Exclusions best-effort; Agent 04 re-checks before email.
+      // 5d. ImportYeti discovery — mirror of 5c, but run in-process: pulls
+      //     US-customs suppliers, filters, and stages source='importyeti' leads
+      //     inline. Contacts are resolved downstream by Agent 06. Same gating
+      //     (new/backlog materials only) and per-run cap. Exclusions
+      //     best-effort; Agent 04 re-checks before email.
       if (
         importYetiEnabled() &&
         importYetiFired < IMPORTYETI_MAX_MATERIALS_PER_RUN &&
@@ -1129,16 +1129,32 @@ registerAgent({
           IMPORTYETI_PAGE_SIZE
         );
         const iyPage = iyCursor.page;
-        const ok = await fireImportYetiDiscovery({
-          oaOrgId,
-          materialId: material.id,
-          materialName: matLabel,
-          inci: material.inci ?? null,
-          tenkaraOrgId: material.tenkara_org_id ?? null,
-          excludedCountries: ex ? Array.from(ex.excludedCountries) : [],
-          size: IMPORTYETI_PAGE_SIZE,
-          page: iyPage,
-        });
+        let ok = false;
+        let iyDetail: Record<string, any> = {};
+        let iyError: string | null = null;
+        try {
+          const r = await runImportYetiDiscovery(
+            admin,
+            {
+              oaOrgId,
+              materialId: material.id,
+              materialName: matLabel,
+              inci: material.inci ?? null,
+              tenkaraOrgId: material.tenkara_org_id ?? null,
+              excludedCountries: ex ? Array.from(ex.excludedCountries) : [],
+              size: IMPORTYETI_PAGE_SIZE,
+              page: iyPage,
+            },
+            ctx.runId
+          );
+          ok = r.ok;
+          iyDetail = { received: r.received, inserted: r.inserted, skipped: r.skipped, reason: r.reason };
+          stagedThisMaterial += r.inserted;
+        } catch (e: any) {
+          // ImportYeti 500s flap in bursts. Leave the cursor unadvanced so the
+          // same page is retried next run rather than being skipped.
+          iyError = e instanceof ImportYetiUnavailableError ? "api_unavailable" : (e?.message ?? String(e));
+        }
         if (ok) {
           importYetiFired++;
           await admin.from("agent_state").upsert(
@@ -1151,8 +1167,14 @@ registerAgent({
           );
         }
         await ctx.log(
-          ok ? `Fired ImportYeti discovery for ${matLabel} (page ${iyPage})` : `ImportYeti discovery request failed for ${matLabel}`,
-          { step: "importyeti", level: ok ? "info" : "warn", data: { material_id: material.id, page: iyPage, dry_pages: iyCursor.dry } }
+          ok
+            ? `ImportYeti discovery for ${matLabel} (page ${iyPage}): staged ${iyDetail.inserted ?? 0} of ${iyDetail.received ?? 0}`
+            : `ImportYeti discovery failed for ${matLabel}: ${iyError ?? "unknown"}`,
+          {
+            step: "importyeti",
+            level: ok ? "info" : "warn",
+            data: { material_id: material.id, page: iyPage, dry_pages: iyCursor.dry, ...iyDetail, error: iyError },
+          }
         );
       }
 

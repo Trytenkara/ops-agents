@@ -133,7 +133,9 @@ Liveness probe. Writes an `agent_runs` row, no business logic. The only agent ex
 Sweeps Tenkara for expiring and expired quotes, groups by supplier (max 15 materials per email), and drafts one re-quote per (client × supplier): a reply inside the existing thread when there is one, otherwise a new conversation. QA-linted inline, assigned to an operator and mirrored to Tenkara, CSV uploaded, Slack summary posted. Debounced so a quote isn't re-drafted within 7 days. Active orgs only.
 
 ### 03 Lead Creator · `lead-creator/`
-Stages `raw` leads only; enrichment and outreach are their own agents. Four sources: the Tenkara supplier graph, an Anthropic `web_search` scout (rotating 3-of-6 scoped passes so successive runs cover different ground), and signed webhook pulls from ImportYeti and SourceReady (25 materials each, results land out of band). Probes URLs, dedupes on supplier / canonical name / 90-day mirror, flags misspelled materials, caps at 300 leads per run, emits a sourcing CSV. Sources until a material has ~100 leads, then backs off; dry materials re-check weekly. Active and sourcing_only orgs.
+Stages `raw` leads only; enrichment and outreach are their own agents. Four sources: the Tenkara supplier graph, an Anthropic `web_search` scout (rotating 3-of-6 scoped passes so successive runs cover different ground), an in-process ImportYeti US-customs pull, and a signed webhook pull from SourceReady (25 materials each per run). ImportYeti stages its leads inline during the run; SourceReady results still land out of band. Probes URLs, dedupes on supplier / canonical name / 90-day mirror, flags misspelled materials, caps at 300 leads per run, emits a sourcing CSV. Sources until a material has ~100 leads, then backs off; dry materials re-check weekly. Active and sourcing_only orgs.
+
+**ImportYeti runs in-process** (`lib/importyeti-client.ts` + `lead-creator/importyeti.ts`), not via a webhook to an external agent. An ImportYeti 5xx leaves the page cursor unadvanced so the same page is retried next run rather than silently skipped. SourceReady still fires a signed webhook because it exposes no HTTP API, only MCP tools.
 
 **Paging runs off an explicit cursor**, `agent_state` key `discovery_page:<source>:<materialId>`, advancing exactly one page per fire and wrapping to page 1 after 3 dry pages. Page number used to be inferred from the ingested lead count, which pinned every material to page 1 forever: Cetearyl Alcohol sat at 54 ingested of a 100-supplier page 1 while page 2 held 92 suppliers we had never seen.
 
@@ -388,7 +390,8 @@ select slug, schedule_cron, schedule_tz, training_wheels, status, last_run_at fr
 | `SAM_SLACK_DM_ID` | `safety-alerts.ts` (falls back to `SLACK_ESCALATION_CHANNEL_ID`), fleet summary, 15 |
 | `HUNTER_API_KEY`, `LEADMAGIC_API_KEY`, `ZOOMINFO_CLIENT_ID`, `ZOOMINFO_CLIENT_SECRET`, `ZOOMINFO_API_BASE`, `GETPROSPECT_API_KEY` | 06 contact waterfall |
 | `HUNTER_MAX_EMAILS_PER_DOMAIN` (default 3) | 06 (Hunter cost knob) |
-| `SOURCEREADY_WEBHOOK_URL`, `SOURCEREADY_WEBHOOK_SECRET`, `IMPORTYETI_WEBHOOK_URL`, `IMPORTYETI_WEBHOOK_SECRET` | 03 (discovery is inert without each pair) |
+| `IMPORTYETI_API_KEY` | 03 (ImportYeti discovery runs in-process; inert without it) |
+| `SOURCEREADY_WEBHOOK_URL`, `SOURCEREADY_WEBHOOK_SECRET` | 03 (SourceReady discovery is inert without the pair) |
 | `SOURCEREADY_UNLOCK_CONTACTS` | 03 (paid contact unlock, default **off**) |
 | `SOURCEREADY_MAX_MATERIALS_PER_RUN`, `SOURCEREADY_PAGE_SIZE`, `IMPORTYETI_MAX_MATERIALS_PER_RUN`, `IMPORTYETI_PAGE_SIZE` | 03 (optional) |
 | `DISCOVERY_MIN_NEW_PER_PAGE`, `DISCOVERY_MAX_DRY_PAGES` | 03 page cursor (optional) |
