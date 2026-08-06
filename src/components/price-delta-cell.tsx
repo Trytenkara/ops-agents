@@ -134,6 +134,31 @@ export function PriceChangeReason({ source }: { source: string | null | undefine
   );
 }
 
+// Only rendered on a 'both' row, and deliberately so. Everywhere else the
+// headline price already is the supplier-only price, and repeating it would
+// read as a second, disagreeing number.
+export function SupplierOnlyPrice({
+  source,
+  value,
+}: {
+  source: string | null | undefined;
+  value: number | null | undefined;
+}) {
+  if (source !== "both" || value == null || !Number.isFinite(Number(value))) return null;
+  return (
+    <span
+      className="block text-[10px] text-muted-foreground"
+      title="The current price with exchange-rate movement taken back out: what the seller's own reprice is worth on its own. Reissue platform quotes from this, not from the headline, so rate drift doesn't get baked into a contract number."
+    >
+      supplier only ${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+    </span>
+  );
+}
+
+export function fmtSupplierOnlyPrice(source: string | null | undefined, value: number | null | undefined): string {
+  return source === "both" && value != null && Number.isFinite(Number(value)) ? String(value) : "";
+}
+
 export function fmtChangeReason(source: string | null | undefined): string {
   return source && source !== "none" ? CHANGE_LABELS[source]?.label ?? source : "";
 }

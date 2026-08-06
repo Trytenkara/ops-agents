@@ -6,7 +6,7 @@ import { relativeTime } from "@/lib/utils";
 import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
-import { DeltaCell, PriceSourceLabel, PriceChangeReason, fmtDelta, fmtSource, fmtChangeReason } from "@/components/price-delta-cell";
+import { DeltaCell, PriceSourceLabel, PriceChangeReason, SupplierOnlyPrice, fmtDelta, fmtSource, fmtChangeReason, fmtSupplierOnlyPrice } from "@/components/price-delta-cell";
 
 export type DirectPriceRow = {
   id: string;
@@ -37,6 +37,7 @@ export type DirectPriceRow = {
   status: string | null;
   priceSource: string | null;
   priceChangeSource: string | null;
+  supplierOnlyPrice: number | null;
   createdAt: string | null;
   caseDims: string | null;
 };
@@ -88,6 +89,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
     r.createdAt ?? "",
     fmtSource(r.priceSource),
     fmtChangeReason(r.priceChangeSource),
+    fmtSupplierOnlyPrice(r.priceChangeSource, r.supplierOnlyPrice),
   ]);
 
   return (
@@ -112,6 +114,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
             "Updated",
             "Last updated by",
             "Why it changed",
+            "Supplier-only price (USD)",
           ]}
           rows={csvRows}
         />
@@ -174,6 +177,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
                   </span>
                 )}
                 <PriceChangeReason source={r.priceChangeSource} />
+                <SupplierOnlyPrice source={r.priceChangeSource} value={r.supplierOnlyPrice} />
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 <DeltaCell value={r.supplierDelta} attributable={r.supplierAttributable} kind="supplier" />

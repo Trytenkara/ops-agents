@@ -30,6 +30,12 @@ export interface PriceDeltaSplit {
   totalDelta: number | null;    // USD change, currency + supplier
   currencyDelta: number | null; // USD change attributable to the exchange rate
   supplierDelta: number | null; // USD change attributable to the seller repricing
+  // The current price with the exchange rate held where it was, i.e. n1*f0. On a
+  // "both" row the headline price mixes the seller's move with the rate's, and a
+  // quote reissued off it would propagate rate noise into a contract number; this
+  // is the figure that isolates what the seller actually did. Reconciles by
+  // construction: prev.usd + supplierDelta === supplierPriceUsd.
+  supplierPriceUsd: number | null;
   source: PriceChangeSource;
   // False when there is no native/rate pair on both sides — a USD-native listing
   // (where any move is by definition the seller's) or a legacy row written before
@@ -54,6 +60,7 @@ const EMPTY: PriceDeltaSplit = {
   totalDelta: null,
   currencyDelta: null,
   supplierDelta: null,
+  supplierPriceUsd: null,
   source: "none",
   attributable: false,
 };
@@ -88,6 +95,9 @@ export function splitPriceDelta(prev: PriceObservation, cur: PriceObservation): 
         totalDelta,
         currencyDelta: 0,
         supplierDelta: totalDelta,
+        // No rate to hold constant, so the headline price already is the
+        // supplier-only price.
+        supplierPriceUsd: cur.usd,
         source: materialAgainst(totalDelta, prev.usd) ? "supplier" : "none",
         attributable: true,
       };
@@ -102,7 +112,7 @@ export function splitPriceDelta(prev: PriceObservation, cur: PriceObservation): 
   const supMoved = materialAgainst(supplierDelta, prev.usd);
   const source: PriceChangeSource = supMoved && curMoved ? "both" : supMoved ? "supplier" : curMoved ? "currency" : "none";
 
-  return { totalDelta, currencyDelta, supplierDelta, source, attributable: true };
+  return { totalDelta, currencyDelta, supplierDelta, supplierPriceUsd: round(prev.usd + supplierDelta), source, attributable: true };
 }
 
 function materialAgainst(delta: number | null, base: number): boolean {
@@ -168,6 +178,11 @@ function numOrNull(v: any): number | null {
 export interface QuoteDeltaSplit {
   currencyDelta: number | null; // USD drift of this quote since it was captured
   supplierDelta: number | null; // USD move vs the previous quote, at a common rate
+  // The price with rate drift taken back out, i.e. what the supplier actually
+  // quoted. For a foreign quote that is its capture-time anchor: a supplier
+  // cannot reprice inside an existing row (a reprice arrives as a new quote), so
+  // every dollar this row has moved since capture is the rate's doing.
+  supplierPriceUsd: number | null;
   source: PriceChangeSource;
   currencyAttributable: boolean;
   supplierAttributable: boolean;
@@ -185,6 +200,7 @@ export interface StagedQuoteObservation {
 const EMPTY_QUOTE: QuoteDeltaSplit = {
   currencyDelta: null,
   supplierDelta: null,
+  supplierPriceUsd: null,
   source: "none",
   currencyAttributable: false,
   supplierAttributable: false,
@@ -242,5 +258,8 @@ export function stagedQuoteDelta(
   const source: PriceChangeSource =
     supMoved && curMoved ? "both" : supMoved ? "supplier" : curMoved ? "currency" : "none";
 
-  return { currencyDelta, supplierDelta, source, currencyAttributable, supplierAttributable };
+  const supplierPriceUsd =
+    currencyDelta != null && curUsd != null ? round(curUsd - currencyDelta) : curUsd;
+
+  return { currencyDelta, supplierDelta, supplierPriceUsd, source, currencyAttributable, supplierAttributable };
 }

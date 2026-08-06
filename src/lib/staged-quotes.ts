@@ -293,6 +293,9 @@ export async function insertStagedQuotes(
       price_source: "supplier_quote",
       price_source_at: new Date().toISOString(),
       price_change_source: quotedBefore.has(approvedKey(r.orgId, r.supplierName ?? null, r.materialName ?? null)) ? "supplier" : "none",
+      // At insert the quote has not drifted yet, so the supplier-only price is
+      // the price. The FX pass moves `price` away from it and leaves this here.
+      supplier_price_usd: price,
       case_size: r.caseSize,
       unit_price_gap_reason: gapReason,
       unit_of_measurement: r.unitOfMeasurement,

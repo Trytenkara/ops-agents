@@ -13,7 +13,7 @@ import { MarketplaceFindingActions } from "@/components/marketplace-finding-acti
 import { useListFilter, byString, byNumberDesc, byDateDesc } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
-import { DeltaCell, PriceSourceLabel, PriceChangeReason, fmtDelta, fmtSource, fmtChangeReason } from "@/components/price-delta-cell";
+import { DeltaCell, PriceSourceLabel, PriceChangeReason, SupplierOnlyPrice, fmtDelta, fmtSource, fmtChangeReason, fmtSupplierOnlyPrice } from "@/components/price-delta-cell";
 import { fmtCaseDims, resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
 import { relativeTime } from "@/lib/utils";
 import { aggregatorNameOf } from "@/lib/aggregator-hosts";
@@ -128,9 +128,10 @@ export function MarketplaceFindingsList({
     fmtDelta(r.supplier_delta ?? null, !!r.delta_attributable),
     fmtDelta(r.currency_delta ?? null, !!r.delta_attributable),
     r.listed_currency ?? "USD",
+    r.created_at ?? "",
     fmtSource(r.price_source),
     fmtChangeReason(r.price_change_source),
-    r.created_at ?? "",
+    fmtSupplierOnlyPrice(r.price_change_source, r.supplier_price_usd),
   ]);
 
   return (
@@ -154,7 +155,7 @@ export function MarketplaceFindingsList({
         {controls}
         <ListCsvButton
           filename={filenameFor(slug, "price-changes")}
-          headers={["Supplier", "Aggregator", "Material", "Pack / tier", "Case dims", "Per-unit", "$/kg", "Pack class", "QA", "On file", "Current", "Change", "Supplier delta (USD)", "Currency delta (USD)", "Listed currency", "Updated", "Last updated by", "Why it changed"]}
+          headers={["Supplier", "Aggregator", "Material", "Pack / tier", "Case dims", "Per-unit", "$/kg", "Pack class", "QA", "On file", "Current", "Change", "Supplier delta (USD)", "Currency delta (USD)", "Listed currency", "Updated", "Last updated by", "Why it changed", "Supplier-only price (USD)"]}
           rows={csvRows}
         />
       </div>
@@ -316,6 +317,7 @@ export function MarketplaceFindingsList({
                         {r.created_at ? relativeTime(r.created_at) : "—"}
                         <PriceSourceLabel source={r.price_source} />
                         <PriceChangeReason source={r.price_change_source} />
+                        <SupplierOnlyPrice source={r.price_change_source} value={r.supplier_price_usd} />
                       </TableCell>
                       <TableCell className="text-right align-top">
                         {r.kind === "on_file" ? (

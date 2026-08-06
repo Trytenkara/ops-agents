@@ -143,6 +143,9 @@ async function refreshLeads(
         nextPull.price_change_source = "currency";
         nextPull.currency_delta_usd = roundUsd(nextPull.price - (typeof pull.price === "number" ? pull.price : nextPull.price));
         nextPull.supplier_delta_usd = 0;
+        // Nothing the seller did, so the supplier-only price is what it was
+        // before this restatement, not the number we just wrote.
+        nextPull.supplier_price_usd = typeof pull.price === "number" ? pull.price : nextPull.price;
       }
 
       const tiers = Array.isArray(row.payload?.price_tiers) ? row.payload.price_tiers : [];
@@ -164,7 +167,7 @@ async function refreshLeads(
           price_source: "fx_refresh",
           price_source_at: fx.fetchedAt,
           ...(price !== t.price
-            ? { price_change_source: "currency", currency_delta_usd: roundUsd(price - t.price), supplier_delta_usd: 0 }
+            ? { price_change_source: "currency", currency_delta_usd: roundUsd(price - t.price), supplier_delta_usd: 0, supplier_price_usd: t.price }
             : {}),
         };
       });
@@ -196,7 +199,7 @@ async function refreshStagedQuotes(
   for (let from = 0; ; from += PAGE) {
     const { data: rows, error } = await admin
       .from("staged_quotes")
-      .select("id, price, native_price, native_currency, fx_rate")
+      .select("id, price, native_price, native_currency, fx_rate, captured_price")
       // Only rows still in review. An approved quote is a number an operator
       // signed off and downstream treats as agreed; silently restating it later
       // would change a commercial figure behind their back.
@@ -229,8 +232,12 @@ async function refreshStagedQuotes(
           price_source: "fx_refresh",
           price_source_at: fx.fetchedAt,
           price_change_source: "currency",
-          currency_delta_usd: roundUsd(price - Number(q.price ?? price)),
+          // Drift measured against the capture-time anchor, not against the
+          // last restatement, so it matches what the Direct tab renders and
+          // accumulates instead of resetting every six hours.
+          currency_delta_usd: roundUsd(price - Number(q.captured_price ?? q.price ?? price)),
           supplier_delta_usd: 0,
+          supplier_price_usd: q.captured_price ?? q.price ?? null,
         })
         .eq("id", q.id);
       if (upErr) {

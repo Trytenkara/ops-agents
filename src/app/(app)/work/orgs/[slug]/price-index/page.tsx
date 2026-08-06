@@ -78,7 +78,7 @@ export default async function OrgPriceIndexPage({
       .limit(200),
     admin
       .from("staged_quotes")
-      .select("id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, currency, grade, status, created_at, case_type, case_dimensions, native_price, native_currency, fx_rate, captured_price, captured_fx_rate, extraction_notes, price_source, price_source_at, price_change_source")
+      .select("id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, currency, grade, status, created_at, case_type, case_dimensions, native_price, native_currency, fx_rate, captured_price, captured_fx_rate, extraction_notes, price_source, price_source_at, price_change_source, supplier_price_usd")
       .eq("org_id", org.id)
       .not("material_id", "is", null)
       .order("created_at", { ascending: false })
@@ -233,6 +233,7 @@ export default async function OrgPriceIndexPage({
               listed_currency: t.native_currency ?? null,
               price_source: t.price_source ?? null,
               price_change_source: t.price_change_source ?? null,
+              supplier_price_usd: split.supplierPriceUsd,
               classification: "price_on_file",
               status: "on_file",
               currency: "USD",
@@ -304,6 +305,7 @@ export default async function OrgPriceIndexPage({
     status: s.status ?? null,
     priceSource: s.price_source ?? null,
     priceChangeSource: s.price_change_source ?? null,
+    supplierOnlyPrice: split.supplierPriceUsd,
     createdAt: s.price_source_at ?? s.created_at ?? null,
     caseDims: fmtCaseDims({
       case_type: s.case_type ?? null,

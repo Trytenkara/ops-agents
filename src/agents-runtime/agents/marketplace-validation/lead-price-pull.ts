@@ -921,6 +921,8 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
             price_change_source: s.source === "none" ? (priorPull?.price_change_source ?? "none") : s.source,
             supplier_delta_usd: s.supplierDelta,
             currency_delta_usd: s.currencyDelta,
+            // The price to reissue a quote from when the verdict is 'both'.
+            supplier_price_usd: s.supplierPriceUsd,
           };
         })(),
       };
@@ -1106,6 +1108,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           price_change_source: changeSplit.source === "none" ? (prior?.price_change_source ?? "none") : changeSplit.source,
           supplier_delta_usd: changeSplit.supplierDelta,
           currency_delta_usd: changeSplit.currencyDelta,
+          supplier_price_usd: changeSplit.supplierPriceUsd,
         };
       });
       nextPayload.price_tiers = tiers;
