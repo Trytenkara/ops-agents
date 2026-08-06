@@ -684,7 +684,21 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         }));
         result.currency = "USD";
       }
-    } else if (result.currency === "USD") {
+    } else if (typeof result.current_price === "number" && (!result.currency || result.currency === "USD")) {
+      // Blank counts as USD *here specifically*, and only because the two guards
+      // above have already run: an explicit foreign token would have relabelled
+      // this, and a blank on a domestic-currency host would have been quarantined
+      // with its prices dropped. So a blank reaching this point is a dollar site,
+      // and the write below publishes it as USD regardless. Stamping it is exactly
+      // as strong a claim as the price itself.
+      //
+      // Matching only "USD" was the first attempt and it silently did nothing:
+      // the extractor usually returns no currency at all on US pages, so the
+      // common case fell through both branches and stayed unstamped.
+      //
+      // The price check is not defensive padding: a result with no price (an
+      // unreadable listing, a non-marketplace verdict) has nothing to denominate,
+      // and stamping one would assert a currency for a number that does not exist.
       // Stamp USD listings too, even though there is nothing to convert. Without
       // this, native_currency is null for both "the page listed dollars" and "we
       // read this page before native capture shipped" — and those must not render
