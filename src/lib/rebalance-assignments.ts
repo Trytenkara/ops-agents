@@ -56,6 +56,9 @@ export interface RebalanceResult {
   leadsCleared: number;
   leadsMoved: number;
   draftsMoved: number;
+  // Threads Control Room moved but Tenkara refused, i.e. the inbox still shows
+  // the old owner. Non-zero means run the reset again to catch them up.
+  mirrorsFailed: number;
   // Suppliers per operator once the reset lands, counted over the org's whole
   // book (every active lead plus every claimed supplier), deduped by assignment
   // key so a supplier's material rows count once.
@@ -84,6 +87,8 @@ interface DraftRow {
 // route's maxDuration; unbounded parallelism would hammer the email app.
 const MIRROR_CONCURRENCY = 6;
 const WRITE_CONCURRENCY = 12;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
@@ -134,6 +139,7 @@ export async function rebalanceOrgAssignments(
     leadsCleared: 0,
     leadsMoved: 0,
     draftsMoved: 0,
+    mirrorsFailed: 0,
     projected: [],
     unowned: 0,
   };
@@ -229,10 +235,27 @@ export async function rebalanceOrgAssignments(
   for (const d of draftRows) {
     // Scout drafts carry no supplier_id, so key them through the lead they were
     // drafted from, the way outreach keyed them when it stamped the first owner.
+    // Once that lead goes terminal it drops out of the active scan, and keying on
+    // it alone stranded the thread on its original owner forever (200 of them on
+    // California Chemicals, still sitting with operators the reset had emptied).
+    // The draft's own metadata carries the same name and address the key is built
+    // from, so rebuild it there rather than dragging every closed lead into the
+    // scan.
     const viaLead = d.supplier_id ? null : keyByLead.get(d.metadata?.lead_id ?? "");
-    const key = d.supplier_id ?? viaLead?.key ?? null;
+    const viaMeta =
+      d.supplier_id || viaLead
+        ? null
+        : {
+            key: orgAutoKey(ctx, {
+              supplierName: d.metadata?.supplier_name ?? null,
+              email: d.metadata?.supplier_contact_email ?? null,
+              leadId: d.metadata?.lead_id ?? d.id,
+            }),
+            name: (d.metadata?.supplier_name ?? null) as string | null,
+          };
+    const key = d.supplier_id ?? viaLead?.key ?? viaMeta?.key ?? null;
     if (!key) continue;
-    const name = d.supplier_id ? nameOf(d.supplier_id) : viaLead?.name;
+    const name = d.supplier_id ? nameOf(d.supplier_id) : viaLead?.name ?? viaMeta?.name;
     // A thread on a supplier whose leads all closed is still a live book entry,
     // so it counts toward the projected split even with no active lead behind it.
     project(key, name);
@@ -326,10 +349,18 @@ export async function rebalanceOrgAssignments(
     }
     throw new Error(`moving thread assignees: ${lastError}`);
   });
-  // Mirror last and best-effort: mirrorDraftAssignee already swallows its own
-  // failures, and a Tenkara outage must not roll back a completed rebalance.
+  // Mirror last: a Tenkara outage must not roll back a completed rebalance. But
+  // hundreds of assignee PATCHes in a row trip Tenkara's rate limiter, and a
+  // dropped mirror leaves the inbox showing an owner Control Room no longer
+  // agrees with, so 429s back off and retry rather than being swallowed.
+  result.mirrorsFailed = 0;
   await mapLimit(draftMoves, MIRROR_CONCURRENCY, async (m) => {
-    await mirrorDraftAssignee(admin, m.threadId, m.operatorId).catch(() => undefined);
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const ok = await mirrorDraftAssignee(admin, m.threadId, m.operatorId).catch(() => false);
+      if (ok) return;
+      await sleep(500 * 2 ** attempt);
+    }
+    result.mirrorsFailed += 1;
   });
 
   await admin.from("audit_log").insert({

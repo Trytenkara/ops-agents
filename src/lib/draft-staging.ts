@@ -25,22 +25,28 @@ const BLOCKING_CODES = new Set(["fabricated_contact_info", "grade_ask_widened"])
 // email on the operator, an email that isn't an active Tenkara member → 422, or a
 // thread our token didn't create → 403) is logged, never thrown, so it can't roll
 // back a staged draft.
+// Returns whether Tenkara now agrees with us. Callers that mirror one draft can
+// keep ignoring it; a bulk reassignment needs to know which threads to retry, or
+// Control Room and the inbox disagree on who owns the conversation.
 export async function mirrorDraftAssignee(
   admin: Admin,
   threadId: string | null | undefined,
   operatorId: string | null | undefined
-): Promise<void> {
-  if (!threadId || !operatorId) return;
+): Promise<boolean> {
+  // A "blocked:" id is a placeholder for a draft that never reached Tenkara, so
+  // there is no conversation to mirror onto.
+  if (!threadId || !operatorId || threadId.startsWith("blocked:")) return true;
   const { data: op } = await admin.from("users").select("email").eq("id", operatorId).maybeSingle();
   const email = op?.email ?? null;
   if (!email) {
     console.warn(`[mirrorDraftAssignee] operator ${operatorId} has no email; skipped conversation ${threadId}`);
-    return;
+    return false;
   }
   const res = await setTenkaraConversationAssignee(threadId, email);
   if (!res.ok) {
     console.warn(`[mirrorDraftAssignee] Tenkara assignee mirror failed for conversation ${threadId}: ${res.status} ${res.error}`);
   }
+  return res.ok;
 }
 
 // Everyone we've already CC'd on a Tenkara thread, unioned across every draft we

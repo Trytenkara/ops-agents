@@ -40,6 +40,7 @@ interface RebalancePreview {
   leadsCleared: number;
   leadsMoved: number;
   draftsMoved: number;
+  mirrorsFailed: number;
   unowned: number;
   projected: { id: string; name: string; suppliers: number }[];
 }
@@ -124,7 +125,10 @@ export function OrgAssignmentSettings({
         `Rebalanced across ${landed} operator${landed === 1 ? "" : "s"}: ` +
           `${data.claimsCleared + data.claimsMoved} supplier${data.claimsCleared + data.claimsMoved === 1 ? "" : "s"}, ` +
           `${data.leadsCleared + data.leadsMoved} lead${data.leadsCleared + data.leadsMoved === 1 ? "" : "s"}, ` +
-          `${data.draftsMoved} thread${data.draftsMoved === 1 ? "" : "s"} moved.`
+          `${data.draftsMoved} thread${data.draftsMoved === 1 ? "" : "s"} moved.` +
+          (data.mirrorsFailed
+            ? ` ${data.mirrorsFailed} thread${data.mirrorsFailed === 1 ? "" : "s"} still show the old owner in the Tenkara inbox, run it again to catch them up.`
+            : "")
       );
       router.refresh();
     } catch (e: any) {
