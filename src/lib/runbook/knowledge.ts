@@ -71,7 +71,8 @@ Promote is allowed only on an enriched lead, or on a raw lead that has an enrich
 const SAFETY = `SAFETY INVARIANTS (always true):
 - Agents stage, humans send. No email is ever sent automatically: drafts wait in the client's Tenkara inbox for a human to review and click Send.
 - No writes to Tenkara prod. Control Room only reads Tenkara; all writes land in the ops (OA) database. Collected quotes leave as a CSV that ops bulk-uploads.
-- Agents never fabricate data. An unreadable price or an unverifiable contact is flagged with a reason, never guessed. A draft caught with fabricated contact details is blocked before it is ever created.
+- Agents never fabricate data. An unreadable price is flagged with a reason, never estimated or back-calculated, and a draft caught stating an unverified contact detail is blocked before it is ever created.
+- One deliberate exception, and it is labelled: when enrichment has a person's name but no address, it builds the standard email patterns on that supplier's own domain (never a marketplace or platform domain), puts the likeliest on To and the rest on CC, and marks them guessed so the operator sees what is confirmed and what is not before sending.
 - Agents never share data across client orgs, and operators only see the orgs they're assigned to.
 - Each org has a sourcing status set on its Overview tab: Active (full pipeline), Sourcing only (build the supplier pool; outreach and replies held), or Off (agents skip the org entirely). New orgs default to Off.`;
 

@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 
-// Visual of the outreach pipeline for /how-it-works. Pure presentational —
-// the canonical agent list lives in agents-spec.ts; this just sequences the
+// Visual of the outreach pipeline for /how-it-works. Pure presentational.
+// The canonical agent list lives in agents-spec.ts; this just sequences the
 // happy path and calls out the two human gates (agents stage, humans send).
 
 type StepKind = "agent" | "human";
@@ -12,22 +12,29 @@ interface Step {
   detail: string;
 }
 
-// Agent 03 is the single driver: it discovers, then calls 06 → 04 → 10 as
-// sub-steps. The only human gate is Send (nothing leaves without a click).
+// 03, 06 and 04 are each scheduled in their own right and hand the lead on by
+// stage, not by calling each other. The human gate is Send (nothing leaves
+// without a click).
 const MAIN_FLOW: Step[] = [
-  { kind: "agent", badge: "03", title: "Lead Creator", detail: "Discovers suppliers + drives the pipeline" },
-  { kind: "agent", badge: "06", title: "Enrichment", detail: "Fills contacts (called by 03)" },
-  { kind: "agent", badge: "04", title: "Outreach", detail: "Drafts the email (called by 03)" },
-  { kind: "agent", badge: "10", title: "QA", detail: "Lints the draft inline" },
+  { kind: "agent", badge: "03", title: "Lead Creator", detail: "Discovers suppliers, stages raw leads" },
+  { kind: "agent", badge: "06", title: "Enrichment", detail: "Finds contacts, raw to enriched" },
+  { kind: "agent", badge: "04", title: "Outreach", detail: "Drafts one email per supplier" },
+  { kind: "agent", badge: "10", title: "QA", detail: "Lints the draft inline, blocks bad ones" },
   { kind: "human", badge: "YOU", title: "Send", detail: "Review & click Send in the Tenkara Inbox" },
-  { kind: "agent", badge: "08", title: "Email Scanner", detail: "Detects the reply, drafts a response" },
+  { kind: "agent", badge: "08", title: "Email Scanner", detail: "Reply arrives, drafts the response" },
   { kind: "human", badge: "YOU", title: "Send reply", detail: "Review & send the response" },
 ];
 
 const SIDE_CHANNELS = [
-  { badge: "02", title: "Quote Revalidation", detail: "Daily — drafts re-quotes for expiring quotes" },
-  { badge: "05", title: "Price Changes", detail: "Daily — flags marketplace price changes to apply" },
-  { badge: "07", title: "Escalation + Nudge", detail: "Daily — opens cases for stale leads, nudges ops on pending work" },
+  { badge: "02", title: "Quote Revalidation", detail: "Daily, drafts re-quotes for expiring quotes" },
+  { badge: "05", title: "Marketplace Prices", detail: "Hourly, re-reads listings and updates prices and tiers" },
+  { badge: "07", title: "Escalation + Nudge", detail: "Daily, opens cases for stale leads, nudges ops on pending work" },
+  { badge: "09", title: "Document Retrieval", detail: "Hourly, collects SDS/CoA/TDS suppliers already publish" },
+  { badge: "12", title: "Client Profile", detail: "Hourly, syncs client settings and re-judges leads on a requirements change" },
+  { badge: "13", title: "Inbox Context", detail: "Daily, reads thread history so follow-ups strike the right tone" },
+  { badge: "14", title: "QA Watchdog", detail: "Daily, integrity sweep posted to Slack" },
+  { badge: "15", title: "Reply Manager", detail: "Every 5 min, recovers missed replies and nudges silent threads" },
+  { badge: "16", title: "FX Refresh", detail: "Every 6h, restates USD prices when exchange rates move" },
   { badge: "01", title: "Heartbeat", detail: "Confirms the runtime is alive" },
 ];
 

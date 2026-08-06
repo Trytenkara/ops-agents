@@ -22,7 +22,15 @@ export default function HowItWorksPage() {
         <ul className="text-sm text-muted-foreground space-y-1 list-disc pl-5">
           <li>No emails are ever sent automatically. Drafts are staged in the Tenkara Inbox under Pending Outreach; operators review and click Send.</li>
           <li>No writes to Tenkara prod. Control Room only has a read-only client; all writes land in the ops-assistants Supabase project.</li>
-          <li>Agents never fabricate. An unreadable price or an unverifiable contact is flagged with its reason, never guessed.</li>
+          <li>
+            Agents never fabricate. An unreadable price is flagged with its reason, never estimated, and a contact detail
+            stated in an email must be verified or the draft is blocked outright.
+          </li>
+          <li>
+            Where a supplier gives us a person&apos;s name but no address, the agent builds the standard email patterns on that
+            supplier&apos;s own domain and labels them as guessed, so you can see what is confirmed and what is a best guess
+            before you send. It never guesses on a marketplace or platform domain.
+          </li>
           <li>Org access is gated by RLS plus app-layer filters. Operators only see the orgs they&apos;re assigned to.</li>
           <li>Each client carries a sourcing status (Active, Sourcing only, Off) that decides which agents touch it at all.</li>
         </ul>
