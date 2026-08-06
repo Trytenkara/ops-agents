@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getOrgAssignmentContext, resolveOperatorId, type AssignmentContext } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, orgAutoKey, resolveOperatorId, type AssignmentContext } from "@/lib/operator-assignment";
 import { postAgentAlert } from "@/lib/slack-alert";
 import { deepLink } from "@/lib/slack";
 import { callBriefHeadline, type CallBrief } from "@/lib/call-brief";
@@ -70,7 +70,20 @@ export class CallOperatorResolver {
     let userId = opts.assignedOperator;
     if (!userId) {
       const ctx = await this.assignmentContext(orgId);
-      userId = ctx ? resolveOperatorId(ctx, opts.supplierId, null, opts.supplierName) : null;
+      // Key on the supplier the way every other surface does, so the call brief
+      // goes to whoever already owns the supplier.
+      userId = ctx
+        ? resolveOperatorId(
+            ctx,
+            orgAutoKey(ctx, {
+              supplierId: opts.supplierId,
+              supplierName: opts.supplierName,
+              leadId: opts.supplierId ?? opts.supplierName ?? "",
+            }),
+            null,
+            opts.supplierName
+          )
+        : null;
     }
     if (!userId) userId = await this.defaultOperator(orgId);
     if (!userId) return { userId: null, name: null, email: null, slackUserId: null };

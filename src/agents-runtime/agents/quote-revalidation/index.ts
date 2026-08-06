@@ -9,7 +9,7 @@ import { createTenkaraConversation, createTenkaraDraft, tenkaraEmailAccountIdFor
 import { bodyToHtml } from "@/lib/email-style";
 import { lintDraft } from "../outreach-qa/lint";
 import { postQrSummary } from "./slack-notifier";
-import { getOrgAssignmentContext, resolveOperatorId } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, orgAutoKey, resolveOperatorId } from "@/lib/operator-assignment";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import { mirrorDraftAssignee, threadCcContacts } from "@/lib/draft-staging";
 
@@ -361,7 +361,16 @@ registerAgent({
           }
           // Manual claim or sticky-random owner, per the client's assignment mode.
           const assignmentCtx = await getOrgAssignmentContext(admin, (oaOrg as any).id);
-          const resolved = resolveOperatorId(assignmentCtx, r.group.supplier_id, null, r.group.supplier_name);
+          const resolved = resolveOperatorId(
+            assignmentCtx,
+            orgAutoKey(assignmentCtx, {
+              supplierId: r.group.supplier_id,
+              supplierName: r.group.supplier_name,
+              leadId: r.group.supplier_id ?? r.group.supplier_name ?? "",
+            }),
+            null,
+            r.group.supplier_name
+          );
           if (resolved) assignedOperator = resolved;
         }
         // Mirror the Control Room operator onto the Tenkara conversation so the

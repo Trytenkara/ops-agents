@@ -6,7 +6,7 @@ import {
   ALL_SUPPLIER_TYPES,
   autoOperator,
   getOrgAssignmentContext,
-  leadAutoKey,
+  orgAutoKey,
   pickSupplierOperator,
   supplierKind,
 } from "@/lib/operator-assignment";
@@ -83,6 +83,7 @@ interface DraftRow {
 // large client moves hundreds of them. Sequential mirroring would run past the
 // route's maxDuration; unbounded parallelism would hammer the email app.
 const MIRROR_CONCURRENCY = 6;
+const WRITE_CONCURRENCY = 12;
 
 async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
@@ -187,7 +188,7 @@ export async function rebalanceOrgAssignments(
   const moveLeads = new Map<string, string[]>();
   const keyByLead = new Map<string, { key: string; name: string | null }>();
   for (const l of leadRows) {
-    const key = leadAutoKey({ supplierId: l.supplier_id, supplierName: l.supplier_name, email: l.email, leadId: l.id });
+    const key = orgAutoKey(ctx, { supplierId: l.supplier_id, supplierName: l.supplier_name, email: l.email, leadId: l.id });
     keyByLead.set(l.id, { key, name: l.supplier_name });
     if (!l.assigned_operator_id) continue;
     // A supplier-backed lead reads its owner from supplier_assignment, so its own
@@ -307,19 +308,24 @@ export async function rebalanceOrgAssignments(
     }
   }
 
-  for (let i = 0; i < draftMoves.length; i += 200) {
-    const chunk = draftMoves.slice(i, i + 200);
-    await Promise.all(
-      chunk.map(async (m) => {
-        const { error } = await admin
-          .from("draft_references")
-          .update({ assigned_operator: m.operatorId })
-          .eq("org_id", orgId)
-          .eq("id", m.id);
-        if (error) throw new Error(`moving thread assignees: ${error.message}`);
-      })
-    );
-  }
+  // Threads are re-stamped one at a time because each one gets a different
+  // operator. 200 of those in flight at once exhausted the connection pool and
+  // failed the run part-way, so this is bounded like the mirror pass, and each
+  // row retries: a dropped socket must not strand half the org's threads on the
+  // old owner.
+  await mapLimit(draftMoves, WRITE_CONCURRENCY, async (m) => {
+    let lastError = "";
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { error } = await admin
+        .from("draft_references")
+        .update({ assigned_operator: m.operatorId })
+        .eq("org_id", orgId)
+        .eq("id", m.id);
+      if (!error) return;
+      lastError = error.message;
+    }
+    throw new Error(`moving thread assignees: ${lastError}`);
+  });
   // Mirror last and best-effort: mirrorDraftAssignee already swallows its own
   // failures, and a Tenkara outage must not roll back a completed rebalance.
   await mapLimit(draftMoves, MIRROR_CONCURRENCY, async (m) => {

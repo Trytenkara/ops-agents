@@ -17,7 +17,7 @@ import { getQuoteProfiles } from "@/lib/quote-profiles";
 import { stagedPackLabel } from "@/lib/staged-pack-label";
 import { loadSupplierDocIndex } from "@/lib/supplier-doc-index";
 import { getClientRequirements, clientDocRules } from "@/lib/tenkara-requirements";
-import { getOrgAssignmentContext, resolveOperatorId } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, orgAutoKey, resolveOperatorId } from "@/lib/operator-assignment";
 import { getSupplierProfiles } from "@/lib/supplier-profiles";
 import { CasesSection } from "@/components/cases-section";
 import { loadOrgCases, caseCategory } from "@/lib/org-cases";
@@ -363,21 +363,36 @@ export default async function OrgPriceIndexPage({
     if (q.supplier_id && q.supplier_name) supplierNameById.set(q.supplier_id, q.supplier_name);
   }
   const supplierOperators: Record<string, string> = {};
-  for (const sid of new Set(quoteProfiles.map((q) => q.supplier_id).filter(Boolean) as string[])) {
+  // Walk the QUOTES, not the supplier ids on them: quote_profiles carries a
+  // supplier_id on almost nothing (0 of California Chemicals' 885 rows), so an
+  // id-keyed loop produced an empty map and the whole validation queue read
+  // "Unassigned" however the org's assignment settings were set. The owner is
+  // resolved on the supplier's shared key, so this tab agrees with Leads and
+  // Suppliers instead of hashing a quote's own name into a different operator.
+  for (const q of quoteProfiles) {
+    const sname = q.supplier_name?.trim() || (q.supplier_id ? supplierNameById.get(q.supplier_id) ?? null : null);
+    if (!q.supplier_id && !sname) continue;
     // Name matters as much as id here: a supplier that never got a supplier_id on
     // a lead is only classifiable by name, and an unclassified one reads as
     // "direct" and falls out of a marketplace-only scope.
-    const sname = supplierNameById.get(sid) ?? null;
     const hint =
-      (supplierTypes[`id:${sid}`] as MarketKind | undefined) ??
+      (q.supplier_id ? (supplierTypes[`id:${q.supplier_id}`] as MarketKind | undefined) : undefined) ??
       (sname ? (supplierTypes[`name:${sname.toLowerCase()}`] as MarketKind | undefined) : undefined) ??
       null;
-    const opId = resolveOperatorId(assignmentCtx, sid, hint, sname);
+    const idKey = q.supplier_id ? `id:${q.supplier_id}` : null;
+    const nameLookupKey = sname ? `name:${sname.toLowerCase()}` : null;
+    if ((idKey && supplierOperators[idKey]) || (nameLookupKey && supplierOperators[nameLookupKey])) continue;
+    const opId = resolveOperatorId(
+      assignmentCtx,
+      orgAutoKey(assignmentCtx, { supplierId: q.supplier_id, supplierName: sname, leadId: q.id }),
+      hint,
+      sname
+    );
     const name = opId ? operatorNameById.get(opId) : null;
     if (!name) continue;
-    supplierOperators[`id:${sid}`] = name;
+    if (idKey) supplierOperators[idKey] = name;
     // Quotes staged before their supplier was linked carry only a name.
-    if (sname) supplierOperators[`name:${sname.toLowerCase()}`] = name;
+    if (nameLookupKey) supplierOperators[nameLookupKey] = name;
   }
 
   const marketplaceDims = await loadMarketplaceCaseDims(admin);

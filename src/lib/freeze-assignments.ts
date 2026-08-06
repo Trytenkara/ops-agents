@@ -3,10 +3,9 @@ import { selectAllPaged } from "@/lib/supabase-paging";
 import { getClientSuppliers } from "@/lib/client-suppliers";
 import {
   getOrgAssignmentContext,
-  getOrgSupplierTypes,
   resolveOperatorId,
   supplierKind,
-  leadAutoKey,
+  orgAutoKey,
   type AssignmentConfig,
 } from "@/lib/operator-assignment";
 import type { MarketKind } from "@/lib/lead-market";
@@ -78,7 +77,7 @@ export async function freezeDerivedOwners(
   // Resolve against the config still in force, so what gets pinned is exactly
   // what the page showed a moment ago.
   const restrict = kinds?.length ? new Set<MarketKind>(kinds) : null;
-  const types = restrict ? await getOrgSupplierTypes(admin, orgId) : ctx.supplierTypes;
+  const types = ctx.supplierTypes;
   const index = await collectOrgSuppliers(admin, orgId);
   const kindOf = (id: string | null, name?: string | null): MarketKind | null =>
     supplierKind(types, id, name) ?? (id && index.tenkaraMarketplace.has(id) ? "marketplace" : null);
@@ -123,7 +122,7 @@ export async function freezeDerivedOwners(
   const byOperator = new Map<string, string[]>();
   for (const l of scout) {
     // Same key outreach uses, so the frozen owner matches who was getting drafts.
-    const key = leadAutoKey({ supplierName: l.supplier_name, email: l.email, leadId: l.id });
+    const key = orgAutoKey(ctx, { supplierName: l.supplier_name, email: l.email, leadId: l.id });
     if (!wanted(key, l.supplier_name)) continue;
     const opId = resolveOperatorId(ctx, key, kindOf(key, l.supplier_name));
     if (!opId) continue;

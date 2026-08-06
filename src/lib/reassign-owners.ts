@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAllPaged } from "@/lib/supabase-paging";
-import { getOrgAssignmentContext, pickSupplierOperator, leadAutoKey } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, pickSupplierOperator, orgAutoKey } from "@/lib/operator-assignment";
 import { mirrorDraftAssignee } from "@/lib/draft-staging";
 
 export interface ReassignResult {
@@ -15,7 +15,7 @@ export interface ReassignResult {
 // claims are only read, never re-derived, and draft_references/leads_in_flight
 // stamp an owner once at creation and never revisit it. Move everything the
 // removed operator(s) held for this org onto the current pool, keyed the same
-// way the auto spread keys it (leadAutoKey) so a supplier's claim, its drafts,
+// way the auto spread keys it (orgAutoKey) so a supplier's claim, its drafts,
 // and its leads all land on the SAME new owner instead of drifting apart.
 export async function reassignIneligibleOwners(
   admin: SupabaseClient,
@@ -87,7 +87,7 @@ export async function reassignIneligibleOwners(
       .select("id, supplier_id, supplier_name, email:payload->>supplier_contact_email")
       .in("id", leadIdsNeeded.slice(i, i + 200));
     for (const l of (data ?? []) as { id: string; supplier_id: string | null; supplier_name: string | null; email: string | null }[]) {
-      leadKeyById.set(l.id, leadAutoKey({ supplierId: l.supplier_id, supplierName: l.supplier_name, email: l.email, leadId: l.id }));
+      leadKeyById.set(l.id, orgAutoKey(ctx, { supplierId: l.supplier_id, supplierName: l.supplier_name, email: l.email, leadId: l.id }));
     }
   }
   for (const d of draftRows) {
@@ -113,7 +113,7 @@ export async function reassignIneligibleOwners(
         .range(from, to)
   ).catch(() => []);
   for (const l of leadRows) {
-    const key = leadAutoKey({ supplierId: l.supplier_id, supplierName: l.supplier_name, email: l.email, leadId: l.id });
+    const key = orgAutoKey(ctx, { supplierId: l.supplier_id, supplierName: l.supplier_name, email: l.email, leadId: l.id });
     const newOwner = pick(key);
     if (!newOwner) continue;
     const { error } = await admin

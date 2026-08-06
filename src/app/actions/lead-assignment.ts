@@ -52,6 +52,32 @@ export async function assignLeadOperator(orgId: string, leadId: string, operator
     }
   }
 
+  // A supplier is owned by one operator, so the claim covers the supplier's whole
+  // book, not the single material row that was clicked. Assigning one row left its
+  // siblings on the auto owner, which is how one supplier ended up reading two
+  // different operators down the Leads tab.
+  const { data: clicked } = await admin
+    .from("leads_in_flight")
+    .select("supplier_name")
+    .eq("id", leadId)
+    .eq("org_id", orgId)
+    .maybeSingle();
+  const siblingName = (clicked?.supplier_name ?? "").trim();
+  // ILIKE reads % and _ as wildcards, and supplier names do carry them.
+  const pattern = siblingName.replace(/[\\%_]/g, (c: string) => `\\${c}`);
+  const { data: siblings } = siblingName
+    ? await admin
+        .from("leads_in_flight")
+        .select("id")
+        .eq("org_id", orgId)
+        .eq("status", "active")
+        // Supplier-backed rows read their owner from supplier_assignment, so leave
+        // them to assignSupplierOperator rather than writing a competing record.
+        .is("supplier_id", null)
+        .ilike("supplier_name", pattern)
+    : { data: null };
+  const targetIds = Array.from(new Set([leadId, ...((siblings ?? []) as { id: string }[]).map((r) => r.id)]));
+
   const now = new Date().toISOString();
   const { error } = await admin
     .from("leads_in_flight")
@@ -59,20 +85,21 @@ export async function assignLeadOperator(orgId: string, leadId: string, operator
     // so it can't tell an operator's claim from an agent's touch, and auto_all
     // needs that distinction to know which claims override its spread.
     .update({ assigned_operator_id: operatorId, assigned_operator_at: operatorId ? now : null, updated_at: now })
-    .eq("id", leadId)
+    .in("id", targetIds)
     .eq("org_id", orgId);
   if (error) return { ok: false, error: error.message };
 
-  // Re-point any in-flight manual-outreach case for this lead (Scout leads become
-  // cases, keyed by lead_id in metadata; drafts aren't lead-keyed) so the change
-  // takes effect on work already queued. Best-effort — never fails the assign.
+  // Re-point any in-flight manual-outreach case for those leads (Scout leads
+  // become cases, keyed by lead_id in metadata; drafts aren't lead-keyed) so the
+  // change takes effect on work already queued. Best-effort — never fails the
+  // assign.
   if (operatorId !== null) {
     await admin
       .from("cases")
       .update({ assigned_operator: operatorId })
       .eq("org_id", orgId)
       .eq("status", "open")
-      .filter("metadata->>lead_id", "eq", leadId);
+      .in("metadata->>lead_id", targetIds);
   }
 
   await admin.from("audit_log").insert({

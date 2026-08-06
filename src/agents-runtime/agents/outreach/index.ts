@@ -1,6 +1,6 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getOrgAssignmentContext, resolveOperatorId, overridesAuto, leadAutoKey, type AssignmentContext } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, resolveOperatorId, overridesAuto, orgAutoKey, type AssignmentContext } from "@/lib/operator-assignment";
 import { classifyClient } from "../quote-revalidation/config";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import { compileWaitMs } from "@/lib/agent-timing";
@@ -446,7 +446,7 @@ registerAgent({
           const auto = ctx
             ? resolveOperatorId(
                 ctx,
-                leadAutoKey({
+                orgAutoKey(ctx, {
                   supplierId: lead.supplier_id,
                   supplierName: lead.supplier_name,
                   email: hasEmail ? email : null,

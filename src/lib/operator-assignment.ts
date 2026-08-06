@@ -161,8 +161,38 @@ export async function getOrgAssignmentConfig(admin: SupabaseClient, orgId: strin
 // and every supplier fell through to the "direct" default. An org that narrowed
 // its scope to marketplaces then had NOTHING in scope, and auto assignment
 // silently stopped covering anything.
-export async function getOrgSupplierTypes(admin: SupabaseClient, orgId: string): Promise<Map<string, MarketKind>> {
-  const m = new Map<string, MarketKind>();
+export interface OrgLeadIndex {
+  types: Map<string, MarketKind>;
+  // Supplier name key → the ONE key every row of that supplier hashes on. See
+  // orgAutoKey.
+  keys: Map<string, string>;
+}
+
+// A supplier reaches us through rows that don't agree on what identifies it: one
+// material row carries a supplier_id, its siblings carry only a contact email,
+// and a quote carries neither. Each of those produces a different leadAutoKey, so
+// ONE supplier got several keys, the spread treated each as its own supplier, and
+// the same supplier's rows rendered under different operators (Lab Alley: 5 rows
+// on the email key, 1 on the supplier id, and the operator column disagreed).
+// Rank the candidates a name is seen with and keep the strongest, so distribution
+// is per supplier rather than per row: supplier id (also what claims key on),
+// else the contact email, else the name itself. Ties resolve lexicographically so
+// the answer doesn't depend on row order.
+function keyRank(key: string): number {
+  return key.startsWith("name:") ? 2 : key.startsWith("e:") ? 1 : 0;
+}
+
+function strongerKey(current: string | undefined, candidate: string): string {
+  if (!current) return candidate;
+  const rc = keyRank(current);
+  const rn = keyRank(candidate);
+  if (rn !== rc) return rn < rc ? candidate : current;
+  return candidate < current ? candidate : current;
+}
+
+export async function getOrgLeadIndex(admin: SupabaseClient, orgId: string): Promise<OrgLeadIndex> {
+  const types = new Map<string, MarketKind>();
+  const keys = new Map<string, string>();
 
   // The scanner's per-lead call, keyed by whatever the spread will be keyed by.
   const leads = await selectAllPaged<{
@@ -181,30 +211,59 @@ export async function getOrgSupplierTypes(admin: SupabaseClient, orgId: string):
       .range(from, to)
   ).catch(() => []);
   for (const l of leads) {
+    if (l.supplier_name) {
+      const nk = nameKey(l.supplier_name);
+      keys.set(
+        nk,
+        strongerKey(
+          keys.get(nk),
+          leadAutoKey({ supplierId: l.supplier_id, supplierName: l.supplier_name, email: l.email, leadId: l.id })
+        )
+      );
+    }
     const kind = leadMarketKind(l.site_type);
     if (!kind) continue;
-    m.set(leadAutoKey({ supplierId: l.supplier_id, supplierName: l.supplier_name, email: l.email, leadId: l.id }), kind);
-    if (l.supplier_name) m.set(nameKey(l.supplier_name), kind);
+    types.set(leadAutoKey({ supplierId: l.supplier_id, supplierName: l.supplier_name, email: l.email, leadId: l.id }), kind);
+    if (l.supplier_name) types.set(nameKey(l.supplier_name), kind);
   }
 
   // Agent 06's validated profiles win where they exist: a human/agent confirmed
   // the kind there, whereas site_type is the scanner's first guess.
-  const profiles = await selectAllPaged<{ supplier_id: string | null; supplier_name: string | null; supplier_type: string | null }>((from, to) =>
+  const profiles = await selectAllPaged<{
+    supplier_id: string | null;
+    supplier_name: string | null;
+    supplier_type: string | null;
+    poc_email: string | null;
+  }>((from, to) =>
     admin
       .from("supplier_profiles")
-      .select("supplier_id, supplier_name, supplier_type")
+      .select("supplier_id, supplier_name, supplier_type, poc_email")
       .eq("org_id", orgId)
       .order("id")
       .range(from, to)
   ).catch(() => []);
   for (const r of profiles) {
+    if (r.supplier_name) {
+      const nk = nameKey(r.supplier_name);
+      keys.set(
+        nk,
+        strongerKey(
+          keys.get(nk),
+          leadAutoKey({ supplierId: r.supplier_id, supplierName: r.supplier_name, email: r.poc_email, leadId: nk })
+        )
+      );
+    }
     if (!r.supplier_type || !(ALL_SUPPLIER_TYPES as string[]).includes(r.supplier_type)) continue;
     const kind = r.supplier_type as MarketKind;
-    if (r.supplier_id) m.set(r.supplier_id, kind);
-    if (r.supplier_name) m.set(nameKey(r.supplier_name), kind);
+    if (r.supplier_id) types.set(r.supplier_id, kind);
+    if (r.supplier_name) types.set(nameKey(r.supplier_name), kind);
   }
 
-  return m;
+  return { types, keys };
+}
+
+export async function getOrgSupplierTypes(admin: SupabaseClient, orgId: string): Promise<Map<string, MarketKind>> {
+  return (await getOrgLeadIndex(admin, orgId)).types;
 }
 
 // Suppliers reach us from Tenkara with an id that never appears on a lead (Sierra
@@ -238,6 +297,21 @@ export function leadAutoKey(input: {
   if (EMAIL_SHAPE.test(email)) return `e:${email}`;
   const name = String(input.supplierName ?? "").trim();
   return name ? nameKey(name) : input.leadId;
+}
+
+// The key a row hashes on, once the org's other rows have had their say. A row
+// carrying a supplier_id keeps it: it is already supplier-scoped, and it is what
+// supplier_assignment claims key on. Everything else adopts its supplier's key,
+// so a quote with only a name, a Scout lead with only an email, and a lead
+// carrying the supplier id all resolve to ONE operator instead of three.
+export function orgAutoKey(
+  ctx: AssignmentContext,
+  input: { supplierId?: string | null; supplierName?: string | null; email?: string | null; leadId: string }
+): string {
+  if (input.supplierId) return input.supplierId;
+  const name = String(input.supplierName ?? "").trim();
+  if (name) return ctx.supplierKeys.get(nameKey(name)) ?? leadAutoKey(input);
+  return leadAutoKey(input);
 }
 
 export function supplierKind(
@@ -292,21 +366,25 @@ export interface AssignmentContext {
   // the claims it was asked to redo.
   manualAt: Map<string, string>;
   supplierTypes: Map<string, MarketKind>;
+  // Supplier name key → the key that supplier's rows hash on. See orgAutoKey.
+  supplierKeys: Map<string, string>;
 }
 
 export async function getOrgAssignmentContext(admin: SupabaseClient, orgId: string): Promise<AssignmentContext> {
   const config = await getOrgAssignmentConfig(admin, orgId).catch(() => DEFAULT_ASSIGNMENT_CONFIG);
-  const [pool, manual, supplierTypes] = await Promise.all([
+  const [pool, manual, index] = await Promise.all([
     getOrgOperatorPool(admin, orgId).catch(() => [] as OperatorRef[]),
     getSupplierAssignments(admin, orgId).catch(() => ({
       claims: new Map<string, string>(),
       claimedAt: new Map<string, string>(),
     })),
-    // Only read when the org narrowed the scope; every supplier is in scope
-    // otherwise and the map would go unused.
-    config.supplierTypes.length < ALL_SUPPLIER_TYPES.length
-      ? getOrgSupplierTypes(admin, orgId)
-      : Promise.resolve(new Map<string, MarketKind>()),
+    // Read unconditionally: the scope map is only needed by a narrowed org, but
+    // the key map decides which key a supplier's rows share, and every org needs
+    // that or its own rows disagree about who owns the supplier.
+    getOrgLeadIndex(admin, orgId).catch(() => ({
+      types: new Map<string, MarketKind>(),
+      keys: new Map<string, string>(),
+    })),
   ]);
   return {
     config,
@@ -314,7 +392,8 @@ export async function getOrgAssignmentContext(admin: SupabaseClient, orgId: stri
     autoPool: pool.filter((p) => p.autoAssignable),
     manual: manual.claims,
     manualAt: manual.claimedAt,
-    supplierTypes,
+    supplierTypes: index.types,
+    supplierKeys: index.keys,
   };
 }
 

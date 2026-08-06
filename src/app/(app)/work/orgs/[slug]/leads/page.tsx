@@ -13,7 +13,7 @@ import { leadMarketKind } from "@/lib/lead-market";
 import { computeLeadFlags } from "@/lib/lead-flags";
 import { getClientRequirements, dealbreakerCertNames } from "@/lib/tenkara-requirements";
 import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
-import { getOrgAssignmentContext, autoOperator, overridesAuto, resolveOperatorId, nameKey, leadAutoKey } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, autoOperator, overridesAuto, resolveOperatorId, nameKey, orgAutoKey } from "@/lib/operator-assignment";
 
 import { orgDisplayName } from "@/lib/org-display";
 import { getSupplierProfiles } from "@/lib/supplier-profiles";
@@ -174,14 +174,16 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     // outreach thread), falling back to the supplier name when that field holds a
     // channel note rather than an address.
     // Same key outreach uses, so the displayed owner matches who gets the drafts.
-    const scoutAutoKey = leadAutoKey({
+    const autoKey = orgAutoKey(assignmentCtx, {
+      supplierId: r.supplier_id,
       supplierName: r.supplier_name,
       email: r.payload?.supplier_contact_email,
       leadId: r.id,
     });
-    const operator_assigned_id = r.supplier_id
-      ? supplierAssignments.get(r.supplier_id) ?? null
-      : r.assigned_operator_id ?? null;
+    // Read the claim on the SAME key the spread uses, so a supplier whose rows
+    // don't all carry its supplier_id still shows one owner: the id-less rows
+    // pick up the supplier's claim instead of only their own lead-level pin.
+    const operator_assigned_id = supplierAssignments.get(autoKey) ?? (r.supplier_id ? null : r.assigned_operator_id) ?? null;
     // Empty when the client runs manual assignment, or when this lead's market
     // kind sits outside the client's auto scope. The validated profile outranks
     // market_kind here (same precedence Supplier Validation renders its badge
@@ -191,12 +193,12 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     // the join key — this org carries no supplier_id on any lead.
     const profileKind = r.supplier_name ? assignmentCtx.supplierTypes.get(nameKey(r.supplier_name)) ?? null : null;
     const operator_auto_name =
-      autoOperator(assignmentCtx, r.supplier_id ?? scoutAutoKey, profileKind ?? market_kind, r.supplier_name)?.name ?? null;
+      autoOperator(assignmentCtx, autoKey, profileKind ?? market_kind, r.supplier_name)?.name ?? null;
     // Static label (rows without an assign control): a manual claim wins, except
     // under "auto, reassign all", where the auto owner is who agents route to —
     // unless the claim was made after that spread, i.e. someone corrected it.
     const claimedName = operator_assigned_id ? operatorNameById.get(operator_assigned_id) ?? null : null;
-    const claimedAt = r.supplier_id ? assignmentCtx.manualAt.get(r.supplier_id) ?? null : r.assigned_operator_at ?? null;
+    const claimedAt = assignmentCtx.manualAt.get(autoKey) ?? (r.supplier_id ? null : r.assigned_operator_at) ?? null;
     const operator_name = overridesAuto(assignmentCtx, claimedAt)
       ? claimedName ?? operator_auto_name
       : operator_auto_name ?? claimedName;
@@ -278,7 +280,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
   for (const p of supplierProfiles) {
     const key = p.supplier_id ?? p.supplier_name.toLowerCase();
     // Same key outreach consolidates on, so the card matches who gets the thread.
-    const autoKey = leadAutoKey({
+    const autoKey = orgAutoKey(assignmentCtx, {
       supplierId: p.supplier_id,
       supplierName: p.supplier_name,
       email: p.poc_email,

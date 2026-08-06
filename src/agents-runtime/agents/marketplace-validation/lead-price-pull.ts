@@ -5,7 +5,7 @@ import { ensureMarketplaceCaseDims } from "@/lib/marketplace-case-dims-fill";
 import { neverMarketplaceHostOf } from "@/lib/marketplace-hosts";
 import { screenClonedListings } from "@/lib/clone-ring";
 import { aggregatorNameOf, isAggregatorIndexUrl, isAggregatorPlatformName, shouldEnumerateAggregatorSellers } from "@/lib/aggregator-hosts";
-import { getOrgAssignmentContext, resolveOperatorId, type AssignmentContext } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, orgAutoKey, resolveOperatorId, type AssignmentContext } from "@/lib/operator-assignment";
 import { leadMarketKind } from "@/lib/lead-market";
 import { splitPriceDelta } from "@/lib/price-delta";
 
@@ -423,10 +423,16 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     if (!l.org_id) return null;
     const ctx = ctxByOrg.get(l.org_id);
     if (!ctx) return null;
-    // Marketplace leads usually have no supplier_id — fall back to the lead id so
-    // the sticky-random default spreads across the org's pool instead of every
-    // case piling onto pool[0] (mirrors the outreach agent + Leads-tab key).
-    return resolveOperatorId(ctx, l.supplier_id ?? l.id, leadMarketKind((l.payload as any)?.site_type), (l as any).supplier_name ?? null);
+    // Marketplace leads usually have no supplier_id — key on the supplier the way
+    // the Leads tab and outreach do, so the case lands on the operator who already
+    // owns that supplier instead of on a per-lead pick of its own.
+    const key = orgAutoKey(ctx, {
+      supplierId: l.supplier_id,
+      supplierName: (l as any).supplier_name ?? null,
+      email: (l.payload as any)?.supplier_contact_email ?? null,
+      leadId: l.id,
+    });
+    return resolveOperatorId(ctx, key, leadMarketKind((l.payload as any)?.site_type), (l as any).supplier_name ?? null);
   };
 
   let processed = 0;
