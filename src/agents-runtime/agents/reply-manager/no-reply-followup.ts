@@ -166,25 +166,38 @@ async function escalateToCalling(
   return true;
 }
 
-// Follow-up drafts already staged into a thread, keyed by thread id. The sequence
-// position is derived from these rows rather than from a counter stamped at stage
-// time, so a nudge the operator never sent can't advance the sequence.
-async function loadFollowupsByThread(admin: Admin, threadIds: string[]): Promise<Map<string, any[]>> {
-  const byThread = new Map<string, any[]>();
+// Follow-up drafts already staged into a thread, keyed by thread id, plus the set
+// of threads a supplier has actually replied on. The sequence position is derived
+// from these rows rather than from a counter stamped at stage time, so a nudge the
+// operator never sent can't advance the sequence.
+//
+// `replied` has to be read across every row on the thread, not just Agent 04's
+// original outreach row: the inbound handler stamps reply_detected on the NEWEST
+// reference, so from the first reply onward that stamp lands on an Agent 15 reply
+// row and the outreach row it answers stays null forever. Keying "did they reply"
+// off that one row nudged suppliers who had already written back, quote attached.
+async function loadThreadState(
+  admin: Admin,
+  threadIds: string[]
+): Promise<{ followups: Map<string, any[]>; replied: Set<string> }> {
+  const followups = new Map<string, any[]>();
+  const replied = new Set<string>();
   for (let i = 0; i < threadIds.length; i += 100) {
     const { data } = await admin
       .from("draft_references")
-      .select("thread_id, status, reviewed_at, created_at")
-      .in("thread_id", threadIds.slice(i, i + 100))
-      .eq("metadata->>draft_kind", "no_reply_followup");
+      .select("thread_id, status, reviewed_at, created_at, metadata")
+      .in("thread_id", threadIds.slice(i, i + 100));
     for (const d of (data ?? []) as any[]) {
       if (!d.thread_id) continue;
-      const list = byThread.get(d.thread_id);
+      const meta = (d.metadata ?? {}) as any;
+      if (meta.reply_detected || meta.draft_kind === "inbound_reply") replied.add(d.thread_id);
+      if (meta.draft_kind !== "no_reply_followup") continue;
+      const list = followups.get(d.thread_id);
       if (list) list.push(d);
-      else byThread.set(d.thread_id, [d]);
+      else followups.set(d.thread_id, [d]);
     }
   }
-  return byThread;
+  return { followups, replied };
 }
 
 export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ drafted: number; skipped: number; escalated: number }> {
@@ -213,7 +226,7 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
   // paused org's in-flight RFQs stop getting follow-ups.
   const orgStatuses = await loadOrgStatuses(admin);
 
-  const followupsByThread = await loadFollowupsByThread(
+  const { followups: followupsByThread, replied: repliedThreads } = await loadThreadState(
     admin,
     Array.from(new Set(((sent ?? []) as any[]).map((r) => r.thread_id).filter(Boolean)))
   );
@@ -230,6 +243,10 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
     // The sequence is tracked per thread; without one there's nothing to reply
     // into and no way to see the nudges we already wrote.
     if (!r.thread_id) continue;
+    // They already wrote back on this thread, even if the stamp for it landed on a
+    // different row. Nudging them for silence would be answering a quote with
+    // "just following up on my note below".
+    if (repliedThreads.has(r.thread_id)) continue;
 
     // Where this thread actually stands: a nudge still awaiting the operator
     // pauses the sequence, and only nudges they acted on advance it.
