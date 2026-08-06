@@ -26,7 +26,7 @@ const MAX_QUOTES_PER_RUN = 25;
 const SIGNIFICANCE_THRESHOLD_PCT = 1.0; // <1% drift treated as unchanged
 
 // Each recheck is an Opus + web_search call (~25s). Run sequentially, the cap's
-// worth of quotes blows past the 300s function budget: the run never reaches
+// worth of quotes blows past the function budget: the run never reaches
 // completion, so last_run_at/lock never update and the scheduler re-fires it
 // every ~30min in a perpetual timeout loop. Two guards fix that:
 //  - CONCURRENCY: process rechecks in bounded-parallel batches so a full cap of
@@ -34,7 +34,13 @@ const SIGNIFICANCE_THRESHOLD_PCT = 1.0; // <1% drift treated as unchanged
 //  - RUN_DEADLINE_MS: stop before the function cap and exit cleanly with
 //    partial progress, so completion (last_run_at + lock release) always runs.
 const CONCURRENCY = 4;
-const RUN_DEADLINE_MS = 270_000;
+// Sized against /api/cron's maxDuration of 800s, leaving ~100s of headroom for
+// the completion bookkeeping after the loop. This was 270_000 back when the
+// function cap was 300s; the cap was raised and this was not, so every run was
+// quitting at ~290s having spent a third of an invocation it had already paid
+// for, and the re-check cohort (which queues behind first-pulls) never ran at
+// all. Both phases share this budget, so re-checks still yield to quote work.
+const RUN_DEADLINE_MS = 700_000;
 
 interface QuoteRow {
   id: string;                      // material_quotes.id
