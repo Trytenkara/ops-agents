@@ -383,6 +383,9 @@ export function tenkaraEmailAccountIdFor(input: {
 }
 
 export interface TenkaraMessage {
+  // Tenkara's message UUID — the same id the message.received webhook carries,
+  // so it is the join key for "have we already processed this inbound message".
+  id: string | null;
   // Tenkara's own record of which side sent the message. Authoritative: it does
   // not depend on us knowing every inbox address we have ever sent from.
   is_outbound: boolean | null;
@@ -409,6 +412,9 @@ export interface TenkaraConversationDetails {
   // from an empty history must not treat a throttled read as an empty thread.
   rateLimited: boolean;
   emailAccountId: string | null;
+  // Set when this conversation was merged INTO another one, so callers can
+  // follow to the live thread instead of writing to an invisible shell.
+  mergedInto: string | null;
   hasActiveDraft: boolean;
   messages: TenkaraMessage[];
 }
@@ -422,6 +428,7 @@ export async function getTenkaraConversationDetails(
     status,
     rateLimited: status === 429,
     emailAccountId: null,
+    mergedInto: null,
     hasActiveDraft: false,
     messages: [],
   });
@@ -441,10 +448,14 @@ export async function getTenkaraConversationDetails(
     if (!res.ok) return miss(res.status);
     const data = await res.json();
     const messages = (Array.isArray(data?.messages) ? data.messages : []).map((m: any) => ({
+      id: m.id ?? null,
       is_outbound: typeof m.is_outbound === "boolean" ? m.is_outbound : null,
       from_email: m.from_email ?? null,
       from_name: m.from_name ?? null,
-      to: m.to ?? null,
+      // Tenkara sends the recipients as a `to_addresses` array; `to` is its
+      // legacy scalar. Reading only `to` left this null on every real message,
+      // which silently broke recipient-based org resolution.
+      to: m.to ?? (Array.isArray(m.to_addresses) ? m.to_addresses.join(", ") : null),
       subject: m.subject ?? null,
       body_text: m.body_text ?? null,
       body_html: m.body_html ?? null,
@@ -455,6 +466,9 @@ export async function getTenkaraConversationDetails(
       status: res.status,
       rateLimited: false,
       emailAccountId: data?.email_account_id ?? data?.conversation?.email_account_id ?? null,
+      // Non-null once an operator merges this thread INTO another: this id is a
+      // shell and the live thread is the target.
+      mergedInto: data?.conversation?.merged_into ?? data?.merged_into ?? null,
       hasActiveDraft: Boolean(data?.draft ?? data?.active_draft ?? data?.conversation?.draft),
       messages,
     };

@@ -1,0 +1,296 @@
+import type { createAdminClient } from "@/lib/supabase/admin";
+import { getTenkaraConversationDetails } from "@/lib/tenkara";
+import { handleInboundReply } from "@/lib/tenkara-inbound";
+
+// Reconciles tracked Tenkara threads against what we actually processed.
+//
+// Tenkara only fires message.received for conversations our agents already
+// touched. When a supplier replies on a separate thread (a fresh subject, an
+// inquiry-form auto-thread, a colleague starting a new mail) that conversation
+// is not agent-touched, so no webhook is ever delivered. An operator then MERGES
+// that thread into the agent's thread — and a merge MOVES message rows between
+// conversations in place, emitting no event at all. Both halves are silent, so a
+// real reply (with its quote and attachments) lands in a thread we track while
+// our records still read as silence, and Agent 15 escalates the supplier to a
+// phone call.
+//
+// The messages are physically in the TARGET conversation once merged, and the
+// target is a thread we already track by thread_id. So polling our own tracked
+// threads for unprocessed inbound messages catches merges, missed webhooks and
+// out-of-thread replies with one mechanism, without needing a merge webhook.
+
+type Admin = ReturnType<typeof createAdminClient>;
+
+export interface ReconcileDeps {
+  agentId: string;
+  runId: string;
+  log: (message: string, opts?: Record<string, any>) => Promise<void> | void;
+}
+
+export interface ReconcileResult {
+  threadsChecked: number;
+  replayed: number;
+  drafted: number;
+  failed: number;
+  unreadable: number;
+  mergedShells: number;
+  budgetExhausted: boolean;
+  // Threads whose next_check_at is already in the past at the END of the run.
+  // This is the honest coverage signal: if it climbs run over run the cadence is
+  // writing cheques the read budget cannot cash.
+  backlog: number;
+  oldestDueMinutes: number | null;
+}
+
+// Tenkara allows 60 conversation reads/minute across everything we run, so the
+// sweep takes half and leaves the rest for the reply drafter and price pulls.
+const READ_INTERVAL_MS = 2_000;
+// Agent 15 runs every 5 minutes; stop well inside that so runs never overlap, and
+// leave room for the no-reply sweep that follows in the same invocation.
+const TIME_BUDGET_MS = 200_000;
+const MAX_THREADS_PER_RUN = 120;
+// A merged shell is followed to its live target; the cap stops a cycle or a long
+// chain from spinning. Tenkara resolves up to five hops on its own draft writes.
+const MAX_MERGE_HOPS = 5;
+
+// Cadence tiers, keyed on how recently anyone wrote on the thread. The webhook is
+// still the primary path — this sweep is the safety net for when it never fires —
+// so even the hot tier does not need minute-level polling.
+const HOT_AGE_DAYS = 21;
+const WARM_AGE_DAYS = 60;
+const HOT_INTERVAL_MIN = 60;
+const WARM_INTERVAL_MIN = 12 * 60;
+const COLD_INTERVAL_MIN = 7 * 24 * 60;
+// A thread that just yielded an unseen reply is live in a way its timestamps may
+// not show yet; look again soon rather than waiting out the full tier.
+const FOUND_INTERVAL_MIN = 15;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function nextCheckAt(lastMessageAt: string | null, foundSomething: boolean): string {
+  let minutes: number;
+  if (foundSomething) {
+    minutes = FOUND_INTERVAL_MIN;
+  } else {
+    const ageDays = lastMessageAt
+      ? (Date.now() - new Date(lastMessageAt).getTime()) / 86_400_000
+      : Infinity;
+    minutes = ageDays <= HOT_AGE_DAYS ? HOT_INTERVAL_MIN : ageDays <= WARM_AGE_DAYS ? WARM_INTERVAL_MIN : COLD_INTERVAL_MIN;
+  }
+  return new Date(Date.now() + minutes * 60_000).toISOString();
+}
+
+// Registers any tracked thread the cadence table has not seen yet, then returns
+// the most-overdue slice. Threads with a null next_check_at (never checked) sort
+// first; that null set drains permanently on first check, so unlike an
+// always-refilling null column it cannot starve the rotation.
+async function claimDueThreads(admin: Admin, limit: number): Promise<string[]> {
+  // PostgREST caps an unbounded select at 1000 rows; there are already more
+  // draft_references than that, so page explicitly or the tail of the fleet is
+  // silently never reconciled.
+  const PAGE = 1000;
+  const tracked = new Set<string>();
+  for (let offset = 0; ; offset += PAGE) {
+    const { data: refs, error } = await admin
+      .from("draft_references")
+      .select("thread_id")
+      .eq("email_client", "rod_app")
+      .not("thread_id", "is", null)
+      .order("created_at", { ascending: true })
+      .range(offset, offset + PAGE - 1);
+    if (error) throw new Error(`thread list failed: ${error.message}`);
+    for (const r of refs ?? []) tracked.add((r as any).thread_id as string);
+    if (!refs || refs.length < PAGE) break;
+  }
+  if (tracked.size === 0) return [];
+
+  const { error: seedError } = await admin
+    .from("tenkara_thread_reconcile")
+    .upsert([...tracked].map((thread_id) => ({ thread_id })), { onConflict: "thread_id", ignoreDuplicates: true });
+  if (seedError) throw new Error(`cadence seed failed: ${seedError.message}`);
+
+  const { data: due, error: dueError } = await admin
+    .from("tenkara_thread_reconcile")
+    .select("thread_id")
+    .or(`next_check_at.is.null,next_check_at.lte.${new Date().toISOString()}`)
+    .order("next_check_at", { ascending: true, nullsFirst: true })
+    .limit(limit);
+  if (dueError) throw new Error(`cadence read failed: ${dueError.message}`);
+  return (due ?? []).map((r: any) => r.thread_id as string);
+}
+
+async function measureBacklog(admin: Admin): Promise<{ backlog: number; oldestDueMinutes: number | null }> {
+  const now = new Date().toISOString();
+  const { count } = await admin
+    .from("tenkara_thread_reconcile")
+    .select("thread_id", { count: "exact", head: true })
+    .or(`next_check_at.is.null,next_check_at.lte.${now}`);
+  const { data: oldest } = await admin
+    .from("tenkara_thread_reconcile")
+    .select("next_check_at")
+    .not("next_check_at", "is", null)
+    .lte("next_check_at", now)
+    .order("next_check_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  const oldestDueMinutes = oldest?.next_check_at
+    ? Math.round((Date.now() - new Date(oldest.next_check_at).getTime()) / 60_000)
+    : null;
+  return { backlog: count ?? 0, oldestDueMinutes };
+}
+
+// Reads a thread, following a merge shell to the conversation that now holds the
+// messages. Returns the live conversation id alongside its contents.
+async function readLiveThread(threadId: string) {
+  let currentId = threadId;
+  let mergedInto: string | null = null;
+  for (let hop = 0; hop < MAX_MERGE_HOPS; hop++) {
+    const details = await getTenkaraConversationDetails(currentId, { retryOn429: true });
+    if (!details.found || !details.mergedInto || details.mergedInto === currentId) {
+      return { details, liveId: currentId, mergedInto };
+    }
+    mergedInto = details.mergedInto;
+    currentId = details.mergedInto;
+    await sleep(READ_INTERVAL_MS);
+  }
+  const details = await getTenkaraConversationDetails(currentId, { retryOn429: true });
+  return { details, liveId: currentId, mergedInto };
+}
+
+export async function runThreadReconcile(deps: ReconcileDeps, admin: Admin): Promise<ReconcileResult> {
+  const startedAt = Date.now();
+  const result: ReconcileResult = {
+    threadsChecked: 0, replayed: 0, drafted: 0, failed: 0,
+    unreadable: 0, mergedShells: 0, budgetExhausted: false,
+    backlog: 0, oldestDueMinutes: null,
+  };
+
+  const threads = await claimDueThreads(admin, MAX_THREADS_PER_RUN);
+  if (threads.length === 0) return { ...result, ...(await measureBacklog(admin)) };
+
+  for (const threadId of threads) {
+    if (Date.now() - startedAt > TIME_BUDGET_MS) {
+      result.budgetExhausted = true;
+      break;
+    }
+
+    let live: Awaited<ReturnType<typeof readLiveThread>>;
+    try {
+      live = await readLiveThread(threadId);
+    } catch (e: any) {
+      await deps.log(`Thread ${threadId} read threw: ${e?.message ?? e}`, { level: "warn", step: "reconcile" });
+      result.unreadable++;
+      continue;
+    }
+    const { details, liveId, mergedInto } = live;
+    if (mergedInto) result.mergedShells++;
+
+    // A throttled or errored read is "unknown", never "no messages". Leaving
+    // next_check_at untouched keeps the thread at the front of the queue instead
+    // of rotating it to the back on the strength of a read that told us nothing.
+    if (!details.found) {
+      result.unreadable++;
+      if (details.rateLimited) {
+        await deps.log("Tenkara read throttled; ending sweep early", { level: "warn", step: "reconcile" });
+        result.budgetExhausted = true;
+        break;
+      }
+      await sleep(READ_INTERVAL_MS);
+      continue;
+    }
+    result.threadsChecked++;
+
+    const inbound = details.messages.filter((m) => m.is_outbound === false && m.id);
+    let unseen: typeof inbound = [];
+    if (inbound.length > 0) {
+      const { data: known, error: ledgerError } = await admin
+        .from("inbound_message_ledger")
+        .select("message_id")
+        .in("message_id", inbound.map((m) => m.id as string));
+      if (ledgerError) throw new Error(`ledger read failed: ${ledgerError.message}`);
+      const seen = new Set((known ?? []).map((r: any) => r.message_id as string));
+      unseen = inbound.filter((m) => !seen.has(m.id as string));
+    }
+
+    for (const m of unseen) {
+      const messageId = m.id as string;
+      // Claim the message BEFORE replaying it. handleInboundReply stages a draft
+      // and can be slow; if the invocation dies midway, the claim is what stops
+      // the next run from drafting a second reply to the same supplier message.
+      const { error: claimError } = await admin
+        .from("inbound_message_ledger")
+        .insert({
+          message_id: messageId,
+          conversation_id: liveId,
+          sender_email: m.from_email,
+          outcome: "claimed",
+        });
+      if (claimError) {
+        // 23505: another run already claimed it.
+        if (claimError.code !== "23505") throw new Error(`ledger claim failed: ${claimError.message}`);
+        continue;
+      }
+
+      result.replayed++;
+      let outcome = "replayed";
+      let body: Record<string, any> = {};
+      try {
+        const res = await handleInboundReply(admin, {
+          conversation_id: liveId,
+          message_id: messageId,
+          from: m.from_name ? `${m.from_name} <${m.from_email}>` : (m.from_email ?? ""),
+          subject: m.subject,
+          body_text: m.body_text,
+          body_html: m.body_html,
+          received_at: m.sent_at,
+          to_email: m.to?.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] ?? null,
+          email_account_id: details.emailAccountId,
+        });
+        body = res.body ?? {};
+        if (res.status >= 400) {
+          outcome = "error";
+          result.failed++;
+        } else if (body.drafted) {
+          outcome = "drafted";
+          result.drafted++;
+        } else {
+          outcome = String(body.reason ?? Object.keys(body)[0] ?? "no_draft");
+        }
+        await deps.log(
+          `Replayed unseen reply from ${m.from_email} on ${liveId}: ${outcome}`,
+          { level: outcome === "error" ? "warn" : "info", step: "reconcile" }
+        );
+      } catch (e: any) {
+        outcome = "threw";
+        body = { error: e?.message ?? String(e) };
+        result.failed++;
+        await deps.log(`Replay threw for ${messageId}: ${body.error}`, { level: "warn", step: "reconcile" });
+      }
+
+      await admin
+        .from("inbound_message_ledger")
+        .update({ outcome, result: body, processed_at: new Date().toISOString() })
+        .eq("message_id", messageId);
+    }
+
+    const lastMessageAt = details.messages.reduce<string | null>(
+      (acc, m) => (m.sent_at && (!acc || m.sent_at > acc) ? m.sent_at : acc),
+      null
+    );
+    await admin
+      .from("tenkara_thread_reconcile")
+      .update({
+        last_checked_at: new Date().toISOString(),
+        next_check_at: nextCheckAt(lastMessageAt, unseen.length > 0),
+        last_message_at: lastMessageAt,
+        last_status: details.status,
+        merged_into: mergedInto,
+        replayed_last: unseen.length,
+      })
+      .eq("thread_id", threadId);
+
+    await sleep(READ_INTERVAL_MS);
+  }
+
+  return { ...result, ...(await measureBacklog(admin)) };
+}
