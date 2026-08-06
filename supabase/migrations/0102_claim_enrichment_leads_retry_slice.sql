@@ -1,3 +1,5 @@
+-- (Renumbered from a duplicate 0093; already applied in prod, and the body is a
+-- create-or-replace, so re-running it in this position is a no-op.)
 -- Reserve part of every enrichment claim for leads that have been tried before.
 --
 -- 0083/0086 ordered the claim `last_enrichment_attempt_at asc nulls first`, i.e.

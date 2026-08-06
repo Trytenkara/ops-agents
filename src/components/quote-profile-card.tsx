@@ -10,6 +10,7 @@ import { saveQuoteProfile } from "@/app/actions/quote-profiles";
 import type { QuoteProfile, QuoteProfileUpdate } from "@/lib/quote-profiles";
 import { quoteCompleteness } from "@/lib/quote-profiles";
 import { qaQuoteProfile } from "@/lib/price-qa";
+import type { DensityIndex } from "@/lib/material-density";
 import { DocumentRow } from "@/components/document-row";
 import type { QuoteDoc } from "@/lib/supplier-doc-index";
 import type { ClientDocRule, ClientDocRules } from "@/lib/tenkara-requirements";
@@ -161,6 +162,7 @@ export function QuoteProfileCard({
   canAct,
   docs = [],
   clientRules = {},
+  densities = {},
   collapsed = false,
   onToggleCollapsed,
 }: {
@@ -169,6 +171,7 @@ export function QuoteProfileCard({
   canAct: boolean;
   docs?: QuoteDoc[];
   clientRules?: ClientDocRules;
+  densities?: DensityIndex;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
 }) {
@@ -187,7 +190,7 @@ export function QuoteProfileCard({
     ? (profile.price / profile.case_size).toFixed(4)
     : null;
   // Recomputed from the edited profile, so fixing a pack size clears the flag on save.
-  const qa = qaQuoteProfile(profile);
+  const qa = qaQuoteProfile(profile, densities);
 
   function handleFieldChange(field: string, value: string) {
     setProfile((p) => ({ ...p, [field]: value || null }));

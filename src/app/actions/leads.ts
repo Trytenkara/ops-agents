@@ -9,6 +9,8 @@ import { sanitizeTiers, type PriceTier } from "@/lib/price-tiers";
 import { normalizeCompanyName, hostOf } from "@/lib/tenkara-sourcing-exclusions";
 import { deleteTenkaraDrafts, getTenkaraConversationDetails } from "@/lib/tenkara";
 import { isSameCompanyName } from "@/lib/fuzzy";
+import { isMarketplaceLeadPayload, splitDirectLeadFromMarketplace } from "@/lib/marketplace-direct-split";
+import { isAggregatorEmail } from "@/agents-runtime/agents/data-enrichment/enrich";
 import { randomUUID } from "crypto";
 
 interface ActionResult {
@@ -595,6 +597,19 @@ export async function updateLeadEmail(leadId: string, email: string): Promise<Ac
   }
 
   const payload = (lead.payload as any) ?? {};
+
+  // Same rule the case resolver follows: a listing does not become a direct
+  // supplier because we now hold an address. Writing the address here instead
+  // would make the marketplace row cold-emailable, so the listing and the direct
+  // relationship would both mail the same person.
+  if (trimmed && isMarketplaceLeadPayload(payload) && !isAggregatorEmail(trimmed)) {
+    const split = await splitDirectLeadFromMarketplace(admin, { leadId, contactEmail: trimmed, trigger: "operator" });
+    if (!split.split) return { ok: false, error: `could not create the direct lead (${split.reason})` };
+    revalidatePath("/work/review/leads");
+    revalidatePath("/work/orgs/[slug]/leads", "page");
+    return { ok: true };
+  }
+
   const enrichment = payload.enrichment ? { ...payload.enrichment } : {};
   if (enrichment.contact) enrichment.contact = { ...enrichment.contact, email: trimmed || null };
 
@@ -696,6 +711,13 @@ export async function importEmailsFromCsv(orgId: string, form: FormData): Promis
     if (!hits?.length) { unmatched.push(supplierName); continue; }
     for (const hit of hits) {
       const payload = (hit.payload as any) ?? {};
+      // A listing stays a listing: give the address its own direct lead rather
+      // than making the marketplace row cold-emailable.
+      if (isMarketplaceLeadPayload(payload) && !isAggregatorEmail(email)) {
+        const split = await splitDirectLeadFromMarketplace(admin, { leadId: hit.id, contactEmail: email, trigger: "operator" });
+        if (split.split) matched++;
+        continue;
+      }
       const enrichment = payload.enrichment ? { ...payload.enrichment } : {};
       if (enrichment.contact) enrichment.contact = { ...enrichment.contact, email };
       await admin

@@ -262,17 +262,27 @@ export function qaLeadTier(payload: any, tier: any, densities?: DensityIndex): Q
   });
 }
 
-/** QA a quote_profiles row, the enrichment side of the same question. */
-export function qaQuoteProfile(p: any): QaResult {
+/**
+ * QA a quote_profiles row, the enrichment side of the same question.
+ * Pass the org's density index so a volumetric pack whose material is already in
+ * material_densities gets an honest $/kg. Without it the row's own density column
+ * is the only source, which is why Quote Validation reported
+ * density_missing_for_volume_pack for materials we hold a density for.
+ */
+export function qaQuoteProfile(p: any, densities?: DensityIndex): QaResult {
+  const indexed = densities ? resolveDensity(densities, p?.material_name) : null;
+  const own = p?.density != null ? { density: Number(p.density), unit: p?.density_unit ?? null, rank: rankDensitySource(p?.density_source), kind: null as DensityKind | null } : null;
+  const d = own ?? indexed;
   return qaPrice({
     material_name: p?.material_name ?? null,
     price: p?.price ?? null,
     unit_price: p?.unit_price ?? null,
     case_size: p?.case_size ?? null,
     unit_of_measurement: p?.unit_of_measurement ?? null,
-    density: p?.density ?? null,
-    density_unit: p?.density_unit ?? null,
-    density_rank: rankDensitySource(p?.density_source),
+    density: d?.density ?? null,
+    density_unit: d?.unit ?? null,
+    density_rank: d?.rank ?? null,
+    density_kind: d?.kind ?? null,
     source_url: p?.source_url ?? null,
   });
 }

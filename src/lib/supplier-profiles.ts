@@ -237,6 +237,27 @@ export async function seedProfilesFromLeads(
     bySupplier.set(key, { supplierId: lead.supplier_id ?? null, name, payload: lead.payload ?? {}, source: lead.source ?? null });
   }
 
+  // A lead split out of a marketplace listing carries no supplier_id while the
+  // listing keeps one, so one company lands under two keys and, on the first run
+  // for that supplier, each key inserts its own profile (the partial unique
+  // indexes in 0075 cover id-rows and name-rows separately, so both are legal).
+  // Fold the name-only group into the id-bearing one; the direct payload still
+  // wins inside it.
+  const idKeyByName = new Map<string, string>();
+  for (const [key, info] of bySupplier) {
+    if (info.supplierId && info.name) idKeyByName.set(info.name.toLowerCase(), key);
+  }
+  for (const [key, info] of [...bySupplier]) {
+    if (info.supplierId || !info.name) continue;
+    const idKey = idKeyByName.get(info.name.toLowerCase());
+    if (!idKey || idKey === key) continue;
+    const held = bySupplier.get(idKey)!;
+    if ((info.payload as any)?.aggregator_direct_contact === true && !(held.payload as any)?.aggregator_direct_contact) {
+      bySupplier.set(idKey, { ...held, payload: info.payload, source: info.source });
+    }
+    bySupplier.delete(key);
+  }
+
   const existingById = new Map(existing.filter((p) => p.supplier_id).map((p) => [p.supplier_id!, p]));
   const existingByName = new Map(existing.map((p) => [(p.supplier_name ?? "").trim().toLowerCase(), p]));
   let created = 0;

@@ -429,7 +429,21 @@ export async function handleInboundReply(
     // direct half onto its own lead and hand this conversation over to it, so
     // the quote lands as a direct price and every later message belongs to the
     // direct record instead of the listing.
-    if (isMarketplaceLeadPayload(leadPayload) && !isAggregatorEmail(from.address) && !leadPayload.direct_lead_id) {
+    if (leadPayload.direct_lead_id) {
+      // The split already happened on an earlier message. Re-derive the hand-over
+      // from the listing's own payload rather than from ref metadata: the
+      // reconcile sweep (extractOnly) and the no-API-key path both return before
+      // that metadata is written, so a thread split on one of those runs would
+      // otherwise write every later reply back onto the listing row.
+      leadId = leadPayload.direct_lead_id as string;
+      refMeta.lead_id = leadId;
+      const { data: directRow } = await admin
+        .from("leads_in_flight")
+        .select("payload, supplier_name, material_name")
+        .eq("id", leadId)
+        .maybeSingle();
+      if (directRow) leadRow = directRow;
+    } else if (isMarketplaceLeadPayload(leadPayload) && !isAggregatorEmail(from.address)) {
       const split = await splitDirectLeadFromMarketplace(admin, {
         leadId,
         contactEmail: from.address,

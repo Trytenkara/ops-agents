@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { QuoteProfileCard } from "@/components/quote-profile-card";
 import { createQuoteProfile } from "@/app/actions/quote-profiles";
 import { qaQuoteProfile } from "@/lib/price-qa";
+import type { DensityIndex } from "@/lib/material-density";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
 import { quoteCompleteness, type QuoteProfile } from "@/lib/quote-profiles";
@@ -92,6 +93,7 @@ export function QuoteValidationView({
   supplierDocs,
   clientRules = {},
   suppliers = [],
+  densities = {},
 }: {
   profiles: QuoteProfile[];
   canAct: boolean;
@@ -103,6 +105,7 @@ export function QuoteValidationView({
   currentUserName?: string | null;
   supplierDocs?: SupplierDocIndex;
   clientRules?: ClientDocRules;
+  densities?: DensityIndex;
 }) {
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("quotes");
@@ -279,7 +282,7 @@ export function QuoteValidationView({
   ];
   const csvRows = profiles.map((q) => {
     const up = q.price != null && q.case_size && q.case_size > 0 ? (q.price / q.case_size).toFixed(4) : "";
-    const qa = qaQuoteProfile(q);
+    const qa = qaQuoteProfile(q, densities);
     const docs = docsForQuote(supplierDocs, q);
     return [
       q.supplier_name, kindOf(q), operatorFor(q) ?? "", q.material_name,
@@ -461,6 +464,7 @@ export function QuoteValidationView({
                         canAct={canAct}
                         docs={docsForQuote(supplierDocs, q)}
                         clientRules={clientRules}
+                        densities={densities}
                         collapsed={!openQuotes.has(q.id)}
                         onToggleCollapsed={() => toggleQuote(q.id)}
                       />

@@ -413,6 +413,7 @@ export default async function OrgPriceIndexPage({
         validation={
           <QuoteValidationView
             profiles={quoteProfiles}
+            densities={densities}
             canAct={canAct}
             slug={org.slug}
             orgId={org.id}

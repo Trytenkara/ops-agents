@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { isAggregatorEmail } from "@/agents-runtime/agents/data-enrichment/enrich";
+import { isAggregatorDomain, isAggregatorEmail } from "@/agents-runtime/agents/data-enrichment/enrich";
 import { leadMarketKind } from "@/lib/lead-market";
 
 type Admin = SupabaseClient<any, any, any>;
@@ -10,12 +10,23 @@ type Admin = SupabaseClient<any, any, any>;
 export function isMarketplaceLeadPayload(payload: Record<string, any> | null | undefined): boolean {
   const p = payload ?? {};
   const kind = leadMarketKind(p.site_type);
+  if (kind === "direct") return false;
+  const channelUrl = (p.marketplace_pull?.source_url ?? p.source_url ?? p.supplier_website) as string | undefined;
+  const host = channelUrl
+    ? channelUrl.replace(/^https?:\/\//, "").split("/")[0].toLowerCase().replace(/^www\./, "")
+    : null;
   return (
     kind === "marketplace" ||
     kind === "aggregator" ||
-    (kind !== "direct" && !!p.aggregator) ||
+    !!p.aggregator ||
     p.supplier_role === "Marketplace" ||
-    p.supplier_role === "Reseller"
+    p.supplier_role === "Reseller" ||
+    // Both of these decide the marketplace track in the outreach sweep, so a
+    // lead it declines to cold-email must be splittable here too. Without them a
+    // listing known only by its host, or only by Tenkara's own flag, replies
+    // from its own address and never gets a direct record.
+    isAggregatorDomain(host) ||
+    p.enrichment?.tenkara_supplier?.is_marketplace === true
   );
 }
 

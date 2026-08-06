@@ -46,6 +46,11 @@ for (let offset = 0; ; offset += 1000) {
   for (const l of rows) {
     const p = l.payload ?? {};
     if (p.site_type === "A") continue;
+    // A direct lead split out of an aggregator listing keeps the listing URL as
+    // provenance, so it still looks like an aggregator host here. Stamping 'A'
+    // on it would put the supplier we now email directly back on the marketplace
+    // track and undo the split.
+    if (p.origin_marketplace_lead_id) continue;
     const host = hostOf(p.marketplace_pull?.source_url ?? p.source_url ?? p.supplier_website);
     if (isAggregator(host)) targets.push({ id: l.id, payload: p, host });
   }
