@@ -11,6 +11,47 @@ import {
 } from "@/lib/operator-assignment";
 import type { MarketKind } from "@/lib/lead-market";
 
+// Every supplier this org can own, with the name needed to classify it. Names
+// matter because supplier_profiles carries a supplier_id on almost no row, so an
+// id-only classification lookup misses and the supplier defaults to "direct",
+// which silently drops it out of a marketplace-only scope.
+export interface OrgSupplierIndex {
+  // supplier_id → supplier name (null when nothing we read carried one).
+  names: Map<string, string | null>;
+  // Tenkara's own is_marketplace flag. It can't tell aggregator from direct, so
+  // it only ever settles the marketplace question and is consulted only after a
+  // lead or profile has failed to classify the supplier.
+  tenkaraMarketplace: Set<string>;
+}
+
+export async function collectOrgSuppliers(admin: SupabaseClient, orgId: string): Promise<OrgSupplierIndex> {
+  const names = new Map<string, string | null>();
+  const collect = async (table: "leads_in_flight" | "draft_references", cols: string) => {
+    const rows = await selectAllPaged<{ supplier_id: string | null; supplier_name?: string | null }>((from, to) =>
+      admin.from(table).select(cols).eq("org_id", orgId).not("supplier_id", "is", null).order("supplier_id").range(from, to) as any
+    ).catch(() => []);
+    for (const r of rows) if (r.supplier_id) names.set(r.supplier_id, r.supplier_name ?? names.get(r.supplier_id) ?? null);
+  };
+  await collect("leads_in_flight", "supplier_id, supplier_name");
+  await collect("draft_references", "supplier_id");
+
+  // The Suppliers tab lists the client's Tenkara suppliers, including ones with
+  // no lead yet. They show an auto owner today, so they belong in the index too.
+  const tenkaraMarketplace = new Set<string>();
+  const { data: org } = await admin.from("orgs").select("tenkara_org_id").eq("id", orgId).maybeSingle();
+  const tenkaraSuppliers = await getClientSuppliers(org?.tenkara_org_id ?? null).catch(() => null);
+  for (const s of [
+    ...(tenkaraSuppliers?.approved ?? []),
+    ...(tenkaraSuppliers?.pending_review ?? []),
+    ...(tenkaraSuppliers?.denied ?? []),
+    ...(tenkaraSuppliers?.draft ?? []),
+  ]) {
+    names.set(s.id, s.name ?? names.get(s.id) ?? null);
+    if (s.is_marketplace) tenkaraMarketplace.add(s.id);
+  }
+  return { names, tenkaraMarketplace };
+}
+
 // Pin the CURRENT derived owner into supplier_assignment for every supplier that
 // has no claim yet, so the auto spread's answer becomes the explicit one and the
 // change about to be made is visually a no-op.
@@ -38,42 +79,13 @@ export async function freezeDerivedOwners(
   // what the page showed a moment ago.
   const restrict = kinds?.length ? new Set<MarketKind>(kinds) : null;
   const types = restrict ? await getOrgSupplierTypes(admin, orgId) : ctx.supplierTypes;
-  const marketplaceOnly = new Set<string>();
+  const index = await collectOrgSuppliers(admin, orgId);
   const kindOf = (id: string | null, name?: string | null): MarketKind | null =>
-    supplierKind(types, id, name) ?? (id && marketplaceOnly.has(id) ? "marketplace" : null);
+    supplierKind(types, id, name) ?? (id && index.tenkaraMarketplace.has(id) ? "marketplace" : null);
   const wanted = (id: string | null, name?: string | null) =>
     !restrict || restrict.has(kindOf(id, name) ?? "direct");
 
-  const suppliers = new Map<string, string | null>();
-  const collect = async (table: "leads_in_flight" | "draft_references", cols: string) => {
-    const rows = await selectAllPaged<{ supplier_id: string | null; supplier_name?: string | null }>((from, to) =>
-      admin.from(table).select(cols).eq("org_id", orgId).not("supplier_id", "is", null).order("supplier_id").range(from, to) as any
-    ).catch(() => []);
-    for (const r of rows) if (r.supplier_id) suppliers.set(r.supplier_id, r.supplier_name ?? suppliers.get(r.supplier_id) ?? null);
-  };
-  await collect("leads_in_flight", "supplier_id, supplier_name");
-  await collect("draft_references", "supplier_id");
-
-  // The Suppliers tab lists the client's Tenkara suppliers, including ones with
-  // no lead yet. They show an auto owner today, so they get frozen too.
-  const { data: org } = await admin.from("orgs").select("tenkara_org_id").eq("id", orgId).maybeSingle();
-  const tenkaraSuppliers = await getClientSuppliers(org?.tenkara_org_id ?? null).catch(() => null);
-  if (tenkaraSuppliers) {
-    for (const s of [
-      ...tenkaraSuppliers.approved,
-      ...tenkaraSuppliers.pending_review,
-      ...tenkaraSuppliers.denied,
-      ...tenkaraSuppliers.draft,
-    ]) {
-      suppliers.set(s.id, s.name ?? suppliers.get(s.id) ?? null);
-      // Tenkara's own flag is the fallback when neither a lead nor a profile
-      // classified this supplier. It can't tell aggregator from direct, so it
-      // only ever settles the marketplace question.
-      if (s.is_marketplace && !kindOf(s.id, s.name)) marketplaceOnly.add(s.id);
-    }
-  }
-
-  const claims = [...suppliers]
+  const claims = [...index.names]
     .filter(([sid, name]) => !ctx.manual.has(sid) && wanted(sid, name))
     .map(([sid, name]) => ({ supplier_id: sid, operator_id: resolveOperatorId(ctx, sid, kindOf(sid, name)) }))
     .filter((r): r is { supplier_id: string; operator_id: string } => !!r.operator_id);

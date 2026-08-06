@@ -185,6 +185,7 @@ export default async function OrgOverview({ params }: { params: { slug: string }
               initialSupplierTypes={(((org as any).assignment_supplier_types ?? ALL_SUPPLIER_TYPES) as any)}
               operators={assignmentOperators}
               canEdit={canEditAssignment}
+              canRebalance={canEditSourcing}
             />
           </div>
         </CardContent>

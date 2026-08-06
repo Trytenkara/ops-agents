@@ -28,6 +28,17 @@ export interface AssignmentOperator {
   autoAssignable: boolean;
 }
 
+interface RebalancePreview {
+  poolSize: number;
+  claimsCleared: number;
+  claimsMoved: number;
+  leadsCleared: number;
+  leadsMoved: number;
+  draftsMoved: number;
+  unowned: number;
+  projected: { id: string; name: string; suppliers: number }[];
+}
+
 export function OrgAssignmentSettings({
   orgId,
   orgSlug,
@@ -36,6 +47,7 @@ export function OrgAssignmentSettings({
   initialSupplierTypes,
   operators,
   canEdit,
+  canRebalance,
 }: {
   orgId: string;
   orgSlug: string;
@@ -44,6 +56,7 @@ export function OrgAssignmentSettings({
   initialSupplierTypes: MarketKind[];
   operators: AssignmentOperator[];
   canEdit: boolean;
+  canRebalance: boolean;
 }) {
   const [savedMode, setSavedMode] = useState(initialMode);
   const [savedTypes, setSavedTypes] = useState(initialSupplierTypes);
@@ -55,6 +68,8 @@ export function OrgAssignmentSettings({
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [preview, setPreview] = useState<RebalancePreview | null>(null);
+  const [rebalancing, setRebalancing] = useState(false);
   const router = useRouter();
 
   const dirty = mode !== savedMode || types.length !== savedTypes.length || types.some((t) => !savedTypes.includes(t));
@@ -77,6 +92,40 @@ export function OrgAssignmentSettings({
       setMsg(res.frozen ? `Saved. Pinned ${res.frozen} current assignee${res.frozen === 1 ? "" : "s"} so nothing moved.` : "Saved.");
       router.refresh();
     });
+  }
+
+  async function rebalance(dryRun: boolean) {
+    setMsg(null);
+    setErr(null);
+    setRebalancing(true);
+    try {
+      const res = await fetch(`/api/orgs/${orgId}/rebalance-assignments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dryRun, orgSlug }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setErr(data?.error ?? "failed");
+        return;
+      }
+      if (dryRun) {
+        setPreview(data);
+        return;
+      }
+      setPreview(null);
+      setMsg(
+        `Rebalanced across ${data.poolSize} operator${data.poolSize === 1 ? "" : "s"}: ` +
+          `${data.claimsCleared + data.claimsMoved} supplier${data.claimsCleared + data.claimsMoved === 1 ? "" : "s"}, ` +
+          `${data.leadsCleared + data.leadsMoved} lead${data.leadsCleared + data.leadsMoved === 1 ? "" : "s"}, ` +
+          `${data.draftsMoved} thread${data.draftsMoved === 1 ? "" : "s"} moved.`
+      );
+      router.refresh();
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setRebalancing(false);
+    }
   }
 
   function toggleOperator(userId: string, next: boolean) {
@@ -183,6 +232,53 @@ export function OrgAssignmentSettings({
           {autoOn ? ` ${inLoop.length} of ${operators.length} in the loop.` : " Auto is off, so this applies once it is turned on."}
         </p>
       </div>
+
+      {canRebalance && (
+        <div className="space-y-2 border-t pt-5">
+          <div className="text-xs uppercase tracking-wider text-muted-foreground">Rebalance across the current operators</div>
+          <p className="text-xs text-muted-foreground">
+            Re-runs the rules above against today&apos;s operator list, so anyone added since the last run picks up their
+            share. Suppliers, leads and email threads all move together. Pinned assignments are released where the rules
+            can own them, and spread evenly where they cannot (manual mode, or a type outside the auto loop).
+          </p>
+          <div className="flex items-center gap-3">
+            <Button size="sm" variant="outline" disabled={rebalancing || operators.length === 0} onClick={() => rebalance(true)}>
+              {rebalancing && !preview ? "Checking..." : "Preview rebalance"}
+            </Button>
+            {preview && (
+              <Button size="sm" variant="destructive" disabled={rebalancing} onClick={() => rebalance(false)}>
+                {rebalancing ? "Rebalancing..." : "Apply rebalance"}
+              </Button>
+            )}
+          </div>
+          {operators.length === 0 && (
+            <p className="text-xs text-muted-foreground">Add operators to this org first, there is nobody to rebalance onto.</p>
+          )}
+          {preview && (
+            <div className="space-y-1 rounded-md border p-3">
+              <p className="text-xs">
+                Moves {preview.claimsCleared + preview.claimsMoved} supplier
+                {preview.claimsCleared + preview.claimsMoved === 1 ? "" : "s"},{" "}
+                {preview.leadsCleared + preview.leadsMoved} lead{preview.leadsCleared + preview.leadsMoved === 1 ? "" : "s"} and{" "}
+                {preview.draftsMoved} email thread{preview.draftsMoved === 1 ? "" : "s"} across {preview.poolSize} operator
+                {preview.poolSize === 1 ? "" : "s"}.
+              </p>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                {preview.projected.map((p) => (
+                  <span key={p.id}>
+                    {p.name} {p.suppliers}
+                  </span>
+                ))}
+                {preview.unowned > 0 && <span>unassigned {preview.unowned}</span>}
+              </div>
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                Reassigned threads are mirrored to the Tenkara inbox, so operators lose conversations they have already
+                emailed on. Released pins cannot be restored by switching modes back.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       {msg && <p className="text-xs text-muted-foreground">{msg}</p>}
       {err && <p className="text-xs text-destructive">{err}</p>}
