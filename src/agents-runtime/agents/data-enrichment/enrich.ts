@@ -14,6 +14,7 @@ import {
   type CachedContact,
 } from "@/lib/contact-domain-cache";
 import { assessDealbreakerFit, type DealbreakerFit, type DealbreakerSpec } from "@/lib/dealbreaker-fit";
+import { collectProductText } from "@/lib/product-text";
 import { readContactsFromPages } from "./contact-read";
 
 // Pre-outreach enrichment building blocks. No LLM, no email — those land
@@ -963,34 +964,10 @@ function relevanceTokens(s: string | null | undefined): string[] {
     .filter((t) => t.length >= 3 && !/^\d+$/.test(t) && !RELEVANCE_STOPWORDS.has(t));
 }
 
-// Collect the free-text product/description fields the discovery sources populate
-// into one lowercased blob for overlap checking. Guards each field; several may
-// be arrays (e.g. top_products).
-export function collectProductText(payload: Record<string, any> | null | undefined): string {
-  if (!payload) return "";
-  const values = [
-    payload.top_products,
-    payload.product_description,
-    payload.supplier_background,
-    payload.trade_name,
-    payload.grades_offered,
-    payload.scout_notes,
-    payload.importyeti?.top_products,
-    payload.importyeti?.product_descriptions,
-    payload.sourceready_tags,
-    payload.sourceready?.tags,
-    payload.sourceready?.products,
-  ];
-  const parts: string[] = [];
-  const append = (value: any) => {
-    if (value == null) return;
-    if (Array.isArray(value)) value.forEach(append);
-    else if (typeof value === "object") Object.values(value).forEach(append);
-    else parts.push(String(value));
-  };
-  values.forEach(append);
-  return parts.join(" ").trim();
-}
+// Moved to lib/product-text.ts so the requirements re-check can rebuild the same
+// evidence blob from a stored payload without importing this module. Re-exported
+// here because existing callers import it from the agent.
+export { collectProductText } from "@/lib/product-text";
 
 // Advisory relevance check. `productText` is the supplier's captured product/
 // description blob (see collectProductText). Returns relevant=false ONLY when

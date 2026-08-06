@@ -2,6 +2,12 @@ import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { refreshStaleClientProfiles } from "@/lib/client-profile";
 import { syncAllClientSettings } from "@/lib/tenkara-client-settings";
+import { recheckOrgLeads } from "@/lib/requirements-recheck";
+
+// Wall-clock this run will spend re-judging leads after a requirements change,
+// leaving the rest of the function budget to the research sweep. Anything not
+// reached keeps its old fingerprint, so the next hourly run resumes it.
+const RECHECK_BUDGET_MS = 120_000;
 
 // Agent 12 - Client Profile.
 //
@@ -36,6 +42,58 @@ registerAgent({
       await ctx.log(`Settings sync failed: ${e.message}`, { level: "error", step: "settings_sync" });
     }
 
+    // Step 1b - re-judge existing leads for any client whose requirements moved.
+    // Without this, a dealbreaker grade added today only ever applies to leads
+    // discovered after today: the verdict on existing leads is frozen at
+    // enrichment and the enrichment claim only ever sees stage='raw'. No LLM, no
+    // web, no credits — it recomputes from evidence already on the payload.
+    let rechecked = 0;
+    if (sync?.requirementsChangedOrgs?.length) {
+      const ids = sync.requirementsChangedOrgs.map((o) => o.orgId);
+      const { data: orgRows } = await admin
+        .from("orgs")
+        .select("id, name, tenkara_org_id, onboarding_stage, is_internal, sourcing_status")
+        .in("id", ids);
+      const byId = new Map((orgRows ?? []).map((o: any) => [o.id, o]));
+      // Real clients before internal test orgs, and orgs the fleet is actually
+      // working before parked ones: this shares the run's wall clock with the
+      // research sweep below, so the capacity drains in that order.
+      const rank = (orgId: string) => {
+        const o = byId.get(orgId);
+        return (o?.is_internal === false ? 0 : 2) + ((o?.sourcing_status ?? "off") === "off" ? 1 : 0);
+      };
+      const queue = [...sync.requirementsChangedOrgs].sort((a, b) => rank(a.orgId) - rank(b.orgId));
+      const budgetEndsAt = Date.now() + RECHECK_BUDGET_MS;
+      for (const item of queue) {
+        const org = byId.get(item.orgId);
+        if (!org) continue;
+        const remaining = budgetEndsAt - Date.now();
+        if (remaining < 5_000) {
+          await ctx.log(`Requirements re-check budget spent; ${queue.length - rechecked} org(s) deferred to the next run`, {
+            step: "requirements_recheck",
+          });
+          break;
+        }
+        const summary = await recheckOrgLeads(admin, org as any, {
+          reason: "client requirements changed",
+          deadlineMs: remaining,
+        }).catch((e: any) => ({ orgId: item.orgId, scanned: 0, updated: 0, verdictChanged: 0, barChanged: 0, truncated: true, error: e?.message ?? String(e) }));
+        rechecked++;
+        await ctx.log(
+          `Requirements re-check for ${org.name ?? item.orgId}: ${summary.updated} of ${summary.scanned} lead(s) updated (${summary.verdictChanged} dealbreaker verdict, ${summary.barChanged} onboarded bar)${summary.truncated ? " · incomplete, resumes next run" : ""}${summary.error ? ` · ${summary.error}` : ""}`,
+          { level: summary.error ? "warn" : "info", step: "requirements_recheck", data: summary as any }
+        );
+        // Only record the fingerprint on a COMPLETE pass, so a truncated one is
+        // picked up again next cycle instead of being marked done.
+        if (!summary.truncated && !summary.error) {
+          await admin
+            .from("client_tenkara_settings")
+            .update({ requirements_hash: item.hash, requirements_checked_at: new Date().toISOString() })
+            .eq("org_id", item.orgId);
+        }
+      }
+    }
+
     // Step 2 - the costly research backstop.
     let res;
     try {
@@ -47,7 +105,7 @@ registerAgent({
       return;
     }
 
-    const syncNote = sync ? `Synced settings for ${sync.synced} client(s)${sync.changed ? ` · ${sync.changed} changed` : ""}. ` : "";
+    const syncNote = sync ? `Synced settings for ${sync.synced} client(s)${sync.changed ? ` · ${sync.changed} changed` : ""}${rechecked ? ` · re-checked leads for ${rechecked} client(s) whose requirements changed` : ""}. ` : "";
     ctx.setItemsProcessed(res.generated);
     ctx.setStatus(res.errored > 0 && res.generated === 0 ? "failure" : res.errored > 0 ? "partial" : "success");
     ctx.setSummary(

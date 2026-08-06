@@ -8,6 +8,7 @@ import { OrgOperatorsEditor } from "@/components/org-operators-editor";
 import { OrgAssignmentSettings } from "@/components/org-assignment-settings";
 import { ALL_SUPPLIER_TYPES } from "@/lib/operator-assignment";
 import { OrgSourcingToggle } from "@/components/org-sourcing-toggle";
+import { OrgOnboardingToggle } from "@/components/org-onboarding-toggle";
 import { OrgTenkaraInbox } from "@/components/org-tenkara-inbox";
 import { OrgBounceAlert } from "@/components/org-bounce-alert";
 import { getOrgNudgeCounts } from "@/lib/org-nudges";
@@ -20,7 +21,7 @@ export default async function OrgOverview({ params }: { params: { slug: string }
   const admin = createAdminClient();
   const { data: org } = await admin
     .from("orgs")
-    .select("id, slug, name, display_name, tenkara_org_id, is_internal, sourcing_status, bounce_alert_status, tenkara_email_account_id, tenkara_email_address, assignment_mode, assignment_supplier_types")
+    .select("id, slug, name, display_name, tenkara_org_id, is_internal, sourcing_status, onboarding_stage, bounce_alert_status, tenkara_email_account_id, tenkara_email_address, assignment_mode, assignment_supplier_types")
     .eq("slug", params.slug)
     .maybeSingle();
   if (!org) notFound();
@@ -136,6 +137,12 @@ export default async function OrgOverview({ params }: { params: { slug: string }
             orgId={org.id}
             orgName={orgDisplayName(org)}
             initial={(org.sourcing_status ?? "off") as any}
+            canEdit={canEditSourcing}
+          />
+          <OrgOnboardingToggle
+            orgId={org.id}
+            orgName={orgDisplayName(org)}
+            initial={(org.onboarding_stage ?? "motherlode") as any}
             canEdit={canEditSourcing}
           />
           <OrgTenkaraInbox

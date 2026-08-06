@@ -7,7 +7,7 @@ import { shipsToUsVerdict } from "@/lib/ships-to-us";
 // every existing lead with no re-run and no DB write.
 
 export interface LeadFlag {
-  code: "inactive_site" | "missing_cert" | "sample_only" | "dealbreaker_met" | "direct_contact" | "yielded_direct" | "no_us_shipping";
+  code: "inactive_site" | "missing_cert" | "sample_only" | "dealbreaker_met" | "direct_contact" | "yielded_direct" | "no_us_shipping" | "below_onboarded_bar";
   label: string;
   // Most flags are caveats. A few are positive signals and must not be rendered
   // in warning colours; the renderer keys the badge variant off this.
@@ -108,6 +108,17 @@ function noUsShipping(payload: any): LeadFlag | null {
   return { code: "no_us_shipping", label: "No US shipping, buy at origin or drop-ship" };
 }
 
+// The client has graduated to the tighter onboarded bar and this lead sits under
+// it (see lib/onboarded-bar.ts). Read straight from the advisory the re-check
+// wrote (payload.below_onboarded_bar) so it renders with no recompute; clearing
+// that advisory (moving back to motherlode) drops the flag.
+function belowOnboardedBar(payload: any): LeadFlag | null {
+  const b = payload?.below_onboarded_bar;
+  if (!b || typeof b !== "object") return null;
+  const reason = typeof b.reason === "string" && b.reason.trim() ? `: ${b.reason.trim()}` : "";
+  return { code: "below_onboarded_bar", label: `Below onboarded bar${reason}` };
+}
+
 export function computeLeadFlags(payload: any, ctx: LeadFlagContext = {}): LeadFlag[] {
   const flags: LeadFlag[] = [];
   const site = inactiveSite(payload);
@@ -128,5 +139,7 @@ export function computeLeadFlags(payload: any, ctx: LeadFlagContext = {}): LeadF
   if (yielded) flags.push(yielded);
   const noUs = noUsShipping(payload);
   if (noUs) flags.push(noUs);
+  const onboarded = belowOnboardedBar(payload);
+  if (onboarded) flags.push(onboarded);
   return flags;
 }

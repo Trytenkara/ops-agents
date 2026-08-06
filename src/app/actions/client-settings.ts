@@ -3,6 +3,7 @@ import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateClientProfile } from "@/lib/client-profile";
 import { extractDocumentText } from "@/lib/po-parse";
+import { recheckOrgLeads } from "@/lib/requirements-recheck";
 import { revalidatePath } from "next/cache";
 
 interface Result { ok: boolean; error?: string }
@@ -39,6 +40,43 @@ export async function setOrgSourcingStatus(orgId: string, status: SourcingStatus
     .update({ sourcing_status: status, updated_at: new Date().toISOString() })
     .eq("id", orgId);
   if (error) return { ok: false, error: error.message };
+  revalidatePath(`/work/orgs`);
+  revalidatePath(`/work/orgs/${orgId}`);
+  return { ok: true };
+}
+
+// Where the client sits in their lifecycle. 'motherlode' is the early wide-net
+// stage (surface every candidate); 'onboarded' applies the tighter bar in
+// lib/onboarded-bar.ts. Changing it re-judges the org's existing leads straight
+// away, so the Leads list reflects the new bar without waiting for Agent 12.
+// Restricted to admin/ops_lead: it changes what an operator sees flagged across
+// the whole client.
+const ONBOARDING_STAGES = ["motherlode", "onboarded"] as const;
+export type OnboardingStageInput = (typeof ONBOARDING_STAGES)[number];
+
+export async function setOrgOnboardingStage(orgId: string, stage: OnboardingStageInput): Promise<Result> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" };
+  if (!hasAnyRole(session, ["admin", "ops_lead"])) return { ok: false, error: "forbidden" };
+  if (!ONBOARDING_STAGES.includes(stage)) return { ok: false, error: "invalid stage" };
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("orgs")
+    .update({ onboarding_stage: stage, updated_at: new Date().toISOString() })
+    .eq("id", orgId);
+  if (error) return { ok: false, error: error.message };
+
+  // Advisory-only and reversible: flipping back to motherlode clears the flags on
+  // the next pass. Best-effort so a slow re-check never fails the toggle itself.
+  const { data: org } = await admin
+    .from("orgs")
+    .select("id, tenkara_org_id, onboarding_stage")
+    .eq("id", orgId)
+    .maybeSingle();
+  if (org) {
+    await recheckOrgLeads(admin, org as any, { reason: `onboarding stage set to ${stage}` }).catch(() => null);
+  }
+
   revalidatePath(`/work/orgs`);
   revalidatePath(`/work/orgs/${orgId}`);
   return { ok: true };

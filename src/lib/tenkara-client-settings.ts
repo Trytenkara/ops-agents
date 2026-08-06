@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
+import { requirementsFingerprint } from "@/lib/requirements-fingerprint";
 
 // Tenkara -> OA mirror of a client's settings (ship-to, billing/samples
 // addresses, UoM, country exclusions, qualification requirements).
@@ -101,6 +102,12 @@ export interface OrgSyncResult {
   status: "synced" | "no_tenkara_org" | "no_settings" | "error";
   shipTo?: string | null;
   changed?: boolean;
+  // The client's requirements (dealbreaker grades, certs, exclusions, material
+  // list) differ from the ones their existing leads were last judged against, so
+  // those leads need re-checking. Carries the new fingerprint to record once a
+  // re-check completes. Null when the fingerprint could not be read.
+  requirementsChanged?: boolean;
+  requirementsHash?: string | null;
   error?: string;
 }
 
@@ -129,7 +136,7 @@ export async function syncClientSettingsForOrg(
 
   const { data: before } = await admin
     .from("client_tenkara_settings")
-    .select("ship_to_address_line, ship_to_city, ship_to_zip")
+    .select("ship_to_address_line, ship_to_city, ship_to_zip, requirements_hash")
     .eq("org_id", org.id)
     .maybeSingle();
 
@@ -167,7 +174,20 @@ export async function syncClientSettingsForOrg(
     (before?.ship_to_city ?? null) !== (primary?.city ?? null) ||
     (before?.ship_to_zip ?? null) !== (primary?.zip ?? null);
 
-  return { orgId: org.id, status: "synced", shipTo: shipToRegion(primary), changed };
+  // Requirement drift is tracked separately from the ship-to diff above: it does
+  // not change any address, it changes how every existing lead should be judged.
+  // Best-effort — a failed fingerprint read reports "unknown", never "unchanged",
+  // so a Tenkara hiccup can't be mistaken for the client clearing their specs.
+  let requirementsHash: string | null = null;
+  let requirementsChanged = false;
+  try {
+    requirementsHash = await requirementsFingerprint(org.tenkara_org_id);
+    requirementsChanged = !!requirementsHash && requirementsHash !== (before?.requirements_hash ?? null);
+  } catch {
+    requirementsHash = null;
+  }
+
+  return { orgId: org.id, status: "synced", shipTo: shipToRegion(primary), changed, requirementsChanged, requirementsHash };
 }
 
 export interface SyncSummary {
@@ -177,6 +197,9 @@ export interface SyncSummary {
   missing: number;
   errored: number;
   changedOrgs: string[];
+  // Orgs whose requirements moved, for the caller to re-check. Carries the new
+  // fingerprint so the caller can record it only after a complete pass.
+  requirementsChangedOrgs: { orgId: string; hash: string }[];
 }
 
 // Sync every linked org. Cheap enough (one small query per org) to run on every
@@ -184,7 +207,7 @@ export interface SyncSummary {
 export async function syncAllClientSettings(admin: SupabaseClient): Promise<SyncSummary> {
   const { data: orgs } = await admin.from("orgs").select("id, name, tenkara_org_id").not("tenkara_org_id", "is", null);
 
-  const summary: SyncSummary = { considered: orgs?.length ?? 0, synced: 0, changed: 0, missing: 0, errored: 0, changedOrgs: [] };
+  const summary: SyncSummary = { considered: orgs?.length ?? 0, synced: 0, changed: 0, missing: 0, errored: 0, changedOrgs: [], requirementsChangedOrgs: [] };
   for (const org of orgs ?? []) {
     const res = await syncClientSettingsForOrg(admin, org as any);
     if (res.status === "synced") {
@@ -192,6 +215,9 @@ export async function syncAllClientSettings(admin: SupabaseClient): Promise<Sync
       if (res.changed) {
         summary.changed++;
         summary.changedOrgs.push((org as any).name ?? res.orgId);
+      }
+      if (res.requirementsChanged && res.requirementsHash) {
+        summary.requirementsChangedOrgs.push({ orgId: res.orgId, hash: res.requirementsHash });
       }
     } else if (res.status === "error") summary.errored++;
     else summary.missing++;

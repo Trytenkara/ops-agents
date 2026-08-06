@@ -9,6 +9,7 @@ import { runOutreachForSupplier, type OutreachLead } from "./run-outreach";
 import { isAggregatorEmail, isAggregatorDomain } from "../data-enrichment/enrich";
 import { suppliersWithPriorRelationship } from "@/lib/tenkara-relationships";
 import { getSourcingExclusions, exclusionReason } from "@/lib/tenkara-sourcing-exclusions";
+import { getNoteDerivedCountryExclusions } from "@/lib/client-sourcing-rules";
 import { resolveMaterialNames } from "@/lib/tenkara-names";
 import { randomUUID } from "crypto";
 
@@ -543,6 +544,19 @@ registerAgent({
       let exclusions;
       try {
         exclusions = await getSourcingExclusions(tenkaraOrgId);
+        // Free-text rules from the ops notes ("No India please") count as real
+        // exclusions here too. Agent 03 already applies them at discovery, so
+        // without this the same written rule bans future candidates while the
+        // suppliers already in the pipeline stay emailable.
+        const { aliases, hits } = await getNoteDerivedCountryExclusions(admin, orgId);
+        if (aliases.size) {
+          aliases.forEach((a) => exclusions!.excludedCountries.add(a));
+          exclusions.raw.countries += aliases.size;
+          await ctx.log(
+            `Note-derived country exclusions for org ${org?.name ?? orgId}: ${hits.map((h) => h.country).join(", ")} (from ops notes)`,
+            { step: "exclusions", data: { hits } }
+          );
+        }
       } catch (e: any) {
         await ctx.log(`Sourcing-exclusions check failed for org ${org?.name}: ${e.message}`, {
           level: "error", step: "exclusions",
