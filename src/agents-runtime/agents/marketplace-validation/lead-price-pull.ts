@@ -1,6 +1,6 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { recheckMarketplaceQuote, type AggregatorSeller } from "./price-recheck";
-import { convertToUsd } from "@/lib/fx";
+import { convertToUsd, roundUsd } from "@/lib/fx";
 import { ensureMarketplaceCaseDims } from "@/lib/marketplace-case-dims-fill";
 import { neverMarketplaceHostOf } from "@/lib/marketplace-hosts";
 import { screenClonedListings } from "@/lib/clone-ring";
@@ -447,6 +447,13 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     // is anything else. Re-checks compare to a known baseline on a cheaper model.
     const isRecheck = priorPull?.status === "pulled";
     const priorPrice = isRecheck ? (typeof priorPull?.price === "number" ? priorPull.price : null) : null;
+    // The listed-currency price on file. Change detection thresholds on THIS, not
+    // on the USD figure: a rupee listing that never moved still drifts in dollars
+    // every time the rate does, and counting that as a seller reprice both lied in
+    // `history[].changed` and inflated the per-host volatility prior that decides
+    // how often we re-read the page. Null for USD listings, where the two are equal.
+    const priorNativePrice = isRecheck && typeof priorPull?.native_price === "number" ? priorPull.native_price : null;
+    const priorNativeCurrency = isRecheck ? (priorPull?.native_currency ?? null) : null;
     // Two shapes of "the platform is the lead", handled differently:
     //  - platformAsSupplier: no real company on the row at all. Ask the reader to
     //    enumerate the sellers on the page so we can replace it with one lead each.
@@ -651,18 +658,52 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         result.tiers = [];
         result.notes = `Listed in ${listed}; USD conversion unavailable — not publishing an unconverted price. ${result.notes ?? ""}`.trim();
       } else {
-        const toUsd = async (n: number | null): Promise<number | null> => {
-          if (n == null || !Number.isFinite(n)) return n;
-          const c = await convertToUsd(n, listed).catch(() => null);
-          return c ? c.usd : n;
-        };
-        result.current_price = await toUsd(result.current_price);
-        result.unit_price = await toUsd(result.unit_price);
-        result.tiers = await Promise.all(
-          result.tiers.map(async (t) => ({ ...t, price: await toUsd(t.price), unit_price: await toUsd(t.unit_price) })),
-        );
+        // Keep the listed amount and the rate we used. Converting in place used to
+        // destroy both, which made a later USD move impossible to attribute: a lead
+        // going $100 → $105 could be the seller repricing or just the rupee moving,
+        // and nothing on the row distinguished them. With native + rate stored, the
+        // split is arithmetic, and the 6h FX pass can restate USD without a re-scrape.
+        const rate = probe.rate;
+        const toUsd = (n: number | null): number | null =>
+          n == null || !Number.isFinite(n) ? n : roundUsd(n * rate);
+        result.native_price = result.current_price;
+        result.native_unit_price = result.unit_price;
+        result.native_currency = listed;
+        result.fx_rate = rate;
+        result.fx_rate_at = new Date().toISOString();
+        result.current_price = toUsd(result.current_price);
+        result.unit_price = toUsd(result.unit_price);
+        result.tiers = result.tiers.map((t) => ({
+          ...t,
+          native_price: t.price,
+          native_unit_price: t.unit_price,
+          native_currency: listed,
+          fx_rate: rate,
+          price: toUsd(t.price),
+          unit_price: toUsd(t.unit_price),
+        }));
         result.currency = "USD";
       }
+    } else if (result.currency === "USD") {
+      // Stamp USD listings too, even though there is nothing to convert. Without
+      // this, native_currency is null for both "the page listed dollars" and "we
+      // read this page before native capture shipped" — and those must not render
+      // the same. A null read as USD would let the delta split attribute a legacy
+      // INR lead's entire USD move to the seller, which is a fabricated
+      // attribution on precisely the rows the split exists to disambiguate.
+      // Null now means unknown, and the UI says so instead of guessing.
+      result.native_price = result.current_price;
+      result.native_unit_price = result.unit_price;
+      result.native_currency = "USD";
+      result.fx_rate = 1;
+      result.fx_rate_at = new Date().toISOString();
+      result.tiers = result.tiers.map((t) => ({
+        ...t,
+        native_price: t.price,
+        native_unit_price: t.unit_price,
+        native_currency: "USD",
+        fx_rate: 1,
+      }));
     }
 
     if (
@@ -781,13 +822,29 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       stable_streak: number;
       last_change_at: string | null;
       previous_price: number | null;
+      previous_native_price: number | null;
+      previous_fx_rate: number | null;
       history: any[];
     } | null = null;
     if (gotPrice) {
+      // Compare like for like. When both scrapes carry a native price in the SAME
+      // currency, that pair is the seller's actual asking price and FX cancels out
+      // of the comparison entirely. Otherwise fall back to USD (a USD listing, or a
+      // legacy row predating native capture, where USD is all we have).
+      const nativeComparable =
+        priorNativePrice != null &&
+        priorNativePrice > 0 &&
+        result.native_price != null &&
+        result.native_currency != null &&
+        priorNativeCurrency === result.native_currency;
+      const [baseline, current] = nativeComparable
+        ? [priorNativePrice!, result.native_price!]
+        : [priorPrice, result.current_price];
       const changed =
-        priorPrice != null &&
-        result.current_price != null &&
-        Math.abs(result.current_price - priorPrice) / priorPrice >= CHANGE_THRESHOLD_PCT / 100;
+        baseline != null &&
+        baseline > 0 &&
+        current != null &&
+        Math.abs(current - baseline) / baseline >= CHANGE_THRESHOLD_PCT / 100;
       let intervalDays: number;
       let streak: number;
       if (!isRecheck) {
@@ -806,15 +863,29 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       // volatility signal ready — we just override the interval to 1 day here.
       if (FULL_REFRESH) intervalDays = 1;
       const priorHistory = Array.isArray(priorPull?.history) ? priorPull.history : [];
-      const history = [...priorHistory, { at: nowIso, price: result.current_price, changed }].slice(-HISTORY_DEPTH);
+      const history = [
+        ...priorHistory,
+        {
+          at: nowIso,
+          price: result.current_price,
+          native_price: result.native_price ?? null,
+          native_currency: result.native_currency ?? null,
+          fx_rate: result.fx_rate ?? null,
+          changed,
+        },
+      ].slice(-HISTORY_DEPTH);
       cadence = {
         check_interval_days: intervalDays,
         next_check_at: new Date(Date.now() + intervalDays * 86400000).toISOString(),
         stable_streak: streak,
         last_change_at: changed ? nowIso : (priorPull?.last_change_at ?? null),
         // The price at the previous scrape, so the Quotes/marketplace tab can show a
-        // "last price" column next to the auto-updated current price.
+        // "last price" column next to the auto-updated current price. The native and
+        // rate counterparts are what let the tab split that delta into the part the
+        // seller caused and the part the exchange rate caused.
         previous_price: priorPrice ?? (priorPull?.previous_price ?? null),
+        previous_native_price: priorNativePrice ?? (priorPull?.previous_native_price ?? null),
+        previous_fx_rate: (typeof priorPull?.fx_rate === "number" ? priorPull.fx_rate : null) ?? (priorPull?.previous_fx_rate ?? null),
         history,
       };
     }
@@ -865,6 +936,14 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           price: result.current_price,
           pack_size: result.pack_size,
           currency: "USD",
+          // The listing as it was actually printed, plus the rate used to publish
+          // the USD figure above. Null on a USD listing. The 0068 invariant only
+          // constrains `currency`, so these sit beside it without conflict.
+          native_price: result.native_price ?? null,
+          native_unit_price: result.native_unit_price ?? null,
+          native_currency: result.native_currency ?? null,
+          fx_rate: result.fx_rate ?? null,
+          fx_rate_at: result.fx_rate_at ?? null,
           // Level-2 listing fields (null unless the page showed them). Consumed by
           // the marketplace quote/supplier profile seeders.
           moq: result.moq,
@@ -913,18 +992,50 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       const packKey = (p: any) => String(p ?? "").trim().toLowerCase();
       const priorByPack = new Map((existingTiers as any[]).map((t) => [packKey(t.pack_size), t]));
       const raw = result.tiers.length
-        ? result.tiers.map((t) => ({ pack_size: t.pack_size ?? "", price: t.price ?? null, unit_price: t.unit_price ?? null }))
-        : [{ pack_size: result.pack_size ?? "", price: result.current_price, unit_price: result.unit_price }];
+        ? result.tiers.map((t) => ({
+            pack_size: t.pack_size ?? "",
+            price: t.price ?? null,
+            unit_price: t.unit_price ?? null,
+            native_price: t.native_price ?? null,
+            native_unit_price: t.native_unit_price ?? null,
+            native_currency: t.native_currency ?? null,
+            fx_rate: t.fx_rate ?? null,
+          }))
+        : [
+            {
+              pack_size: result.pack_size ?? "",
+              price: result.current_price,
+              unit_price: result.unit_price,
+              native_price: result.native_price ?? null,
+              native_unit_price: result.native_unit_price ?? null,
+              native_currency: result.native_currency ?? null,
+              fx_rate: result.fx_rate ?? null,
+            },
+          ];
       const tiers = raw.map((t) => {
         const prior: any = priorByPack.get(packKey(t.pack_size));
         const priorPriceTier = prior && typeof prior.price === "number" ? prior.price : null;
-        const moved =
-          priorPriceTier != null && t.price != null && Math.abs(t.price - priorPriceTier) / priorPriceTier >= CHANGE_THRESHOLD_PCT / 100;
+        const priorNativeTier = prior && typeof prior.native_price === "number" ? prior.native_price : null;
+        // Same like-for-like rule as the headline: when both scrapes have a native
+        // price in the same currency, the seller's move is the native move and FX
+        // drops out. Only fall back to USD when there is no native pair to compare.
+        const nativePair =
+          priorNativeTier != null && priorNativeTier > 0 && t.native_price != null && prior?.native_currency === t.native_currency;
+        const base = nativePair ? priorNativeTier : priorPriceTier;
+        const cur = nativePair ? t.native_price : t.price;
+        const moved = base != null && base > 0 && cur != null && Math.abs(cur - base) / base >= CHANGE_THRESHOLD_PCT / 100;
         return {
           ...t,
           // last price shown for this pack: the prior scrape's price, or the
           // last-different price we already had if this scrape didn't move it.
           previous_price: moved ? priorPriceTier : (prior?.previous_price ?? priorPriceTier ?? null),
+          // Native/rate counterparts of previous_price. These three fields are the
+          // inputs splitPriceDelta() needs to separate the seller's move from the
+          // exchange rate's; deliberately stored raw rather than pre-computed, so
+          // every surface derives the split the same way.
+          previous_native_price: moved ? priorNativeTier : (prior?.previous_native_price ?? priorNativeTier ?? null),
+          previous_fx_rate: (prior && typeof prior.fx_rate === "number" ? prior.fx_rate : null) ?? prior?.previous_fx_rate ?? null,
+          // Stamps when the SELLER last moved this tier. FX drift no longer touches it.
           price_changed_at: moved ? nowIso : (prior?.price_changed_at ?? null),
         };
       });

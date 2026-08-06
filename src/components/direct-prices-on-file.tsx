@@ -6,6 +6,7 @@ import { relativeTime } from "@/lib/utils";
 import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
+import { DeltaCell, fmtDelta } from "@/components/price-delta-cell";
 
 export type DirectPriceRow = {
   id: string;
@@ -17,6 +18,17 @@ export type DirectPriceRow = {
   currency: string | null;
   previousPrice: number | null;
   previousUnitPrice: number | null;
+  // Why a supplier quote's two deltas do not sum to the Δ% beside them: the Δ%
+  // is this quote against the supplier's previous quote, and so is supplierDelta
+  // (but valued at a single rate, so a rate move between the two quotes can't be
+  // mistaken for a reprice). currencyDelta answers a different question against a
+  // different baseline: how much the quote we are holding has drifted in USD
+  // since the day it landed. See stagedQuoteDelta in lib/price-delta.ts.
+  currencyDelta: number | null;
+  supplierDelta: number | null;
+  currencyAttributable: boolean;
+  supplierAttributable: boolean;
+  listedCurrency: string | null;
   grade: string | null;
   status: string | null;
   createdAt: string | null;
@@ -60,6 +72,9 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
     fmtPrice(r, true),
     fmtPrice(r),
     directPctChange(r) != null ? `${directPctChange(r)!.toFixed(1)}%` : "",
+    fmtDelta(r.supplierDelta, r.supplierAttributable),
+    fmtDelta(r.currencyDelta, r.currencyAttributable),
+    r.listedCurrency ?? "USD",
     r.caseDims ?? "",
     r.grade ?? "",
     r.status ?? "",
@@ -72,7 +87,20 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
         {controls}
         <ListCsvButton
           filename={filenameFor(slug, "direct-prices-on-file")}
-          headers={["Supplier", "Material", "On file", "Current", "Change", "Case dims", "Grade", "Status", "Updated"]}
+          headers={[
+            "Supplier",
+            "Material",
+            "On file",
+            "Current",
+            "Change",
+            "Supplier delta (USD)",
+            "Currency delta (USD)",
+            "Listed currency",
+            "Case dims",
+            "Grade",
+            "Status",
+            "Updated",
+          ]}
           rows={csvRows}
         />
       </div>
@@ -84,6 +112,18 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
             <TableHead className="text-right" title="Previous captured direct price for this supplier × material">On file</TableHead>
             <TableHead className="text-right" title="Latest captured direct price for this supplier × material">Current</TableHead>
             <TableHead className="text-right" title="Percent change from On file to Current">Δ</TableHead>
+            <TableHead
+              className="text-right"
+              title="USD change caused by the supplier quoting a different number than last time, with exchange-rate movement held out."
+            >
+              Supplier Δ
+            </TableHead>
+            <TableHead
+              className="text-right"
+              title="USD change caused by the exchange rate alone: what this quote is worth today versus the day it landed. The supplier did nothing."
+            >
+              Currency Δ
+            </TableHead>
             <TableHead>Case dims</TableHead>
             <TableHead>Grade</TableHead>
             <TableHead title="When this direct price was captured / last updated">Updated</TableHead>
@@ -114,6 +154,17 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
                   </span>
                 )}
               </TableCell>
+              <TableCell className="text-right tabular-nums">
+                <DeltaCell value={r.supplierDelta} attributable={r.supplierAttributable} kind="supplier" />
+              </TableCell>
+              <TableCell className="text-right tabular-nums">
+                <DeltaCell
+                  value={r.currencyDelta}
+                  attributable={r.currencyAttributable}
+                  kind="currency"
+                  currency={r.listedCurrency}
+                />
+              </TableCell>
               <TableCell className="text-xs">
                 {r.caseDims ? (
                   <span className="inline-flex flex-col gap-0.5">
@@ -135,7 +186,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
           ))}
           {filtered.length === 0 && (
             <TableRow>
-              <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+              <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
                 No direct prices on file yet.
               </TableCell>
             </TableRow>

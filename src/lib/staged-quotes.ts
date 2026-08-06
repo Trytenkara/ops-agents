@@ -168,11 +168,30 @@ export async function insertStagedQuotes(
     let currency = norm.currency;
     let confidence: StagedQuoteConfidence = r.confidence ?? "needs_review";
     let extractionNotes = r.extractionNotes ?? null;
+    // Structured counterparts of the prose note below. The note stays (operators
+    // read it during review), but a delta cannot be computed from a sentence, so
+    // the same facts are stored as columns.
+    let nativePrice: number | null = null;
+    let nativeCurrency: string | null = null;
+    let fxRate: number | null = null;
+    let fxRateAt: string | null = null;
     if (norm.status === "converted" && r.price != null) {
       price = norm.convert(r.price);
+      nativePrice = r.price;
+      nativeCurrency = (r.currency ?? "").trim().toUpperCase();
+      fxRate = norm.rate;
+      fxRateAt = new Date().toISOString();
       extractionNotes = [`${norm.note} (was ${(r.currency ?? "").trim().toUpperCase()} ${r.price}, stored USD ${price}).`, extractionNotes]
         .filter(Boolean)
         .join(" ");
+    } else if (norm.status === "usd" && r.price != null) {
+      // Stamp USD quotes too, so a null native_currency means "unknown", never
+      // "was dollars". Same reason as the marketplace pull: the delta split must
+      // not be able to mistake an unrecorded currency for a confirmed one.
+      nativePrice = r.price;
+      nativeCurrency = "USD";
+      fxRate = 1;
+      fxRateAt = new Date().toISOString();
     } else if (norm.status === "unconvertible") {
       confidence = "needs_review";
       extractionNotes = [`${norm.note}. Confirm currency/price before approving.`, extractionNotes]
@@ -241,6 +260,16 @@ export async function insertStagedQuotes(
       material_id: r.materialId ?? null,
       material_name: r.materialName ?? null,
       price,
+      native_price: nativePrice,
+      native_currency: nativeCurrency,
+      fx_rate: fxRate,
+      fx_rate_at: fxRateAt,
+      // Frozen anchor. `price`/`fx_rate` float with the FX refresh; these two
+      // stay at what the supplier's quote was worth the day it arrived, which is
+      // the only thing the currency delta can be measured against. Null for USD
+      // quotes: nothing restates them, so there is no drift to anchor.
+      captured_price: nativePrice != null ? price : null,
+      captured_fx_rate: fxRate,
       case_size: r.caseSize,
       unit_price_gap_reason: gapReason,
       unit_of_measurement: r.unitOfMeasurement,

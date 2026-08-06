@@ -52,6 +52,13 @@ export interface PriceTier {
   pack_size: string | null; // free-text e.g. "25 kg"
   price: number | null;     // total price for that pack
   unit_price: number | null; // per-unit ($/kg, $/lb…) when derivable
+  // Set by the caller's currency-normalization step, never by the model: the
+  // amount exactly as the page listed it, before conversion. `price` above is
+  // always the published USD figure. Null on a listing that was already USD.
+  native_price?: number | null;
+  native_unit_price?: number | null;
+  native_currency?: string | null;
+  fx_rate?: number | null;   // USD per 1 unit of native_currency at conversion time
 }
 
 export interface RecheckResult {
@@ -66,6 +73,14 @@ export interface RecheckResult {
   pack_size: string | null;            // free-text e.g. "50 lb"
   unit_price: number | null;           // best (lowest) per-unit price seen
   tiers: PriceTier[];                  // every visible pack-size / volume-break tier
+  // Headline equivalents of PriceTier's native fields, filled by the caller's
+  // conversion step. Keeping them is what lets a later USD move be attributed to
+  // the exchange rate rather than the seller.
+  native_price?: number | null;
+  native_unit_price?: number | null;
+  native_currency?: string | null;
+  fx_rate?: number | null;
+  fx_rate_at?: string | null;
   // Level-2 listing fields — captured verbatim off the page when visible, else
   // null. Never inferred. Downstream parses these into quote/supplier profiles.
   moq: string | null;                  // minimum order quantity as printed, e.g. "Min. order: 25 kg"

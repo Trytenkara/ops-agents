@@ -13,13 +13,14 @@ import { MarketplaceFindingActions } from "@/components/marketplace-finding-acti
 import { useListFilter, byString, byNumberDesc, byDateDesc } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
+import { DeltaCell, fmtDelta } from "@/components/price-delta-cell";
 import { fmtCaseDims, resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
 import { relativeTime } from "@/lib/utils";
 import { aggregatorNameOf } from "@/lib/aggregator-hosts";
 import { qaPrice, type QaResult } from "@/lib/price-qa";
 import { resolveDensity, type DensityIndex } from "@/lib/material-density";
 
-const COLS = 10;
+const COLS = 12;
 
 // Prefer the agent's structured unit_price (Agent 05); fall back to deriving it
 // from the pack-size string.
@@ -124,6 +125,9 @@ export function MarketplaceFindingsList({
     r.baseline_price ?? "",
     r.current_price ?? "",
     r.pct_change != null ? `${r.pct_change}%` : "",
+    fmtDelta(r.supplier_delta ?? null, !!r.delta_attributable),
+    fmtDelta(r.currency_delta ?? null, !!r.delta_attributable),
+    r.listed_currency ?? "USD",
     r.created_at ?? "",
   ]);
 
@@ -148,7 +152,7 @@ export function MarketplaceFindingsList({
         {controls}
         <ListCsvButton
           filename={filenameFor(slug, "price-changes")}
-          headers={["Supplier", "Aggregator", "Material", "Pack / tier", "Case dims", "Per-unit", "$/kg", "Pack class", "QA", "On file", "Current", "Change", "Updated"]}
+          headers={["Supplier", "Aggregator", "Material", "Pack / tier", "Case dims", "Per-unit", "$/kg", "Pack class", "QA", "On file", "Current", "Change", "Supplier delta (USD)", "Currency delta (USD)", "Listed currency", "Updated"]}
           rows={csvRows}
         />
       </div>
@@ -161,6 +165,18 @@ export function MarketplaceFindingsList({
             <TableHead className="text-right" title="Previous marketplace scrape for this pack size">On file</TableHead>
             <TableHead className="text-right" title="Latest marketplace scrape for this pack size">Current</TableHead>
             <TableHead className="text-right" title="Percent change from On file to Current">Δ</TableHead>
+            <TableHead
+              className="text-right"
+              title="Of the change from On file to Current, the USD part the seller caused by repricing. Exchange-rate movement is held out."
+            >
+              Supplier Δ
+            </TableHead>
+            <TableHead
+              className="text-right"
+              title="Of the change from On file to Current, the USD part the exchange rate caused. The seller's listed price did not move. Adds to Supplier Δ to give the full change."
+            >
+              Currency Δ
+            </TableHead>
             <TableHead>Supplier / source</TableHead>
             <TableHead>Status</TableHead>
             <TableHead title="When this marketplace price was last checked / refreshed">Updated</TableHead>
@@ -255,6 +271,17 @@ export function MarketplaceFindingsList({
                       <TableCell className="text-right align-top tabular-nums">{formatPrice(r.baseline_price, r.currency)}</TableCell>
                       <TableCell className="text-right align-top tabular-nums">{formatPrice(r.current_price, r.currency)}</TableCell>
                       <TableCell className="text-right align-top tabular-nums"><PctBadge pct={r.pct_change} /></TableCell>
+                      <TableCell className="text-right align-top tabular-nums">
+                        <DeltaCell value={r.supplier_delta ?? null} attributable={!!r.delta_attributable} kind="supplier" />
+                      </TableCell>
+                      <TableCell className="text-right align-top tabular-nums">
+                        <DeltaCell
+                          value={r.currency_delta ?? null}
+                          attributable={!!r.delta_attributable}
+                          kind="currency"
+                          currency={r.listed_currency ?? null}
+                        />
+                      </TableCell>
                       <TableCell className="align-top">
                         <div className="font-medium">{r.supplier_name ?? "—"}</div>
                         {(r.aggregator ?? aggregatorNameOf(r.source_url)) && (

@@ -25,6 +25,7 @@ import { loadMaterialDensities } from "@/lib/material-density";
 import { cn } from "@/lib/utils";
 import { aggregatorNameFromPayload, aggregatorNameOf } from "@/lib/aggregator-hosts";
 import { leadMarketKind, type MarketKind } from "@/lib/lead-market";
+import { tierDelta, stagedQuoteDelta } from "@/lib/price-delta";
 
 export const dynamic = "force-dynamic";
 
@@ -76,7 +77,7 @@ export default async function OrgPriceIndexPage({
       .limit(200),
     admin
       .from("staged_quotes")
-      .select("id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, currency, grade, status, created_at, case_type, case_dimensions")
+      .select("id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, currency, grade, status, created_at, case_type, case_dimensions, native_price, native_currency, fx_rate, captured_price, captured_fx_rate")
       .eq("org_id", org.id)
       .not("material_id", "is", null)
       .order("created_at", { ascending: false })
@@ -202,29 +203,42 @@ export default async function OrgPriceIndexPage({
           const src = (l.payload?.source_url ?? l.payload?.supplier_website ?? null) as string | null;
           const aggregator =
             leadMarketKind(l.payload?.site_type) === "aggregator" ? aggregatorNameFromPayload(l.payload) : null;
-          return tiers.map((t: any, i: number) => ({
-            aggregator,
-            id: `lead-${l.id}-${i}`,
-            supplier_name: l.supplier_name ?? null,
-            material_name: correctMaterialSpelling(l.material_name),
-            pack_size: t.pack_size ?? null,
-            unit_price: t.unit_price ?? null,
-            // On file = prior scrape's price (previous_price); Current = latest price.
-            // Δ = change on-file → current. Lets the row read as last-vs-current.
-            baseline_price: t.previous_price ?? null,
-            current_price: t.price ?? null,
-            pct_change:
-              t.previous_price != null && t.price != null && t.previous_price !== 0
-                ? Math.round(((t.price - t.previous_price) / t.previous_price) * 1000) / 10
-                : null,
-            classification: "price_on_file",
-            status: "on_file",
-            currency: "USD",
-            source_url: src,
-            notes: null,
-            created_at: (l.payload?.price_tiers_updated_at ?? l.created_at ?? null) as string | null,
-            kind: "on_file" as const,
-          }));
+          return tiers.map((t: any, i: number) => {
+            // The USD move, split into the part the seller caused and the part
+            // the exchange rate caused. ~20% of these listings are foreign
+            // (IndiaMART/TradeIndia in INR), where a total-only Δ tells an
+            // operator nothing actionable: "$100 → $105" is a renegotiation
+            // trigger if the seller repriced and noise if the rupee moved.
+            const split = tierDelta(t);
+            return {
+              aggregator,
+              id: `lead-${l.id}-${i}`,
+              supplier_name: l.supplier_name ?? null,
+              material_name: correctMaterialSpelling(l.material_name),
+              pack_size: t.pack_size ?? null,
+              unit_price: t.unit_price ?? null,
+              // On file = prior scrape's price (previous_price); Current = latest price.
+              // Δ = change on-file → current. Lets the row read as last-vs-current.
+              baseline_price: t.previous_price ?? null,
+              current_price: t.price ?? null,
+              pct_change:
+                t.previous_price != null && t.price != null && t.previous_price !== 0
+                  ? Math.round(((t.price - t.previous_price) / t.previous_price) * 1000) / 10
+                  : null,
+              currency_delta: split.currencyDelta,
+              supplier_delta: split.supplierDelta,
+              delta_source: split.source,
+              delta_attributable: split.attributable,
+              listed_currency: t.native_currency ?? null,
+              classification: "price_on_file",
+              status: "on_file",
+              currency: "USD",
+              source_url: src,
+              notes: null,
+              created_at: (l.payload?.price_tiers_updated_at ?? l.created_at ?? null) as string | null,
+              kind: "on_file" as const,
+            };
+          });
         });
   // Aggregator listings (Alibaba, IndiaMART, ...) are prices too, but they are
   // indicative asks off a multi-seller inquiry platform rather than something you
@@ -257,6 +271,10 @@ export default async function OrgPriceIndexPage({
   }
   const directOnFile: DirectPriceRow[] = Array.from(directOnFileMap.entries()).map(([k, s]: [string, any]) => {
     const previous = previousDirectMap.get(k);
+    // Two independent measures, not an additive split (see stagedQuoteDelta):
+    // supplier Δ is this quote vs the supplier's previous one at a common rate,
+    // currency Δ is this quote's own drift since the day it landed.
+    const split = stagedQuoteDelta(s, previous);
     return {
       id: s.id,
     supplierName: s.supplier_name ?? null,
@@ -265,6 +283,12 @@ export default async function OrgPriceIndexPage({
     unitPrice: s.unit_price != null ? Number(s.unit_price) : null,
     previousPrice: previous?.price != null ? Number(previous.price) : null,
     previousUnitPrice: previous?.unit_price != null ? Number(previous.unit_price) : null,
+    currencyDelta: split.currencyDelta,
+    supplierDelta: split.supplierDelta,
+    deltaSource: split.source,
+    currencyAttributable: split.currencyAttributable,
+    supplierAttributable: split.supplierAttributable,
+    listedCurrency: s.native_currency ?? null,
     unitOfMeasurement: s.unit_of_measurement ?? previous?.unit_of_measurement ?? null,
     currency: s.currency ?? null,
     grade: s.grade ?? null,
