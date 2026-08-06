@@ -14,6 +14,7 @@ import { DirectPricesOnFile, type DirectPriceRow } from "@/components/direct-pri
 import { PriceIndexTabs } from "@/components/price-index-tabs";
 import { QuoteValidationView } from "@/components/quote-validation-view";
 import { getQuoteProfiles } from "@/lib/quote-profiles";
+import { stagedPackLabel } from "@/lib/staged-pack-label";
 import { loadSupplierDocIndex } from "@/lib/supplier-doc-index";
 import { getClientRequirements, clientDocRules } from "@/lib/tenkara-requirements";
 import { getOrgAssignmentContext, resolveOperatorId } from "@/lib/operator-assignment";
@@ -77,7 +78,7 @@ export default async function OrgPriceIndexPage({
       .limit(200),
     admin
       .from("staged_quotes")
-      .select("id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, currency, grade, status, created_at, case_type, case_dimensions, native_price, native_currency, fx_rate, captured_price, captured_fx_rate")
+      .select("id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, currency, grade, status, created_at, case_type, case_dimensions, native_price, native_currency, fx_rate, captured_price, captured_fx_rate, extraction_notes")
       .eq("org_id", org.id)
       .not("material_id", "is", null)
       .order("created_at", { ascending: false })
@@ -264,8 +265,13 @@ export default async function OrgPriceIndexPage({
   const previousDirectMap = new Map<string, any>();
   for (const s of (stagedRes.data ?? []) as any[]) {
     if (s.status === "dismissed" || !s.material_id) continue;
-    const k = `${s.supplier_id ?? normName(s.supplier_name)}|${s.material_id}`;
-    if (consumedDirectKeys.has(k)) continue;
+    const base = `${s.supplier_id ?? normName(s.supplier_name)}|${s.material_id}`;
+    if (consumedDirectKeys.has(base)) continue;
+    // Keyed per rung. Without the tier, one email quoting a 3-step ladder read as
+    // three revisions of one price: the cheapest rung became "current" and the
+    // rung above it became the "previous price", inventing a double-digit drop
+    // the supplier never made.
+    const k = `${base}|${(stagedPackLabel(s) ?? "").toLowerCase()}`;
     if (!directOnFileMap.has(k)) directOnFileMap.set(k, s); // newest-first, first wins
     else if (!previousDirectMap.has(k)) previousDirectMap.set(k, s); // second-newest = on-file baseline
   }
@@ -279,6 +285,7 @@ export default async function OrgPriceIndexPage({
       id: s.id,
     supplierName: s.supplier_name ?? null,
     materialName: s.material_name ? correctMaterialSpelling(s.material_name) : null,
+    tier: stagedPackLabel(s),
     price: s.price != null ? Number(s.price) : null,
     unitPrice: s.unit_price != null ? Number(s.unit_price) : null,
     previousPrice: previous?.price != null ? Number(previous.price) : null,

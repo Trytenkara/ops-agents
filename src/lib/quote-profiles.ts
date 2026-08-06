@@ -1,6 +1,7 @@
 import { SupabaseClient } from "@supabase/supabase-js";
 import { resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
 import { selectAllPaged } from "@/lib/supabase-paging";
+import { stagedPackLabel } from "@/lib/staged-pack-label";
 
 export interface QuoteProfile {
   id: string;
@@ -168,7 +169,7 @@ export async function seedQuoteProfilesFromStaged(
   const staged = await selectAllPaged<any>((from, to) =>
     admin
       .from("staged_quotes")
-      .select("supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, currency, case_type, case_dimensions, lead_time_days, moq_quantity, moq_unit, payment_terms, grade, source_attachment_url")
+      .select("supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, currency, case_type, case_dimensions, lead_time_days, moq_quantity, moq_unit, payment_terms, grade, source_attachment_url, extraction_notes")
       .eq("org_id", orgId)
       .not("status", "eq", "dismissed")
       .order("id")
@@ -177,19 +178,25 @@ export async function seedQuoteProfilesFromStaged(
   if (!staged.length) return 0;
 
   const existing = await getQuoteProfiles(admin, orgId);
-  // A reply-driven quote belongs on the packless profile, never on one of a
-  // marketplace ladder's tier rows — those are public listing prices this
-  // supplier never negotiated.
+  // One bucket per supplier×material holding every rung of that ladder, so a
+  // 3-tier reply lands as 3 rows. A single profile per supplier×material used to
+  // answer for the whole ladder, which silently collapsed a quoted ladder to one
+  // arbitrary rung on the org's quote tab.
   // Keyed on the supplier NAME, so a nameless quote would key on the material
   // alone and collide with every other nameless quote for it — the second
   // supplier's quote would be swallowed as an update to the first. Nameless
   // quotes are excluded from the index and always insert.
-  const existingByKey = new Map<string, QuoteProfile>();
+  // Marketplace listing rows are excluded outright: a reply-driven quote belongs
+  // on a negotiated rung, never on a public listing price this supplier never
+  // quoted us.
+  const byIdentity = new Map<string, QuoteProfile[]>();
   for (const p of existing) {
     if (!p.supplier_name?.trim()) continue;
-    const key = `${p.supplier_name.toLowerCase()}|${p.material_name?.toLowerCase()}`;
-    const prev = existingByKey.get(key);
-    if (!prev || (prev.pack_size && !p.pack_size)) existingByKey.set(key, p);
+    if ((p.purchasing_notes ?? "").startsWith(LISTING_NOTE_PREFIX)) continue;
+    const key = `${p.supplier_name.toLowerCase()}|${(p.material_name ?? "").toLowerCase()}`;
+    const bucket = byIdentity.get(key);
+    if (bucket) bucket.push(p);
+    else byIdentity.set(key, [p]);
   }
 
   let created = 0;
@@ -198,7 +205,19 @@ export async function seedQuoteProfilesFromStaged(
   for (const s of staged as any[]) {
     const supplierKey = (s.supplier_name ?? "").trim().toLowerCase();
     const key = `${supplierKey}|${(s.material_name ?? "").toLowerCase()}`;
-    const current = supplierKey ? existingByKey.get(key) : undefined;
+    const rows = supplierKey ? byIdentity.get(key) ?? [] : [];
+    const pack = stagedPackLabel(s);
+    const packKey = packKeyOf(pack);
+    // Its own rung first. Failing that, a pre-tier row carrying no label at all
+    // is this pair's one old profile, so adopt and label it (price match first)
+    // rather than inserting a duplicate beside it. Adopting stamps pack_size, so
+    // the row leaves the packless pool and only the first rung can take it.
+    const current =
+      rows.find((p) => packKeyOf(p.pack_size) === packKey) ??
+      (packKey
+        ? rows.find((p) => !p.pack_size && p.price != null && s.price != null && Number(p.price) === Number(s.price)) ??
+          rows.find((p) => !p.pack_size)
+        : undefined);
     const dims = s.case_dimensions ?? {};
     try {
       const generatedNotes = [
@@ -209,13 +228,21 @@ export async function seedQuoteProfilesFromStaged(
         s.grade ? `Grade: ${s.grade}.` : null,
       ].filter(Boolean).join(" ");
       if (current) {
-        if ((generatedNotes || null) === (current.generated_notes ?? null)) continue;
-        await admin.from("quote_profiles").update({ generated_notes: generatedNotes || null }).eq("id", current.id);
+        const patch: QuoteProfileUpdate & { generated_notes?: string | null } = {};
+        if ((generatedNotes || null) !== (current.generated_notes ?? null)) {
+          patch.generated_notes = generatedNotes || null;
+        }
+        // A rung adopted from a pre-tier row still has no label, so stamp it —
+        // otherwise the ladder stays unreadable on the card.
+        if (pack && !current.pack_size) patch.pack_size = pack;
+        if (!Object.keys(patch).length) continue;
+        await admin.from("quote_profiles").update(patch).eq("id", current.id);
+        Object.assign(current, patch);
         touched++;
         if (touched >= limit) break;
         continue;
       }
-      await insertQuoteProfile(admin, orgId, {
+      const inserted = await insertQuoteProfile(admin, orgId, {
         supplier_id: s.supplier_id ?? null,
         supplier_name: s.supplier_name ?? "",
         material_id: s.material_id ?? null,
@@ -223,6 +250,7 @@ export async function seedQuoteProfilesFromStaged(
         price: s.price != null ? Number(s.price) : null,
         case_size: s.case_size != null ? Number(s.case_size) : null,
         unit_of_measurement: s.unit_of_measurement ?? null,
+        pack_size: pack,
         currency: s.currency ?? "USD",
         case_type: s.case_type ?? null,
         case_width: dims.width != null ? Number(dims.width) : null,
@@ -236,7 +264,12 @@ export async function seedQuoteProfilesFromStaged(
         source_url: typeof s.source_attachment_url === "string" ? s.source_attachment_url : null,
         generated_notes: generatedNotes || null,
       });
-      existingByKey.set(key, {} as QuoteProfile);
+      // Nameless quotes stay out of the index for the reason above: indexing one
+      // would make the next nameless quote for the same material adopt it.
+      if (supplierKey) {
+        rows.push(inserted);
+        byIdentity.set(key, rows);
+      }
       created++;
       touched++;
       if (touched >= limit) break;

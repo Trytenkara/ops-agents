@@ -6,6 +6,7 @@ import { useListFilter, byString, byNumberDesc, byDateDesc } from "@/components/
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
 import { cn } from "@/lib/utils";
+import { stagedPackLabel } from "@/lib/staged-pack-label";
 
 // The Quote board section of the Platform Extraction tab. Read/pull surface:
 // every field the pipeline extracted from supplier replies + attachments,
@@ -37,6 +38,7 @@ function pullLine(r: any): string {
   return [
     r.supplier_name ?? "",
     r.material_name ?? "",
+    stagedPackLabel(r) ?? "",
     r.grade ?? "",
     r.unit_price ?? "",
     r.currency ?? "",
@@ -94,6 +96,7 @@ export function ExtractionQuoteBoard({ rows, slug, showDocs = false }: { rows: a
   const csvRows = filtered.map((r: any) => [
     r.supplier_name ?? "",
     r.material_name ?? "",
+    stagedPackLabel(r) ?? "",
     r.grade ?? "",
     r.unit_price ?? "",
     r.currency ?? "",
@@ -118,6 +121,7 @@ export function ExtractionQuoteBoard({ rows, slug, showDocs = false }: { rows: a
           headers={[
             "Supplier",
             "Material",
+            "Tier / pack",
             "Grade",
             "Per-unit",
             "Currency",
@@ -140,6 +144,7 @@ export function ExtractionQuoteBoard({ rows, slug, showDocs = false }: { rows: a
           <TableRow>
             <TableHead>Supplier</TableHead>
             <TableHead>Material</TableHead>
+            <TableHead title="Which quantity break or pack this price is for.">Tier / pack</TableHead>
             <TableHead>Grade</TableHead>
             <TableHead className="text-right">Per-unit</TableHead>
             <TableHead className="text-right">Pack</TableHead>
@@ -161,6 +166,15 @@ export function ExtractionQuoteBoard({ rows, slug, showDocs = false }: { rows: a
               </TableCell>
               <TableCell className="align-top">
                 {r.material_name ?? <span className="text-destructive">— missing —</span>}
+              </TableCell>
+              {/* A tiered reply lands as one row per rung, so without the rung
+                  three quotes for one material read as three duplicates. */}
+              <TableCell className="align-top text-xs">
+                {stagedPackLabel(r) ? (
+                  <span className="rounded border border-border px-1.5 py-0.5 text-muted-foreground">{stagedPackLabel(r)}</span>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
               </TableCell>
               <TableCell className="align-top text-sm">
                 {r.grade ? (
@@ -228,7 +242,7 @@ export function ExtractionQuoteBoard({ rows, slug, showDocs = false }: { rows: a
           ))}
           {filtered.length === 0 && (
             <TableRow>
-              <TableCell colSpan={showDocs ? 13 : 12} className="text-center py-8 text-muted-foreground">
+              <TableCell colSpan={showDocs ? 14 : 13} className="text-center py-8 text-muted-foreground">
                 No extracted quotes yet. Supplier replies and price sheets land here as the agents process them.
               </TableCell>
             </TableRow>

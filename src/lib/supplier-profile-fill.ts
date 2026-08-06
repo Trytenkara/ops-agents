@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
 import { getSupplierProfiles, type SupplierProfile } from "@/lib/supplier-profiles";
+import { selectAllPaged } from "@/lib/supabase-paging";
 
 // Keeps the Supplier Validation card filled from the sources we already own, on
 // every cycle rather than only at profile-creation time. Deliberately dumb: no
@@ -133,17 +134,29 @@ export async function fillProfilesFromKnownSources(
   const profiles = await getSupplierProfiles(admin, orgId);
   if (!profiles.length) return stats;
 
-  const [{ data: leads }, { data: staged }] = await Promise.all([
-    admin
-      .from("leads_in_flight")
-      .select("supplier_id, supplier_name, payload")
-      .eq("org_id", orgId)
-      .eq("status", "active"),
-    admin
-      .from("staged_quotes")
-      .select("supplier_id, supplier_name, payment_terms")
-      .eq("org_id", orgId)
-      .not("payment_terms", "is", null),
+  // Paged: an unpaged select is capped at PostgREST's 1000 rows, which silently
+  // hid every lead past that mark from the fill (16,401 active leads on the
+  // largest org) while re-doing the same first 1000 on every cycle. Ordered by
+  // id so the pages are a stable partition rather than an arbitrary window.
+  const [leads, staged] = await Promise.all([
+    selectAllPaged<any>((from, to) =>
+      admin
+        .from("leads_in_flight")
+        .select("supplier_id, supplier_name, payload")
+        .eq("org_id", orgId)
+        .eq("status", "active")
+        .order("id")
+        .range(from, to)
+    ),
+    selectAllPaged<any>((from, to) =>
+      admin
+        .from("staged_quotes")
+        .select("supplier_id, supplier_name, payment_terms")
+        .eq("org_id", orgId)
+        .not("payment_terms", "is", null)
+        .order("id")
+        .range(from, to)
+    ),
   ]);
 
   // Best contact each lead knows about, merged across that supplier's leads:

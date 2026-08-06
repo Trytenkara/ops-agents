@@ -12,6 +12,10 @@ export type DirectPriceRow = {
   id: string;
   supplierName: string | null;
   materialName: string | null;
+  // Which rung of the supplier's ladder this price is ("tier: >=1000kg"). One
+  // supplier can hold several rows for one material; without this they read as
+  // duplicates.
+  tier: string | null;
   price: number | null;
   unitPrice: number | null;
   unitOfMeasurement: string | null;
@@ -69,6 +73,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
   const csvRows = filtered.map((r) => [
     r.supplierName ?? "",
     r.materialName ?? "",
+    r.tier ?? "",
     fmtPrice(r, true),
     fmtPrice(r),
     directPctChange(r) != null ? `${directPctChange(r)!.toFixed(1)}%` : "",
@@ -90,6 +95,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
           headers={[
             "Supplier",
             "Material",
+            "Tier / pack",
             "On file",
             "Current",
             "Change",
@@ -109,7 +115,8 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
           <TableRow>
             <TableHead>Supplier</TableHead>
             <TableHead>Material</TableHead>
-            <TableHead className="text-right" title="Previous captured direct price for this supplier × material">On file</TableHead>
+            <TableHead title="Which quantity break or pack this price is for. Each rung is priced and tracked separately.">Tier / pack</TableHead>
+            <TableHead className="text-right" title="Previous captured direct price for this supplier × material × tier">On file</TableHead>
             <TableHead className="text-right" title="Latest captured direct price for this supplier × material">Current</TableHead>
             <TableHead className="text-right" title="Percent change from On file to Current">Δ</TableHead>
             <TableHead
@@ -134,6 +141,13 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
             <TableRow key={r.id}>
               <TableCell className="font-medium">{r.supplierName ?? "—"}</TableCell>
               <TableCell>{r.materialName ?? "—"}</TableCell>
+              <TableCell className="text-xs">
+                {r.tier ? (
+                  <span className="rounded border border-border px-1.5 py-0.5 text-muted-foreground">{r.tier}</span>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </TableCell>
               <TableCell className="text-right tabular-nums text-muted-foreground">{fmtPrice(r, true) || "—"}</TableCell>
               <TableCell className="text-right tabular-nums">
                 <div className="flex flex-col items-end gap-0.5">
@@ -186,7 +200,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
           ))}
           {filtered.length === 0 && (
             <TableRow>
-              <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
+              <TableCell colSpan={11} className="text-center text-muted-foreground py-8">
                 No direct prices on file yet.
               </TableCell>
             </TableRow>

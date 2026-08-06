@@ -1,5 +1,6 @@
 import { TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { StagedQuoteRowActions } from "@/components/staged-quote-row-actions";
+import { stagedPackLabel } from "@/lib/staged-pack-label";
 
 // Shared rendering for a staged supplier quote (extracted by the Email Scanner),
 // used by the cross-org Review queue (/work/review/staged-quotes) and the
@@ -72,7 +73,16 @@ export function StagedQuoteRow({
         {r.supplier_name ?? <span className="text-destructive">— missing —</span>}
       </TableCell>
       <TableCell className="align-top">
-        {r.material_name ?? <span className="text-destructive">— missing —</span>}
+        <span className="flex flex-col gap-0.5">
+          <span>{r.material_name ?? <span className="text-destructive">— missing —</span>}</span>
+          {/* A tiered reply lands as one row per rung, so without the rung three
+              quotes for one material read as three duplicates. */}
+          {stagedPackLabel(r) && (
+            <span className="w-fit rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              {stagedPackLabel(r)}
+            </span>
+          )}
+        </span>
       </TableCell>
       <TableCell className="align-top text-sm">
         {r.grade ? (

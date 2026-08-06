@@ -29,7 +29,7 @@ export default async function OrgExtractionPage({ params }: { params: { slug: st
   const { data: staged } = await admin
     .from("staged_quotes")
     .select(
-      "id, supplier_id, supplier_name, material_name, grade, price, case_size, unit_of_measurement, unit_price, unit_price_gap_reason, currency, lead_time_days, lead_time_text, moq_quantity, moq_unit, payment_terms, source, source_attachment_name, confidence, case_type, case_dimensions, dim_source, status, created_at"
+      "id, supplier_id, supplier_name, material_name, grade, price, case_size, unit_of_measurement, unit_price, unit_price_gap_reason, currency, lead_time_days, lead_time_text, moq_quantity, moq_unit, payment_terms, source, source_attachment_name, confidence, case_type, case_dimensions, dim_source, status, created_at, extraction_notes"
     )
     .eq("org_id", org.id)
     .neq("status", "dismissed")
