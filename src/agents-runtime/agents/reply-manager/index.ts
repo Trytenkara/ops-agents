@@ -26,7 +26,7 @@ registerAgent({
     // nudged and escalated to a call while its quote sits unread.
     let reconcile = {
       threadsChecked: 0, replayed: 0, drafted: 0, failed: 0, unreadable: 0,
-      mergedShells: 0, budgetExhausted: false, backlog: 0, oldestDueMinutes: null as number | null,
+      mergedShells: 0, superseded: 0, budgetExhausted: false, backlog: 0, oldestDueMinutes: null as number | null,
     };
     let degraded = false;
     try {
@@ -55,6 +55,7 @@ registerAgent({
     ctx.setStatus(degraded ? "partial" : "success");
     ctx.setSummary(
       `Reconcile: ${reconcile.threadsChecked} threads · ${reconcile.replayed} unseen replies replayed · ${reconcile.drafted} drafted` +
+        `${reconcile.superseded ? ` · ${reconcile.superseded} superseded` : ""}` +
         `${reconcile.mergedShells ? ` · ${reconcile.mergedShells} merged shells` : ""}` +
         `${reconcile.unreadable ? ` · ${reconcile.unreadable} unreadable` : ""}` +
         `${reconcile.failed ? ` · ${reconcile.failed} failed` : ""}` +

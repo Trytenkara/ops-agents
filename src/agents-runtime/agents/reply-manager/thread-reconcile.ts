@@ -34,6 +34,9 @@ export interface ReconcileResult {
   failed: number;
   unreadable: number;
   mergedShells: number;
+  // Older unseen messages skipped because a newer one from the same sender
+  // supersedes them. Ledgered, never replayed.
+  superseded: number;
   budgetExhausted: boolean;
   // Threads whose next_check_at is already in the past at the END of the run.
   // This is the honest coverage signal: if it climbs run over run the cadence is
@@ -52,6 +55,11 @@ const MAX_THREADS_PER_RUN = 120;
 // A merged shell is followed to its live target; the cap stops a cycle or a long
 // chain from spinning. Tenkara resolves up to five hops on its own draft writes.
 const MAX_MERGE_HOPS = 5;
+// A claim is taken before the replay so a dying invocation cannot double-draft.
+// The cost is that a claim left behind by an invocation that died mid-replay
+// would strand that message forever, so a claim this old is considered abandoned
+// and retried. Comfortably longer than the function's own 800s ceiling.
+const STALE_CLAIM_MS = 20 * 60_000;
 
 // Cadence tiers, keyed on how recently anyone wrote on the thread. The webhook is
 // still the primary path — this sweep is the safety net for when it never fires —
@@ -161,7 +169,7 @@ export async function runThreadReconcile(deps: ReconcileDeps, admin: Admin): Pro
   const startedAt = Date.now();
   const result: ReconcileResult = {
     threadsChecked: 0, replayed: 0, drafted: 0, failed: 0,
-    unreadable: 0, mergedShells: 0, budgetExhausted: false,
+    unreadable: 0, mergedShells: 0, superseded: 0, budgetExhausted: false,
     backlog: 0, oldestDueMinutes: null,
   };
 
@@ -205,18 +213,64 @@ export async function runThreadReconcile(deps: ReconcileDeps, admin: Admin): Pro
     if (inbound.length > 0) {
       const { data: known, error: ledgerError } = await admin
         .from("inbound_message_ledger")
-        .select("message_id")
+        .select("message_id,outcome,processed_at")
         .in("message_id", inbound.map((m) => m.id as string));
       if (ledgerError) throw new Error(`ledger read failed: ${ledgerError.message}`);
-      const seen = new Set((known ?? []).map((r: any) => r.message_id as string));
+      const staleBefore = Date.now() - STALE_CLAIM_MS;
+      const seen = new Set(
+        (known ?? [])
+          // A row still sitting at "claimed" long after any invocation could
+          // still be alive is an abandoned claim, not a processed message.
+          .filter((r: any) => !(r.outcome === "claimed" && Date.parse(r.processed_at) < staleBefore))
+          .map((r: any) => r.message_id as string)
+      );
       unseen = inbound.filter((m) => !seen.has(m.id as string));
+
+      // A thread can carry months of unseen backlog (one supplier here had 14).
+      // Replaying each in turn drafts a reply to a message that later ones already
+      // superseded, overwrites the same single draft slot every time, and costs a
+      // model call plus attachment parsing per message. Only the NEWEST unseen
+      // message per sender is worth a reply. Per SENDER, not per thread, because a
+      // merged thread carries several people and each one's latest still needs an
+      // answer. The rest are ledgered so they are never reconsidered.
+      const newestPerSender = new Map<string, string>();
+      for (const m of unseen) {
+        const who = (m.from_email ?? "").toLowerCase();
+        const cur = newestPerSender.get(who);
+        if (!cur || (m.sent_at ?? "") > cur) newestPerSender.set(who, m.sent_at ?? "");
+      }
+      const superseded = unseen.filter(
+        (m) => (m.sent_at ?? "") !== newestPerSender.get((m.from_email ?? "").toLowerCase())
+      );
+      if (superseded.length > 0) {
+        await admin.from("inbound_message_ledger").upsert(
+          superseded.map((m) => ({
+            message_id: m.id as string,
+            conversation_id: liveId,
+            sender_email: m.from_email,
+            outcome: "superseded",
+          })),
+          { onConflict: "message_id", ignoreDuplicates: true }
+        );
+        result.superseded += superseded.length;
+        unseen = unseen.filter((m) => !superseded.includes(m));
+      }
     }
 
+    let replayedHere = 0;
     for (const m of unseen) {
+      // A replay stages a draft (model call plus attachment parsing) and can run
+      // tens of seconds, so the budget has to be checked per MESSAGE. Checking
+      // only per thread let one busy thread overrun the whole invocation.
+      if (Date.now() - startedAt > TIME_BUDGET_MS) {
+        result.budgetExhausted = true;
+        break;
+      }
       const messageId = m.id as string;
       // Claim the message BEFORE replaying it. handleInboundReply stages a draft
       // and can be slow; if the invocation dies midway, the claim is what stops
       // the next run from drafting a second reply to the same supplier message.
+      const claimedAt = new Date().toISOString();
       const { error: claimError } = await admin
         .from("inbound_message_ledger")
         .insert({
@@ -224,12 +278,25 @@ export async function runThreadReconcile(deps: ReconcileDeps, admin: Admin): Pro
           conversation_id: liveId,
           sender_email: m.from_email,
           outcome: "claimed",
+          processed_at: claimedAt,
         });
       if (claimError) {
-        // 23505: another run already claimed it.
+        // 23505 means a row already exists. It is ours to take over only if it is
+        // an abandoned claim; the conditional update is what keeps that takeover
+        // atomic against a concurrent run doing the same thing.
         if (claimError.code !== "23505") throw new Error(`ledger claim failed: ${claimError.message}`);
-        continue;
+        const { data: reclaimed, error: reclaimError } = await admin
+          .from("inbound_message_ledger")
+          .update({ outcome: "claimed", processed_at: claimedAt, conversation_id: liveId })
+          .eq("message_id", messageId)
+          .eq("outcome", "claimed")
+          .lt("processed_at", new Date(Date.now() - STALE_CLAIM_MS).toISOString())
+          .select("message_id");
+        if (reclaimError) throw new Error(`ledger reclaim failed: ${reclaimError.message}`);
+        if (!reclaimed?.length) continue;
+        await deps.log(`Reclaimed abandoned claim on ${messageId}`, { level: "warn", step: "reconcile" });
       }
+      replayedHere++;
 
       result.replayed++;
       let outcome = "replayed";
@@ -277,18 +344,23 @@ export async function runThreadReconcile(deps: ReconcileDeps, admin: Admin): Pro
       (acc, m) => (m.sent_at && (!acc || m.sent_at > acc) ? m.sent_at : acc),
       null
     );
+    // Ran out of budget partway through this thread's unseen messages: the rest
+    // are still unreplayed, so leave next_check_at where it is to keep the thread
+    // at the front of the queue rather than rotating it to the back half-done.
+    const finished = replayedHere >= unseen.length;
     await admin
       .from("tenkara_thread_reconcile")
       .update({
         last_checked_at: new Date().toISOString(),
-        next_check_at: nextCheckAt(lastMessageAt, unseen.length > 0),
+        ...(finished ? { next_check_at: nextCheckAt(lastMessageAt, unseen.length > 0) } : {}),
         last_message_at: lastMessageAt,
         last_status: details.status,
         merged_into: mergedInto,
-        replayed_last: unseen.length,
+        replayed_last: replayedHere,
       })
       .eq("thread_id", threadId);
 
+    if (result.budgetExhausted) break;
     await sleep(READ_INTERVAL_MS);
   }
 
