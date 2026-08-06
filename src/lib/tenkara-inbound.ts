@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import type { createAdminClient } from "@/lib/supabase/admin";
-import { stageDraft } from "@/lib/draft-staging";
+import { stageDraft, threadCcContacts } from "@/lib/draft-staging";
 import { composeReply } from "@/lib/reply-drafter";
 import { shipsToUsVerdict, type ShipsToUsAnnotation } from "@/lib/ships-to-us";
 import { stageReferredSuppliers } from "@/lib/referred-suppliers";
@@ -1073,7 +1073,8 @@ export async function handleInboundReply(
     .eq("slug", "agent-08-email-scanner")
     .maybeSingle();
 
-  // 7. Stage the reply as a Tenkara draft in the same conversation.
+  // 7. Stage the reply as a Tenkara draft in the same conversation, keeping every
+  //    contact we already CC'd on the thread.
   const staged = await stageDraft({
     admin,
     agentId: agent08?.id ?? null,
@@ -1083,6 +1084,7 @@ export async function handleInboundReply(
     materialId: ref.material_id,
     conversationId: msg.conversation_id,
     to: from,
+    cc: (await threadCcContacts(admin, msg.conversation_id, from.address)).map((address) => ({ address })),
     subject: reply.subject,
     body: reply.body,
     assignedOperator: ref.assigned_operator,

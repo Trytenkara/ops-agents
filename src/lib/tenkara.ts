@@ -21,6 +21,12 @@ export const TENKARA_INBOX_BASE = "https://tenkara-inbox-nine.vercel.app";
 // mailbox it currently has loaded, it fetches that conversation by id and
 // switches to its account. Without the hash the operator lands on the inbox root
 // and has to hunt for the thread.
+//
+// FALLBACK ONLY. Tenkara now returns its own `conversation_url` on create/GET/
+// PATCH and every webhook, and we store it on the draft_references row; prefer
+// that so links survive a routing change on their side. This hand-built form
+// still covers rows staged before we captured it and the reply path (POST
+// /api/drafts), which does not return a URL.
 export function tenkaraInboxUrl(conversationId?: string | null): string {
   if (!conversationId) return TENKARA_INBOX_BASE;
   return `${TENKARA_INBOX_BASE}/#conversation=${encodeURIComponent(conversationId)}`;
@@ -155,6 +161,7 @@ export interface TenkaraConversation {
   requiresSenderSelection: boolean;
   createdAt?: string;
   idempotent: boolean;                // true if external_id replayed an existing create
+  conversationUrl?: string | null;    // Tenkara's own deep link — prefer it over building our own
 }
 
 export async function createTenkaraConversation(input: CreateTenkaraConversationInput): Promise<TenkaraConversation> {
@@ -202,6 +209,7 @@ export async function createTenkaraConversation(input: CreateTenkaraConversation
     requiresSenderSelection: body.requires_sender_selection ?? true,
     createdAt: body.created_at,
     idempotent: body.idempotent ?? false,
+    conversationUrl: body.conversation_url ?? null,
   };
 }
 

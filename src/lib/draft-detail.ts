@@ -91,7 +91,7 @@ export async function loadDraftDetail(draftId: string): Promise<DraftDetail | nu
     isTenkara,
     inboxName: isTenkara ? "Tenkara Inbox" : "Missive",
     inboxUrl: isTenkara
-      ? tenkaraInboxUrl(d.thread_id)
+      ? (meta.conversation_url ?? tenkaraInboxUrl(d.thread_id))
       : `https://mail.missiveapp.com/#inbox/conversations/${d.thread_id}/drafts/${d.draft_id}`,
     assigned: person(d.assigned),
     reviewer: person(d.reviewer),

@@ -43,6 +43,37 @@ export async function mirrorDraftAssignee(
   }
 }
 
+// Everyone we've already CC'd on a Tenkara thread, unioned across every draft we
+// staged onto it. Cold outreach puts the extra supplier contacts in CC and records
+// them as metadata.cc_contacts; without replaying that list, each agent reply goes
+// only to whoever wrote back and silently drops the rest of the supplier's team off
+// the thread. Unioning across rows (rather than reading one) matters because the
+// row a reply matched on may itself be an earlier reply.
+export async function threadCcContacts(
+  admin: Admin,
+  threadId: string | null | undefined,
+  exclude?: string | null
+): Promise<string[]> {
+  if (!threadId) return [];
+  const { data, error } = await admin
+    .from("draft_references")
+    .select("metadata")
+    .eq("email_client", "rod_app")
+    .eq("thread_id", threadId);
+  if (error || !data) return [];
+
+  const skip = exclude?.toLowerCase();
+  const seen = new Map<string, string>();
+  for (const row of data as any[]) {
+    for (const addr of (row?.metadata?.cc_contacts ?? []) as string[]) {
+      const key = typeof addr === "string" ? addr.trim().toLowerCase() : "";
+      if (!key || key === skip || seen.has(key)) continue;
+      seen.set(key, addr.trim());
+    }
+  }
+  return [...seen.values()];
+}
+
 export interface StageDraftInput {
   admin: Admin;
   agentId: string | null;
@@ -197,6 +228,7 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
       extraMeta.draft_kind = callerMeta.draft_kind ?? "cold_outbound";
       extraMeta.external_id = input.externalId;
       extraMeta.requires_sender_selection = c.requiresSenderSelection;
+      if (c.conversationUrl) extraMeta.conversation_url = c.conversationUrl;
     } else {
       return { ok: false, error: "drafts require conversationId (reply) or externalId (cold outbound)", qaFindings };
     }

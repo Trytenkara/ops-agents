@@ -11,7 +11,7 @@ import { lintDraft } from "../outreach-qa/lint";
 import { postQrSummary } from "./slack-notifier";
 import { getOrgAssignmentContext, resolveOperatorId } from "@/lib/operator-assignment";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
-import { mirrorDraftAssignee } from "@/lib/draft-staging";
+import { mirrorDraftAssignee, threadCcContacts } from "@/lib/draft-staging";
 
 // Now runs daily (was weekly), so a quote that's expiring stays "overdue" for
 // days. Debounce: don't re-draft a quote we already drafted within this window,
@@ -276,12 +276,14 @@ registerAgent({
         }
 
         if (existingConversationId) {
+          const threadCc = await threadCcContacts(admin, existingConversationId, group.supplier_contact_email);
           const d = await createTenkaraDraft({
             conversationId: existingConversationId,
             to: { name: group.supplier_contact_name ?? "", address: group.supplier_contact_email },
             subject: `Re: ${draft.subject.replace(/^Re:\s*/i, "")}`,
             bodyHtml: bodyToHtml(draft.body),
             bodyText: draft.body,
+            cc: threadCc.length ? threadCc.join(", ") : undefined,
             emailAccountId,
           });
           draftIdValue = d.id;
