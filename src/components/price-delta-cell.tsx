@@ -67,7 +67,7 @@ export function DeltaCell({
 }
 
 // What actually wrote the price last. Shown beside the timestamp because the
-// timestamp alone is misleading: the 6-hourly FX pass restates the USD figure
+// timestamp alone is misleading: the daily FX pass restates the USD figure
 // without reading anything, so a price can be minutes old and still reflect a
 // listing nobody has looked at in weeks. "rate only" is the label that earns
 // this column; the rest exist so it isn't the only one and therefore alarming.
@@ -171,8 +171,8 @@ export function fmtDelta(value: number | null, attributable: boolean): string {
 
 // When the SUPPLIER last moved this price, as an absolute date/time rather than
 // "2h ago". Relative time is actively misleading here now that the FX pass runs
-// hourly: every foreign row would read as freshly updated while the seller may
-// not have touched it in months.
+// on a rate change: every foreign row would read as freshly updated while the
+// seller may not have touched it in months.
 export function SupplierChangedCell({ at }: { at: string | null | undefined }) {
   if (!at) {
     return (
@@ -196,9 +196,9 @@ export function fmtSupplierChanged(at: string | null | undefined): string {
 }
 
 // The price exactly as the seller lists it, before conversion. This is the only
-// number on the row that is not a derived figure: the USD column moves hourly
-// with the rate even when the listing has not changed, so on a foreign row this
-// is what an operator is actually negotiating against.
+// number on the row that is not a derived figure: the USD column moves with the
+// rate even when the listing has not changed, so on a foreign row this is what
+// an operator is actually negotiating against.
 export function ListedPriceCell({
   price,
   currency,
@@ -248,7 +248,7 @@ export function ListedCurrencyCell({ currency }: { currency: string | null | und
       className={foreign ? "font-medium text-sky-700 dark:text-sky-400" : "text-muted-foreground"}
       title={
         foreign
-          ? `Listed in ${currency}. The USD figure shown is converted at the current rate and moves hourly with it.`
+          ? `Listed in ${currency}. The USD figure shown is converted at the latest published rate, which updates once a day, so it can move without the seller doing anything.`
           : "Listed in USD. The price only moves when the seller changes it."
       }
     >

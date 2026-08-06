@@ -171,7 +171,7 @@ export function MarketplaceFindingsList({
             <TableHead className="text-right" title="The price exactly as the listing shows it, before conversion. On a non-USD row this is the number that only moves when the seller reprices.">
               Listed price
             </TableHead>
-            <TableHead title="The currency this listing was originally read in. A non-USD row is reconverted hourly, so its USD figure moves on its own.">
+            <TableHead title="The currency this listing was originally read in. A non-USD row is reconverted once a day when the rate source publishes, so its USD figure can move on its own.">
               Listed currency
             </TableHead>
             <TableHead>Supplier / source</TableHead>
