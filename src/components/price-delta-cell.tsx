@@ -66,6 +66,38 @@ export function DeltaCell({
   );
 }
 
+// What actually wrote the price last. Shown beside the timestamp because the
+// timestamp alone is misleading: the 6-hourly FX pass restates the USD figure
+// without reading anything, so a price can be minutes old and still reflect a
+// listing nobody has looked at in weeks. "rate only" is the label that earns
+// this column; the rest exist so it isn't the only one and therefore alarming.
+const SOURCE_LABELS: Record<string, { label: string; title: string; muted?: boolean }> = {
+  marketplace_scrape: { label: "page read", title: "Read from the seller's live listing." },
+  fx_refresh: {
+    label: "rate only",
+    title:
+      "Restated at a new exchange rate. No page was read and no supplier was contacted, so the amount the seller is asking has not been re-confirmed.",
+    muted: true,
+  },
+  supplier_quote: { label: "supplier reply", title: "Captured from a price the supplier sent us." },
+  operator: { label: "operator", title: "Entered by hand." },
+};
+
+export function PriceSourceLabel({ source }: { source: string | null | undefined }) {
+  if (!source) return null;
+  const meta = SOURCE_LABELS[source];
+  if (!meta) return null;
+  return (
+    <span className={`block text-[10px] ${meta.muted ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground/70"}`} title={meta.title}>
+      {meta.label}
+    </span>
+  );
+}
+
+export function fmtSource(source: string | null | undefined): string {
+  return source ? SOURCE_LABELS[source]?.label ?? source : "";
+}
+
 export function fmtDelta(value: number | null, attributable: boolean): string {
   if (!attributable || value == null) return "n/a";
   if (Math.abs(value) < 0.01) return "0.00";

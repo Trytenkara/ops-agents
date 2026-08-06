@@ -131,6 +131,11 @@ async function refreshLeads(
       }
       nextPull.fx_rate = rate;
       nextPull.fx_rate_at = fx.fetchedAt;
+      // Say plainly that no page was read. Without this the price looks freshly
+      // observed, and an operator would read a restated number as evidence the
+      // seller is still asking it.
+      nextPull.price_source = "fx_refresh";
+      nextPull.price_source_at = fx.fetchedAt;
 
       const tiers = Array.isArray(row.payload?.price_tiers) ? row.payload.price_tiers : [];
       let tiersTouched = 0;
@@ -148,6 +153,8 @@ async function refreshLeads(
           price,
           unit_price: typeof t.native_unit_price === "number" ? roundUsd(t.native_unit_price * tRate) : t.unit_price,
           fx_rate: tRate,
+          price_source: "fx_refresh",
+          price_source_at: fx.fetchedAt,
         };
       });
 
@@ -204,7 +211,7 @@ async function refreshStagedQuotes(
       if (price === q.price) continue;
       const { error: upErr } = await admin
         .from("staged_quotes")
-        .update({ price, fx_rate: rate, fx_rate_at: fx.fetchedAt })
+        .update({ price, fx_rate: rate, fx_rate_at: fx.fetchedAt, price_source: "fx_refresh", price_source_at: fx.fetchedAt })
         .eq("id", q.id);
       if (upErr) {
         result.errors++;

@@ -13,7 +13,7 @@ import { MarketplaceFindingActions } from "@/components/marketplace-finding-acti
 import { useListFilter, byString, byNumberDesc, byDateDesc } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
-import { DeltaCell, fmtDelta } from "@/components/price-delta-cell";
+import { DeltaCell, PriceSourceLabel, fmtDelta, fmtSource } from "@/components/price-delta-cell";
 import { fmtCaseDims, resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
 import { relativeTime } from "@/lib/utils";
 import { aggregatorNameOf } from "@/lib/aggregator-hosts";
@@ -128,6 +128,7 @@ export function MarketplaceFindingsList({
     fmtDelta(r.supplier_delta ?? null, !!r.delta_attributable),
     fmtDelta(r.currency_delta ?? null, !!r.delta_attributable),
     r.listed_currency ?? "USD",
+    fmtSource(r.price_source),
     r.created_at ?? "",
   ]);
 
@@ -152,7 +153,7 @@ export function MarketplaceFindingsList({
         {controls}
         <ListCsvButton
           filename={filenameFor(slug, "price-changes")}
-          headers={["Supplier", "Aggregator", "Material", "Pack / tier", "Case dims", "Per-unit", "$/kg", "Pack class", "QA", "On file", "Current", "Change", "Supplier delta (USD)", "Currency delta (USD)", "Listed currency", "Updated"]}
+          headers={["Supplier", "Aggregator", "Material", "Pack / tier", "Case dims", "Per-unit", "$/kg", "Pack class", "QA", "On file", "Current", "Change", "Supplier delta (USD)", "Currency delta (USD)", "Listed currency", "Updated", "Last updated by"]}
           rows={csvRows}
         />
       </div>
@@ -179,7 +180,7 @@ export function MarketplaceFindingsList({
             </TableHead>
             <TableHead>Supplier / source</TableHead>
             <TableHead>Status</TableHead>
-            <TableHead title="When this marketplace price was last checked / refreshed">Updated</TableHead>
+            <TableHead title="When this price last changed, and what changed it. 'rate only' means the exchange rate was restated without re-reading the listing.">Updated</TableHead>
             <TableHead className="text-right">Action</TableHead>
           </TableRow>
         </TableHeader>
@@ -312,6 +313,7 @@ export function MarketplaceFindingsList({
                       <TableCell className="align-top"><ClassificationBadge value={r.classification ?? null} /></TableCell>
                       <TableCell className="text-muted-foreground align-top text-xs" title={r.created_at ? new Date(r.created_at).toLocaleString() : undefined}>
                         {r.created_at ? relativeTime(r.created_at) : "—"}
+                        <PriceSourceLabel source={r.price_source} />
                       </TableCell>
                       <TableCell className="text-right align-top">
                         {r.kind === "on_file" ? (

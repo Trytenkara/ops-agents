@@ -270,6 +270,12 @@ export async function insertStagedQuotes(
       // quotes: nothing restates them, so there is no drift to anchor.
       captured_price: nativePrice != null ? price : null,
       captured_fx_rate: fxRate,
+      // A quote starts life as something a supplier actually said. The FX pass
+      // may later restate `price` and overwrite this with 'fx_refresh', which is
+      // the point: it distinguishes a number the supplier stands behind from one
+      // we recomputed for them.
+      price_source: "supplier_quote",
+      price_source_at: new Date().toISOString(),
       case_size: r.caseSize,
       unit_price_gap_reason: gapReason,
       unit_of_measurement: r.unitOfMeasurement,

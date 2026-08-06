@@ -965,6 +965,14 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           shipping: result.shipping,
           source_url: result.source_url ?? url,
           pulled_at: nowIso,
+          // What actually moved this number last. A price can change without any
+          // page being read (the 6-hourly FX pass restates the USD figure off a
+          // new rate), so "updated 2h ago" on its own is ambiguous: it may mean a
+          // fresh reading of the seller's page or pure arithmetic on a months-old
+          // one. Readers that need a genuine observation must check this, not the
+          // timestamp.
+          price_source: "marketplace_scrape",
+          price_source_at: nowIso,
           ...cadence!,
           ...aggregatorMark,
         }
@@ -1051,6 +1059,8 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           previous_fx_rate: (prior && typeof prior.fx_rate === "number" ? prior.fx_rate : null) ?? prior?.previous_fx_rate ?? null,
           // Stamps when the SELLER last moved this tier. FX drift no longer touches it.
           price_changed_at: moved ? nowIso : (prior?.price_changed_at ?? null),
+          price_source: "marketplace_scrape",
+          price_source_at: nowIso,
         };
       });
       nextPayload.price_tiers = tiers;

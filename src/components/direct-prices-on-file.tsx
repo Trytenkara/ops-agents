@@ -6,7 +6,7 @@ import { relativeTime } from "@/lib/utils";
 import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
-import { DeltaCell, fmtDelta } from "@/components/price-delta-cell";
+import { DeltaCell, PriceSourceLabel, fmtDelta, fmtSource } from "@/components/price-delta-cell";
 
 export type DirectPriceRow = {
   id: string;
@@ -35,6 +35,7 @@ export type DirectPriceRow = {
   listedCurrency: string | null;
   grade: string | null;
   status: string | null;
+  priceSource: string | null;
   createdAt: string | null;
   caseDims: string | null;
 };
@@ -84,6 +85,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
     r.grade ?? "",
     r.status ?? "",
     r.createdAt ?? "",
+    fmtSource(r.priceSource),
   ]);
 
   return (
@@ -106,6 +108,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
             "Grade",
             "Status",
             "Updated",
+            "Last updated by",
           ]}
           rows={csvRows}
         />
@@ -133,7 +136,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
             </TableHead>
             <TableHead>Case dims</TableHead>
             <TableHead>Grade</TableHead>
-            <TableHead title="When this direct price was captured / last updated">Updated</TableHead>
+            <TableHead title="When this price last changed, and what changed it. 'rate only' means the exchange rate was restated without re-confirming the price with the supplier.">Updated</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -195,7 +198,10 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
                 )}
               </TableCell>
               <TableCell className="text-muted-foreground">{r.grade ?? "—"}</TableCell>
-              <TableCell className="text-muted-foreground">{relativeTime(r.createdAt)}</TableCell>
+              <TableCell className="text-muted-foreground">
+                {relativeTime(r.createdAt)}
+                <PriceSourceLabel source={r.priceSource} />
+              </TableCell>
             </TableRow>
           ))}
           {filtered.length === 0 && (
