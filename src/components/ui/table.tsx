@@ -45,7 +45,11 @@ TableRow.displayName = "TableRow";
 
 const TableHead = React.forwardRef<HTMLTableCellElement, React.ThHTMLAttributes<HTMLTableCellElement>>(
   ({ className, ...props }, ref) => (
-    <th ref={ref} className={cn("h-10 px-3 text-left align-middle text-xs font-semibold uppercase tracking-wide text-muted-foreground [html.density-compact_&]:h-8", className)} {...props} />
+    // Headers never wrap. A two-word label breaking mid-phrase ("ON / FILE",
+    // "SUPPLIER / Δ") reads as two columns and doubles the header height across
+    // the whole row. The viewport already scrolls horizontally, so the cost of a
+    // wider header is a scrollbar, not a broken layout.
+    <th ref={ref} className={cn("h-10 whitespace-nowrap px-3 text-left align-middle text-xs font-semibold uppercase tracking-wide text-muted-foreground [html.density-compact_&]:h-8", className)} {...props} />
   )
 );
 TableHead.displayName = "TableHead";
