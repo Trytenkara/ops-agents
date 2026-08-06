@@ -156,6 +156,22 @@ export async function insertStagedQuotes(
     }
   }
 
+  // Whether we already hold a price from this supplier for this material. A
+  // first quote is not a change, so it gets 'none'; anything after it is the
+  // supplier stating a new number, which is 'supplier' by definition (the FX
+  // pass is the only other writer, and it overwrites this with 'currency').
+  const quotedBefore = new Set<string>();
+  if (orgIds.length) {
+    const { data } = await admin
+      .from("staged_quotes")
+      .select("org_id, supplier_name, material_name")
+      .in("org_id", orgIds)
+      .neq("status", "dismissed");
+    for (const r of (data ?? []) as any[]) {
+      quotedBefore.add(approvedKey(r.org_id, r.supplier_name, r.material_name));
+    }
+  }
+
   for (const r of rows) {
     // Currency safety net, same policy as the marketplace pull: convert a listed
     // foreign price to USD before it is stored (unit_price is a generated column,
@@ -276,6 +292,7 @@ export async function insertStagedQuotes(
       // we recomputed for them.
       price_source: "supplier_quote",
       price_source_at: new Date().toISOString(),
+      price_change_source: quotedBefore.has(approvedKey(r.orgId, r.supplierName ?? null, r.materialName ?? null)) ? "supplier" : "none",
       case_size: r.caseSize,
       unit_price_gap_reason: gapReason,
       unit_of_measurement: r.unitOfMeasurement,

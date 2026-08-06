@@ -98,6 +98,46 @@ export function fmtSource(source: string | null | undefined): string {
   return source ? SOURCE_LABELS[source]?.label ?? source : "";
 }
 
+// WHY the price last moved, which is a different question from what wrote it and
+// drives a different decision: a supplier reprice makes the quote we are holding
+// stale and it has to be reissued, while pure rate drift means the seller still
+// stands behind the same number.
+const CHANGE_LABELS: Record<string, { label: string; title: string; cls: string }> = {
+  supplier: {
+    label: "supplier",
+    title: "The supplier changed their price. Any quote issued off the old number is stale and should be reissued.",
+    cls: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+  },
+  currency: {
+    label: "currency",
+    title: "Only the exchange rate moved. The supplier is still asking the same amount in their own currency.",
+    cls: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300",
+  },
+  both: {
+    label: "supplier + currency",
+    title: "The supplier repriced AND the exchange rate moved. Both columns are material.",
+    cls: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+  },
+};
+
+export function PriceChangeReason({ source }: { source: string | null | undefined }) {
+  // 'none' and null both render nothing, but they are not the same claim: 'none'
+  // means we compared and the price held, null means never evaluated. Neither is
+  // worth a badge, because a badge on an unchanged row is noise.
+  if (!source || source === "none") return null;
+  const meta = CHANGE_LABELS[source];
+  if (!meta) return null;
+  return (
+    <span className={`inline-flex w-fit items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${meta.cls}`} title={meta.title}>
+      {meta.label}
+    </span>
+  );
+}
+
+export function fmtChangeReason(source: string | null | undefined): string {
+  return source && source !== "none" ? CHANGE_LABELS[source]?.label ?? source : "";
+}
+
 export function fmtDelta(value: number | null, attributable: boolean): string {
   if (!attributable || value == null) return "n/a";
   if (Math.abs(value) < 0.01) return "0.00";

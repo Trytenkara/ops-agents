@@ -13,7 +13,7 @@ import { MarketplaceFindingActions } from "@/components/marketplace-finding-acti
 import { useListFilter, byString, byNumberDesc, byDateDesc } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
-import { DeltaCell, PriceSourceLabel, fmtDelta, fmtSource } from "@/components/price-delta-cell";
+import { DeltaCell, PriceSourceLabel, PriceChangeReason, fmtDelta, fmtSource, fmtChangeReason } from "@/components/price-delta-cell";
 import { fmtCaseDims, resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
 import { relativeTime } from "@/lib/utils";
 import { aggregatorNameOf } from "@/lib/aggregator-hosts";
@@ -129,6 +129,7 @@ export function MarketplaceFindingsList({
     fmtDelta(r.currency_delta ?? null, !!r.delta_attributable),
     r.listed_currency ?? "USD",
     fmtSource(r.price_source),
+    fmtChangeReason(r.price_change_source),
     r.created_at ?? "",
   ]);
 
@@ -153,7 +154,7 @@ export function MarketplaceFindingsList({
         {controls}
         <ListCsvButton
           filename={filenameFor(slug, "price-changes")}
-          headers={["Supplier", "Aggregator", "Material", "Pack / tier", "Case dims", "Per-unit", "$/kg", "Pack class", "QA", "On file", "Current", "Change", "Supplier delta (USD)", "Currency delta (USD)", "Listed currency", "Updated", "Last updated by"]}
+          headers={["Supplier", "Aggregator", "Material", "Pack / tier", "Case dims", "Per-unit", "$/kg", "Pack class", "QA", "On file", "Current", "Change", "Supplier delta (USD)", "Currency delta (USD)", "Listed currency", "Updated", "Last updated by", "Why it changed"]}
           rows={csvRows}
         />
       </div>
@@ -314,6 +315,7 @@ export function MarketplaceFindingsList({
                       <TableCell className="text-muted-foreground align-top text-xs" title={r.created_at ? new Date(r.created_at).toLocaleString() : undefined}>
                         {r.created_at ? relativeTime(r.created_at) : "—"}
                         <PriceSourceLabel source={r.price_source} />
+                        <PriceChangeReason source={r.price_change_source} />
                       </TableCell>
                       <TableCell className="text-right align-top">
                         {r.kind === "on_file" ? (

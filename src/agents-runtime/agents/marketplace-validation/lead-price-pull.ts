@@ -7,6 +7,7 @@ import { screenClonedListings } from "@/lib/clone-ring";
 import { aggregatorNameOf, isAggregatorIndexUrl, isAggregatorPlatformName, shouldEnumerateAggregatorSellers } from "@/lib/aggregator-hosts";
 import { getOrgAssignmentContext, resolveOperatorId, type AssignmentContext } from "@/lib/operator-assignment";
 import { leadMarketKind } from "@/lib/lead-market";
+import { splitPriceDelta } from "@/lib/price-delta";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -901,6 +902,27 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         previous_native_price: priorNativePrice ?? (priorPull?.previous_native_price ?? null),
         previous_fx_rate: (typeof priorPull?.fx_rate === "number" ? priorPull.fx_rate : null) ?? (priorPull?.previous_fx_rate ?? null),
         history,
+        ...(() => {
+          const s = splitPriceDelta(
+            {
+              usd: priorPrice ?? null,
+              native: priorNativePrice ?? null,
+              rate: (typeof priorPull?.fx_rate === "number" ? priorPull.fx_rate : null) ?? (priorPull?.previous_fx_rate ?? null),
+              currency: priorPull?.native_currency ?? null,
+            },
+            {
+              usd: result.current_price,
+              native: result.native_price ?? null,
+              rate: result.fx_rate ?? null,
+              currency: result.native_currency ?? null,
+            },
+          );
+          return {
+            price_change_source: s.source === "none" ? (priorPull?.price_change_source ?? "none") : s.source,
+            supplier_delta_usd: s.supplierDelta,
+            currency_delta_usd: s.currencyDelta,
+          };
+        })(),
       };
     }
 
@@ -1036,6 +1058,22 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           ];
       const tiers = raw.map((t) => {
         const prior: any = priorByPack.get(packKey(t.pack_size));
+        // Persist WHY the price moved, not just that it did. Downstream has to
+        // act differently on the two causes: a supplier reprice means the quote
+        // on the platform is stale and has to be reissued, while pure FX drift
+        // means the seller still stands behind the same number. Computed here at
+        // write time (rather than only derived in the UI) so a consumer reading
+        // the row can tell them apart without re-deriving the split.
+        const priorFxTier = typeof prior?.fx_rate === "number" ? prior.fx_rate : (prior?.previous_fx_rate ?? null);
+        const changeSplit = splitPriceDelta(
+          {
+            usd: typeof prior?.price === "number" ? prior.price : null,
+            native: typeof prior?.native_price === "number" ? prior.native_price : null,
+            rate: priorFxTier,
+            currency: prior?.native_currency ?? null,
+          },
+          { usd: t.price, native: t.native_price, rate: t.fx_rate, currency: t.native_currency },
+        );
         const priorPriceTier = prior && typeof prior.price === "number" ? prior.price : null;
         const priorNativeTier = prior && typeof prior.native_price === "number" ? prior.native_price : null;
         // Same like-for-like rule as the headline: when both scrapes have a native
@@ -1061,6 +1099,13 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           price_changed_at: moved ? nowIso : (prior?.price_changed_at ?? null),
           price_source: "marketplace_scrape",
           price_source_at: nowIso,
+          // 'supplier' | 'currency' | 'both' | 'none', plus the two amounts so a
+          // consumer never has to recompute the convention. Carried forward when
+          // this read moved nothing, so the field always describes the last real
+          // change rather than resetting to 'none' on every quiet re-read.
+          price_change_source: changeSplit.source === "none" ? (prior?.price_change_source ?? "none") : changeSplit.source,
+          supplier_delta_usd: changeSplit.supplierDelta,
+          currency_delta_usd: changeSplit.currencyDelta,
         };
       });
       nextPayload.price_tiers = tiers;

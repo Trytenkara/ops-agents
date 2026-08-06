@@ -136,6 +136,14 @@ async function refreshLeads(
       // seller is still asking it.
       nextPull.price_source = "fx_refresh";
       nextPull.price_source_at = fx.fetchedAt;
+      // Nothing here reads a page, so any move this pass makes is the rate and
+      // only the rate. Stating that explicitly is what lets a consumer skip
+      // reissuing a quote: the seller is still asking the same native amount.
+      if (touched) {
+        nextPull.price_change_source = "currency";
+        nextPull.currency_delta_usd = roundUsd(nextPull.price - (typeof pull.price === "number" ? pull.price : nextPull.price));
+        nextPull.supplier_delta_usd = 0;
+      }
 
       const tiers = Array.isArray(row.payload?.price_tiers) ? row.payload.price_tiers : [];
       let tiersTouched = 0;
@@ -155,6 +163,9 @@ async function refreshLeads(
           fx_rate: tRate,
           price_source: "fx_refresh",
           price_source_at: fx.fetchedAt,
+          ...(price !== t.price
+            ? { price_change_source: "currency", currency_delta_usd: roundUsd(price - t.price), supplier_delta_usd: 0 }
+            : {}),
         };
       });
 
@@ -211,7 +222,16 @@ async function refreshStagedQuotes(
       if (price === q.price) continue;
       const { error: upErr } = await admin
         .from("staged_quotes")
-        .update({ price, fx_rate: rate, fx_rate_at: fx.fetchedAt, price_source: "fx_refresh", price_source_at: fx.fetchedAt })
+        .update({
+          price,
+          fx_rate: rate,
+          fx_rate_at: fx.fetchedAt,
+          price_source: "fx_refresh",
+          price_source_at: fx.fetchedAt,
+          price_change_source: "currency",
+          currency_delta_usd: roundUsd(price - Number(q.price ?? price)),
+          supplier_delta_usd: 0,
+        })
         .eq("id", q.id);
       if (upErr) {
         result.errors++;

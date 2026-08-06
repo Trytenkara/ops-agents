@@ -6,7 +6,7 @@ import { relativeTime } from "@/lib/utils";
 import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
-import { DeltaCell, PriceSourceLabel, fmtDelta, fmtSource } from "@/components/price-delta-cell";
+import { DeltaCell, PriceSourceLabel, PriceChangeReason, fmtDelta, fmtSource, fmtChangeReason } from "@/components/price-delta-cell";
 
 export type DirectPriceRow = {
   id: string;
@@ -36,6 +36,7 @@ export type DirectPriceRow = {
   grade: string | null;
   status: string | null;
   priceSource: string | null;
+  priceChangeSource: string | null;
   createdAt: string | null;
   caseDims: string | null;
 };
@@ -86,6 +87,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
     r.status ?? "",
     r.createdAt ?? "",
     fmtSource(r.priceSource),
+    fmtChangeReason(r.priceChangeSource),
   ]);
 
   return (
@@ -109,6 +111,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
             "Status",
             "Updated",
             "Last updated by",
+            "Why it changed",
           ]}
           rows={csvRows}
         />
@@ -170,6 +173,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
                     {directPctChange(r)! > 0 ? "+" : ""}{directPctChange(r)!.toFixed(1)}%
                   </span>
                 )}
+                <PriceChangeReason source={r.priceChangeSource} />
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 <DeltaCell value={r.supplierDelta} attributable={r.supplierAttributable} kind="supplier" />
