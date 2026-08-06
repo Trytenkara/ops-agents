@@ -4,10 +4,13 @@ import { refreshStaleClientProfiles } from "@/lib/client-profile";
 import { syncAllClientSettings } from "@/lib/tenkara-client-settings";
 import { recheckOrgLeads } from "@/lib/requirements-recheck";
 
-// Wall-clock this run will spend re-judging leads after a requirements change,
-// leaving the rest of the function budget to the research sweep. Anything not
-// reached keeps its old fingerprint, so the next hourly run resumes it.
-const RECHECK_BUDGET_MS = 120_000;
+// Wall-clock this run will spend re-judging leads after a requirements change.
+// Deliberately a small slice of the 300s this agent's invocation gets: the
+// research sweep below already times out on its own sometimes, and starving it
+// would trade one stale thing for another. The re-check is resumable and runs
+// every cycle, so a small slice per run still drains a large backlog quickly;
+// anything not reached keeps its old fingerprint and is picked up next cycle.
+const RECHECK_BUDGET_MS = 45_000;
 
 // Agent 12 - Client Profile.
 //
