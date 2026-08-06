@@ -180,9 +180,14 @@ export async function seedQuoteProfilesFromStaged(
   // A reply-driven quote belongs on the packless profile, never on one of a
   // marketplace ladder's tier rows — those are public listing prices this
   // supplier never negotiated.
+  // Keyed on the supplier NAME, so a nameless quote would key on the material
+  // alone and collide with every other nameless quote for it — the second
+  // supplier's quote would be swallowed as an update to the first. Nameless
+  // quotes are excluded from the index and always insert.
   const existingByKey = new Map<string, QuoteProfile>();
   for (const p of existing) {
-    const key = `${p.supplier_name?.toLowerCase()}|${p.material_name?.toLowerCase()}`;
+    if (!p.supplier_name?.trim()) continue;
+    const key = `${p.supplier_name.toLowerCase()}|${p.material_name?.toLowerCase()}`;
     const prev = existingByKey.get(key);
     if (!prev || (prev.pack_size && !p.pack_size)) existingByKey.set(key, p);
   }
@@ -191,8 +196,9 @@ export async function seedQuoteProfilesFromStaged(
   // Counts every write, not just inserts: see the same fix in supplier-profiles.
   let touched = 0;
   for (const s of staged as any[]) {
-    const key = `${(s.supplier_name ?? "").toLowerCase()}|${(s.material_name ?? "").toLowerCase()}`;
-    const current = existingByKey.get(key);
+    const supplierKey = (s.supplier_name ?? "").trim().toLowerCase();
+    const key = `${supplierKey}|${(s.material_name ?? "").toLowerCase()}`;
+    const current = supplierKey ? existingByKey.get(key) : undefined;
     const dims = s.case_dimensions ?? {};
     try {
       const generatedNotes = [

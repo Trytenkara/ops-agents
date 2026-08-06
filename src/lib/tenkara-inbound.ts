@@ -144,7 +144,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   if (inboundOrg?.replyTag) {
     const { data: tagRef, error } = await admin
       .from("draft_references")
-      .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata")
+      .select("id, org_id, supplier_id, material_id, thread_id, subject, assigned_operator, metadata")
       .eq("email_client", "rod_app")
       .eq("org_id", inboundOrg.orgId)
       .eq("metadata->>reply_tag", inboundOrg.replyTag)
@@ -161,7 +161,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   if (!ref && msg.in_reply_to_draft_id) {
     let lookup = admin
       .from("draft_references")
-      .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata")
+      .select("id, org_id, supplier_id, material_id, thread_id, subject, assigned_operator, metadata")
       .eq("draft_id", msg.in_reply_to_draft_id)
       .eq("email_client", "rod_app");
     if (inboundOrg) lookup = lookup.eq("org_id", inboundOrg.orgId);
@@ -172,7 +172,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
   if (!ref) {
     let lookup = admin
       .from("draft_references")
-      .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata")
+      .select("id, org_id, supplier_id, material_id, thread_id, subject, assigned_operator, metadata")
       .eq("thread_id", msg.conversation_id)
       .eq("email_client", "rod_app");
     if (inboundOrg) lookup = lookup.eq("org_id", inboundOrg.orgId);
@@ -198,7 +198,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
       if (alias) {
         let aliasRefQuery = admin
           .from("draft_references")
-          .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata")
+          .select("id, org_id, supplier_id, material_id, thread_id, subject, assigned_operator, metadata")
           .eq("org_id", inboundOrg.orgId)
           .eq("email_client", "rod_app");
         aliasRefQuery = alias.draft_ref_id ? aliasRefQuery.eq("id", alias.draft_ref_id) : aliasRefQuery.eq("thread_id", alias.thread_id);
@@ -229,7 +229,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     if (senderDomain && !GENERIC_EMAIL_DOMAINS.has(senderDomain)) {
       const { data: domainRefs, error } = await admin
         .from("draft_references")
-        .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata")
+        .select("id, org_id, supplier_id, material_id, thread_id, subject, assigned_operator, metadata")
         .eq("email_client", "rod_app")
         .eq("org_id", inboundOrg.orgId)
         .filter("metadata->>supplier_contact_email", "ilike", `%@${senderDomain}`)
@@ -258,7 +258,7 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     if (fromAddr) {
       const { data: addrRefs, error } = await admin
         .from("draft_references")
-        .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata")
+        .select("id, org_id, supplier_id, material_id, thread_id, subject, assigned_operator, metadata")
         .eq("email_client", "rod_app")
         .eq("org_id", inboundOrg.orgId)
         .filter("metadata->>supplier_contact_email", "ilike", fromAddr)
@@ -379,7 +379,23 @@ export async function handleInboundReply(admin: Admin, msg: InboundMessage): Pro
     .eq("id", ref.id);
 
   // 4. Pull lead context for a better reply (supplier/material/contact names).
+  // Only the originating cold_outbound ref carries lead_id; followups and prior
+  // inbound replies do not. `ref` is the NEWEST ref on the thread, so from turn
+  // two onward it has none, and every downstream consumer (reply context, quote
+  // staging) loses the supplier. Fall back to the thread's originating ref.
   let leadId = refMeta.lead_id as string | undefined;
+  if (!leadId && ref.thread_id) {
+    const { data: originRef } = await admin
+      .from("draft_references")
+      .select("metadata")
+      .eq("thread_id", ref.thread_id)
+      .eq("email_client", "rod_app")
+      .not("metadata->>lead_id", "is", null)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    leadId = (originRef?.metadata as any)?.lead_id as string | undefined;
+  }
   let leadRow: any = null;
   if (leadId) {
     const { data } = await admin

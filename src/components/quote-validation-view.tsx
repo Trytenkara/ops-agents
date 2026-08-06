@@ -25,6 +25,7 @@ import {
 import type { ClientDocRules } from "@/lib/tenkara-requirements";
 
 interface SupplierQuoteGroup {
+  key: string;
   supplierName: string;
   supplierId: string | null;
   operatorName: string | null;
@@ -152,10 +153,13 @@ export function QuoteValidationView({
   // Group quotes by supplier
   const groupMap = new Map<string, SupplierQuoteGroup>();
   for (const q of profiles) {
-    const key = q.supplier_id ?? q.supplier_name.toLowerCase();
+    // A nameless quote gets its own card keyed by its id. Grouping them by the
+    // empty name instead merges unrelated suppliers into one card that reads as
+    // a single supplier's quotes.
+    const key = q.supplier_id ?? (q.supplier_name.trim() ? q.supplier_name.toLowerCase() : `quote:${q.id}`);
     let group = groupMap.get(key);
     if (!group) {
-      group = { supplierName: q.supplier_name, supplierId: q.supplier_id, operatorName: operatorFor(q), quotes: [] };
+      group = { key, supplierName: q.supplier_name, supplierId: q.supplier_id, operatorName: operatorFor(q), quotes: [] };
       groupMap.set(key, group);
     }
     group.quotes.push(q);
@@ -354,7 +358,7 @@ export function QuoteValidationView({
       {/* Supplier groups */}
       <div className="space-y-2">
         {groups.map((g) => {
-          const key = g.supplierId ?? g.supplierName;
+          const key = g.key;
           const isExpanded = expandedSupplier === key;
           const avgPct = g.quotes.length
             ? Math.round(g.quotes.reduce((s, q) => s + quoteCompleteness(q).pct, 0) / g.quotes.length)
@@ -376,7 +380,9 @@ export function QuoteValidationView({
               >
                 <div className="flex items-center gap-3 min-w-0">
                   <span className="text-xs text-muted-foreground">{isExpanded ? "v" : ">"}</span>
-                  <span className="font-serif text-lg font-semibold truncate">{g.supplierName}</span>
+                  <span className={`font-serif text-lg font-semibold truncate${g.supplierName.trim() ? "" : " italic text-muted-foreground"}`}>
+                    {g.supplierName.trim() || "Unknown supplier"}
+                  </span>
                   {kinds.map((k) => (
                     <Badge key={k} variant={MARKET_KIND_VARIANT[k]} title={MARKET_KIND_TITLE[k]}>
                       {k === "aggregator" && aggregators.length === 1
