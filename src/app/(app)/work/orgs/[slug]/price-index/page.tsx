@@ -296,7 +296,8 @@ export default async function OrgPriceIndexPage({
     const kind = leadMarketKind(l.payload?.site_type);
     if (kind && l.supplier_name) supplierTypes[`name:${l.supplier_name.toLowerCase()}`] = kind;
   }
-  for (const p of await getSupplierProfiles(admin, org.id).catch(() => [])) {
+  const supplierProfiles = await getSupplierProfiles(admin, org.id).catch(() => []);
+  for (const p of supplierProfiles) {
     if (!p.supplier_type) continue;
     if (p.supplier_id) supplierTypes[`id:${p.supplier_id}`] = p.supplier_type;
     supplierTypes[`name:${p.supplier_name.toLowerCase()}`] = p.supplier_type;
@@ -378,6 +379,7 @@ export default async function OrgPriceIndexPage({
             canAct={canAct}
             slug={org.slug}
             orgId={org.id}
+            suppliers={supplierProfiles.map((p) => ({ id: p.supplier_id, name: p.supplier_name }))}
             supplierTypes={supplierTypes}
             supplierOperators={supplierOperators}
             currentUserName={assignmentCtx.pool.find((op) => op.id === session.userId)?.name ?? null}

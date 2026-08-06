@@ -40,6 +40,16 @@ export type SupplierOperatorMap = Record<string, string>;
 // back to the supplier's validated type.
 export type SupplierTypeMap = Record<string, MarketKind>;
 
+// Suppliers already on file for this org, so adding a quote is a pick from a
+// list rather than a retype of a name that has to match exactly.
+export type SupplierChoice = { id: string | null; name: string };
+
+const NEW_SUPPLIER = "__new__";
+
+function supplierKey(s: SupplierChoice): string {
+  return s.id ? `id:${s.id}` : `name:${s.name.toLowerCase()}`;
+}
+
 function quoteMarketKind(q: QuoteProfile, types: SupplierTypeMap): MarketKind | null {
   if (aggregatorNameOf(q.source_url)) return "aggregator";
   const byId = q.supplier_id ? types[`id:${q.supplier_id}`] : undefined;
@@ -80,11 +90,13 @@ export function QuoteValidationView({
   currentUserName = null,
   supplierDocs,
   clientRules = {},
+  suppliers = [],
 }: {
   profiles: QuoteProfile[];
   canAct: boolean;
   slug: string;
   orgId: string;
+  suppliers?: SupplierChoice[];
   supplierTypes?: SupplierTypeMap;
   supplierOperators?: SupplierOperatorMap;
   currentUserName?: string | null;
@@ -118,6 +130,19 @@ export function QuoteValidationView({
     }
     group.quotes.push(q);
   }
+
+  // Every supplier an operator could add a quote for: the org's roster plus any
+  // supplier that only exists on a quote so far.
+  const supplierChoices = new Map<string, SupplierChoice>();
+  for (const s of [...suppliers, ...Array.from(groupMap.values()).map((g) => ({ id: g.supplierId, name: g.supplierName }))]) {
+    if (!s.name) continue;
+    const key = s.name.toLowerCase();
+    const current = supplierChoices.get(key);
+    // Same supplier reached twice (roster + quote): keep the one carrying an id,
+    // so the new quote links instead of only name-matching.
+    if (!current || (!current.id && s.id)) supplierChoices.set(key, s);
+  }
+  const supplierList = Array.from(supplierChoices.values()).sort((a, b) => a.name.localeCompare(b.name));
 
   const searchOptions: SearchOption[] = [
     ...Array.from(groupMap.values()).map((g) => ({ value: g.supplierName, group: "Suppliers" })),
@@ -246,16 +271,16 @@ export function QuoteValidationView({
         <span className="text-muted-foreground">{totalSuppliers} supplier{totalSuppliers !== 1 ? "s" : ""}</span>
         <span className="text-muted-foreground">{totalQuotes} quote{totalQuotes !== 1 ? "s" : ""}</span>
         <span className="text-muted-foreground">Avg completeness: {avgCompleteness}%</span>
-        {canAct && (
-          <Button variant="outline" size="sm" onClick={() => setShowAddQuote(true)}>
-            Add quote
+        {canAct && !showAddQuote && (
+          <Button size="sm" className="ml-auto" onClick={() => setShowAddQuote(true)}>
+            + Add quote
           </Button>
         )}
       </div>
 
       {/* Add quote form */}
       {showAddQuote && canAct && (
-        <AddQuoteForm orgId={orgId} onClose={() => setShowAddQuote(false)} />
+        <AddQuoteForm orgId={orgId} suppliers={supplierList} onClose={() => setShowAddQuote(false)} />
       )}
 
       {/* Filters */}
@@ -389,6 +414,9 @@ export function QuoteValidationView({
             <p className="text-sm text-muted-foreground">
               No quote profiles yet. Agent 06 builds them automatically from staged quotes and marketplace listings, or add one manually.
             </p>
+            {canAct && !showAddQuote && (
+              <Button size="sm" onClick={() => setShowAddQuote(true)}>+ Add quote</Button>
+            )}
           </div>
         )}
       </div>
@@ -396,20 +424,34 @@ export function QuoteValidationView({
   );
 }
 
-function AddQuoteForm({ orgId, onClose }: { orgId: string; onClose: () => void }) {
-  const [supplierName, setSupplierName] = useState("");
+function AddQuoteForm({
+  orgId,
+  suppliers,
+  onClose,
+}: {
+  orgId: string;
+  suppliers: SupplierChoice[];
+  onClose: () => void;
+}) {
+  const [picked, setPicked] = useState("");
+  const [newSupplierName, setNewSupplierName] = useState("");
   const [materialName, setMaterialName] = useState("");
   const [creating, startCreate] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
+  const isNew = picked === NEW_SUPPLIER;
+  const selected = suppliers.find((s) => supplierKey(s) === picked) ?? null;
+  const supplierName = isNew ? newSupplierName.trim() : selected?.name ?? "";
+
   function handleCreate() {
-    if (!supplierName.trim() || !materialName.trim()) {
-      setError("Supplier and material names are required");
+    if (!supplierName || !materialName.trim()) {
+      setError("Pick a supplier (or enter a new one) and a material name");
       return;
     }
     startCreate(async () => {
       const res = await createQuoteProfile(orgId, {
-        supplier_name: supplierName.trim(),
+        supplier_id: isNew ? null : selected?.id ?? null,
+        supplier_name: supplierName,
         material_name: materialName.trim(),
       });
       if (res.ok) onClose();
@@ -422,8 +464,27 @@ function AddQuoteForm({ orgId, onClose }: { orgId: string; onClose: () => void }
       <h4 className="text-sm font-semibold">Add new quote</h4>
       <div className="flex flex-wrap gap-3">
         <label className="flex flex-col gap-1 flex-1 min-w-[14rem]">
-          <span className="text-xs text-muted-foreground">Supplier name</span>
-          <Input value={supplierName} onChange={(e) => setSupplierName(e.target.value)} className="h-8" placeholder="e.g. Acme Chemicals" />
+          <span className="text-xs text-muted-foreground">Supplier</span>
+          <Select
+            size="sm"
+            ariaLabel="Supplier"
+            placeholder={suppliers.length ? "Select a supplier…" : "No suppliers on file yet"}
+            value={picked}
+            onValueChange={setPicked}
+            options={[
+              ...suppliers.map((s) => ({ value: supplierKey(s), label: s.name })),
+              { value: NEW_SUPPLIER, label: "+ Supplier not listed…" },
+            ]}
+          />
+          {isNew && (
+            <Input
+              autoFocus
+              value={newSupplierName}
+              onChange={(e) => setNewSupplierName(e.target.value)}
+              className="h-8"
+              placeholder="New supplier name, e.g. Acme Chemicals"
+            />
+          )}
         </label>
         <label className="flex flex-col gap-1 flex-1 min-w-[14rem]">
           <span className="text-xs text-muted-foreground">Material name</span>
@@ -456,13 +517,9 @@ function AddQuoteForSupplier({
 
   if (!show) {
     return (
-      <button
-        type="button"
-        onClick={() => setShow(true)}
-        className="text-xs text-muted-foreground hover:text-foreground border border-dashed rounded px-3 py-1.5"
-      >
+      <Button variant="outline" size="sm" onClick={() => setShow(true)} className="border-primary/40 text-primary hover:bg-primary/10">
         + Add quote for {supplierName}
-      </button>
+      </Button>
     );
   }
 
