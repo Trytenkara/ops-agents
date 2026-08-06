@@ -28,6 +28,11 @@ export interface AssignmentOperator {
   autoAssignable: boolean;
 }
 
+// Operators who actually end up holding something. Not the pool size: everyone
+// excluded from the auto loop stays in the pool and receives nothing, so quoting
+// the pool would claim a wider spread than the rebalance delivers.
+const receiving = (r: RebalancePreview) => r.projected.filter((p) => p.suppliers > 0).length;
+
 interface RebalancePreview {
   poolSize: number;
   claimsCleared: number;
@@ -114,8 +119,9 @@ export function OrgAssignmentSettings({
         return;
       }
       setPreview(null);
+      const landed = receiving(data);
       setMsg(
-        `Rebalanced across ${data.poolSize} operator${data.poolSize === 1 ? "" : "s"}: ` +
+        `Rebalanced across ${landed} operator${landed === 1 ? "" : "s"}: ` +
           `${data.claimsCleared + data.claimsMoved} supplier${data.claimsCleared + data.claimsMoved === 1 ? "" : "s"}, ` +
           `${data.leadsCleared + data.leadsMoved} lead${data.leadsCleared + data.leadsMoved === 1 ? "" : "s"}, ` +
           `${data.draftsMoved} thread${data.draftsMoved === 1 ? "" : "s"} moved.`
@@ -260,12 +266,15 @@ export function OrgAssignmentSettings({
                 Moves {preview.claimsCleared + preview.claimsMoved} supplier
                 {preview.claimsCleared + preview.claimsMoved === 1 ? "" : "s"},{" "}
                 {preview.leadsCleared + preview.leadsMoved} lead{preview.leadsCleared + preview.leadsMoved === 1 ? "" : "s"} and{" "}
-                {preview.draftsMoved} email thread{preview.draftsMoved === 1 ? "" : "s"} across {preview.poolSize} operator
-                {preview.poolSize === 1 ? "" : "s"}.
+                {preview.draftsMoved} email thread{preview.draftsMoved === 1 ? "" : "s"} across {receiving(preview)} operator
+                {receiving(preview) === 1 ? "" : "s"}
+                {receiving(preview) < preview.poolSize
+                  ? `, of ${preview.poolSize} on the org (the rest are out of the auto loop).`
+                  : "."}
               </p>
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 {preview.projected.map((p) => (
-                  <span key={p.id}>
+                  <span key={p.id} className={p.suppliers === 0 ? "opacity-50" : undefined}>
                     {p.name} {p.suppliers}
                   </span>
                 ))}
