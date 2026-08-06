@@ -65,9 +65,14 @@ async function findUnreachedContacts(
 
 const MAX_PER_RUN = 50;
 
+// A staged draft the operator hasn't acted on yet. While one of these is sitting
+// in a thread the sequence is paused: nudge #2 says "circling back", which is a
+// lie if nudge #1 never left the outbox.
+const PENDING_DRAFT_STATUS = new Set(["staged", "reviewed"]);
+
 // No-reply nudge delays and calling-escalation grace are resolved per-org (see
-// lib/agent-timing.ts): the compressed test cadence applies only to the Sierra
-// test org, every other org uses the prod defaults (4d/8d nudges, ~day-10 call).
+// lib/agent-timing.ts): the compressed test cadence applies only to orgs on the
+// fast-track list, every other org uses the prod defaults (4d/8d, ~day-10 call).
 const MAX_ESCALATIONS_PER_RUN = 50;
 const TERMINAL = new Set(["stale", "closed_declined", "finalized", "price_captured", "escalated_to_calling"]);
 
@@ -100,7 +105,7 @@ async function escalateToCalling(
   admin: Admin,
   r: any,
   meta: any,
-  followupTotal: number
+  followupsSent: number
 ): Promise<boolean> {
   const { data: existing } = await admin
     .from("cases")
@@ -122,6 +127,10 @@ async function escalateToCalling(
 
   const supplierName = meta.supplier_name ?? r.supplier_id ?? "supplier";
   const materialName = meta.material_name ?? null;
+  const silence =
+    followupsSent > 0
+      ? `no reply after ${followupsSent} email follow-up${followupsSent === 1 ? "" : "s"}`
+      : "no reply to the initial sourcing inquiry";
   const { error: caseErr } = await admin.from("cases").insert({
     org_id: r.org_id,
     type: "calling_escalation",
@@ -129,7 +138,7 @@ async function escalateToCalling(
     supplier_id: r.supplier_id ?? null,
     material_id: r.material_id ?? null,
     originating_thread_id: r.thread_id ?? null,
-    recommended_action: `Call ${supplierName}${materialName ? ` re: ${materialName}` : ""} — no reply after ${followupTotal} email follow-ups. Confirm the RFQ was received and the right contact, and request a quote.`,
+    recommended_action: `Call ${supplierName}${materialName ? ` re: ${materialName}` : ""}, ${silence}. Confirm the sourcing inquiry was received and the right contact, and request a quote.`,
     assigned_operator: r.assigned_operator ?? null,
     metadata: {
       source_agent: "agent-15-reply-manager",
@@ -153,8 +162,29 @@ async function escalateToCalling(
     .from("draft_references")
     .update({ metadata: { ...meta, calling_escalated_at: new Date().toISOString(), flow_status: "escalated_to_calling" } })
     .eq("id", r.id);
-  await ctx.log(`Calling escalation opened for ${supplierName} (no reply after ${followupTotal} follow-ups)`, { step: "calling_escalation" });
+  await ctx.log(`Calling escalation opened for ${supplierName} (${silence})`, { step: "calling_escalation" });
   return true;
+}
+
+// Follow-up drafts already staged into a thread, keyed by thread id. The sequence
+// position is derived from these rows rather than from a counter stamped at stage
+// time, so a nudge the operator never sent can't advance the sequence.
+async function loadFollowupsByThread(admin: Admin, threadIds: string[]): Promise<Map<string, any[]>> {
+  const byThread = new Map<string, any[]>();
+  for (let i = 0; i < threadIds.length; i += 100) {
+    const { data } = await admin
+      .from("draft_references")
+      .select("thread_id, status, reviewed_at, created_at")
+      .in("thread_id", threadIds.slice(i, i + 100))
+      .eq("metadata->>draft_kind", "no_reply_followup");
+    for (const d of (data ?? []) as any[]) {
+      if (!d.thread_id) continue;
+      const list = byThread.get(d.thread_id);
+      if (list) list.push(d);
+      else byThread.set(d.thread_id, [d]);
+    }
+  }
+  return byThread;
 }
 
 export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ drafted: number; skipped: number; escalated: number }> {
@@ -183,32 +213,60 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
   // paused org's in-flight RFQs stop getting follow-ups.
   const orgStatuses = await loadOrgStatuses(admin);
 
+  const followupsByThread = await loadFollowupsByThread(
+    admin,
+    Array.from(new Set(((sent ?? []) as any[]).map((r) => r.thread_id).filter(Boolean)))
+  );
+
   const now = Date.now();
   for (const r of (sent ?? []) as any[]) {
     if (drafted >= MAX_PER_RUN) break;
     const meta = (r.metadata ?? {}) as any;
-    const fu = Number(meta.followup_count ?? 0);
     if (TERMINAL.has(meta.flow_status)) continue;
     if (!outreachAllowed(orgStatuses.byOaId.get(r.org_id) ?? "off")) continue;
 
-    // Per-org cadence: compressed only for the Sierra test org, prod defaults elsewhere.
+    const sentAt = r.reviewed_at ? new Date(r.reviewed_at).getTime() : null;
+    if (!sentAt) continue;
+    // The sequence is tracked per thread; without one there's nothing to reply
+    // into and no way to see the nudges we already wrote.
+    if (!r.thread_id) continue;
+
+    // Where this thread actually stands: a nudge still awaiting the operator
+    // pauses the sequence, and only nudges they acted on advance it.
+    const priorFollowups = followupsByThread.get(r.thread_id) ?? [];
+    const awaitingOperator = priorFollowups.some((d) => PENDING_DRAFT_STATUS.has(d.status));
+    const acted = priorFollowups.filter((d) => !PENDING_DRAFT_STATUS.has(d.status));
+    const fu = acted.length;
+    const followupsSent = acted.filter((d) => d.status === "sent").length;
+    const lastOutboundAt = acted.reduce(
+      (max, d) => Math.max(max, new Date(d.reviewed_at ?? d.created_at).getTime()),
+      sentAt
+    );
+
+    // Per-org cadence: compressed only for the fast-track orgs, prod defaults elsewhere.
     const followupDelays = followupDelaysMs(r.org_id);
 
-    // Both follow-ups sent and still silent → escalate to a phone call once the
+    // Both follow-ups out and still silent → escalate to a phone call once the
     // grace window has elapsed. Stamped via calling_escalated_at so we only do
     // this once per conversation.
     if (fu >= followupDelays.length) {
       if (meta.calling_escalated_at) continue;
       if (escalated >= MAX_ESCALATIONS_PER_RUN) continue;
-      const lastFu = meta.last_followup_at ? new Date(meta.last_followup_at).getTime() : null;
-      if (!lastFu || (now - lastFu) < callingEscalateAfterMs(r.org_id)) continue; // grace not elapsed
-      if (await escalateToCalling(ctx, admin, r, meta, followupDelays.length)) escalated++;
+      if ((now - lastOutboundAt) < callingEscalateAfterMs(r.org_id)) continue; // grace not elapsed
+      if (await escalateToCalling(ctx, admin, r, meta, followupsSent)) escalated++;
       continue;
     }
 
-    const sentAt = r.reviewed_at ? new Date(r.reviewed_at).getTime() : null;
-    if (!sentAt) continue;
-    if ((now - sentAt) < followupDelays[fu]) continue; // not due yet
+    if (awaitingOperator) continue; // nudge #N still unsent, don't write #N+1 over it
+
+    // Due on the original cadence (days since the RFQ), but never closer to the
+    // previous nudge than that cadence's own spacing — an operator who sends
+    // nudge #1 late shouldn't get nudge #2 on the next tick.
+    const dueAt = Math.max(
+      sentAt + followupDelays[fu],
+      fu > 0 ? lastOutboundAt + (followupDelays[fu] - followupDelays[fu - 1]) : 0
+    );
+    if (now < dueAt) continue; // not due yet
 
     const to = meta.supplier_contact_email as string | undefined;
     if (!to) {
@@ -261,9 +319,17 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
           .eq("reservation_id", ccReservationId)
           .eq("claim_status", "reserved");
       }
+      // followup_count is what the operator sees as "N follow-ups sent", so it
+      // records nudges that actually went out, not the one just staged.
       await admin
         .from("draft_references")
-        .update({ metadata: { ...meta, followup_count: fu + 1, last_followup_at: new Date().toISOString() } })
+        .update({
+          metadata: {
+            ...meta,
+            followup_count: followupsSent,
+            last_followup_at: fu > 0 ? new Date(lastOutboundAt).toISOString() : (meta.last_followup_at ?? null),
+          },
+        })
         .eq("id", r.id);
       await ctx.log(`No-reply follow-up #${fu + 1} drafted for ${meta.supplier_name ?? to}${freshCc.length ? ` (+${freshCc.length} new contact${freshCc.length === 1 ? "" : "s"} CC'd)` : ""}`, { step: "followup" });
     } else {
