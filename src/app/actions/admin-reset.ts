@@ -1,5 +1,5 @@
 "use server";
-import { getSession, hasAnyRole } from "@/lib/auth";
+import { getSession, hasAnyRole, verifyPassword } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { revalidatePath } from "next/cache";
 
@@ -32,13 +32,16 @@ export interface ResetResult {
   failed?: Record<string, string>;
 }
 
-export async function resetClientData(orgId: string, confirm: string): Promise<ResetResult> {
+export async function resetClientData(orgId: string, confirm: string, password: string): Promise<ResetResult> {
   const session = await getSession();
   if (!session) return { ok: false, error: "unauthenticated" };
   // Admin only — this is destructive and not scoped by client ownership.
   if (!hasAnyRole(session, ["admin"])) return { ok: false, error: "forbidden — admin only" };
   if (confirm !== "DELETE") return { ok: false, error: "type DELETE to confirm" };
   if (!orgId) return { ok: false, error: "no client selected" };
+  if (!(await verifyPassword(session.email, password))) {
+    return { ok: false, error: "password incorrect" };
+  }
 
   const admin = createAdminClient();
   const { data: org } = await admin.from("orgs").select("id, name").eq("id", orgId).maybeSingle();

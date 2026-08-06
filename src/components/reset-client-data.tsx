@@ -6,14 +6,15 @@ import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { resetClientData } from "@/app/actions/admin-reset";
 
-// Admin-only per-client data reset. Two-step: pick a client, then type DELETE to
-// confirm. Irreversible — wipes the client's OA working data (leads, drafts,
-// POs, quotes, cases, settings/profile/notes). Tenkara data is untouched.
+// Admin-only per-client data reset. Two-step: pick a client, then type DELETE and
+// re-enter your own password. Irreversible — wipes the client's OA working data
+// (leads, drafts, POs, quotes, cases, settings/profile/notes). Tenkara data is untouched.
 export function ResetClientData({ orgs }: { orgs: { id: string; name: string }[] }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [orgId, setOrgId] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [password, setPassword] = useState("");
   const [arming, setArming] = useState(false);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
@@ -23,7 +24,8 @@ export function ResetClientData({ orgs }: { orgs: { id: string; name: string }[]
   function run() {
     setMsg(null);
     start(async () => {
-      const r = await resetClientData(orgId, confirm);
+      const r = await resetClientData(orgId, confirm, password);
+      setPassword("");
       if (r.ok) {
         const total = Object.values(r.cleared ?? {}).reduce((a, b) => a + b, 0);
         setMsg({ kind: "ok", text: `Reset "${selectedName}" — ${total} row(s) cleared across ${Object.keys(r.cleared ?? {}).length} tables.` });
@@ -76,10 +78,21 @@ export function ResetClientData({ orgs }: { orgs: { id: string; name: string }[]
                 className="h-8 w-40 rounded-md border border-input bg-transparent px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               />
             </label>
-            <Button size="sm" variant="destructive" disabled={confirm !== "DELETE" || pending} onClick={run}>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs text-muted-foreground">Your password</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="password"
+                className="h-8 w-48 rounded-md border border-input bg-transparent px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+            </label>
+            <Button size="sm" variant="destructive" disabled={confirm !== "DELETE" || !password || pending} onClick={run}>
               {pending ? "Resetting…" : `Wipe ${selectedName || "client"}`}
             </Button>
-            <Button size="sm" variant="ghost" disabled={pending} onClick={() => { setArming(false); setConfirm(""); }}>
+            <Button size="sm" variant="ghost" disabled={pending} onClick={() => { setArming(false); setConfirm(""); setPassword(""); }}>
               Cancel
             </Button>
           </div>

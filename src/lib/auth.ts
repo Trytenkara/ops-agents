@@ -1,3 +1,4 @@
+import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -52,6 +53,20 @@ export async function getSession(): Promise<SessionContext | null> {
 export function hasAnyRole(session: SessionContext | null, roles: AppRole[]): boolean {
   if (!session) return false;
   return session.roles.some((r) => roles.includes(r));
+}
+
+// Re-authenticate the signed-in user before a destructive action ("sudo" check).
+// Uses a throwaway client so the cookie-bound session is never touched, and never
+// signs out — a global signOut here would revoke the caller's real session.
+export async function verifyPassword(email: string, password: string): Promise<boolean> {
+  if (!email || !password) return false;
+  const verifier = createSupabaseClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+  const { data, error } = await verifier.auth.signInWithPassword({ email, password });
+  return !error && !!data.user;
 }
 
 export function canSeeAgentTab(session: SessionContext | null): boolean {
