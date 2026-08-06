@@ -12,16 +12,17 @@
 // current one (n1 at f1), the USD move decomposes exactly:
 //
 //   usd1 - usd0  =  n1*f1 - n0*f0
-//                =  n0*(f1 - f0)   +   (n1 - n0)*f1
+//                =  n1*(f1 - f0)   +   (n1 - n0)*f0
 //                   \___________/       \___________/
 //                    currency delta       supplier delta
 //
-// The convention values the FX move at the OLD quantity and the seller's move at
-// the NEW rate. Any split of a product of two changing terms has to assign the
-// cross-term (Δn·Δf) to one side; putting it with the supplier delta means the
-// currency delta answers exactly "what would this have cost me if the seller had
-// not touched the price", which is the question operators actually ask. The two
-// parts always sum to the total, so the columns reconcile.
+// The convention values the FX move at the CURRENT quantity and the seller's move
+// at the OLD rate. Any split of a product of two changing terms has to assign the
+// cross-term (Δn·Δf) to one side; putting it with the currency delta means that
+// column answers "at what the seller is asking today, what is the rate costing
+// me" — an operator reading it is deciding whether to buy now at a live price, so
+// the live amount is the one worth denominating. The two parts always sum to the
+// total, so the columns reconcile.
 
 export type PriceChangeSource = "supplier" | "currency" | "both" | "none";
 
@@ -94,8 +95,8 @@ export function splitPriceDelta(prev: PriceObservation, cur: PriceObservation): 
     return { ...EMPTY, totalDelta };
   }
 
-  const currencyDelta = round(prev.native! * (cur.rate! - prev.rate!));
-  const supplierDelta = round((cur.native! - prev.native!) * cur.rate!);
+  const currencyDelta = round(cur.native! * (cur.rate! - prev.rate!));
+  const supplierDelta = round((cur.native! - prev.native!) * prev.rate!);
 
   const curMoved = materialAgainst(currencyDelta, prev.usd);
   const supMoved = materialAgainst(supplierDelta, prev.usd);
