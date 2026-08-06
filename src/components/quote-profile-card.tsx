@@ -230,10 +230,10 @@ export function QuoteProfileCard({
                 className="flex items-center gap-2 min-w-0 text-left hover:opacity-70 transition-opacity"
               >
                 <span className="text-xs text-muted-foreground w-2">{isCollapsed ? ">" : "v"}</span>
-                <CardTitle className="text-base truncate">{profile.material_name}</CardTitle>
+                <CardTitle className="text-sm truncate">{profile.material_name}</CardTitle>
               </button>
             ) : (
-              <CardTitle className="text-base">{profile.material_name}</CardTitle>
+              <CardTitle className="text-sm">{profile.material_name}</CardTitle>
             )}
             <span className="text-xs text-muted-foreground">from {profile.supplier_name}</span>
             {/* A supplier has one card per pack tier, so the rung has to be on the

@@ -376,7 +376,7 @@ export function QuoteValidationView({
               >
                 <div className="flex items-center gap-3 min-w-0">
                   <span className="text-xs text-muted-foreground">{isExpanded ? "v" : ">"}</span>
-                  <span className="font-medium text-sm truncate">{g.supplierName}</span>
+                  <span className="font-serif text-lg font-semibold truncate">{g.supplierName}</span>
                   {kinds.map((k) => (
                     <Badge key={k} variant={MARKET_KIND_VARIANT[k]} title={MARKET_KIND_TITLE[k]}>
                       {k === "aggregator" && aggregators.length === 1
