@@ -215,6 +215,13 @@ export function SupplierLeadsView({
 
   let groups = allGroups;
 
+  // Leads whose material matches the active search. Drives both the "Most leads"
+  // ranking and which material the row's chip shows, so a search for one material
+  // doesn't surface a supplier by its other, unsearched materials.
+  const query = search.trim().toLowerCase();
+  const matchingLeads = (g: SupplierGroup) =>
+    query ? g.leads.filter((l: any) => (l.material_name ?? "").toLowerCase().includes(query)) : [];
+
   // Filters
   if (search) {
     const q = search.toLowerCase();
@@ -270,8 +277,16 @@ export function SupplierLeadsView({
         // A supplier is ranked by its best lead: one material meeting the client's
         // dealbreakers is enough to make the supplier worth working.
         return bestFitRank(a) - bestFitRank(b) || b.leads.length - a.leads.length;
-      default:
-        return b.leads.length - a.leads.length;
+      default: {
+        // Under a search, "most leads" means most leads OF THE SEARCHED MATERIAL —
+        // otherwise a broad-catalog supplier with one matching lead outranks a
+        // supplier carrying five of them.
+        if (query) {
+          const byMatch = matchingLeads(b).length - matchingLeads(a).length;
+          if (byMatch !== 0) return byMatch;
+        }
+        return b.leads.length - a.leads.length || a.supplierName.localeCompare(b.supplierName);
+      }
     }
   });
 
@@ -426,7 +441,9 @@ export function SupplierLeadsView({
           const isExpanded = expandedSupplier === key;
           const isShowingLeads = showLeadsFor === key;
           const comp = g.profile ? profileCompleteness(g.profile) : null;
-          const materials = Array.from(new Set(g.leads.map((l: any) => l.material_name).filter(Boolean)));
+          const materials = Array.from(
+            new Set([...matchingLeads(g), ...g.leads].map((l: any) => l.material_name).filter(Boolean))
+          );
           const stages = { raw: 0, enriched: 0, ready_for_outreach: 0, held: 0 };
           for (const l of g.leads) {
             if (l.needs_material_name) stages.held++;

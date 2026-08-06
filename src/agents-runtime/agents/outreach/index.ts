@@ -319,8 +319,8 @@ registerAgent({
       // fix the material in Tenkara and re-run, rather than sending a supplier a
       // "the material" RFQ.
       const resolvedName =
-        (lead.material_name && lead.material_name.trim()) ||
-        (lead.material_id ? matNamesById.get(lead.material_id) ?? null : null);
+        (lead.material_id ? matNamesById.get(lead.material_id) ?? null : null) ||
+        (lead.material_name && lead.material_name.trim());
       if (!resolvedName) {
         heldForMissingName++;
         blockedSupplierKeys.add(supplierKeyForLead(lead));

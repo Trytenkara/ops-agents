@@ -200,9 +200,14 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
     const operator_name = overridesAuto(assignmentCtx, claimedAt)
       ? claimedName ?? operator_auto_name
       : operator_auto_name ?? claimedName;
+    // Tenkara wins over the stored string, which is stamped once at discovery and
+    // drifts: one material_id was carrying both "Monoethanolamine" and
+    // "Monoethanolamine (MEA)", splitting every name-keyed surface (search,
+    // supplier grouping, the outreach tracker label) into two half-empty halves.
     const resolvedName = correctMaterialSpelling(
-      (r.material_name && r.material_name.trim()) ||
-        (r.material_id ? leadNames.get(r.material_id) ?? null : null)
+      (r.material_id ? leadNames.get(r.material_id) ?? null : null) ||
+        (r.material_name && r.material_name.trim()) ||
+        null
     );
     const tenkara_assignee_name = r.supplier_id
       ? tenkaraAssigneeBySupplier.get(r.supplier_id) ?? null
