@@ -923,6 +923,15 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
             currency_delta_usd: s.currencyDelta,
             // The price to reissue a quote from when the verdict is 'both'.
             supplier_price_usd: s.supplierPriceUsd,
+            // Stamped ONLY when the seller moved. This is the column an operator
+            // reads to answer "when did this supplier last actually reprice",
+            // and it has to survive every FX restatement in between, otherwise
+            // an hourly rate pass would make every supplier look like it
+            // repriced an hour ago.
+            supplier_price_changed_at:
+              s.source === "supplier" || s.source === "both"
+                ? nowIso
+                : (priorPull?.supplier_price_changed_at ?? null),
           };
         })(),
       };
@@ -1109,6 +1118,10 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           supplier_delta_usd: changeSplit.supplierDelta,
           currency_delta_usd: changeSplit.currencyDelta,
           supplier_price_usd: changeSplit.supplierPriceUsd,
+          supplier_price_changed_at:
+            changeSplit.source === "supplier" || changeSplit.source === "both"
+              ? nowIso
+              : (prior?.supplier_price_changed_at ?? null),
         };
       });
       nextPayload.price_tiers = tiers;

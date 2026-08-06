@@ -168,3 +168,91 @@ export function fmtDelta(value: number | null, attributable: boolean): string {
   if (Math.abs(value) < 0.01) return "0.00";
   return `${value > 0 ? "+" : "-"}${Math.abs(value).toFixed(2)}`;
 }
+
+// When the SUPPLIER last moved this price, as an absolute date/time rather than
+// "2h ago". Relative time is actively misleading here now that the FX pass runs
+// hourly: every foreign row would read as freshly updated while the seller may
+// not have touched it in months.
+export function SupplierChangedCell({ at }: { at: string | null | undefined }) {
+  if (!at) {
+    return (
+      <span className="text-muted-foreground/60" title="No supplier price change recorded yet. Either this is the first price we hold, or the seller has not moved it since we started tracking.">
+        —
+      </span>
+    );
+  }
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return <span className="text-muted-foreground/60">—</span>;
+  return (
+    <span className="whitespace-nowrap tabular-nums" title={`${d.toLocaleString()} — the seller's own price moved at this time. Exchange-rate restatements do not touch it.`}>
+      {d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}{" "}
+      <span className="text-muted-foreground">{d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span>
+    </span>
+  );
+}
+
+export function fmtSupplierChanged(at: string | null | undefined): string {
+  return at ?? "";
+}
+
+// The price exactly as the seller lists it, before conversion. This is the only
+// number on the row that is not a derived figure: the USD column moves hourly
+// with the rate even when the listing has not changed, so on a foreign row this
+// is what an operator is actually negotiating against.
+export function ListedPriceCell({
+  price,
+  currency,
+}: {
+  price: number | null | undefined;
+  currency?: string | null;
+}) {
+  if (price == null || !Number.isFinite(Number(price))) {
+    return (
+      <span className="text-muted-foreground/60" title="Listed price not captured for this row. It predates native-price capture.">
+        —
+      </span>
+    );
+  }
+  return (
+    <span
+      className="whitespace-nowrap tabular-nums"
+      title={
+        currency && currency !== "USD"
+          ? `The seller's own listed price in ${currency}. It only moves when the seller reprices, unlike the USD column.`
+          : "The seller's own listed price, as read from the listing."
+      }
+    >
+      {Number(price).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+    </span>
+  );
+}
+
+export function fmtListedPrice(price: number | null | undefined): string {
+  return price != null && Number.isFinite(Number(price)) ? String(price) : "";
+}
+
+// The currency the listing was actually read in. Null is NOT rendered as USD:
+// a row we read before native capture shipped genuinely has an unknown listing
+// currency, and calling it USD would assert the price cannot move on FX.
+export function ListedCurrencyCell({ currency }: { currency: string | null | undefined }) {
+  if (!currency) {
+    return (
+      <span className="text-muted-foreground/60" title="Listing currency not captured for this row. It predates native-currency capture.">
+        —
+      </span>
+    );
+  }
+  const foreign = currency !== "USD";
+  return (
+    <span
+      className={foreign ? "font-medium text-sky-700 dark:text-sky-400" : "text-muted-foreground"}
+      title={
+        foreign
+          ? `Listed in ${currency}. The USD figure shown is converted at the current rate and moves hourly with it.`
+          : "Listed in USD. The price only moves when the seller changes it."
+      }
+    >
+      {currency}
+    </span>
+  );
+}

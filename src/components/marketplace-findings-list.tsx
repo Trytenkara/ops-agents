@@ -6,14 +6,13 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@
 import {
   formatPrice,
   perUnitPrice,
-  PctBadge,
   ClassificationBadge,
 } from "@/components/marketplace-finding-row";
 import { MarketplaceFindingActions } from "@/components/marketplace-finding-actions";
 import { useListFilter, byString, byNumberDesc, byDateDesc } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
-import { DeltaCell, PriceSourceLabel, PriceChangeReason, SupplierOnlyPrice, fmtDelta, fmtSource, fmtChangeReason, fmtSupplierOnlyPrice } from "@/components/price-delta-cell";
+import { PriceSourceLabel, PriceChangeReason, SupplierOnlyPrice, SupplierChangedCell, ListedCurrencyCell, ListedPriceCell, fmtListedPrice, fmtSource, fmtChangeReason, fmtSupplierOnlyPrice, fmtSupplierChanged } from "@/components/price-delta-cell";
 import { fmtCaseDims, resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
 import { relativeTime } from "@/lib/utils";
 import { aggregatorNameOf } from "@/lib/aggregator-hosts";
@@ -124,10 +123,9 @@ export function MarketplaceFindingsList({
     qaOf(r, densities).verdict,
     r.baseline_price ?? "",
     r.current_price ?? "",
-    r.pct_change != null ? `${r.pct_change}%` : "",
-    fmtDelta(r.supplier_delta ?? null, !!r.delta_attributable),
-    fmtDelta(r.currency_delta ?? null, !!r.delta_attributable),
-    r.listed_currency ?? "USD",
+    fmtSupplierChanged(r.supplier_price_changed_at),
+    fmtListedPrice(r.listed_price),
+    r.listed_currency ?? "",
     r.created_at ?? "",
     fmtSource(r.price_source),
     fmtChangeReason(r.price_change_source),
@@ -155,7 +153,7 @@ export function MarketplaceFindingsList({
         {controls}
         <ListCsvButton
           filename={filenameFor(slug, "price-changes")}
-          headers={["Supplier", "Aggregator", "Material", "Pack / tier", "Case dims", "Per-unit", "$/kg", "Pack class", "QA", "On file", "Current", "Change", "Supplier delta (USD)", "Currency delta (USD)", "Listed currency", "Updated", "Last updated by", "Why it changed", "Supplier-only price (USD)"]}
+          headers={["Supplier", "Aggregator", "Material", "Pack / tier", "Case dims", "Per-unit", "$/kg", "Pack class", "QA", "On file", "Current", "Supplier price changed", "Listed price", "Listed currency", "Updated", "Last updated by", "Why it changed", "Supplier-only price (USD)"]}
           rows={csvRows}
         />
       </div>
@@ -167,18 +165,14 @@ export function MarketplaceFindingsList({
             <TableHead className="text-right">Per-unit</TableHead>
             <TableHead className="text-right" title="Previous marketplace scrape for this pack size">On file</TableHead>
             <TableHead className="text-right" title="Latest marketplace scrape for this pack size">Current</TableHead>
-            <TableHead className="text-right" title="Percent change from On file to Current">Δ</TableHead>
-            <TableHead
-              className="text-right"
-              title="Of the change from On file to Current, the USD part the seller caused by repricing. Exchange-rate movement is held out."
-            >
-              Supplier Δ
+            <TableHead title="When the seller themselves last moved this price. Exchange-rate restatements do not touch it, so a stale date here means the listing has genuinely held.">
+              Supplier price changed
             </TableHead>
-            <TableHead
-              className="text-right"
-              title="Of the change from On file to Current, the USD part the exchange rate caused. The seller's listed price did not move. Adds to Supplier Δ to give the full change."
-            >
-              Currency Δ
+            <TableHead className="text-right" title="The price exactly as the listing shows it, before conversion. On a non-USD row this is the number that only moves when the seller reprices.">
+              Listed price
+            </TableHead>
+            <TableHead title="The currency this listing was originally read in. A non-USD row is reconverted hourly, so its USD figure moves on its own.">
+              Listed currency
             </TableHead>
             <TableHead>Supplier / source</TableHead>
             <TableHead>Status</TableHead>
@@ -273,17 +267,16 @@ export function MarketplaceFindingsList({
                       </TableCell>
                       <TableCell className="text-right align-top tabular-nums">{formatPrice(r.baseline_price, r.currency)}</TableCell>
                       <TableCell className="text-right align-top tabular-nums">{formatPrice(r.current_price, r.currency)}</TableCell>
-                      <TableCell className="text-right align-top tabular-nums"><PctBadge pct={r.pct_change} /></TableCell>
-                      <TableCell className="text-right align-top tabular-nums">
-                        <DeltaCell value={r.supplier_delta ?? null} attributable={!!r.delta_attributable} kind="supplier" />
+                      <TableCell className="align-top text-xs">
+                        <SupplierChangedCell at={r.supplier_price_changed_at} />
+                        <PriceChangeReason source={r.price_change_source} />
+                        <SupplierOnlyPrice source={r.price_change_source} value={r.supplier_price_usd} />
                       </TableCell>
-                      <TableCell className="text-right align-top tabular-nums">
-                        <DeltaCell
-                          value={r.currency_delta ?? null}
-                          attributable={!!r.delta_attributable}
-                          kind="currency"
-                          currency={r.listed_currency ?? null}
-                        />
+                      <TableCell className="align-top text-right text-xs">
+                        <ListedPriceCell price={r.listed_price ?? null} currency={r.listed_currency ?? null} />
+                      </TableCell>
+                      <TableCell className="align-top text-xs">
+                        <ListedCurrencyCell currency={r.listed_currency ?? null} />
                       </TableCell>
                       <TableCell className="align-top">
                         <div className="font-medium">{r.supplier_name ?? "—"}</div>
@@ -316,8 +309,6 @@ export function MarketplaceFindingsList({
                       <TableCell className="text-muted-foreground align-top text-xs" title={r.created_at ? new Date(r.created_at).toLocaleString() : undefined}>
                         {r.created_at ? relativeTime(r.created_at) : "—"}
                         <PriceSourceLabel source={r.price_source} />
-                        <PriceChangeReason source={r.price_change_source} />
-                        <SupplierOnlyPrice source={r.price_change_source} value={r.supplier_price_usd} />
                       </TableCell>
                       <TableCell className="text-right align-top">
                         {r.kind === "on_file" ? (

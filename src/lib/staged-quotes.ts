@@ -296,6 +296,10 @@ export async function insertStagedQuotes(
       // At insert the quote has not drifted yet, so the supplier-only price is
       // the price. The FX pass moves `price` away from it and leaves this here.
       supplier_price_usd: price,
+      // A quote row IS a supplier price statement, so its arrival is the moment
+      // the supplier last priced. Nothing later moves this: the FX pass restates
+      // `price` without touching it.
+      supplier_price_changed_at: new Date().toISOString(),
       case_size: r.caseSize,
       unit_price_gap_reason: gapReason,
       unit_of_measurement: r.unitOfMeasurement,

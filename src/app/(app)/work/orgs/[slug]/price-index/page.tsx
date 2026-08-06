@@ -61,7 +61,7 @@ export default async function OrgPriceIndexPage({
     admin
       .from("marketplace_check_findings")
       .select(
-        "id, supplier_name, material_name, baseline_price, current_price, currency, pack_size, pct_change, classification, status, source_url, notes, created_at, orgs(slug, name)"
+        "id, supplier_name, material_name, baseline_price, current_price, currency, pack_size, pct_change, classification, status, source_url, notes, stock_status, stock_note, out_of_stock_since, created_at, orgs(slug, name)"
       )
       .eq("org_id", org.id)
       .eq("status", status)
@@ -78,7 +78,7 @@ export default async function OrgPriceIndexPage({
       .limit(200),
     admin
       .from("staged_quotes")
-      .select("id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, currency, grade, status, created_at, case_type, case_dimensions, native_price, native_currency, fx_rate, captured_price, captured_fx_rate, extraction_notes, price_source, price_source_at, price_change_source, supplier_price_usd")
+      .select("id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, currency, grade, status, created_at, case_type, case_dimensions, native_price, native_currency, fx_rate, captured_price, captured_fx_rate, extraction_notes, price_source, price_source_at, price_change_source, supplier_price_usd, supplier_price_changed_at")
       .eq("org_id", org.id)
       .not("material_id", "is", null)
       .order("created_at", { ascending: false })
@@ -204,6 +204,9 @@ export default async function OrgPriceIndexPage({
           const src = (l.payload?.source_url ?? l.payload?.supplier_website ?? null) as string | null;
           const aggregator =
             leadMarketKind(l.payload?.site_type) === "aggregator" ? aggregatorNameFromPayload(l.payload) : null;
+          // Availability rides on the pull, not the tier: it's a property of the
+          // listing, so every pack size on that page shares it.
+          const pull = l.payload?.marketplace_pull ?? null;
           return tiers.map((t: any, i: number) => {
             // The USD move, split into the part the seller caused and the part
             // the exchange rate caused. ~20% of these listings are foreign
@@ -230,15 +233,20 @@ export default async function OrgPriceIndexPage({
               supplier_delta: split.supplierDelta,
               delta_source: split.source,
               delta_attributable: split.attributable,
+              listed_price: t.native_price ?? null,
               listed_currency: t.native_currency ?? null,
               price_source: t.price_source ?? null,
               price_change_source: t.price_change_source ?? null,
               supplier_price_usd: split.supplierPriceUsd,
+              supplier_price_changed_at: t.supplier_price_changed_at ?? t.price_changed_at ?? null,
               classification: "price_on_file",
               status: "on_file",
               currency: "USD",
               source_url: src,
               notes: null,
+              stock_status: pull?.stock_status ?? null,
+              stock_note: pull?.stock_note ?? null,
+              out_of_stock_since: pull?.out_of_stock_since ?? null,
               created_at: (l.payload?.price_tiers_updated_at ?? l.created_at ?? null) as string | null,
               kind: "on_file" as const,
             };
@@ -298,6 +306,7 @@ export default async function OrgPriceIndexPage({
     deltaSource: split.source,
     currencyAttributable: split.currencyAttributable,
     supplierAttributable: split.supplierAttributable,
+    listedPrice: s.native_price != null ? Number(s.native_price) : null,
     listedCurrency: s.native_currency ?? null,
     unitOfMeasurement: s.unit_of_measurement ?? previous?.unit_of_measurement ?? null,
     currency: s.currency ?? null,
@@ -306,6 +315,7 @@ export default async function OrgPriceIndexPage({
     priceSource: s.price_source ?? null,
     priceChangeSource: s.price_change_source ?? null,
     supplierOnlyPrice: split.supplierPriceUsd,
+    supplierPriceChangedAt: s.supplier_price_changed_at ?? s.created_at ?? null,
     createdAt: s.price_source_at ?? s.created_at ?? null,
     caseDims: fmtCaseDims({
       case_type: s.case_type ?? null,

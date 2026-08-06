@@ -6,7 +6,7 @@ import { relativeTime } from "@/lib/utils";
 import { useListFilter, byString, byDateDesc } from "@/components/use-list-filter";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
-import { DeltaCell, PriceSourceLabel, PriceChangeReason, SupplierOnlyPrice, fmtDelta, fmtSource, fmtChangeReason, fmtSupplierOnlyPrice } from "@/components/price-delta-cell";
+import { PriceSourceLabel, PriceChangeReason, SupplierOnlyPrice, SupplierChangedCell, ListedCurrencyCell, ListedPriceCell, fmtListedPrice, fmtSource, fmtChangeReason, fmtSupplierOnlyPrice, fmtSupplierChanged } from "@/components/price-delta-cell";
 
 export type DirectPriceRow = {
   id: string;
@@ -32,12 +32,14 @@ export type DirectPriceRow = {
   supplierDelta: number | null;
   currencyAttributable: boolean;
   supplierAttributable: boolean;
+  listedPrice: number | null;
   listedCurrency: string | null;
   grade: string | null;
   status: string | null;
   priceSource: string | null;
   priceChangeSource: string | null;
   supplierOnlyPrice: number | null;
+  supplierPriceChangedAt: string | null;
   createdAt: string | null;
   caseDims: string | null;
 };
@@ -79,10 +81,9 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
     r.tier ?? "",
     fmtPrice(r, true),
     fmtPrice(r),
-    directPctChange(r) != null ? `${directPctChange(r)!.toFixed(1)}%` : "",
-    fmtDelta(r.supplierDelta, r.supplierAttributable),
-    fmtDelta(r.currencyDelta, r.currencyAttributable),
-    r.listedCurrency ?? "USD",
+    fmtSupplierChanged(r.supplierPriceChangedAt),
+    fmtListedPrice(r.listedPrice),
+    r.listedCurrency ?? "",
     r.caseDims ?? "",
     r.grade ?? "",
     r.status ?? "",
@@ -104,9 +105,8 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
             "Tier / pack",
             "On file",
             "Current",
-            "Change",
-            "Supplier delta (USD)",
-            "Currency delta (USD)",
+            "Supplier price changed",
+            "Listed price",
             "Listed currency",
             "Case dims",
             "Grade",
@@ -127,18 +127,14 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
             <TableHead title="Which quantity break or pack this price is for. Each rung is priced and tracked separately.">Tier / pack</TableHead>
             <TableHead className="text-right" title="Previous captured direct price for this supplier × material × tier">On file</TableHead>
             <TableHead className="text-right" title="Latest captured direct price for this supplier × material">Current</TableHead>
-            <TableHead className="text-right" title="Percent change from On file to Current">Δ</TableHead>
-            <TableHead
-              className="text-right"
-              title="USD change caused by the supplier quoting a different number than last time, with exchange-rate movement held out."
-            >
-              Supplier Δ
+            <TableHead title="When the supplier themselves last moved this price. Exchange-rate restatements do not touch it, so a stale date here means the seller has genuinely held their price.">
+              Supplier price changed
             </TableHead>
-            <TableHead
-              className="text-right"
-              title="USD change caused by the exchange rate alone: what this quote is worth today versus the day it landed. The supplier did nothing."
-            >
-              Currency Δ
+            <TableHead className="text-right" title="The price exactly as the supplier quoted it, before conversion. On a non-USD row this is the number that only moves when the supplier reprices.">
+              Listed price
+            </TableHead>
+            <TableHead title="The currency this price was originally quoted in. A non-USD row is reconverted hourly, so its USD figure moves on its own.">
+              Listed currency
             </TableHead>
             <TableHead>Case dims</TableHead>
             <TableHead>Grade</TableHead>
@@ -168,27 +164,16 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
                   )}
                 </div>
               </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {directPctChange(r) == null ? (
-                  <span className="text-muted-foreground">—</span>
-                ) : (
-                  <span className={directPctChange(r)! > 0 ? "text-amber-700 dark:text-amber-400" : "text-emerald-700 dark:text-emerald-400"}>
-                    {directPctChange(r)! > 0 ? "+" : ""}{directPctChange(r)!.toFixed(1)}%
-                  </span>
-                )}
+              <TableCell className="text-xs">
+                <SupplierChangedCell at={r.supplierPriceChangedAt} />
                 <PriceChangeReason source={r.priceChangeSource} />
                 <SupplierOnlyPrice source={r.priceChangeSource} value={r.supplierOnlyPrice} />
               </TableCell>
-              <TableCell className="text-right tabular-nums">
-                <DeltaCell value={r.supplierDelta} attributable={r.supplierAttributable} kind="supplier" />
+              <TableCell className="text-right text-xs">
+                <ListedPriceCell price={r.listedPrice} currency={r.listedCurrency} />
               </TableCell>
-              <TableCell className="text-right tabular-nums">
-                <DeltaCell
-                  value={r.currencyDelta}
-                  attributable={r.currencyAttributable}
-                  kind="currency"
-                  currency={r.listedCurrency}
-                />
+              <TableCell className="text-xs">
+                <ListedCurrencyCell currency={r.listedCurrency} />
               </TableCell>
               <TableCell className="text-xs">
                 {r.caseDims ? (
