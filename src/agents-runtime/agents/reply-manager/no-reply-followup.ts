@@ -2,6 +2,8 @@ import { stageDraft } from "@/lib/draft-staging";
 import { followupDelaysMs, callingEscalateAfterMs } from "@/lib/agent-timing";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import type { createAdminClient } from "@/lib/supabase/admin";
+import { buildCallBrief } from "@/lib/call-brief";
+import { CallOperatorResolver, notifyCallEscalation } from "@/lib/call-escalation";
 import { randomUUID } from "crypto";
 
 // Feature #2: pull in any supplier contact we haven't reached yet as CC on this
@@ -100,12 +102,18 @@ function buildFollowupBody(opts: { contactName: string | null; material: string 
 // we never escalate the same conversation twice. Returns true if a case was
 // created. Defensive against duplicates: skips if an open calling case already
 // exists for this supplier × material × org.
+//
+// The case carries a full call brief (number, local calling window, what we
+// already sent them, what to ask for) rather than a one-line "call them": an
+// operator picking this up days later has none of the thread in their head, and
+// an escalation they have to reconstruct by hand is one they defer.
 async function escalateToCalling(
   ctx: Ctx,
   admin: Admin,
   r: any,
   meta: any,
-  followupsSent: number
+  followupsSent: number,
+  opts: { resolver: CallOperatorResolver; inquirySentAt: string | null; followupSentAt: string[] }
 ): Promise<boolean> {
   const { data: existing } = await admin
     .from("cases")
@@ -131,6 +139,27 @@ async function escalateToCalling(
     followupsSent > 0
       ? `no reply after ${followupsSent} email follow-up${followupsSent === 1 ? "" : "s"}`
       : "no reply to the initial sourcing inquiry";
+
+  const brief = await buildCallBrief(admin as any, {
+    orgId: r.org_id,
+    supplierId: r.supplier_id ?? null,
+    meta,
+    subject: r.subject ?? null,
+    threadId: r.thread_id ?? null,
+    inquirySentAt: opts.inquirySentAt,
+    followupSentAt: opts.followupSentAt,
+    followupsSent,
+  });
+
+  // Route it to a person even when the draft was never assigned: an unowned call
+  // task is one nobody makes.
+  const operator = await opts.resolver.tag(r.org_id, {
+    assignedOperator: r.assigned_operator ?? null,
+    supplierId: r.supplier_id ?? null,
+    supplierName: meta.supplier_name ?? null,
+  });
+
+  const phoneLine = brief.contact.phone ? ` on ${brief.contact.phone}` : " (no number on file, find one first)";
   const { error: caseErr } = await admin.from("cases").insert({
     org_id: r.org_id,
     type: "calling_escalation",
@@ -138,8 +167,8 @@ async function escalateToCalling(
     supplier_id: r.supplier_id ?? null,
     material_id: r.material_id ?? null,
     originating_thread_id: r.thread_id ?? null,
-    recommended_action: `Call ${supplierName}${materialName ? ` re: ${materialName}` : ""}, ${silence}. Confirm the sourcing inquiry was received and the right contact, and request a quote.`,
-    assigned_operator: r.assigned_operator ?? null,
+    recommended_action: `Call ${supplierName}${phoneLine}${materialName ? ` re: ${materialName}` : ""}, ${silence}. Confirm the sourcing inquiry was received and the right contact, and request a quote.`,
+    assigned_operator: operator.userId,
     metadata: {
       source_agent: "agent-15-reply-manager",
       source_run_id: ctx.runId,
@@ -151,6 +180,8 @@ async function escalateToCalling(
       supplier_name: meta.supplier_name ?? null,
       supplier_contact_email: meta.supplier_contact_email ?? null,
       material_name: materialName,
+      lead_id: brief.leadId,
+      call_brief: brief,
     },
   });
   if (caseErr) {
@@ -162,7 +193,17 @@ async function escalateToCalling(
     .from("draft_references")
     .update({ metadata: { ...meta, calling_escalated_at: new Date().toISOString(), flow_status: "escalated_to_calling" } })
     .eq("id", r.id);
-  await ctx.log(`Calling escalation opened for ${supplierName} (${silence})`, { step: "calling_escalation" });
+
+  const [orgSlug, orgName] = await Promise.all([
+    opts.resolver.orgSlug(r.org_id),
+    opts.resolver.orgName(r.org_id),
+  ]);
+  await notifyCallEscalation({ brief, operator, orgName, orgSlug, silence });
+
+  await ctx.log(
+    `Calling escalation opened for ${supplierName} (${silence})${operator.name ? `, assigned to ${operator.name}` : ", unassigned"}${brief.contact.phone ? "" : ", no phone on file"}`,
+    { step: "calling_escalation" }
+  );
   return true;
 }
 
@@ -232,6 +273,7 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
   );
 
   const now = Date.now();
+  const resolver = new CallOperatorResolver(admin as any);
   for (const r of (sent ?? []) as any[]) {
     if (drafted >= MAX_PER_RUN) break;
     const meta = (r.metadata ?? {}) as any;
@@ -270,7 +312,21 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
       if (meta.calling_escalated_at) continue;
       if (escalated >= MAX_ESCALATIONS_PER_RUN) continue;
       if ((now - lastOutboundAt) < callingEscalateAfterMs(r.org_id)) continue; // grace not elapsed
-      if (await escalateToCalling(ctx, admin, r, meta, followupsSent)) escalated++;
+      // The dates the operator will read back to the supplier on the call, taken
+      // from the nudges that actually went out rather than when they were staged.
+      const followupSentAt = acted
+        .filter((d) => d.status === "sent")
+        .map((d) => (d.reviewed_at ?? d.created_at) as string)
+        .filter(Boolean)
+        .sort();
+      if (
+        await escalateToCalling(ctx, admin, r, meta, followupsSent, {
+          resolver,
+          inquirySentAt: r.reviewed_at ?? null,
+          followupSentAt,
+        })
+      )
+        escalated++;
       continue;
     }
 

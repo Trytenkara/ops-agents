@@ -1,7 +1,8 @@
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { relativeTime } from "@/lib/utils";
 import { CasesList } from "@/components/cases-list";
-import { toCaseRow } from "@/lib/org-cases";
+import { CallsList } from "@/components/calls-list";
+import { toCaseRow, toCallCaseRow, isCallCase } from "@/lib/org-cases";
 
 // Renders one category of escalations: the open-case worklist plus a small
 // "recently resolved" table. Rows are pre-filtered by the caller (email /
@@ -17,12 +18,18 @@ export function CasesSection({
   slug: string;
   emptyLabel?: string;
 }) {
-  const caseRows = openRows.map(toCaseRow);
+  // Calling escalations are a phone worklist and carry a full brief (number,
+  // local calling window, thread history, the ask), which does not fit a table
+  // row. They render as cards above the rest.
+  const callRows = openRows.filter(isCallCase).map(toCallCaseRow);
+  const caseRows = openRows.filter((c) => !isCallCase(c)).map(toCaseRow);
 
   return (
     <div className="space-y-6">
+      <CallsList rows={callRows} />
+
       {caseRows.length === 0 ? (
-        <p className="text-center text-muted-foreground py-8 text-sm">{emptyLabel}</p>
+        callRows.length === 0 && <p className="text-center text-muted-foreground py-8 text-sm">{emptyLabel}</p>
       ) : (
         <CasesList rows={caseRows} slug={slug} />
       )}

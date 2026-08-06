@@ -1,17 +1,29 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 
 // Generic in-page tab switcher. Panels are server-rendered and passed in as
 // `content`; all stay mounted (hidden) so switching is instant and each panel
 // keeps its own filter state.
+//
+// `?tab=<key>` opens a specific panel, so a Slack alert can link straight to the
+// work it is about. Applied after mount rather than during render: the server has
+// no query string to render from, and seeding state from it directly would
+// hydrate a different tab than was painted.
 export function PanelTabs({
   tabs,
 }: {
   tabs: { key: string; label: string; badge?: number; content: React.ReactNode }[];
 }) {
   const [active, setActive] = useState(tabs[0]?.key);
+
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    if (requested && tabs.some((t) => t.key === requested)) setActive(requested);
+    // Deep link is read once on load; clicking a tab afterwards must win.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="space-y-4">

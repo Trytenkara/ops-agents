@@ -1,5 +1,7 @@
 import { operatorRoles, primaryRole } from "@/lib/operator";
 import type { CaseRow } from "@/components/cases-list";
+import type { CallCaseRow } from "@/components/calls-list";
+import type { CallBrief, CallAttempt } from "@/lib/call-brief";
 
 // Escalations (the `cases` table) are split across three surfaces by what kind
 // of problem they represent, so operators land on them where they already work:
@@ -40,6 +42,32 @@ export async function loadOrgCases(admin: any, orgId: string): Promise<{ openRow
     admin.from("cases").select(RESOLVED_SELECT).eq("org_id", orgId).eq("status", "resolved").order("resolved_at", { ascending: false }).limit(50),
   ]);
   return { openRows: openRes.data ?? [], resolvedRows: resolvedRes.data ?? [] };
+}
+
+// Calling escalations are a phone worklist, not a row in a table: they render as
+// their own cards inside the email Escalations tab.
+export function isCallCase(c: any): boolean {
+  return c?.type === "calling_escalation";
+}
+
+export function toCallCaseRow(c: any): CallCaseRow {
+  return {
+    id: c.id,
+    supplierId: c.supplier_id ?? null,
+    supplierName: (c.metadata?.supplier_name as string | undefined) ?? null,
+    status: c.status ?? "open",
+    createdAt: c.created_at ?? null,
+    assignedName: c.users?.display_name ?? null,
+    assignedEmail: c.users?.email ?? null,
+    assignedRole: primaryRole(operatorRoles(c.users)),
+    threadId: (c.metadata?.thread_id as string | undefined) ?? null,
+    draftId: (c.metadata?.draft_reference_id as string | undefined) ?? null,
+    // Escalations raised before this shipped have no brief. The card degrades to
+    // the recommended action rather than disappearing.
+    brief: (c.metadata?.call_brief as CallBrief | undefined) ?? null,
+    recommendedAction: c.recommended_action ?? null,
+    callLog: Array.isArray(c.metadata?.call_log) ? (c.metadata.call_log as CallAttempt[]) : [],
+  };
 }
 
 export function toCaseRow(c: any): CaseRow {
