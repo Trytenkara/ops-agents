@@ -1,10 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { relativeTime } from "@/lib/utils";
 import { OperatorChip } from "@/components/operator-chip";
 import { Select } from "@/components/ui/select";
-import { logCallAttempt, addSupplierPhoneToCase, deescalateCallCase, dropSupplierFromCallCase } from "@/app/actions/cases";
+import {
+  logCallAttempt,
+  addSupplierPhoneToCase,
+  deescalateCallCase,
+  dropSupplierFromCallCase,
+  addGranolaNotesToCase,
+  searchOrgLeadsForCall,
+  createManualCallTask,
+} from "@/app/actions/cases";
 import { CALL_OUTCOMES, type CallOutcome, type CallBrief, type CallAttempt } from "@/lib/call-brief";
 import { zoneOffsetMinutes, isWithinWindow, shiftRangeLabel } from "@/lib/call-window";
 
@@ -38,6 +47,7 @@ export type CallCaseRow = {
   brief: CallBrief | null;
   recommendedAction: string | null;
   callLog: CallAttempt[];
+  granolaNotes: string | null;
 };
 
 // The supplier's business hours expressed in the timezone of whoever is looking
@@ -230,6 +240,7 @@ const REASON_LABEL: Record<string, string> = {
   scheduled_intro_call: "Scheduled intro call, the day after the inquiry went out",
   scheduled_intro_call_replied: "Scheduled intro call, they already replied by email",
   no_reply_after_followups: "No reply to the inquiry or the follow-ups",
+  manual: "Logged manually by an operator",
 };
 
 // The two ways a call task ends other than by outcome: hand the supplier back to
@@ -429,6 +440,49 @@ function InboxBlock({ inbox }: { inbox: InboxContext }) {
   );
 }
 
+// Manual paste box for a Granola call-notes transcript. Feeds the follow-up
+// email drafted when the case goes back to the email loop, so the context from
+// the call survives past whoever took it.
+function GranolaNotesBlock({ row }: { row: CallCaseRow }) {
+  const [notes, setNotes] = useState(row.granolaNotes ?? "");
+  const [saved, setSaved] = useState(row.granolaNotes ?? "");
+  const [err, setErr] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+  const dirty = notes.trim() !== (saved ?? "").trim();
+
+  return (
+    <Panel className="space-y-2">
+      <PanelLabel>Granola call notes (optional)</PanelLabel>
+      <textarea
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        placeholder="Paste the call transcript or notes here. Used as context for the follow-up email."
+        rows={3}
+        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+      />
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          disabled={pending || !dirty}
+          onClick={() => {
+            setErr(null);
+            start(async () => {
+              const r = await addGranolaNotesToCase(row.id, notes);
+              if (!r.ok) setErr(r.error ?? "failed");
+              else setSaved(notes);
+            });
+          }}
+          className="rounded-md border border-border bg-background px-3 py-1.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
+        >
+          {pending ? "Saving…" : "Save notes"}
+        </button>
+        {!dirty && saved && <span className="text-xs text-muted-foreground">Saved</span>}
+      </div>
+      {err && <div className="text-xs text-destructive">{err}</div>}
+    </Panel>
+  );
+}
+
 function CallCard({ row, expanded, onToggle }: { row: CallCaseRow; expanded: boolean; onToggle: () => void }) {
   const brief = row.brief;
 
@@ -444,7 +498,7 @@ function CallCard({ row, expanded, onToggle }: { row: CallCaseRow; expanded: boo
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-muted-foreground">{expanded ? "▾" : "▸"}</span>
             <span className="rounded-full bg-foreground px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-background">
-              Call {row.callStage}
+              {row.callStage > 0 ? `Call ${row.callStage}` : "Manual call"}
             </span>
             <span className="text-base font-semibold tracking-tight">
               {row.supplierName ?? row.supplierId ?? "Unknown supplier"}
@@ -530,9 +584,153 @@ function CallCard({ row, expanded, onToggle }: { row: CallCaseRow; expanded: boo
       )}
 
       <OutcomeButtons row={row} />
+      <GranolaNotesBlock row={row} />
       <ClosingActions row={row} />
       </div>
       )}
+    </div>
+  );
+}
+
+// Search-as-you-type over this org's active leads, restricted to real leads
+// (never a free-typed supplier) so a stray call links up like any other one.
+type LeadOption = {
+  leadId: string;
+  supplierId: string | null;
+  supplierName: string;
+  materialName: string | null;
+  contactEmail: string | null;
+  contactName: string | null;
+};
+
+function LogStrayCallForm({ orgId, onCreated }: { orgId: string; onCreated: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [options, setOptions] = useState<LeadOption[]>([]);
+  const [pickedLeadId, setPickedLeadId] = useState<string | null>(null);
+  const [reason, setReason] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+
+  useEffect(() => {
+    if (!open) return;
+    const handle = setTimeout(() => {
+      searchOrgLeadsForCall(orgId, query).then((r) => {
+        if (r.ok) setOptions(r.leads);
+      });
+    }, 200);
+    return () => clearTimeout(handle);
+  }, [open, query, orgId]);
+
+  function reset() {
+    setOpen(false);
+    setQuery("");
+    setOptions([]);
+    setPickedLeadId(null);
+    setReason("");
+    setErr(null);
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="rounded-md border border-border bg-background px-3 py-1.5 text-sm font-medium hover:bg-muted"
+      >
+        + Log a stray call
+      </button>
+    );
+  }
+
+  const picked = options.find((o) => o.leadId === pickedLeadId) ?? null;
+
+  return (
+    <div className="tb-surface space-y-2 rounded-lg p-3">
+      <div className="flex items-center justify-between">
+        <PanelLabel>Log a stray call</PanelLabel>
+        <button type="button" onClick={reset} className="text-xs text-muted-foreground underline hover:no-underline">
+          Cancel
+        </button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Raise a call the schedule wouldn't have. Pick the supplier from this client's active leads, say why, and it
+        routes and posts exactly like an automated call task.
+      </p>
+      {!picked ? (
+        <div className="space-y-1">
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search this client's suppliers…"
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+          />
+          {options.length > 0 && (
+            <div className="max-h-48 space-y-0.5 overflow-y-auto rounded-md border border-border bg-card p-1">
+              {options.map((o) => (
+                <button
+                  key={o.leadId}
+                  type="button"
+                  onClick={() => setPickedLeadId(o.leadId)}
+                  className="block w-full rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
+                >
+                  {o.supplierName}
+                  {o.materialName && <span className="text-muted-foreground"> — {o.materialName}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between rounded-md border border-border bg-card px-3 py-2 text-sm">
+            <span>
+              <span className="font-medium">{picked.supplierName}</span>
+              {picked.materialName && <span className="text-muted-foreground"> — {picked.materialName}</span>}
+            </span>
+            <button type="button" onClick={() => setPickedLeadId(null)} className="text-xs text-primary underline hover:no-underline">
+              Change
+            </button>
+          </div>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Why this call is needed"
+            rows={2}
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+          />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={pending || !reason.trim()}
+              onClick={() => {
+                setErr(null);
+                start(async () => {
+                  const r = await createManualCallTask({ orgId, leadId: picked.leadId, reason });
+                  if (!r.ok) setErr(r.error ?? "failed");
+                  else {
+                    reset();
+                    onCreated();
+                  }
+                });
+              }}
+              className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
+            >
+              {pending ? "Creating…" : "Create call task"}
+            </button>
+            <button type="button" disabled={pending} onClick={reset} className="rounded-md border border-border bg-background px-3 py-1.5 text-sm">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {picked === null && (
+        <button type="button" onClick={reset} className="text-xs text-muted-foreground underline hover:no-underline">
+          Cancel
+        </button>
+      )}
+      {err && <div className="text-xs text-destructive">{err}</div>}
     </div>
   );
 }
@@ -544,7 +742,8 @@ function operatorKey(row: CallCaseRow): string {
   return row.assignedEmail ?? row.assignedName ?? UNASSIGNED;
 }
 
-export function CallsList({ rows }: { rows: CallCaseRow[] }) {
+export function CallsList({ rows, orgId }: { rows: CallCaseRow[]; orgId: string }) {
+  const router = useRouter();
   const [operator, setOperator] = useState(ALL);
   const [stage, setStage] = useState(ALL);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -576,7 +775,13 @@ export function CallsList({ rows }: { rows: CallCaseRow[] }) {
     (r) => (operator === ALL || operatorKey(r) === operator) && (stage === ALL || String(r.callStage) === stage)
   );
 
-  if (rows.length === 0) return null;
+  if (rows.length === 0) {
+    return (
+      <div className="flex justify-end">
+        <LogStrayCallForm orgId={orgId} onCreated={() => router.refresh()} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
@@ -603,8 +808,11 @@ export function CallsList({ rows }: { rows: CallCaseRow[] }) {
             options={stageOptions}
           />
         </label>
-        <div className="ml-auto text-xs text-muted-foreground">
-          Showing {shown.length} of {rows.length}
+        <div className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
+          <span>
+            Showing {shown.length} of {rows.length}
+          </span>
+          <LogStrayCallForm orgId={orgId} onCreated={() => router.refresh()} />
         </div>
       </div>
 

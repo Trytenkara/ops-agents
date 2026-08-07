@@ -29,11 +29,8 @@ export default async function CallsPage({ params }: { params: { slug: string } }
         collectedBy="Agent 15"
       />
 
-      {open.length === 0 ? (
-        <p className="py-8 text-center text-sm text-muted-foreground">No calls are due right now.</p>
-      ) : (
-        <CallsList rows={open} />
-      )}
+      {open.length === 0 && <p className="py-4 text-center text-sm text-muted-foreground">No calls are due right now.</p>}
+      <CallsList rows={open} orgId={org.id} />
 
       {done.length > 0 && (
         <div className="space-y-2">

@@ -3,11 +3,15 @@
 // notifies, unlike posting via a user's connected account.
 // Pass opts.channel to target a specific channel; otherwise falls back to the
 // SLACK_ESCALATION_CHANNEL_ID default.
-export async function postAgentAlert(text: string, opts?: { mentionUserId?: string; channel?: string }): Promise<boolean> {
+export async function postAgentAlert(
+  text: string,
+  opts?: { mentionUserId?: string; mentionUserIds?: string[]; channel?: string }
+): Promise<boolean> {
   const token = process.env.SLACK_BOT_TOKEN;
   const channel = opts?.channel ?? process.env.SLACK_ESCALATION_CHANNEL_ID;
   if (!token || !channel) return false;
-  const body = opts?.mentionUserId ? `<@${opts.mentionUserId}> ${text}` : text;
+  const ids = [...new Set([opts?.mentionUserId, ...(opts?.mentionUserIds ?? [])].filter(Boolean))] as string[];
+  const body = ids.length ? `${ids.map((id) => `<@${id}>`).join(" ")} ${text}` : text;
   try {
     const r = await fetch("https://slack.com/api/chat.postMessage", {
       method: "POST",

@@ -18,12 +18,14 @@ import { callBriefHeadline, type CallBrief } from "@/lib/call-brief";
 // work reaches someone who makes calls for this client rather than whoever owns
 // the supplier's inbox.
 //
-// Only a call operator is ever tagged. The email operator who sent the inquiry is
-// named in the post for context, since the caller wants to know who the supplier
-// has already heard from, but they are not pinged and the task is not theirs.
-// Where a client has named no call operator the task stays unassigned and the
-// post says so: a call routed to the email team is a ping nobody acts on, and it
-// hides the fact that nobody is doing this client's phone work.
+// The call operator is the sole owner of the task (only they are ever assigned
+// or claim it), but the Slack post @mentions both them and the email operator
+// who sent the inquiry, for information: the caller wants to know who the
+// supplier has already heard from, and the email side wants a heads-up their
+// supplier is being called. Where a client has named no call operator the task
+// stays unassigned and the post says so: a call routed to the email team is a
+// ping nobody acts on, and it hides the fact that nobody is doing this client's
+// phone work.
 
 export interface OperatorTag {
   userId: string;
@@ -166,17 +168,25 @@ export async function notifyCallEscalation(args: {
       ? ":warning: No phone number on file. Find one, or add it on the call task so the next call is one click."
       : null,
     brief.materialNames.length ? `Materials: ${brief.materialNames.join(", ")}` : null,
-    emailOwner ? `Emailed by ${emailOwner} (email operator, no action needed from them)` : null,
+    emailOwner ? `Emailed by ${emailOwner} (email operator, FYI only, this task stays with the caller)` : null,
     caller
       ? null
       : `:warning: ${args.orgName ?? "This client"} has no call operator named, so this call is unassigned. Name one under the client's operators to have calls routed.`,
     orgSlug ? `Open it: ${deepLink(`/work/orgs/${orgSlug}/calls`)}` : null,
   ].filter(Boolean) as string[];
 
-  // Only a call operator is ever @mentioned. Without a Slack id their name is
-  // printed instead, which at least says whose call it is.
+  // Tag both for information; only the caller owns/claims the task. Whoever has
+  // no Slack id gets their plain name printed instead, so the post still says
+  // who they are even when the ping can't reach them.
   const callerName = named(caller);
-  const text =
-    caller?.slackUserId ? lines.join("\n") : [callerName ? `*${callerName}*` : null, ...lines].filter(Boolean).join("\n");
-  return postAgentAlert(text, { mentionUserId: caller?.slackUserId ?? undefined }).catch(() => false);
+  const emailName = emailOwner;
+  const plainNames = [
+    !caller?.slackUserId && callerName ? `*${callerName}*` : null,
+    !routing.emailOperator?.slackUserId && emailName ? `*${emailName}*` : null,
+  ].filter(Boolean) as string[];
+  const text = [...plainNames, ...lines].join("\n");
+  const mentionUserIds = [caller?.slackUserId, routing.emailOperator?.userId !== caller?.userId ? routing.emailOperator?.slackUserId : null].filter(
+    Boolean
+  ) as string[];
+  return postAgentAlert(text, { mentionUserIds }).catch(() => false);
 }

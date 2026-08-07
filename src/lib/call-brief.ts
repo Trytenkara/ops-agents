@@ -104,6 +104,11 @@ export interface BuildCallBriefInput {
   // Whether the supplier has written back on this thread. Only ever true on an
   // intro call, since the silence stages don't fire once a reply lands.
   replied?: boolean;
+  // Set when an operator is manually logging a call the cadence never raised
+  // (a "stray" call). Overrides the auto-composed purpose/asks with whatever
+  // the operator typed, since there is no draft/thread history to compose from.
+  manualReason?: string | null;
+  manualAsks?: string[];
   now?: Date;
 }
 
@@ -209,22 +214,33 @@ export async function buildCallBrief(admin: SupabaseClient, input: BuildCallBrie
     }
   }
 
-  const purpose = input.replied
-    ? "They have replied by email. This is the scheduled intro call, so use it to build the relationship and fill whatever the thread is still missing rather than re-asking what they already answered."
-    : isIntro
-      ? "Scheduled intro call, made the day after the sourcing inquiry went out while it is still fresh. The call is to reach a human, confirm the inquiry landed with the right person, and get the quote moving before we rely on email alone."
-      : `Email is not landing. ${input.followupsSent + 1} messages sent, zero replies, so the address may be wrong, unmonitored, or filtered. The call is to find a human and confirm whether they can quote at all.`;
+  if (input.manualReason) {
+    context.unshift("Manually logged call, not part of the scheduled cadence.");
+  }
 
-  const asks = input.replied
-    ? [
-        "Read the thread first and pick up where their reply left off.",
-        `Fill any gap still outstanding on ${materialList}: price, pack size, MOQ, lead time.`,
-      ]
-    : [
-        `Confirm they received our email about ${materialList}${contactEmail ? ` at ${contactEmail}` : ""}.`,
-        "If that is the wrong address, get the name and direct email of whoever handles quotes.",
-        `Ask whether they can supply ${materialList}, and if so request price, pack size, MOQ, and lead time.`,
-      ];
+  const purpose =
+    input.manualReason ??
+    (input.replied
+      ? "They have replied by email. This is the scheduled intro call, so use it to build the relationship and fill whatever the thread is still missing rather than re-asking what they already answered."
+      : isIntro
+        ? "Scheduled intro call, made the day after the sourcing inquiry went out while it is still fresh. The call is to reach a human, confirm the inquiry landed with the right person, and get the quote moving before we rely on email alone."
+        : `Email is not landing. ${input.followupsSent + 1} messages sent, zero replies, so the address may be wrong, unmonitored, or filtered. The call is to find a human and confirm whether they can quote at all.`);
+
+  const asks =
+    input.manualAsks && input.manualAsks.length
+      ? [...input.manualAsks]
+      : input.manualReason
+        ? [`Ask whether they can supply ${materialList}, and if so request price, pack size, MOQ, and lead time.`]
+        : input.replied
+          ? [
+              "Read the thread first and pick up where their reply left off.",
+              `Fill any gap still outstanding on ${materialList}: price, pack size, MOQ, lead time.`,
+            ]
+          : [
+              `Confirm they received our email about ${materialList}${contactEmail ? ` at ${contactEmail}` : ""}.`,
+              "If that is the wrong address, get the name and direct email of whoever handles quotes.",
+              `Ask whether they can supply ${materialList}, and if so request price, pack size, MOQ, and lead time.`,
+            ];
   if (requiredGrade) {
     asks.push(`${requiredGrade} grade is a hard requirement. Do not accept an offer of a different grade.`);
   }

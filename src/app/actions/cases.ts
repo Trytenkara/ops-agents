@@ -4,7 +4,10 @@ import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAggregatorEmail } from "@/agents-runtime/agents/data-enrichment/enrich";
 import { splitDirectLeadFromMarketplace, isMarketplaceLeadPayload } from "@/lib/marketplace-direct-split";
-import { dialablePhone, CALL_OUTCOMES, type CallOutcome } from "@/lib/call-brief";
+import { dialablePhone, buildCallBrief, CALL_OUTCOMES, type CallOutcome } from "@/lib/call-brief";
+import { CallOperatorResolver, notifyCallEscalation } from "@/lib/call-escalation";
+import { stageDraft, threadCcContacts } from "@/lib/draft-staging";
+import { buildCallFollowupBody } from "@/lib/call-followup";
 
 export async function resolveCase(caseId: string, resolutionNote: string) {
   const session = await getSession();
@@ -152,15 +155,61 @@ export async function deescalateCallCase(
   if (error) return { ok: false, error: error.message } as const;
 
   const draftId = metadata.draft_reference_id as string | undefined;
+  let followupDraftRefId: string | undefined;
   if (draftId) {
-    const { data: draft } = await admin.from("draft_references").select("id, metadata").eq("id", draftId).maybeSingle();
+    const { data: draft } = await admin
+      .from("draft_references")
+      .select("id, org_id, supplier_id, material_id, agent_id, thread_id, subject, assigned_operator, metadata")
+      .eq("id", draftId)
+      .maybeSingle();
     if (draft) {
-      const meta = ((draft as any).metadata ?? {}) as Record<string, any>;
+      const draftRow = draft as any;
+      const meta = (draftRow.metadata ?? {}) as Record<string, any>;
       if (meta.flow_status === "escalated_to_calling") {
         await admin
           .from("draft_references")
           .update({ metadata: { ...meta, flow_status: "outreach_sent", deescalated_from_calling_at: new Date().toISOString() } })
           .eq("id", draftId);
+      }
+
+      // Draft the follow-up right away, reflecting whatever the call surfaced
+      // (call notes, Granola paste), and hand it to the email operator, not the
+      // caller: this task closes out with the caller, the reply is the email
+      // side's to work.
+      const contactEmail = meta.supplier_contact_email as string | undefined;
+      if (contactEmail && draftRow.org_id) {
+        const routing = await new CallOperatorResolver(admin as any).route({
+          orgId: draftRow.org_id,
+          assignedOperator: draftRow.assigned_operator ?? null,
+          supplierId: draftRow.supplier_id ?? null,
+          supplierName: (meta.supplier_name as string | undefined) ?? null,
+        });
+        const cc = await threadCcContacts(admin as any, draftRow.thread_id, contactEmail);
+        const callLog: Array<{ outcome: string; note: string | null }> = Array.isArray(metadata.call_log) ? metadata.call_log : [];
+        const body = buildCallFollowupBody({
+          contactName: (meta.supplier_contact_name as string | undefined) ?? null,
+          materialName: (meta.material_name as string | undefined) ?? null,
+          callLog: callLog as any,
+          deescalationNote: note || null,
+          granolaNotes: (metadata.granola_notes as string | undefined) ?? null,
+          signoff: (meta.suggested_signoff as string | undefined) ?? (meta.ghost_brand as string | undefined) ?? "Sourcing Team",
+        });
+        const staged = await stageDraft({
+          admin: admin as any,
+          agentId: draftRow.agent_id ?? null,
+          runId: null,
+          orgId: draftRow.org_id,
+          supplierId: draftRow.supplier_id ?? null,
+          materialId: draftRow.material_id ?? null,
+          to: { name: (meta.supplier_contact_name as string | undefined) ?? null, address: contactEmail },
+          cc: cc.map((address) => ({ address })),
+          subject: draftRow.subject ? `Re: ${draftRow.subject.replace(/^Re:\s*/i, "")}` : "Following up",
+          body,
+          assignedOperator: routing.emailOperator?.userId ?? null,
+          conversationId: draftRow.thread_id ?? null,
+          metadata: { ...meta, draft_kind: "call_followup", source_case_id: caseId },
+        }).catch((e: any) => ({ ok: false, error: e?.message ?? String(e) }) as const);
+        if (staged.ok) followupDraftRefId = (staged as any).draftRefId;
       }
     }
   }
@@ -170,7 +219,7 @@ export async function deescalateCallCase(
     action: "case.call_deescalated",
     target_table: "cases",
     target_id: caseId,
-    diff: { call_results: input.callResults ?? {}, note: note || null, draft_reference_id: draftId ?? null },
+    diff: { call_results: input.callResults ?? {}, note: note || null, draft_reference_id: draftId ?? null, followup_draft_reference_id: followupDraftRefId ?? null },
   });
 
   revalidatePath(`/work/orgs/[slug]/calls`, "page");
@@ -244,6 +293,187 @@ export async function dropSupplierFromCallCase(caseId: string, note: string) {
 
   revalidatePath(`/work/orgs/[slug]/calls`, "page");
   return { ok: true } as const;
+}
+
+// A pasted Granola call-notes transcript, attached as context for whoever
+// drafts the follow-up when this case goes back to email. Overwrites rather
+// than appends: it's one paste box per call, not a log, and an operator
+// correcting a paste should replace it, not stack a second copy underneath.
+export async function addGranolaNotesToCase(caseId: string, notes: string) {
+  const guard = await openCallCase(caseId);
+  if ("error" in guard) return { ok: false, error: guard.error } as const;
+  const { session, admin, row } = guard;
+
+  const clean = (notes ?? "").trim();
+  const metadata = (row.metadata ?? {}) as Record<string, any>;
+
+  const { error } = await admin
+    .from("cases")
+    .update({
+      metadata: {
+        ...metadata,
+        granola_notes: clean || null,
+        granola_notes_added_by: clean ? session.userId : null,
+        granola_notes_added_at: clean ? new Date().toISOString() : null,
+      },
+    })
+    .eq("id", caseId);
+  if (error) return { ok: false, error: error.message } as const;
+
+  await admin.from("audit_log").insert({
+    actor_user_id: session.userId,
+    action: "case.granola_notes_added",
+    target_table: "cases",
+    target_id: caseId,
+    diff: { has_notes: !!clean },
+  });
+
+  revalidatePath(`/work/orgs/[slug]/calls`, "page");
+  return { ok: true } as const;
+}
+
+// Suppliers an operator can pick from for a manually-logged ("stray") call: any
+// active lead on this org, name-matched. Never a free-typed new supplier — a
+// stray call is still tied to a real lead so the case links up like every other
+// one (phone lookups, drop/deescalate, the lead itself).
+export async function searchOrgLeadsForCall(orgId: string, query: string) {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" } as const;
+  if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator"])) return { ok: false, error: "forbidden" } as const;
+
+  const admin = createAdminClient();
+  const q = (query ?? "").trim();
+  let builder = admin
+    .from("leads_in_flight")
+    .select("id, supplier_id, supplier_name, material_id, material_name, payload")
+    .eq("org_id", orgId)
+    .eq("status", "active")
+    .order("updated_at", { ascending: false })
+    .limit(20);
+  if (q) builder = builder.ilike("supplier_name", `%${q}%`);
+  const { data, error } = await builder;
+  if (error) return { ok: false, error: error.message } as const;
+
+  return {
+    ok: true,
+    leads: (data ?? []).map((r: any) => ({
+      leadId: r.id as string,
+      supplierId: r.supplier_id as string | null,
+      supplierName: (r.supplier_name as string | null) ?? (r.payload?.supplier_name as string | null) ?? "Unknown supplier",
+      materialName: (r.material_name as string | null) ?? (r.payload?.material_name as string | null) ?? null,
+      contactEmail: (r.payload?.supplier_contact_email as string | null) ?? null,
+      contactName: (r.payload?.supplier_contact_name as string | null) ?? null,
+    })),
+  } as const;
+}
+
+// An operator raises a call task the scheduled cadence never would have (an
+// inbound call, a lead someone wants to chase early, whatever). Same shape as
+// an automated call task -- same CallBrief, same routing, same Slack post --
+// just with the reason/asks typed by the operator instead of composed from a
+// draft's thread history, since there usually isn't one.
+export async function createManualCallTask(input: { orgId: string; leadId: string; reason: string }) {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" } as const;
+  if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator"])) return { ok: false, error: "forbidden" } as const;
+
+  const reason = (input.reason ?? "").trim();
+  if (!reason) return { ok: false, error: "say why this call is needed" } as const;
+
+  const admin = createAdminClient();
+  const { data: lead } = await admin
+    .from("leads_in_flight")
+    .select("id, org_id, supplier_id, supplier_name, material_id, material_name, payload")
+    .eq("id", input.leadId)
+    .eq("org_id", input.orgId)
+    .eq("status", "active")
+    .maybeSingle();
+  if (!lead) return { ok: false, error: "lead not found" } as const;
+
+  const payload = ((lead as any).payload ?? {}) as Record<string, any>;
+  const supplierName = (lead as any).supplier_name ?? payload.supplier_name ?? null;
+  const materialName = (lead as any).material_name ?? payload.material_name ?? null;
+  const meta: Record<string, any> = {
+    supplier_name: supplierName,
+    supplier_contact_email: payload.supplier_contact_email ?? null,
+    supplier_contact_name: payload.supplier_contact_name ?? null,
+    material_name: materialName,
+    required_grade: payload.required_grade ?? null,
+    lead_id: (lead as any).id,
+  };
+
+  const { data: existing } = await admin
+    .from("cases")
+    .select("id")
+    .eq("org_id", input.orgId)
+    .eq("type", "calling_escalation")
+    .in("status", ["open", "in_progress"])
+    .eq("supplier_id", (lead as any).supplier_id ?? "")
+    .eq("material_id", (lead as any).material_id ?? "")
+    .maybeSingle();
+  if (existing) return { ok: false, error: "this supplier already has an open call task" } as const;
+
+  const brief = await buildCallBrief(admin as any, {
+    orgId: input.orgId,
+    supplierId: (lead as any).supplier_id ?? null,
+    meta,
+    subject: null,
+    threadId: null,
+    inquirySentAt: null,
+    followupSentAt: [],
+    followupsSent: 0,
+    callStage: 0,
+    manualReason: reason,
+  });
+
+  const resolver = new CallOperatorResolver(admin as any);
+  const routing = await resolver.route({
+    orgId: input.orgId,
+    assignedOperator: null,
+    supplierId: (lead as any).supplier_id ?? null,
+    supplierName,
+  });
+
+  const phoneLine = brief.contact.phone ? ` on ${brief.contact.phone}` : " (no number on file, find one first)";
+  const { data: created, error: caseErr } = await admin
+    .from("cases")
+    .insert({
+      org_id: input.orgId,
+      type: "calling_escalation",
+      status: "open",
+      supplier_id: (lead as any).supplier_id ?? null,
+      material_id: (lead as any).material_id ?? null,
+      recommended_action: `Call ${supplierName ?? "supplier"}${phoneLine}${materialName ? ` re: ${materialName}` : ""}. ${reason}`,
+      assigned_operator: routing.caller?.userId ?? null,
+      metadata: {
+        source: "manual_operator",
+        source_user_id: session.userId,
+        reason: "manual",
+        call_stage: 0,
+        supplier_name: supplierName,
+        supplier_contact_email: meta.supplier_contact_email,
+        material_name: materialName,
+        lead_id: (lead as any).id,
+        call_brief: brief,
+      },
+    })
+    .select("id")
+    .maybeSingle();
+  if (caseErr) return { ok: false, error: caseErr.message } as const;
+
+  const [orgSlug, orgName] = await Promise.all([resolver.orgSlug(input.orgId), resolver.orgName(input.orgId)]);
+  await notifyCallEscalation({ brief, routing, orgName, orgSlug, reason });
+
+  await admin.from("audit_log").insert({
+    actor_user_id: session.userId,
+    action: "case.manual_call_created",
+    target_table: "cases",
+    target_id: created?.id ?? null,
+    diff: { lead_id: (lead as any).id, reason },
+  });
+
+  revalidatePath(`/work/orgs/[slug]/calls`, "page");
+  return { ok: true, caseId: created?.id } as const;
 }
 
 // Operator found a number for a supplier we had none for. Store it on the brief

@@ -169,6 +169,7 @@ export function toCallCaseRow(c: any, inboxLookup?: InboxContextLookup): CallCas
     brief: (c.metadata?.call_brief as CallBrief | undefined) ?? null,
     recommendedAction: c.recommended_action ?? null,
     callLog: Array.isArray(c.metadata?.call_log) ? (c.metadata.call_log as CallAttempt[]) : [],
+    granolaNotes: (c.metadata?.granola_notes as string | undefined) ?? null,
   };
 }
 
