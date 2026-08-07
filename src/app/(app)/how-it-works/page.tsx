@@ -63,7 +63,8 @@ export default function HowItWorksPage() {
           <li><span className="font-medium text-foreground">Day 5</span> — second call, only for suppliers who still have not written back.</li>
         </ul>
         <p className="text-sm text-muted-foreground">
-          Calls land on the client&apos;s <span className="font-medium text-foreground">Call Tracker</span> tab, filterable by
+          Calls land on the client&apos;s <span className="font-medium text-foreground">Call Tracker</span> tab (the Overview
+          &ldquo;Calls owed&rdquo; card counts them), filterable by
           operator. Open a row for the number, the supplier&apos;s calling window in their own timezone, what we already emailed
           them, where the inbox thread stands right now, and what to ask for. Log the outcome, then close the row either by
           sending the supplier back into the email loop (your notes ride along) or by dropping them with a reason when they

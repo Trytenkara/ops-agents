@@ -259,6 +259,8 @@ Two jobs, in this order: **reconcile the threads, then chase the silence.** Repl
 
 **Call tasks** (`call-tasks.ts`): calling is scheduled work in the cadence, not a last resort. Stage 1 lands on day 1 and fires whether or not the supplier replied (the intro call, made while the first email is still fresh); stage 2 lands on day 5 and only for threads with no reply at all. Every offset is measured from the day the sourcing inquiry was actually sent (`draft_references.reviewed_at`), so a nudge sent late cannot drag the phone work with it, and the delays are per-org via `callTaskDelaysMs()` in `src/lib/agent-timing.ts` (prod 1d/5d, compressed orgs via `CALL_TASK_MINUTES`). Each task is a `cases` row of type `calling_escalation` carrying `metadata.call_stage` and a `call_brief` (contact + phone, the supplier's calling window resolved to their timezone, why we are calling, and the asks). One open call case per supplier at a time; `outreachAllowed()` gates them, so `sourcing_only` orgs raise none.
 
+The Overview scoreboard splits the `cases` table between an "Open cases" card (everything else) and a "Calls owed" card; the Cases page and the Call Tracker filter the same way, so a call is never counted twice.
+
 The worklist is the per-client **Call Tracker** tab (`/work/orgs/[slug]/calls`), filterable by operator and by call stage, rows collapsed to one line and expanded on click. Alongside the frozen brief each row reads `supplier_email_context` **live at render time** (Agent 13's per-supplier summary, open ask and thread state) so a brief written on day 1 does not describe a stale thread on day 5. Closing a row either de-escalates the supplier back into the email sequence (with the operator's notes and per-call success flags) or drops them with a required reason.
 
 Stages only, never sends.
@@ -322,7 +324,7 @@ Side-channels:
   - Agent 07 (daily 14:00): >14d stale ──► case; Slack nudge on un-actioned work
   - Agent 09 (hourly :50):  documents published on supplier/product pages ──► supplier_documents
   - Agent 12 (hourly :40):  client settings mirror, requirements re-check, profile backstop
-  - Agent 13 (daily 06:45): per-supplier thread context for Agent 02's tone
+  - Agent 13 (daily 06:45): per-supplier thread context for Agent 02's tone and the Call Tracker's "From the inbox" panel
   - Agent 14 (daily 16:00): integrity sweep ──► Slack digest
   - Agent 16 (every 6h :05): restate USD prices when FX moves
   - Fleet summary (daily 18:00), Agent 01 (1 min heartbeat)

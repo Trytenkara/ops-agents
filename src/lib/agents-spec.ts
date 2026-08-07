@@ -158,9 +158,9 @@ export const AGENT_SPECS: AgentSpec[] = [
     name: "Inbox Context",
     status: "shipped",
     cadence: "Daily: 06:45 America/New_York",
-    purpose: "Build a per-supplier email-context row (thread state, last contact, open ask) so Agent 02 reaches out with the right tone.",
+    purpose: "Build a per-supplier email-context row (thread state, last contact, open ask) so Agent 02 reaches out with the right tone and callers know where the thread stands before they dial.",
     automatic: "Takes the list of Tenkara threads we have drafted into over the last 90 days, reads each conversation, and works out where it stands: they replied and owe us nothing, we are waiting on them, or the thread has gone quiet for 3 weeks. For threads where the supplier replied it summarizes the open ask, otherwise it falls back to the last message. Writes one row per supplier email. Read-only on Tenkara; never drafts or sends.",
-    humanInput: "None. The output only shapes the tone of Agent 02's follow-ups.",
+    humanInput: "None. The output shapes the tone of Agent 02's follow-ups and fills the \"From the inbox\" panel on every Call Tracker row, read live when the row is opened.",
   },
   {
     number: 14,

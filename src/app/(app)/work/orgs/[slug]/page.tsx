@@ -12,6 +12,7 @@ import { OrgOnboardingToggle } from "@/components/org-onboarding-toggle";
 import { OrgTenkaraInbox } from "@/components/org-tenkara-inbox";
 import { OrgBounceAlert } from "@/components/org-bounce-alert";
 import { getOrgNudgeCounts } from "@/lib/org-nudges";
+import { caseCategory } from "@/lib/org-cases";
 import { orgDisplayName } from "@/lib/org-display";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +29,7 @@ export default async function OrgOverview({ params }: { params: { slug: string }
 
   const [draftsRes, casesRes, approvalsRes, quotesRes, membersRes] = await Promise.all([
     admin.from("draft_references").select("id, status").eq("org_id", org.id),
-    admin.from("cases").select("id, status").eq("org_id", org.id).eq("status", "open"),
+    admin.from("cases").select("id, status, type").eq("org_id", org.id).in("status", ["open", "in_progress"]),
     admin.from("pending_approvals").select("id").eq("org_id", org.id).eq("status", "pending"),
     admin.from("staged_quotes").select("id", { count: "exact", head: true }).eq("org_id", org.id).eq("status", "pending_review"),
     // Org members for the auto-loop include/exclude list. Unlike the assignment
@@ -44,6 +45,11 @@ export default async function OrgOverview({ params }: { params: { slug: string }
   const staged = drafts.filter((d: any) => d.status === "staged").length;
   const reviewed = drafts.filter((d: any) => d.status === "reviewed").length;
   const nudges = await getOrgNudgeCounts(admin, org.id);
+  // Call rows live on the Call Tracker, not the Cases page, so the two metrics
+  // split the same table the way the two pages do.
+  const allCases = (casesRes.data ?? []) as any[];
+  const openCalls = allCases.filter((c) => caseCategory(c.type) === "call").length;
+  const openCases = allCases.length - openCalls;
   const base = `/work/orgs/${org.slug}`;
 
   const canEditSourcing = hasAnyRole(session, ["admin", "ops_lead"]);
@@ -77,7 +83,8 @@ export default async function OrgOverview({ params }: { params: { slug: string }
         <Metric label="Drafts to send" value={staged} note={`${reviewed} reviewed`} href={`${base}/threads`} tone="indigo" />
         <Metric label="Quotes to approve" value={quotesRes.count ?? 0} note="pending review" href={`${base}/materials`} tone="amber" />
         <Metric label="Price changes" value={nudges.priceChanges} note="pending review" href={`${base}/price-index`} tone="violet" />
-        <Metric label="Open cases" value={casesRes.data?.length ?? 0} href={`${base}/cases`} tone="red" />
+        <Metric label="Open cases" value={openCases} href={`${base}/cases`} tone="red" />
+        <Metric label="Calls owed" value={openCalls} note="to make" href={`${base}/calls`} tone="red" />
         <Metric label="Pending approvals" value={approvalsRes.data?.length ?? 0} href={`${base}/materials`} tone="emerald" />
       </div>
 
