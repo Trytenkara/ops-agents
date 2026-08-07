@@ -12,7 +12,12 @@ import { normalizeStatus, sourcingAllowed } from "@/lib/org-status";
 import { flagMaterialNames, correctName } from "@/lib/material-name-flags";
 import { flagDuplicateMaterials, type MergeMaterial } from "@/lib/material-merge-flags";
 import { materialLabel } from "@/lib/material-label";
-import { sourceReadyEnabled, sourceReadyUnlockEnabled, fireSourceReadyDiscovery } from "./sourceready";
+import {
+  sourceReadyEnabled,
+  sourceReadyUnlockEnabled,
+  runSourceReadyDiscovery,
+  SourceReadyUnavailableError,
+} from "./sourceready";
 import { importYetiEnabled, runImportYetiDiscovery, ImportYetiUnavailableError } from "./importyeti";
 import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 
@@ -29,9 +34,9 @@ function cleanSupplierWebsite(url: string | null | undefined): string | null {
   return host && isAggregatorDomain(host) ? null : url;
 }
 
-// SourceReady discovery is fired per material (bounded per run) to a Gamut
-// webhook that runs supplier_search_v3 and stages source='sourceready' leads
-// out-of-band. Inert unless SOURCEREADY_WEBHOOK_URL + _SECRET are set.
+// SourceReady discovery runs in-process (bounded per material per run): calls
+// supplier_search_v3 over the MCP endpoint and stages source='sourceready'
+// leads inline. Inert unless SOURCEREADY_MCP_URL + SOURCEREADY_MCP_TOKEN are set.
 const SOURCEREADY_MAX_MATERIALS_PER_RUN = envInt("SOURCEREADY_MAX_MATERIALS_PER_RUN", 25);
 // Suppliers requested per discovery fire; also the page stride.
 const SOURCEREADY_PAGE_SIZE = envInt("SOURCEREADY_PAGE_SIZE", 25);
@@ -1062,12 +1067,12 @@ registerAgent({
         }
       }
 
-      // 5c. SourceReady discovery — fire a signed webhook to the Gamut agent
-      //     that holds the SourceReady MCP; it runs supplier_search_v3 and
-      //     stages source='sourceready' leads out-of-band. Gated like scout
-      //     (new or backlog materials only) and capped per run to bound cost.
-      //     Exclusions here are best-effort; Agent 04 re-checks do-not-contact /
-      //     excluded countries before any email is sent.
+      // 5c. SourceReady discovery — run in-process: calls supplier_search_v3 over
+      //     the upstream MCP endpoint, parses the markdown profiles, and stages
+      //     source='sourceready' leads inline. Gated like scout (new or backlog
+      //     materials only) and capped per run to bound cost. Exclusions here are
+      //     best-effort; Agent 04 re-checks do-not-contact / excluded countries
+      //     before any email is sent.
       const srBacklog = underservedIds.has(material.id);
       if (
         sourceReadyEnabled() &&
@@ -1083,18 +1088,41 @@ registerAgent({
           SOURCEREADY_PAGE_SIZE
         );
         const srPage = srCursor.page;
-        const ok = await fireSourceReadyDiscovery({
-          oaOrgId,
-          materialId: material.id,
-          materialName: matLabel,
-          inci: material.inci ?? null,
-          tenkaraOrgId: material.tenkara_org_id ?? null,
-          excludeHosts: Array.from(excludeHosts),
-          excludedCountries: ex ? Array.from(ex.excludedCountries) : [],
-          size: SOURCEREADY_PAGE_SIZE,
-          page: srPage,
-          unlockContacts: sourceReadyUnlockEnabled() && !!oaOrgId && !isInternalByOaId.get(oaOrgId),
-        });
+        let ok = false;
+        let srDetail: Record<string, any> = {};
+        let srError: string | null = null;
+        try {
+          const r = await runSourceReadyDiscovery(
+            admin,
+            {
+              oaOrgId,
+              materialId: material.id,
+              materialName: matLabel,
+              inci: material.inci ?? null,
+              tenkaraOrgId: material.tenkara_org_id ?? null,
+              excludeHosts: Array.from(excludeHosts),
+              excludedCountries: ex ? Array.from(ex.excludedCountries) : [],
+              size: SOURCEREADY_PAGE_SIZE,
+              page: srPage,
+              unlockContacts:
+                sourceReadyUnlockEnabled() && !!oaOrgId && !isInternalByOaId.get(oaOrgId),
+            },
+            ctx.runId
+          );
+          ok = r.ok;
+          srDetail = {
+            received: r.received, inserted: r.inserted, skipped: r.skipped,
+            reason: r.reason, unlocked: r.unlocked,
+          };
+          stagedThisMaterial += r.inserted;
+        } catch (e: any) {
+          // Leave the cursor unadvanced on a transport failure so the same page
+          // is retried next run rather than being skipped.
+          srError =
+            e instanceof SourceReadyUnavailableError
+              ? "mcp_unavailable"
+              : (e?.message ?? String(e));
+        }
         if (ok) {
           sourceReadyFired++;
           await admin.from("agent_state").upsert(
@@ -1107,8 +1135,14 @@ registerAgent({
           );
         }
         await ctx.log(
-          ok ? `Fired SourceReady discovery for ${matLabel} (page ${srPage})` : `SourceReady discovery request failed for ${matLabel}`,
-          { step: "sourceready", level: ok ? "info" : "warn", data: { material_id: material.id, page: srPage, dry_pages: srCursor.dry } }
+          ok
+            ? `SourceReady discovery for ${matLabel} (page ${srPage}): staged ${srDetail.inserted ?? 0} of ${srDetail.received ?? 0}`
+            : `SourceReady discovery failed for ${matLabel}: ${srError ?? "unknown"}`,
+          {
+            step: "sourceready",
+            level: ok ? "info" : "warn",
+            data: { material_id: material.id, page: srPage, dry_pages: srCursor.dry, ...srDetail, error: srError },
+          }
         );
       }
 
