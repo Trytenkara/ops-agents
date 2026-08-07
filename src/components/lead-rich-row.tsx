@@ -13,6 +13,9 @@ import {
   MARKET_KIND_LABEL,
   MARKET_KIND_TITLE,
   MARKET_KIND_VARIANT,
+  NON_MARKETPLACE_SUFFIX,
+  nonMarketplaceDisplayName,
+  originMarketplaceOf,
   type MarketKind,
 } from "@/lib/lead-market";
 import { aggregatorNameFromPayload } from "@/lib/aggregator-hosts";
@@ -481,6 +484,7 @@ export function LeadRichRow({
   const siteType = r.payload?.site_type as "M" | "MS" | "A" | "N" | undefined;
   const marketKind = (r.market_kind as MarketKind | null | undefined) ?? leadMarketKind(siteType);
   const aggregatorName = marketKind === "aggregator" ? aggregatorNameFromPayload(r.payload) : null;
+  const origin = originMarketplaceOf(r.payload);
   const completeness = r.payload?.completeness_score != null ? Number(r.payload.completeness_score) : null;
   const completenessFactors = Array.isArray(r.payload?.completeness_factors) ? r.payload.completeness_factors : [];
   // "% ready" only means something once Agent 06 enrichment has actually scored
@@ -513,7 +517,7 @@ export function LeadRichRow({
       )}
       <TableCell className="font-medium align-top">
         <div className="flex items-center gap-2 flex-wrap">
-          <span>{r.supplier_name ?? "—"}</span>
+          <span>{nonMarketplaceDisplayName(r.supplier_name, r.payload)}</span>
           {completenessScored && completeness != null && (
             <span
               className="text-[10px] font-normal text-muted-foreground cursor-help"
@@ -734,18 +738,40 @@ export function LeadRichRow({
             <Badge
               variant={MARKET_KIND_VARIANT[marketKind]}
               title={
-                siteType === "M"
+                origin
+                  ? `Split out of a ${origin.platform ?? "marketplace"} listing${
+                      origin.split_at ? ` on ${new Date(origin.split_at).toLocaleDateString()}` : ""
+                    }. This row owns the email thread and the quotes; the listing row keeps the price index.`
+                  : siteType === "M"
                   ? "Marketplace — online checkout, no signup"
                   : siteType === "MS"
                   ? "Marketplace — checkout after registration"
                   : MARKET_KIND_TITLE[marketKind]
               }
             >
-              {MARKET_KIND_LABEL[marketKind]}
+              {origin ? NON_MARKETPLACE_SUFFIX : MARKET_KIND_LABEL[marketKind]}
             </Badge>
             {aggregatorName && (
               <span className="text-[10px] text-muted-foreground" title="Platform this listing was pulled from">
                 via {aggregatorName}
+              </span>
+            )}
+            {origin && (
+              <span className="text-[10px] text-muted-foreground">
+                from{" "}
+                {origin.listing_url ? (
+                  <a
+                    href={origin.listing_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline underline-offset-2"
+                    title={origin.listing_url}
+                  >
+                    {origin.platform ?? "marketplace"} listing
+                  </a>
+                ) : (
+                  `${origin.platform ?? "marketplace"} listing`
+                )}
               </span>
             )}
           </div>

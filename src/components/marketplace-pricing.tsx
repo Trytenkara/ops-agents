@@ -9,7 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useListFilter, byString } from "@/components/use-list-filter";
 import { dealbreakerFitRank } from "@/lib/dealbreaker-fit";
-import { leadMarketKind, type MarketKind } from "@/lib/lead-market";
+import {
+  leadMarketKind,
+  NON_MARKETPLACE_SUFFIX,
+  nonMarketplaceDisplayName,
+  type MarketKind,
+} from "@/lib/lead-market";
 import { aggregatorNameFromPayload } from "@/lib/aggregator-hosts";
 import { saveLeadPriceTiers } from "@/app/actions/leads";
 import { type PriceTier, tierBreakdown, composePackSize } from "@/lib/price-tiers";
@@ -281,9 +286,9 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
             {yieldedDirect ? (
               <Badge
                 variant="success"
-                title={`This seller answered from its own address, so it now has a separate direct supplier lead (${yieldedDirect.email ?? "own address"}) that owns the email thread and the quotes. This row stays the listing the price index publishes from.`}
+                title={`This seller answered from its own address, so it now has a separate direct supplier lead (${yieldedDirect.email ?? "own address"}) that owns the email thread and the quotes. This row stays the listing the price index publishes from. Find it on the Agent Supplier Leads tab as "${nonMarketplaceDisplayName(row.supplier_name, { origin_marketplace_lead_id: row.id })}".`}
               >
-                direct supplier created
+                direct supplier created → {NON_MARKETPLACE_SUFFIX}
               </Badge>
             ) : (
               inquiry && (
