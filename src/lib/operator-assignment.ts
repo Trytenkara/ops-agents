@@ -430,12 +430,16 @@ function inAutoScope(
 // Narrow a pool to the people who actually do this work: the right type (phone
 // vs email) and the right market lane.
 //
-// Each filter falls back to the unnarrowed pool rather than returning nobody. A
-// client with no call operator named yet, or no one covering aggregators, must
-// still have its work land on a person — an empty pool here would mean silently
-// unowned suppliers, which is the failure the whole module exists to prevent.
-// The two filters degrade independently, so naming a call operator who covers
-// only marketplace still routes direct calls to them rather than to the email team.
+// The lane filter falls back to the unnarrowed pool rather than returning nobody:
+// a client with no one covering aggregators must still have that work land on a
+// person, and a call operator who covers only marketplace is still the person who
+// makes this client's calls.
+//
+// The type filter falls back for email work (desk work is what an operator does
+// unless told otherwise) but NOT for phone work. Handing a call to the email team
+// tags someone who doesn't make calls, which reads as a ping to ignore and hides
+// the real problem: the client has no caller named. A client with no call operator
+// gets an unowned call task that says so.
 export function poolForWork(
   pool: OperatorRef[],
   opts: { type?: OperatorType | null; lane?: MarketKind | null }
@@ -443,7 +447,7 @@ export function poolForWork(
   let out = pool;
   if (opts.type) {
     const byType = out.filter((o) => o.operatorType === opts.type);
-    if (byType.length) out = byType;
+    if (byType.length || opts.type === "call") out = byType;
   }
   if (opts.lane) {
     const lane = opts.lane;
@@ -500,9 +504,9 @@ export function resolveOperatorId(
   const claim = supplierId ? ctx.manual.get(supplierId) ?? null : null;
   const auto = autoOperator(ctx, supplierId, kindHint, nameHint, workType)?.id ?? null;
   // A claim says who owns the supplier, which historically meant its email. It
-  // must not drag phone work onto someone who doesn't do phone work: when the
-  // client has call operators, only a claim held by one of them counts for a call.
-  // Where the client has none, poolForWork returns everyone and the claim stands.
+  // must not drag phone work onto someone who doesn't do phone work: only a claim
+  // held by one of the client's call operators counts for a call, and a client
+  // with none has no claim that counts.
   const claimDoesThisWork = claim ? poolForWork(ctx.pool, { type: workType }).some((o) => o.id === claim) : false;
   const claimWins =
     claim && claimDoesThisWork ? overridesAuto(ctx, supplierId ? ctx.manualAt.get(supplierId) : null) : false;

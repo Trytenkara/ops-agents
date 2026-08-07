@@ -13,22 +13,31 @@ import { callBriefHeadline, type CallBrief } from "@/lib/call-brief";
 
 // Routing and notification for call tasks.
 //
-// A call task with nobody's name on it is a task nobody does, so it must land on
-// a person even when the draft it came from was never assigned. Resolution walks
-// the same ladder the rest of the app uses (explicit claim, then the org's
-// sticky-random spread) but asks for the CALL side of the team and the supplier's
-// own lane, so phone work reaches someone who makes calls for this client rather
-// than whoever happens to own the supplier's inbox.
+// Resolution walks the same ladder the rest of the app uses (explicit claim, then
+// the org's sticky-random spread) but asks for the CALL side of the team, so phone
+// work reaches someone who makes calls for this client rather than whoever owns
+// the supplier's inbox.
 //
-// Where a client has named no call operators, or none covering that lane, the
-// spread falls back to the whole pool (see poolForWork): an unrouted call task is
-// worse than one routed to an email operator.
+// Only a call operator is ever tagged. The email operator who sent the inquiry is
+// named in the post for context, since the caller wants to know who the supplier
+// has already heard from, but they are not pinged and the task is not theirs.
+// Where a client has named no call operator the task stays unassigned and the
+// post says so: a call routed to the email team is a ping nobody acts on, and it
+// hides the fact that nobody is doing this client's phone work.
 
 export interface OperatorTag {
-  userId: string | null;
+  userId: string;
   name: string | null;
   email: string | null;
   slackUserId: string | null;
+}
+
+export interface CallRouting {
+  // Who makes the call, and the only person tagged. Null when the client has
+  // named no call operator.
+  caller: OperatorTag | null;
+  // Who owns this supplier's inbox. Context only, never tagged.
+  emailOperator: OperatorTag | null;
 }
 
 // Per-run cache. Building an assignment context is several queries, and a sweep
@@ -37,6 +46,7 @@ export class CallOperatorResolver {
   private ctxByOrg = new Map<string, AssignmentContext | null>();
   private orgById = new Map<string, { slug: string | null; name: string | null }>();
   private userById = new Map<string, OperatorTag>();
+  private directory: Map<string, string> | null = null;
 
   constructor(private admin: SupabaseClient) {}
 
@@ -63,56 +73,71 @@ export class CallOperatorResolver {
     return (await this.org(orgId)).name;
   }
 
-  async tag(opts: {
+  // Slack member ids come from the directory 0109 keeps refreshed, not from a
+  // column on users: the same map every other agent mentions people through, and
+  // the only one that covers operators who sign in with a personal address.
+  private async slackIds(): Promise<Map<string, string>> {
+    if (!this.directory) {
+      const { data } = await this.admin.from("slack_directory").select("email, slack_user_id").eq("deleted", false);
+      this.directory = new Map((data ?? []).map((r: any) => [String(r.email).toLowerCase(), r.slack_user_id]));
+    }
+    return this.directory;
+  }
+
+  private async operator(userId: string | null): Promise<OperatorTag | null> {
+    if (!userId) return null;
+    const cached = this.userById.get(userId);
+    if (cached) return cached;
+    const [{ data }, ids] = await Promise.all([
+      this.admin.from("users").select("id, display_name, email").eq("id", userId).maybeSingle(),
+      this.slackIds(),
+    ]);
+    const row = data as any;
+    const email = (row?.email as string | null) ?? null;
+    const tag: OperatorTag = {
+      userId,
+      name: row?.display_name ?? null,
+      email,
+      slackUserId: email ? ids.get(email.toLowerCase()) ?? null : null,
+    };
+    this.userById.set(userId, tag);
+    return tag;
+  }
+
+  async route(opts: {
     orgId: string;
     assignedOperator: string | null;
     supplierId: string | null;
     supplierName: string | null;
     lane?: MarketKind | null;
-  }): Promise<OperatorTag> {
-    const { orgId } = opts;
-    const ctx = await this.assignmentContext(orgId);
-    // An explicit assignment on the source draft only holds if that person does
-    // phone work here; otherwise the call routes on its own.
-    const callPool = ctx ? poolForWork(ctx.pool, { type: "call", lane: opts.lane ?? null }) : [];
-    let userId =
+  }): Promise<CallRouting> {
+    const ctx = await this.assignmentContext(opts.orgId);
+    if (!ctx) return { caller: null, emailOperator: null };
+
+    // Key on the supplier the way every other surface does, so a supplier that
+    // gets called twice reaches the same operator both times.
+    const key = orgAutoKey(ctx, {
+      supplierId: opts.supplierId,
+      supplierName: opts.supplierName,
+      leadId: opts.supplierId ?? opts.supplierName ?? "",
+    });
+    const spread = { lane: opts.lane ?? null, nameHint: opts.supplierName };
+
+    // An explicit assignment on the source draft only holds for the call if that
+    // person makes calls here; otherwise the call routes on its own, across the
+    // call operators only. Empty pool = the client named none, and the task goes
+    // out unowned rather than onto someone who doesn't dial.
+    const callPool = poolForWork(ctx.pool, { type: "call", lane: opts.lane ?? null });
+    const claimed =
       opts.assignedOperator && callPool.some((o) => o.id === opts.assignedOperator) ? opts.assignedOperator : null;
+    const callerId = claimed ?? spreadOwnerId(ctx, key, { ...spread, workType: "call" });
 
-    if (!userId && ctx) {
-      // Key on the supplier the way every other surface does, so a supplier that
-      // gets called twice reaches the same operator both times. spreadOwnerId
-      // also covers the org that runs manual assignment: a phone task nobody owns
-      // is a call nobody makes.
-      userId = spreadOwnerId(
-        ctx,
-        orgAutoKey(ctx, {
-          supplierId: opts.supplierId,
-          supplierName: opts.supplierName,
-          leadId: opts.supplierId ?? opts.supplierName ?? "",
-        }),
-        { lane: opts.lane ?? null, nameHint: opts.supplierName, workType: "call" }
-      );
-    }
-    if (!userId) return { userId: null, name: null, email: null, slackUserId: null };
+    // Whoever the supplier has been emailing, for the caller's context: the draft's
+    // own operator where it had one, else the desk owner the spread derives.
+    const emailId = opts.assignedOperator ?? spreadOwnerId(ctx, key, { ...spread, workType: "email" });
 
-    const cached = this.userById.get(userId);
-    if (cached) return cached;
-    // slack_user_id arrives with 0105. Selecting it before the migration lands
-    // would fail the whole row read and cost us the operator's name too, so the
-    // mention is asked for separately and its absence just means no @mention.
-    const [{ data }, { data: slack }] = await Promise.all([
-      this.admin.from("users").select("id, display_name, email").eq("id", userId).maybeSingle(),
-      this.admin.from("users").select("slack_user_id").eq("id", userId).maybeSingle(),
-    ]);
-    const row = data as any;
-    const tag: OperatorTag = {
-      userId,
-      name: row?.display_name ?? null,
-      email: row?.email ?? null,
-      slackUserId: (slack as any)?.slack_user_id ?? null,
-    };
-    this.userById.set(userId, tag);
-    return tag;
+    const [caller, emailOperator] = await Promise.all([this.operator(callerId), this.operator(emailId)]);
+    return { caller, emailOperator };
   }
 }
 
@@ -121,12 +146,18 @@ export class CallOperatorResolver {
 // Slack being unconfigured must never block the escalation itself.
 export async function notifyCallEscalation(args: {
   brief: CallBrief;
-  operator: OperatorTag;
+  routing: CallRouting;
   orgName: string | null;
   orgSlug: string | null;
   reason: string;
 }): Promise<boolean> {
-  const { brief, operator, orgSlug } = args;
+  const { brief, routing, orgSlug } = args;
+  const { caller } = routing;
+  const named = (o: OperatorTag | null): string | null => (o ? o.name ?? o.email : null);
+  // Skip it where the caller owns the inbox too, rather than printing one name twice.
+  const emailOwner =
+    routing.emailOperator && routing.emailOperator.userId !== caller?.userId ? named(routing.emailOperator) : null;
+
   const lines = [
     `:telephone_receiver: *Call ${brief.callStage}* ${args.orgName ? `for ${args.orgName}` : ""}`.trim(),
     callBriefHeadline(brief),
@@ -135,10 +166,17 @@ export async function notifyCallEscalation(args: {
       ? ":warning: No phone number on file. Find one, or add it on the call task so the next call is one click."
       : null,
     brief.materialNames.length ? `Materials: ${brief.materialNames.join(", ")}` : null,
+    emailOwner ? `Emailed by ${emailOwner} (email operator, no action needed from them)` : null,
+    caller
+      ? null
+      : `:warning: ${args.orgName ?? "This client"} has no call operator named, so this call is unassigned. Name one under the client's operators to have calls routed.`,
     orgSlug ? `Open it: ${deepLink(`/work/orgs/${orgSlug}/calls`)}` : null,
   ].filter(Boolean) as string[];
 
-  const owner = operator.name ?? operator.email;
-  const text = operator.slackUserId ? lines.join("\n") : [owner ? `*${owner}*` : null, ...lines].filter(Boolean).join("\n");
-  return postAgentAlert(text, { mentionUserId: operator.slackUserId ?? undefined }).catch(() => false);
+  // Only a call operator is ever @mentioned. Without a Slack id their name is
+  // printed instead, which at least says whose call it is.
+  const callerName = named(caller);
+  const text =
+    caller?.slackUserId ? lines.join("\n") : [callerName ? `*${callerName}*` : null, ...lines].filter(Boolean).join("\n");
+  return postAgentAlert(text, { mentionUserId: caller?.slackUserId ?? undefined }).catch(() => false);
 }

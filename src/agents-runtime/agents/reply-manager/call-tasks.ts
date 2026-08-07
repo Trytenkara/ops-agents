@@ -92,9 +92,8 @@ async function raiseCallTask(
     replied: opts.replied,
   });
 
-  // Route it to a person even when the draft was never assigned: an unowned call
-  // task is one nobody makes.
-  const operator = await opts.resolver.tag({
+  // Route it across the client's call operators, not the draft's email owner.
+  const routing = await opts.resolver.route({
     orgId: r.org_id,
     assignedOperator: r.assigned_operator ?? null,
     supplierId: r.supplier_id ?? null,
@@ -110,7 +109,7 @@ async function raiseCallTask(
     material_id: r.material_id ?? null,
     originating_thread_id: r.thread_id ?? null,
     recommended_action: `Call ${supplierName}${phoneLine}${materialName ? ` re: ${materialName}` : ""}, ${reason}. Confirm the sourcing inquiry was received and the right contact, and request a quote.`,
-    assigned_operator: operator.userId,
+    assigned_operator: routing.caller?.userId ?? null,
     metadata: {
       source_agent: "agent-15-reply-manager",
       source_run_id: ctx.runId,
@@ -136,10 +135,10 @@ async function raiseCallTask(
     opts.resolver.orgSlug(r.org_id),
     opts.resolver.orgName(r.org_id),
   ]);
-  await notifyCallEscalation({ brief, operator, orgName, orgSlug, reason });
+  await notifyCallEscalation({ brief, routing, orgName, orgSlug, reason });
 
   await ctx.log(
-    `Call task #${opts.stage} opened for ${supplierName} (${reason})${operator.name ? `, assigned to ${operator.name}` : ", unassigned"}${brief.contact.phone ? "" : ", no phone on file"}`,
+    `Call task #${opts.stage} opened for ${supplierName} (${reason})${routing.caller ? `, assigned to ${routing.caller.name ?? routing.caller.email}` : ", unassigned: no call operator for this client"}${brief.contact.phone ? "" : ", no phone on file"}`,
     { step: "call_task" }
   );
   return true;
