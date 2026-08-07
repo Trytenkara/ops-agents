@@ -49,6 +49,10 @@ const RECHECK_CAP = 85;
 // The batch loop still checks the deadline before each batch, so if per-call
 // latency degrades the run truncates and rolls over instead of overrunning.
 const CONCURRENCY = 10;
+// Ceiling on a single lead's pull. Sized so one full batch still fits between the
+// run deadline and the route's 800s maxDuration: the loop can start a batch at
+// RUN_DEADLINE_MS, so that budget plus this must leave room for the summary write.
+const LEAD_TIMEOUT_MS = 120_000;
 const FLAG_AFTER_ATTEMPTS = 3; // needs_review is read this many times before a case is opened, so one flaky web_search result isn't a premature escalation. It does NOT stop the retries.
 
 // A lead is never given up on. Only a structural verdict ends a pull (price
@@ -1341,13 +1345,34 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     return "flagged";
   };
 
+  // A batch waits for its slowest lead, and a lead's model call had no ceiling of
+  // its own: the 2026-08-07 20:20 run went silent 583s in and was hard-killed at
+  // the route's 800s cap, losing its summary and orphaning the run row (the work
+  // itself had already committed per-lead). The deadline only guards the START of
+  // a batch, so an unbounded lead can always overrun it. Cap the lead instead.
+  // A timed-out lead resolves to null, which the loop already treats as "not
+  // processed" — nothing is written, so it stays queued and rolls to the next run.
+  const runWithTimeout = async (l: LeadRow) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        processOne(l),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), LEAD_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
   for (let i = 0; i < leads.length; i += CONCURRENCY) {
     if (Date.now() > deadline) {
       stoppedEarly = true;
       break;
     }
     const batch = leads.slice(i, i + CONCURRENCY);
-    const outcomes = await Promise.all(batch.map((l) => processOne(l)));
+    const outcomes = await Promise.all(batch.map((l) => runWithTimeout(l)));
     for (const o of outcomes) {
       if (o == null) continue;
       processed++;

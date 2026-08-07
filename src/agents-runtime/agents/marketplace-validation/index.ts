@@ -40,7 +40,11 @@ const CONCURRENCY = 4;
 // quitting at ~290s having spent a third of an invocation it had already paid
 // for, and the re-check cohort (which queues behind first-pulls) never ran at
 // all. Both phases share this budget, so re-checks still yield to quote work.
-const RUN_DEADLINE_MS = 700_000;
+// 700s left only 100s of the route's 800s cap for whatever was already in flight
+// when the deadline passed, which is not enough for a batch that can now take
+// LEAD_TIMEOUT_MS. 600s + a 120s worst-case batch + the summary write fits with
+// margin, and runs were averaging ~530s anyway, so this costs almost no work.
+const RUN_DEADLINE_MS = 600_000;
 
 interface QuoteRow {
   id: string;                      // material_quotes.id
