@@ -1,6 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
 import { requirementsFingerprint } from "@/lib/requirements-fingerprint";
+import {
+  fetchRequirementRows,
+  type RequirementPhase,
+  type RequirementsRow,
+} from "@/lib/tenkara-requirements";
 
 // Tenkara -> OA mirror of a client's settings (ship-to, billing/samples
 // addresses, UoM, country exclusions, qualification requirements).
@@ -74,8 +79,6 @@ interface SettingsRow {
   federal_tax_id: string | null;
   excluded_material_countries: string[] | null;
   excluded_packaging_countries: string[] | null;
-  pre_order_requirements: any;
-  post_order_requirements: any;
   updated_at: string | null;
 }
 
@@ -86,7 +89,7 @@ async function fetchTenkaraSettings(tenkaraOrgId: string): Promise<SettingsRow |
   const rows = await tenkaraQuery<SettingsRow>(
     `select shipping_addresses, billing_address, samples_address, unit_of_measurement,
             federal_tax_id, excluded_material_countries, excluded_packaging_countries,
-            pre_order_requirements, post_order_requirements, updated_at
+            updated_at
        from public.user_supplier_settings
       where organization_id = $1::uuid
       order by (coalesce(array_length(shipping_addresses, 1), 0) > 0) desc,
@@ -118,8 +121,14 @@ export async function syncClientSettingsForOrg(
   if (!org.tenkara_org_id) return { orgId: org.id, status: "no_tenkara_org" };
 
   let row: SettingsRow | null;
+  // Requirements moved off user_supplier_settings into their own tables, so this
+  // is a second read against Tenkara. It shares the settings read's catch: a
+  // failure here has to record sync_error too, or the mirror goes quietly stale
+  // on half its content.
+  let requirementRows: RequirementsRow[] = [];
   try {
     row = await fetchTenkaraSettings(org.tenkara_org_id);
+    if (row) requirementRows = await fetchRequirementRows(org.tenkara_org_id);
   } catch (e: any) {
     // Record the failure rather than swallowing it: a silently dead sync is
     // exactly the failure mode this whole feature exists to fix.
@@ -133,6 +142,12 @@ export async function syncClientSettingsForOrg(
 
   const addresses = (row.shipping_addresses ?? []).map(parseAddress).filter((a): a is ShipToAddress => a !== null);
   const primary = addresses[0] ?? null;
+
+  // The two mirror columns keep their names and stay jsonb — nothing reads them,
+  // they are here so the snapshot is inspectable — but what they hold is now the
+  // normalized row rather than the old blob.
+  const requirementBlob = (orderType: RequirementPhase) =>
+    requirementRows.find((x) => x.order_type === orderType) ?? null;
 
   const { data: before } = await admin
     .from("client_tenkara_settings")
@@ -158,8 +173,8 @@ export async function syncClientSettingsForOrg(
       federal_tax_id: row.federal_tax_id ?? null,
       excluded_material_countries: row.excluded_material_countries ?? [],
       excluded_packaging_countries: row.excluded_packaging_countries ?? [],
-      pre_order_requirements: row.pre_order_requirements ?? null,
-      post_order_requirements: row.post_order_requirements ?? null,
+      pre_order_requirements: requirementBlob("pre_order"),
+      post_order_requirements: requirementBlob("post_order"),
       source_updated_at: row.updated_at ?? null,
       synced_at: now,
       sync_error: null,
