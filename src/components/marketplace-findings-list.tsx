@@ -21,6 +21,44 @@ import { resolveDensity, type DensityIndex } from "@/lib/material-density";
 
 const COLS = 12;
 
+const STOCK_LABEL: Record<string, string> = { out_of_stock: "Out of stock", discontinued: "Discontinued" };
+
+function sinceLabel(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// Only unavailability gets a chip. "In stock" is the assumption an operator
+// already makes, and most listings say nothing at all, so badging either one
+// would bury the case that actually changes a decision.
+function StockBadge({ status, note, since }: { status?: string | null; note?: string | null; since?: string | null }) {
+  const label = status ? STOCK_LABEL[status] : null;
+  if (!label) return null;
+  const on = sinceLabel(since);
+  return (
+    <div
+      className="mt-0.5 w-fit rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-medium text-rose-800 dark:bg-rose-950 dark:text-rose-300"
+      title={[
+        `The listing has been ${label.toLowerCase()} since ${since ? new Date(since).toLocaleString() : "an unrecorded date"}.`,
+        note ? `The page reads: "${note}"` : null,
+        "Any price shown is the last number read off the page. It is not quotable.",
+      ]
+        .filter(Boolean)
+        .join("\n")}
+    >
+      {label}
+      {on ? ` · since ${on}` : ""}
+    </div>
+  );
+}
+
+function fmtStock(r: any): string {
+  const label = r.stock_status ? STOCK_LABEL[r.stock_status] : null;
+  if (!label) return "";
+  return r.out_of_stock_since ? `${label} since ${r.out_of_stock_since.slice(0, 10)}` : label;
+}
+
 // Prefer the agent's structured unit_price (Agent 05); fall back to deriving it
 // from the pack-size string.
 function unitPriceOf(r: any): { value: number; unit: string } | null {
@@ -115,6 +153,7 @@ export function MarketplaceFindingsList({
     r.supplier_name ?? "",
     r.aggregator ?? aggregatorNameOf(r.source_url) ?? "",
     r.material_name ?? "",
+    fmtStock(r),
     r.pack_size ?? "",
     fmtCaseDims(resolveCaseDims(dimsByPack, r.pack_size)) ?? "",
     perUnitLabel(r),
@@ -153,7 +192,7 @@ export function MarketplaceFindingsList({
         {controls}
         <ListCsvButton
           filename={filenameFor(slug, "price-changes")}
-          headers={["Supplier", "Aggregator", "Material", "Pack / tier", "Case dims", "Per-unit", "$/kg", "Pack class", "QA", "On file", "Current", "Supplier price changed", "Listed price", "Listed currency", "Updated", "Last updated by", "Why it changed", "Supplier-only price (USD)"]}
+          headers={["Supplier", "Aggregator", "Material", "Stock", "Pack / tier", "Case dims", "Per-unit", "$/kg", "Pack class", "QA", "On file", "Current", "Supplier price changed", "Listed price", "Listed currency", "Updated", "Last updated by", "Why it changed", "Supplier-only price (USD)"]}
           rows={csvRows}
         />
       </div>
@@ -305,7 +344,10 @@ export function MarketplaceFindingsList({
                           </div>
                         )}
                       </TableCell>
-                      <TableCell className="align-top"><ClassificationBadge value={r.classification ?? null} /></TableCell>
+                      <TableCell className="align-top">
+                        <ClassificationBadge value={r.classification ?? null} />
+                        <StockBadge status={r.stock_status} note={r.stock_note} since={r.out_of_stock_since} />
+                      </TableCell>
                       <TableCell className="text-muted-foreground align-top text-xs" title={r.created_at ? new Date(r.created_at).toLocaleString() : undefined}>
                         {r.created_at ? relativeTime(r.created_at) : "—"}
                         <PriceSourceLabel source={r.price_source} />
