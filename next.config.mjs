@@ -1,5 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // playwright-core and Stagehand must stay out of the bundle: they resolve
+  // optional native deps at require time, which the bundler cannot follow. We
+  // only ever connect to a REMOTE Browserbase browser over CDP, so no browser
+  // binary is needed here — just the client library, loaded from node_modules.
+  serverExternalPackages: ["playwright-core", "@browserbasehq/stagehand", "@browserbasehq/sdk"],
   experimental: {
     serverActions: { bodySizeLimit: "2mb" },
     // Live ops data (leads, drafts, agent runs) must be fresh on navigation.
