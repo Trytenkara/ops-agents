@@ -151,6 +151,21 @@ registerAgent({
       .eq("status", "pending_review");
     const pendingFor = new Set((existing ?? []).map((r: any) => r.quote_id));
 
+    // How long each listing has been unavailable. A finding is one observation,
+    // so "since" has to come from the last observation that saw the same thing —
+    // otherwise every re-check restamps today and the row can only ever say the
+    // listing went out of stock just now.
+    const { data: priorStock } = await admin
+      .from("marketplace_check_findings")
+      .select("quote_id, stock_status, out_of_stock_since, created_at")
+      .in("quote_id", quoteIds)
+      .not("stock_status", "is", null)
+      .order("created_at", { ascending: false });
+    const lastStockFor = new Map<string, { stock_status: string; out_of_stock_since: string | null }>();
+    for (const r of (priorStock ?? []) as any[]) {
+      if (!lastStockFor.has(r.quote_id)) lastStockFor.set(r.quote_id, r);
+    }
+
     let written = 0;
     let stoppedEarly = false;
     const counts = {
@@ -205,6 +220,8 @@ registerAgent({
           moq: null,
           lead_time: null,
           shipping: null,
+          stock_status: null,
+          stock_note: null,
           source_url: q.product_url,
           source_citations: [],
           notes: `Re-check failed: ${e.message}`,
@@ -243,10 +260,25 @@ registerAgent({
       const oaOrgId = q.tenkara_org_id ? tenkaraOrgToOaOrg.get(q.tenkara_org_id) ?? null : null;
       const classification = classify(q.price, result.current_price, result);
 
+      // Silence about stock is not a return to in-stock: carry the last verdict
+      // forward so a standing sold-out listing doesn't quietly look live again.
+      const prior = lastStockFor.get(q.id) ?? null;
+      const stockStatus = result.stock_status ?? prior?.stock_status ?? null;
+      const outOfStockSince =
+        stockStatus == null || stockStatus === "in_stock"
+          ? null
+          : prior && prior.stock_status === stockStatus && prior.out_of_stock_since
+          ? prior.out_of_stock_since
+          : new Date().toISOString();
+
       // Prices that match baseline carry no signal — auto-resolve them so the
       // human review queue only holds actionable findings (diverges / needs_review
       // / link_broken). They stay in the table as a dismissed audit record.
-      const autoResolved = classification === "signal_matches_baseline";
+      // ...except when the listing is sold out. The price matching baseline is
+      // exactly why that case is dangerous: the number looks healthy, so it would
+      // be dismissed unseen even though nobody can buy at it.
+      const autoResolved =
+        classification === "signal_matches_baseline" && stockStatus !== "out_of_stock" && stockStatus !== "discontinued";
 
       const { error: insErr } = await admin.from("marketplace_check_findings").insert({
         org_id: oaOrgId,
@@ -263,6 +295,9 @@ registerAgent({
         unit_price: result.unit_price,
         tiers: result.tiers,
         classification,
+        stock_status: stockStatus,
+        stock_note: result.stock_note,
+        out_of_stock_since: outOfStockSince,
         source_url: result.source_url,
         source_citations: result.source_citations,
         notes: result.notes,

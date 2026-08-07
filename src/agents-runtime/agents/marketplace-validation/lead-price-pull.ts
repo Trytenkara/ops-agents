@@ -487,6 +487,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         market_kind: "marketplace" as const, aggregator: null,
         current_price: null, currency: null, pack_size: null, unit_price: null,
         tiers: [] as any[], moq: null, lead_time: null, shipping: null,
+        stock_status: null, stock_note: null,
         source_url: url, source_citations: [] as any[],
         notes:
           noCheckout.kind === "directory"
@@ -837,6 +838,34 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     // ≥1% move resets to daily and widens the ladder while it holds; a first pull
     // seeds its starting interval from the per-host volatility prior.
     const nowIso = new Date().toISOString();
+
+    // Availability, and WHEN the listing went away. `out_of_stock_since` is
+    // sticky across re-reads: without it every pass would restamp today and the
+    // row could only ever say "out of stock as of now", which is the one thing an
+    // operator already knows. It clears the moment the page says buyable again.
+    // A read where the page said nothing about stock is silence, not a return to
+    // in-stock, so it carries the last verdict forward rather than erasing it.
+    const priorStock = priorPull?.stock_status ?? null;
+    const stock = result.stock_status
+      ? {
+          stock_status: result.stock_status,
+          stock_note: result.stock_note ?? null,
+          stock_checked_at: nowIso,
+          out_of_stock_since:
+            result.stock_status === "in_stock"
+              ? null
+              : priorStock === result.stock_status
+              ? (priorPull?.out_of_stock_since ?? nowIso)
+              : nowIso,
+        }
+      : {
+          stock_status: priorStock,
+          stock_note: priorPull?.stock_note ?? null,
+          stock_checked_at: priorPull?.stock_checked_at ?? null,
+          out_of_stock_since: priorPull?.out_of_stock_since ?? null,
+        };
+    const soldOut = stock.stock_status === "out_of_stock" || stock.stock_status === "discontinued";
+
     let cadence: {
       check_interval_days: number;
       next_check_at: string;
@@ -956,6 +985,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         attempts,
         last_recheck_reason: reason,
         last_recheck_at: nowIso,
+        ...stock,
         ...aggregatorMark,
       };
       preservedRecheckPull = deferPull;
@@ -1013,6 +1043,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           price_source: "marketplace_scrape",
           price_source_at: nowIso,
           ...cadence!,
+          ...stock,
           ...aggregatorMark,
         }
       : preservedRecheckPull ?? {
@@ -1027,6 +1058,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           source_url: result.source_url ?? url,
           last_notes: result.notes ?? null,
           at: new Date().toISOString(),
+          ...stock,
           ...aggregatorMark,
         };
 
@@ -1181,10 +1213,16 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       const moved = isRecheck && cadence?.stable_streak === 0 && priorPrice != null;
       const verb = isRecheck ? (moved ? `re-checked (moved from $${priorPrice})` : "re-checked (unchanged)") : "pulled";
       await log(
-        `Marketplace price ${verb}: ${l.supplier_name} × ${l.material_name} → $${result.current_price}${result.pack_size ? ` / ${result.pack_size}` : ""} — next check in ${cadence?.check_interval_days}d`,
+        `Marketplace price ${verb}: ${l.supplier_name} × ${l.material_name} → $${result.current_price}${result.pack_size ? ` / ${result.pack_size}` : ""}${soldOut ? ` — ${stock.stock_status === "discontinued" ? "DISCONTINUED" : "OUT OF STOCK"} since ${stock.out_of_stock_since}, price is not quotable` : ""} — next check in ${cadence?.check_interval_days}d`,
         {
           step: isRecheck ? "mp_recheck" : "mp_pull",
-          data: { lead_id: l.id, interval_days: cadence?.check_interval_days, moved: !!moved },
+          data: {
+            lead_id: l.id,
+            interval_days: cadence?.check_interval_days,
+            moved: !!moved,
+            stock_status: stock.stock_status,
+            out_of_stock_since: stock.out_of_stock_since,
+          },
         },
       );
       return "pulled";
@@ -1219,13 +1257,18 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         : reason === "link_broken" ? "the listing link is broken"
         : `no price could be auto-pulled after ${attempts} attempts`;
       const noteSuffix = reason === "needs_review" && result.notes ? ` (${result.notes})` : "";
+      // Say it up front: a manual pull on a sold-out listing is wasted work, and
+      // the operator can only tell by opening the page unless we hand it over.
+      const stockPrefix = soldOut
+        ? `The listing has been ${stock.stock_status === "discontinued" ? "discontinued" : "out of stock"} since ${stock.out_of_stock_since?.slice(0, 10)}${stock.stock_note ? ` ("${stock.stock_note}")` : ""} — check it is still worth pricing before pulling. `
+        : "";
       await admin.from("cases").insert({
         org_id: l.org_id,
         type: "marketplace_price_pull",
         status: "open",
         supplier_id: l.supplier_id,
         material_id: l.material_id,
-        recommended_action: `Marketplace price for ${l.material_name} from ${l.supplier_name ?? "this supplier"} couldn't be auto-pulled — ${reasonLabel}${noteSuffix}. Pull the listed/wholesale price manually: ${pull.source_url}`,
+        recommended_action: `${stockPrefix}Marketplace price for ${l.material_name} from ${l.supplier_name ?? "this supplier"} couldn't be auto-pulled — ${reasonLabel}${noteSuffix}. Pull the listed/wholesale price manually: ${pull.source_url}`,
         assigned_operator: operatorFor(l),
         metadata: {
           source_agent: "agent-05-marketplace-validation",
@@ -1237,6 +1280,8 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           attempts,
           last_notes: result.notes ?? null,
           source_url: pull.source_url,
+          stock_status: stock.stock_status,
+          out_of_stock_since: stock.out_of_stock_since,
         },
       });
     }

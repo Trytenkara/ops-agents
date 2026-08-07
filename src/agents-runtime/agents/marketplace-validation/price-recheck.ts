@@ -86,6 +86,12 @@ export interface RecheckResult {
   moq: string | null;                  // minimum order quantity as printed, e.g. "Min. order: 25 kg"
   lead_time: string | null;            // lead time / dispatch time as printed, e.g. "Ships in 3-5 business days"
   shipping: string | null;             // shipping terms as printed, e.g. "Free shipping over $100"
+  // Whether the listing can actually be bought right now. A price on a sold-out
+  // page is a historical number, not something an operator can quote against, so
+  // it publishes with this flag rather than silently as a live price. null = the
+  // page said nothing either way (most B2B listings), which is NOT "in stock".
+  stock_status: "in_stock" | "out_of_stock" | "discontinued" | null;
+  stock_note: string | null;           // the availability text as printed, e.g. "Out of stock"
   source_url: string | null;
   source_citations: string[];
   notes: string | null;
@@ -126,6 +132,8 @@ Return ONLY a JSON object (no prose) like:
   "moq": "Min. order: 25 kg",
   "lead_time": "Ships in 3-5 business days",
   "shipping": "Free shipping over $100",
+  "stock_status": "in_stock | out_of_stock | discontinued | null",
+  "stock_note": "Out of stock",
   "source_url": "https://supplier.com/...",
   "source_citations": ["https://...", "..."],
   "notes": "one-line summary; mention if pack size differs from baseline"
@@ -146,6 +154,9 @@ Rules:
 - "currency": the ISO 4217 code the listed prices are in — "USD", "EUR", "GBP", "INR", "CNY", etc. Infer from the currency symbol/locale (€→EUR, £→GBP, ₹ or "Rs"/"Rs."/"₹"→INR, ¥→CNY or JPY by site, $→USD unless clearly CAD/AUD/etc.). We convert to USD ourselves — do NOT convert; report the listed currency.
 - CURRENCY IS HIGH-STAKES: a price reported in the wrong currency is published as a wildly wrong USD number (e.g. ₹149 shown as $149 is ~85x too high). Do NOT default to USD just because you see a bare "$" or no symbol. Many suppliers — especially Indian, Chinese, Pakistani, and other non-US firms — list domestic-currency prices (₹/Rs, ¥/RMB) even on ".com" sites and even when a "$" appears. If the page shows ₹ or "Rs"/"Rs." anywhere near the price, it is INR, not USD. Consider the supplier's country, the site locale, and whether the price magnitude makes sense for this material in USD (bulk industrial chemicals are typically low single-digit $/kg — a "per kg" price of $60-$800 is almost always a local-currency figure mislabeled).
 - If you cannot POSITIVELY confirm the currency from the page (symbol, explicit code, or a clear locale/magnitude signal), return "needs_review" with a note explaining the ambiguity — do NOT guess "USD". A blank is better than a wrong currency.
+- "stock_status": whether the listing can be bought right now, read off the page. "out_of_stock" when it says so — "Out of stock", "Sold out", "Currently unavailable", "Temporarily out of stock", "Back-order", or an add-to-cart control that is disabled/replaced by a "Notify me"/"Email when available" control. "discontinued" when the page says the product is discontinued, retired, or no longer produced. "in_stock" ONLY when the page positively says it is available ("In stock", "Ships today", a live add-to-cart). If the page says nothing about availability, return null — do NOT infer "in_stock" from the mere presence of a price or a cart button.
+- "stock_note": the availability wording exactly as printed (e.g. "Out of stock", "Only 3 left", "Discontinued - see replacement"). Null if the page shows none.
+- Stock status NEVER changes the classification and NEVER suppresses a price. A sold-out listing that still prints a number is still "current_price_found" with that number — report it and set stock_status "out_of_stock". A sold-out listing that hides its price behind the sold-out state is "needs_review" (not login_required, there is no login to do) with stock_status "out_of_stock".
 - "moq" / "lead_time" / "shipping": capture these ONLY if they are explicitly printed on the product page, copied verbatim (e.g. "Minimum order 25 kg", "Usually ships in 2-3 business days", "Free shipping on orders over $100"). If the page does not show it, return null. Never infer a minimum from the smallest pack size, never assume a default lead time, never guess shipping. These are optional and must not affect the classification or price.
 - source_url must be the actual product page you read from, not a search result.
 - Never fabricate, infer, estimate, round, or back-calculate a price. Only report a number that is explicitly printed on the page for that exact pack size. If the price only appears after selecting a size/variant you cannot confirm was rendered, or you are otherwise unsure of the exact figure, return needs_review — a blank is better than a guess.
@@ -247,6 +258,8 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
       moq: null,
       lead_time: null,
       shipping: null,
+      stock_status: null,
+      stock_note: null,
       source_url: input.product_url,
       source_citations: [],
       notes: `Model returned no JSON: ${text.slice(0, 200)}`,
@@ -295,6 +308,14 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
   const currency = typeof parsed.currency === "string" && /^[A-Za-z]{3}$/.test(parsed.currency.trim())
     ? parsed.currency.trim().toUpperCase()
     : null;
+
+  // The model is told to return null when the page is silent on availability, but
+  // it also likes to answer the literal placeholder string. Anything that isn't
+  // one of the three known verdicts is silence, not a fourth state.
+  const rawStock = typeof parsed.stock_status === "string" ? parsed.stock_status.trim().toLowerCase() : null;
+  const stockStatus =
+    rawStock === "in_stock" || rawStock === "out_of_stock" || rawStock === "discontinued" ? rawStock : null;
+  const stockNote = typeof parsed.stock_note === "string" && parsed.stock_note.trim() ? parsed.stock_note.trim().slice(0, 200) : null;
 
   // Sellers read off an index page. Each must be a named company with its own
   // link: anything that echoes the platform's name, repeats the index URL, or
@@ -368,6 +389,10 @@ export async function recheckMarketplaceQuote(input: RecheckInput): Promise<Rech
     moq: !indexPage && typeof parsed.moq === "string" && parsed.moq.trim() ? parsed.moq.trim() : null,
     lead_time: !indexPage && typeof parsed.lead_time === "string" && parsed.lead_time.trim() ? parsed.lead_time.trim() : null,
     shipping: !indexPage && typeof parsed.shipping === "string" && parsed.shipping.trim() ? parsed.shipping.trim() : null,
+    // An index page's availability belongs to a dozen different sellers, so none
+    // of it is this lead's stock status.
+    stock_status: indexPage ? null : stockStatus,
+    stock_note: indexPage ? null : stockNote,
     source_url: typeof parsed.source_url === "string" ? parsed.source_url : input.product_url,
     source_citations: Array.isArray(parsed.source_citations)
       ? parsed.source_citations.filter((u: any) => typeof u === "string").slice(0, 8)
