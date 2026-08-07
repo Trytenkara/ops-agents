@@ -7,8 +7,8 @@
 // Sierra Materials test org.
 //
 // The live cadence interleaves email and phone, all offsets measured from the
-// day the RFQ went out:
-//   day 0  RFQ (Agent 04)      day 1  call task #1
+// day the sourcing inquiry went out:
+//   day 0  inquiry (Agent 04)  day 1  call task #1
 //   day 2  nudge #1            day 5  call task #2 (only if still no reply)
 //   day 4  nudge #2
 
@@ -62,7 +62,7 @@ export function followupDelaysMs(orgId: string | null | undefined): number[] {
   return envFollowupDelaysMs() ?? PROD_FOLLOWUP_DELAYS_MS;
 }
 
-// Delay before each call task, as ms-after-the-RFQ-was-sent. The list length also
+// Delay before each call task, as ms-after-the-inquiry-was-sent. The list length also
 // sets how many call tasks are raised. Prod default 1d/5d; compressed orgs use
 // CALL_TASK_MINUTES. Stage 1 is an intro call and fires whether or not the
 // supplier replied; every later stage is silence-only (see call-tasks.ts).

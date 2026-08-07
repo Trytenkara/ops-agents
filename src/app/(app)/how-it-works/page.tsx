@@ -48,6 +48,43 @@ export default function HowItWorksPage() {
         <PipelineDiagram />
       </section>
 
+      <section className="space-y-3">
+        <h2 className="font-serif text-xl">The contact cadence</h2>
+        <p className="text-sm text-muted-foreground">
+          Every offset below is counted from the day a supplier&apos;s first email is actually sent, so a follow-up sent late
+          never drags the rest of the sequence with it. This applies to Active clients; Sourcing only and Off clients get
+          no emails and no calls at all.
+        </p>
+        <ul className="text-sm text-muted-foreground space-y-1 list-disc pl-5">
+          <li><span className="font-medium text-foreground">Day 0</span> — the sourcing inquiry goes out (you send it).</li>
+          <li><span className="font-medium text-foreground">Day 1</span> — intro call. Raised whether or not they replied, to reach a person while the email is still fresh.</li>
+          <li><span className="font-medium text-foreground">Day 2</span> — first follow-up email, staged in the same thread.</li>
+          <li><span className="font-medium text-foreground">Day 4</span> — second follow-up email.</li>
+          <li><span className="font-medium text-foreground">Day 5</span> — second call, only for suppliers who still have not written back.</li>
+        </ul>
+        <p className="text-sm text-muted-foreground">
+          Calls land on the client&apos;s <span className="font-medium text-foreground">Call Tracker</span> tab, filterable by
+          operator. Open a row for the number, the supplier&apos;s calling window in their own timezone, what we already emailed
+          them, where the inbox thread stands right now, and what to ask for. Log the outcome, then close the row either by
+          sending the supplier back into the email loop (your notes ride along) or by dropping them with a reason when they
+          never came back on either channel.
+        </p>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="font-serif text-xl">Who gets the work</h2>
+        <p className="text-sm text-muted-foreground">
+          Set per client on its Overview → Operator assignment card. There is no Primary and no Backup: each operator on a
+          client has a work type (Call operator or Email operator) and the market lanes they cover (Marketplace, Aggregator,
+          Direct).
+        </p>
+        <ul className="text-sm text-muted-foreground space-y-1 list-disc pl-5">
+          <li>Type is per client, so the same person can take calls for one client and email for another, but never both on the same client.</li>
+          <li>Work spreads across everyone who covers it rather than being pinned to one person. A supplier keeps a stable owner, so they always see one point of contact, and adding or removing an operator moves only about their share of the book.</li>
+          <li>If nobody on a client covers a lane or a type, the work falls back to the whole pool for that client. Nothing is ever left unowned.</li>
+        </ul>
+      </section>
+
       <section className="space-y-4">
         <h2 className="font-serif text-xl">Agents</h2>
         {sorted.map((a) => (

@@ -78,7 +78,7 @@ export default async function ProfilePage() {
       <Card className="tb-surface shadow-none">
         <CardHeader>
           <CardTitle className="text-base">Out of office</CardTitle>
-          <CardDescription>While on, new items for orgs you're the primary on route to the backup.</CardDescription>
+          <CardDescription>While on, new work skips you and spreads across the other operators on your clients.</CardDescription>
         </CardHeader>
         <CardContent>
           <OooToggle initialStatus={session.status} />

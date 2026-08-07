@@ -49,6 +49,8 @@ Each org picks how suppliers get an owner (`orgs.assignment_mode`, editable from
 | `auto_new` | A claim wins; auto fills every unclaimed supplier. Existing orgs were backfilled to this. |
 | `auto_all` | Auto owns every supplier in scope. Claims are ignored while it is set, but never deleted, so switching back to `auto_new` restores them. |
 
+Beyond the mode, each membership row carries **what that person does on this client**: `user_org_assignments.operator_type` (`call` or `email`) and `user_org_assignments.lanes` (any of `marketplace` / `aggregator` / `direct`). Both are per-(user, org), which is what enforces "can be both, but never for the same client" without a rule to check. `poolForWork()` narrows the pool to the right type and lane before the hash runs, and each filter falls back to the unnarrowed pool rather than returning nobody, so a client with no named call operator still has its calls land on a person. The old org-wide Primary/Backup pair is gone (table `org_default_operators` dropped in `0107`).
+
 Under `auto_all` an ops lead can still override: only a claim stamped **after** `orgs.assignment_auto_all_at` wins, since older claims are exactly what "reassign all" was asked to redo. Scope is `orgs.assignment_supplier_types` (`marketplace` / `aggregator` / `direct`), and `user_org_assignments.auto_assignable` takes one person out of the auto loop without removing their org membership.
 
 Two traps worth knowing. Narrowing the scope used to drop every supplier of the removed kind to "Unassigned" (Sierra lost 231 aggregators that way), so the derived owner is now frozen into `supplier_assignment` before the change lands, and the whole change fails if that pinning fails. And the hash key is not always the supplier id: it falls back to the contact email only when the value is actually email-shaped, because `supplier_contact_email` sometimes holds a prose channel note ("via IndiaMART inquiry") which collapsed 62 unrelated suppliers onto one operator.
@@ -191,7 +193,7 @@ CC harvesting runs after a primary is found. Every paid call is journaled into `
 Active and sourcing_only orgs.
 
 ### 07 Escalation + Nudge · `escalation/`
-Opens a `cases` row for each lead untouched more than 14 days (assigned to the org's primary, or backup if out of office) and drops the lead as `escalated_to_case`; a lead already covered by an open case drops as a duplicate. Separately posts one Slack nudge per org covering drafts staged over 3 days, undrafted inbound replies, and leads stuck at `enriched`. Runs across every org regardless of sourcing status.
+Opens a `cases` row for each lead untouched more than 14 days (assigned to the supplier's owning operator, skipping anyone out of office) and drops the lead as `escalated_to_case`; a lead already covered by an open case drops as a duplicate. Separately posts one Slack nudge per org covering drafts staged over 3 days, undrafted inbound replies, and leads stuck at `enriched`. Runs across every org regardless of sourcing status.
 
 ### 08 Email Scanner + Responder · `src/lib/tenkara-inbound.ts` (+ `src/lib/reply-drafter.ts`)
 Not a scheduled agent and no longer a directory: the `email-scanner/` folder and its registry entry were deleted, and the `agents` row is unscheduled and `disabled`. The webhook is the agent, and it is where reply classification and drafting actually happen (not in Agent 15).
@@ -253,7 +255,11 @@ Two jobs, in this order: **reconcile the threads, then chase the silence.** Repl
 
 **Thread reconcile** (`thread-reconcile.ts`) catches inbound messages no webhook ever delivered. It polls every tracked Tenkara thread on an age-based cadence (hot under 21 days hourly, warm 12-hourly, cold weekly, and 15 minutes after a thread just yielded something), reading at half Tenkara's allowed rate with a 200s budget and 120 threads per run. Per thread it follows merge hops, takes the **newest unseen message per sender**, and replays it. Older messages from the same sender are superseded, except that any carrying attachments are still replayed `extractOnly` so the files are not lost, oldest first, so the newest message's `reply_detected` stamp is the one that sticks. Messages are claimed in the `inbound_message_ledger` before replay, and a claim abandoned for 20 minutes can be atomically taken over by the next run. A thread that is unreadable or only half-replayed does not get its next-check time advanced, so it stays at the front of the queue. The run reports backlog and oldest-due age. Note this sweep is **not** org-status gated.
 
-**No-reply nudges**: two, at 4 and 8 days in production, pulling in contacts not yet reached (reserved atomically so nobody is emailed twice), then a calling-escalation case after a further 2 days. Caps of 50 drafts and 50 escalations per run. A nudge is suppressed when the thread is terminal, when the org is not `active`, when the draft was never reviewed, **when anyone on the thread has replied** (checked across every ref on the thread, because the inbound handler stamps `reply_detected` on the newest ref while the Agent 04 row stays null forever), and **when the previous nudge is still sitting unsent in the outbox**. Sequence position counts only nudges that were actually acted on, and nudge #2 can never land closer than 4 days after nudge #1 truly went out. Both of those gates exist because the two nudges once stacked ~5 minutes apart on 142 threads.
+**No-reply nudges**: two, on day 2 and day 4 in production, pulling in contacts not yet reached (reserved atomically so nobody is emailed twice). Caps of 50 drafts and 50 escalations per run. A nudge is suppressed when the thread is terminal, when the org is not `active`, when the draft was never reviewed, **when anyone on the thread has replied** (checked across every ref on the thread, because the inbound handler stamps `reply_detected` on the newest ref while the Agent 04 row stays null forever), and **when the previous nudge is still sitting unsent in the outbox**. Sequence position counts only nudges that were actually acted on, and nudge #2 can never land closer than 4 days after nudge #1 truly went out. Both of those gates exist because the two nudges once stacked ~5 minutes apart on 142 threads.
+
+**Call tasks** (`call-tasks.ts`): calling is scheduled work in the cadence, not a last resort. Stage 1 lands on day 1 and fires whether or not the supplier replied (the intro call, made while the first email is still fresh); stage 2 lands on day 5 and only for threads with no reply at all. Every offset is measured from the day the sourcing inquiry was actually sent (`draft_references.reviewed_at`), so a nudge sent late cannot drag the phone work with it, and the delays are per-org via `callTaskDelaysMs()` in `src/lib/agent-timing.ts` (prod 1d/5d, compressed orgs via `CALL_TASK_MINUTES`). Each task is a `cases` row of type `calling_escalation` carrying `metadata.call_stage` and a `call_brief` (contact + phone, the supplier's calling window resolved to their timezone, why we are calling, and the asks). One open call case per supplier at a time; `outreachAllowed()` gates them, so `sourcing_only` orgs raise none.
+
+The worklist is the per-client **Call Tracker** tab (`/work/orgs/[slug]/calls`), filterable by operator and by call stage, rows collapsed to one line and expanded on click. Alongside the frozen brief each row reads `supplier_email_context` **live at render time** (Agent 13's per-supplier summary, open ask and thread state) so a brief written on day 1 does not describe a stale thread on day 5. Closing a row either de-escalates the supplier back into the email sequence (with the operator's notes and per-call success flags) or drops them with a required reason.
 
 Stages only, never sends.
 
@@ -307,7 +313,8 @@ Agent 03 (1 min)  ──► raw leads (graph + scout + ImportYeti + SourceReady)
       ▼ Agent 04 (5 min): enriched ──► ready_for_outreach   (one draft per supplier, QA inline)
       ▼ 👤 operator reviews and sends from the Tenkara inbox
       ▼ supplier replies ──► POST /api/webhooks/tenkara ──► staged quotes + documents + reply draft
-      ▼ Agent 15 (5 min): reconciles threads the webhook missed, then nudges silence ──► 👤 Send
+      ▼ Agent 15 (5 min): reconciles threads the webhook missed, nudges silence (day 2, day 4) ──► 👤 Send
+      ▼ Agent 15 also raises the calls: day 1 intro, day 5 on silence ──► 👤 Call Tracker tab
 
 Side-channels:
   - Agent 02 (daily 07:10): expiring-quote re-quote drafts
@@ -323,7 +330,7 @@ Side-channels:
 There are two inbound paths, not one: the webhook, and Agent 15's reconcile sweep for messages the webhook never delivered.
 ```
 
-The human gates are Promote/Drop on the Agent Supplier Leads tab, Send in the Tenkara inbox, and quote approval before the CSV export. Nothing else leaves the building.
+The human gates are Promote/Drop on the Agent Supplier Leads tab, Send in the Tenkara inbox, working the calls on the Call Tracker tab, and quote approval before the CSV export. Nothing else leaves the building.
 
 ---
 

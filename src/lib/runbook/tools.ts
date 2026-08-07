@@ -33,7 +33,7 @@ export const TOOL_DEFS: Anthropic.Tool[] = [
   {
     name: "get_open_cases",
     description:
-      "Get open/in-progress escalation cases (stale leads escalated by Agent 07) for the user's orgs, including type, recommended action, supplier, and org.",
+      "Get open/in-progress escalation cases for the user's orgs, including type, recommended action, supplier, org, and (for calls) which call stage. Cases of type calling_escalation are the rows on a client's Call Tracker tab; everything else opens from the client's Overview \"Open cases\" card.",
     input_schema: { type: "object", properties: {} },
   },
   {
@@ -119,7 +119,7 @@ export async function runRunbookTool(
       if (noAccess) return { count: 0, cases: [] };
       let q = admin
         .from("cases")
-        .select("id, supplier_id, type, recommended_action, status, created_at, org_id, orgs(name)")
+        .select("id, supplier_id, type, recommended_action, status, created_at, org_id, metadata, orgs(name)")
         .in("status", ["open", "in_progress"])
         .order("created_at", { ascending: false })
         .limit(25);
@@ -135,6 +135,7 @@ export async function runRunbookTool(
           org: r.orgs?.name ?? null,
           supplier: r.supplier_id ? supplierNames.get(r.supplier_id) ?? null : null,
           type: r.type,
+          call_stage: r.type === "calling_escalation" ? r.metadata?.call_stage ?? null : undefined,
           recommended_action: r.recommended_action,
           status: r.status,
           opened_at: r.created_at,
