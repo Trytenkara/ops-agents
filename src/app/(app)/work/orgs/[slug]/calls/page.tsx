@@ -4,7 +4,7 @@ import { ListPageHeader } from "@/components/list-page-header";
 import { CallsList } from "@/components/calls-list";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { relativeTime } from "@/lib/utils";
-import { loadOrgCases, caseCategory, toCallCaseRow } from "@/lib/org-cases";
+import { loadOrgCases, caseCategory, toCallCaseRow, loadInboxContext } from "@/lib/org-cases";
 
 export const dynamic = "force-dynamic";
 
@@ -16,8 +16,8 @@ export default async function CallsPage({ params }: { params: { slug: string } }
   const { data: org } = await admin.from("orgs").select("id, name").eq("slug", params.slug).maybeSingle();
   if (!org) notFound();
 
-  const { openRows, resolvedRows } = await loadOrgCases(admin, org.id);
-  const open = openRows.filter((c: any) => caseCategory(c.type) === "call").map(toCallCaseRow);
+  const [{ openRows, resolvedRows }, inbox] = await Promise.all([loadOrgCases(admin, org.id), loadInboxContext(admin, org.id)]);
+  const open = openRows.filter((c: any) => caseCategory(c.type) === "call").map((c: any) => toCallCaseRow(c, inbox));
   const done = resolvedRows.filter((c: any) => caseCategory(c.type) === "call");
 
   return (

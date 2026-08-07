@@ -7,8 +7,21 @@ import { logCallAttempt, addSupplierPhoneToCase, deescalateCallCase, dropSupplie
 import { CALL_OUTCOMES, type CallOutcome, type CallBrief, type CallAttempt } from "@/lib/call-brief";
 import { zoneOffsetMinutes, isWithinWindow, shiftRangeLabel } from "@/lib/call-window";
 
+// What the Tenkara inbox knows about this supplier, read live at render time
+// rather than frozen into the case at creation. A brief written on day 1 and
+// called on day 5 would otherwise describe a thread that has since moved.
+export type InboxContext = {
+  threadState: string | null;
+  summary: string | null;
+  openAsk: string | null;
+  lastInboundAt: string | null;
+  conversationUrl: string | null;
+  updatedAt: string | null;
+};
+
 export type CallCaseRow = {
   id: string;
+  inbox: InboxContext | null;
   supplierId: string | null;
   supplierName: string | null;
   status: string;
@@ -344,6 +357,52 @@ function ClosingActions({ row }: { row: CallCaseRow }) {
   );
 }
 
+const THREAD_STATE_LABEL: Record<string, string> = {
+  they_replied: "They wrote back",
+  awaiting_their_reply: "Waiting on them",
+  awaiting_our_reply: "Waiting on us",
+  no_traffic: "Nothing sent yet",
+};
+
+// The state of the actual email conversation, as read out of the Tenkara inbox.
+// The brief says what we sent; this says where the conversation stands now,
+// which is what an operator needs in the ten seconds before they dial.
+function InboxBlock({ inbox }: { inbox: InboxContext }) {
+  if (!inbox.summary && !inbox.openAsk) return null;
+  const replied = inbox.threadState === "they_replied";
+  return (
+    <div
+      className={`rounded-md border px-3 py-2 text-xs ${
+        replied ? "border-emerald-300 bg-emerald-50/60 dark:border-emerald-900 dark:bg-emerald-950/30" : "border-border bg-muted/40"
+      }`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="font-medium">
+          From the inbox
+          {inbox.threadState ? `: ${THREAD_STATE_LABEL[inbox.threadState] ?? inbox.threadState}` : ""}
+          {inbox.lastInboundAt ? `, last heard ${relativeTime(inbox.lastInboundAt)}` : ""}
+        </span>
+        {inbox.conversationUrl && (
+          <a
+            href={inbox.conversationUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary underline hover:no-underline"
+          >
+            Open in Tenkara
+          </a>
+        )}
+      </div>
+      {inbox.summary && <p className="mt-1 text-muted-foreground">{inbox.summary}</p>}
+      {inbox.openAsk && (
+        <p className="mt-1">
+          <span className="font-medium">Still owed:</span> <span className="text-muted-foreground">{inbox.openAsk}</span>
+        </p>
+      )}
+    </div>
+  );
+}
+
 function CallCard({ row }: { row: CallCaseRow }) {
   const brief = row.brief;
 
@@ -373,6 +432,8 @@ function CallCard({ row }: { row: CallCaseRow }) {
           )}
         </div>
       </div>
+
+      {row.inbox && <InboxBlock inbox={row.inbox} />}
 
       {!brief ? (
         <p className="text-sm text-muted-foreground">{row.recommendedAction ?? "Call this supplier."}</p>

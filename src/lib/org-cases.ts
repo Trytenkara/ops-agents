@@ -2,6 +2,7 @@ import { operatorRoles, primaryRole } from "@/lib/operator";
 import type { CaseRow } from "@/components/cases-list";
 import type { CallCaseRow } from "@/components/calls-list";
 import type { CallBrief, CallAttempt } from "@/lib/call-brief";
+import { tenkaraInboxUrl } from "@/lib/tenkara";
 
 // Escalations (the `cases` table) are split across four surfaces by what kind of
 // problem they represent, so operators land on them where they already work:
@@ -52,9 +53,50 @@ export function isCallCase(c: any): boolean {
   return c?.type === "calling_escalation";
 }
 
-export function toCallCaseRow(c: any): CallCaseRow {
+// Agent 13 already reads the real Tenkara threads and writes a per-supplier
+// summary, open ask and thread state into supplier_email_context. Calls read it
+// live rather than copying it into the case, because a brief written on day 1
+// and dialled on day 5 would otherwise describe a thread that has moved since.
+export type InboxContextLookup = {
+  bySupplierId: Map<string, any>;
+  byEmail: Map<string, any>;
+};
+
+export async function loadInboxContext(admin: any, orgId: string): Promise<InboxContextLookup> {
+  const { data } = await admin
+    .from("supplier_email_context")
+    .select("supplier_id, supplier_email, thread_state, summary, open_ask, last_inbound_at, latest_conversation_id, updated_at")
+    .eq("org_id", orgId);
+  const bySupplierId = new Map<string, any>();
+  const byEmail = new Map<string, any>();
+  for (const r of (data ?? []) as any[]) {
+    if (r.supplier_id && !bySupplierId.has(r.supplier_id)) bySupplierId.set(r.supplier_id, r);
+    const email = (r.supplier_email as string | null)?.toLowerCase();
+    if (email && !byEmail.has(email)) byEmail.set(email, r);
+  }
+  return { bySupplierId, byEmail };
+}
+
+function inboxFor(c: any, lookup?: InboxContextLookup) {
+  if (!lookup) return null;
+  const email = (c.metadata?.supplier_contact_email as string | undefined)?.toLowerCase();
+  const row = (c.supplier_id && lookup.bySupplierId.get(c.supplier_id)) || (email && lookup.byEmail.get(email)) || null;
+  if (!row) return null;
+  const conversationId = row.latest_conversation_id ?? (c.metadata?.thread_id as string | undefined) ?? null;
+  return {
+    threadState: row.thread_state ?? null,
+    summary: row.summary ?? null,
+    openAsk: row.open_ask ?? null,
+    lastInboundAt: row.last_inbound_at ?? null,
+    conversationUrl: conversationId ? tenkaraInboxUrl(conversationId) : null,
+    updatedAt: row.updated_at ?? null,
+  };
+}
+
+export function toCallCaseRow(c: any, inboxLookup?: InboxContextLookup): CallCaseRow {
   return {
     id: c.id,
+    inbox: inboxFor(c, inboxLookup),
     supplierId: c.supplier_id ?? null,
     supplierName: (c.metadata?.supplier_name as string | undefined) ?? null,
     status: c.status ?? "open",
