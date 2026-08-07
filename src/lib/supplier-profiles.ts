@@ -268,7 +268,16 @@ export async function seedProfilesFromLeads(
   let touched = 0;
   for (const info of bySupplier.values()) {
     const nameKey = info.name.toLowerCase();
-    const current = info.supplierId ? existingById.get(info.supplierId) : existingByName.get(nameKey);
+    // A supplier scouted before it was linked to Tenkara already has a name-only
+    // profile, and looking an id-bearing lead up by id alone missed it and inserted
+    // a second row (the partial unique indexes let an id-row and a name-row coexist).
+    // Adopt the name-only row instead. A name row that already carries a DIFFERENT
+    // supplier_id is a different company sharing a name, so it is not a match.
+    const byName = nameKey ? existingByName.get(nameKey) : undefined;
+    const current = info.supplierId
+      ? existingById.get(info.supplierId) ?? (byName && !byName.supplier_id ? byName : undefined)
+      : byName;
+    const adoptId = Boolean(info.supplierId && current && !current.supplier_id);
     const p = info.payload;
     const marketKind: MarketKind = leadMarketKind(p.site_type) ?? "direct";
     try {
@@ -300,6 +309,7 @@ export async function seedProfilesFromLeads(
           !current.marketplace_type_correct;
         const patch = {
           // Fill-only: an operator's entry always wins over enrichment.
+          ...(adoptId ? { supplier_id: info.supplierId } : {}),
           ...(staleMarketKind ? { supplier_type: marketKind } : {}),
           ...((generatedNotes || null) !== (current.generated_notes ?? null) ? { generated_notes: generatedNotes || null } : {}),
           ...(shippingTerms && !current.shipping_terms ? { shipping_terms: shippingTerms } : {}),
