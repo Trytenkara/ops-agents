@@ -110,11 +110,26 @@ registerAgent({
         // fetch limit every run, starving the cold leads behind them.
         .is("payload->phased_hold", null);
       if (retryRequestId) query = query.eq("payload->outreach_retry->>request_id", retryRequestId);
-      else query = query.is("payload->outreach_retry", null);
+      else {
+        query = query.is("payload->outreach_retry", null);
+        // Same defect, same shape as phased_hold: marketplace leads with no
+        // supplier-owned email are skipped below and stay at stage='enriched'
+        // forever, so they occupy the window permanently and new ones keep
+        // landing on top. The candidate loop stamps outreach_parked_at as it sees
+        // them; a DB trigger clears it if the lead ever gains a contact email
+        // (see migration 0110). Not applied to an explicit operator retry — that
+        // is a deliberate re-attempt and should be visible in the run counters
+        // rather than silently dropped from the pull.
+        query = query.is("outreach_parked_at", null);
+      }
       return query.order("created_at", { ascending: false }).limit(retryRequestId ? 1000 : limit);
     };
 
-    const cap = maxDrafts * 4; // over-fetch to allow filtering before capping
+    // Over-fetch to allow filtering before capping. Wide enough that a run still
+    // finds actionable leads while the parked backlog is being stamped out for
+    // the first time — once drained, the extra rows cost one larger select and
+    // are discarded by the maxDrafts cap anyway.
+    const cap = maxDrafts * 20;
     const realRes = await fetchEnriched(realOrgIds, cap);
     if (realRes.error) {
       await ctx.log(`Pull failed: ${realRes.error.message}`, { level: "error", step: "pull" });
@@ -269,6 +284,7 @@ registerAgent({
     // paused orgs; this is a belt-and-suspenders guard in the candidate loop.
     let filteredNoContact = 0; // non-marketplace, no cold-emailable contact → filtered out
     let marketplacePricingLeft = 0; // marketplace, no email → left active for price-pull
+    const marketplaceParkIds: string[] = []; // of those, the ones not yet parked out of the fetch window
     let droppedNoOrg = 0;
     let droppedSkipClient = 0;
     let droppedPausedOrg = 0;
@@ -378,6 +394,10 @@ registerAgent({
         const isMarketplace = marketplaceFor(lead, payload, channelUrl);
         if (isMarketplace) {
           marketplacePricingLeft++;
+          // Stays active at stage='enriched' for Agent 05 price-pull — but park it
+          // out of the outreach fetch window so it stops starving the actionable
+          // leads behind it. Un-parked automatically if it ever gains an email.
+          marketplaceParkIds.push(lead.id);
           continue;
         }
         await admin
@@ -463,6 +483,28 @@ registerAgent({
       });
     }
 
+    // Park the marketplace leads seen this run out of the fetch window. One bulk
+    // stamp, before the no-candidates early return below — during the initial
+    // drain that return is the common path, and skipping the stamp there would
+    // leave the window blocked forever.
+    let parkedThisRun = 0;
+    // Chunked: an `in.()` filter is a URL query param, and the whole window's
+    // worth of uuids in one call runs close to the request-line limit.
+    for (let i = 0; i < marketplaceParkIds.length; i += 50) {
+      const chunk = marketplaceParkIds.slice(i, i + 50);
+      const { error: parkError, count } = await admin
+        .from("leads_in_flight")
+        .update({ outreach_parked_at: new Date().toISOString() }, { count: "exact" })
+        .in("id", chunk)
+        .eq("stage", "enriched")
+        .eq("status", "active");
+      if (parkError) {
+        await ctx.log(`Marketplace park failed (non-fatal): ${parkError.message}`, { level: "warn", step: "filter" });
+      } else {
+        parkedThisRun += count ?? chunk.length;
+      }
+    }
+
     const emailCount = candidates.filter((c) => c.channel === "email").length;
     await ctx.log(
       `Filtered: ${candidates.length} actionable (${emailCount} email) · filtered out ${filteredNoContact} (no contact recovered), left ${marketplacePricingLeft} marketplace for price-pull, ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${droppedPausedOrg ? `, ${droppedPausedOrg} (org not active)` : ""}${heldForSpelling ? ` · held ${heldForSpelling} (pending spelling review)` : ""}${heldForMissingName ? ` · held ${heldForMissingName} (missing material name)` : ""}${heldPhasedCarry ? ` · skipped ${heldPhasedCarry} (held for follow-up)` : ""}${heldForMarketplaceReview ? ` · held ${heldForMarketplaceReview} (marketplace outreach review)` : ""}`,
@@ -472,7 +514,7 @@ registerAgent({
     if (candidates.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary(`No actionable leads after filters (no_contact=${filteredNoContact}, marketplace_pricing=${marketplacePricingLeft}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${droppedPausedOrg ? `, paused_org=${droppedPausedOrg}` : ""}${heldForSpelling ? `, held_spelling=${heldForSpelling}` : ""}${heldForMissingName ? `, held_missing_name=${heldForMissingName}` : ""}).`);
+      ctx.setSummary(`No actionable leads after filters (no_contact=${filteredNoContact}, marketplace_pricing=${marketplacePricingLeft}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${droppedPausedOrg ? `, paused_org=${droppedPausedOrg}` : ""}${heldForSpelling ? `, held_spelling=${heldForSpelling}` : ""}${heldForMissingName ? `, held_missing_name=${heldForMissingName}` : ""})${parkedThisRun ? ` · parked ${parkedThisRun} marketplace out of the outreach window` : ""}.`);
       return;
     }
 
@@ -908,6 +950,7 @@ registerAgent({
         (priorRelSkipped ? ` · skipped ${priorRelSkipped} existing-relationship` : "") +
         (equipmentSkipped ? ` · skipped ${equipmentSkipped} equipment-supplier` : "") +
         (marketplacePricingLeft ? ` · left ${marketplacePricingLeft} marketplace for price-pull` : "") +
+        (parkedThisRun ? ` · parked ${parkedThisRun} marketplace out of the outreach window` : "") +
         (filteredNoContact || droppedNoOrg || droppedSkipClient
           ? ` · filtered ${filteredNoContact + droppedNoOrg + droppedSkipClient} pre-outreach`
           : "")
