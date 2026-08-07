@@ -24,8 +24,8 @@ export default async function CallsPage({ params }: { params: { slug: string } }
     <div className="space-y-6">
       <ListPageHeader
         level={2}
-        title="Caller Jobs"
-        description="Every call this client's suppliers are owed, with the number, the calling window, what we already emailed them, and what to ask for. Log the outcome here so the email sequence knows whether to resume."
+        title="Call Tracker"
+        description="Every call this client's suppliers are owed. Filter to one operator to get their list, then open a row for the number, the calling window, where the email thread stands, and what to ask for. Log the outcome here so the email sequence knows whether to resume."
         collectedBy="Agent 15"
       />
 

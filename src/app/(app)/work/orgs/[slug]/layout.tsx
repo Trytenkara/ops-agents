@@ -14,7 +14,7 @@ const sections = [
   { href: "/leads", label: "Agent Supplier Leads" },
   { href: "/price-index", label: "Agent Quotes" },
   { href: "/threads", label: "Email Thread Tracker" },
-  { href: "/calls", label: "Caller Jobs" },
+  { href: "/calls", label: "Call Tracker" },
   { href: "/savings", label: "Cost Savings and Reports" },
 ];
 

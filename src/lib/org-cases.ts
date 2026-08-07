@@ -6,7 +6,7 @@ import { tenkaraInboxUrl } from "@/lib/tenkara";
 
 // Escalations (the `cases` table) are split across four surfaces by what kind of
 // problem they represent, so operators land on them where they already work:
-//   call     → Caller Jobs (a scheduled call task, or a supplier gone silent)
+//   call     → Call Tracker (a scheduled call task, or a supplier gone silent)
 //   email    → Email Thread Tracker (a supplier reply / form needs a human)
 //   supplier → Agent Supplier Leads "Supplier Escalations" (contact/lead gap)
 //   quote    → Agent Quotes "Quotes Escalations" (a price couldn't be captured)
@@ -48,7 +48,7 @@ export async function loadOrgCases(admin: any, orgId: string): Promise<{ openRow
 }
 
 // Calling escalations are a phone worklist, not a row in a table: they render as
-// their own cards on the Caller Jobs tab.
+// their own cards on the Call Tracker tab.
 export function isCallCase(c: any): boolean {
   return c?.type === "calling_escalation";
 }

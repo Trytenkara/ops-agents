@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { relativeTime } from "@/lib/utils";
 import { OperatorChip } from "@/components/operator-chip";
+import { Select } from "@/components/ui/select";
 import { logCallAttempt, addSupplierPhoneToCase, deescalateCallCase, dropSupplierFromCallCase } from "@/app/actions/cases";
 import { CALL_OUTCOMES, type CallOutcome, type CallBrief, type CallAttempt } from "@/lib/call-brief";
 import { zoneOffsetMinutes, isWithinWindow, shiftRangeLabel } from "@/lib/call-window";
@@ -403,26 +404,35 @@ function InboxBlock({ inbox }: { inbox: InboxContext }) {
   );
 }
 
-function CallCard({ row }: { row: CallCaseRow }) {
+function CallCard({ row, expanded, onToggle }: { row: CallCaseRow; expanded: boolean; onToggle: () => void }) {
   const brief = row.brief;
 
   return (
-    <div className="rounded-lg border border-border p-4 space-y-3">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+    <div className="rounded-lg border border-border">
+      <div className="flex flex-wrap items-start justify-between gap-3 p-3">
+        <button type="button" onClick={onToggle} className="min-w-0 flex-1 text-left" aria-expanded={expanded}>
           <div className="flex flex-wrap items-center gap-2">
+            <span className="text-muted-foreground">{expanded ? "▾" : "▸"}</span>
             <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium uppercase tracking-wider">
               Call {row.callStage}
             </span>
             <span className="font-medium">{row.supplierName ?? row.supplierId ?? "Unknown supplier"}</span>
             {row.materialName && <span className="text-sm text-muted-foreground">for {row.materialName}</span>}
+            {row.inbox?.threadState === "they_replied" && (
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                replied
+              </span>
+            )}
+            {!brief?.contact.phone && (
+              <span className="text-[11px] text-amber-700 dark:text-amber-500">no number</span>
+            )}
           </div>
-          <div className="text-xs text-muted-foreground">
+          <div className="pl-5 text-xs text-muted-foreground">
             {REASON_LABEL[row.reason ?? ""] ?? "Call this supplier"}, raised {relativeTime(row.createdAt)}
             {row.status === "in_progress" ? ", attempted" : ""}
             {brief?.country ? `, ${brief.country}` : ""}
           </div>
-        </div>
+        </button>
         <div className="flex items-center gap-2">
           <OperatorChip name={row.assignedName} email={row.assignedEmail} role={row.assignedRole} />
           {row.draftId && (
@@ -433,6 +443,8 @@ function CallCard({ row }: { row: CallCaseRow }) {
         </div>
       </div>
 
+      {expanded && (
+      <div className="space-y-3 border-t border-border p-4">
       {row.inbox && <InboxBlock inbox={row.inbox} />}
 
       {!brief ? (
@@ -486,24 +498,96 @@ function CallCard({ row }: { row: CallCaseRow }) {
 
       <OutcomeButtons row={row} />
       <ClosingActions row={row} />
+      </div>
+      )}
     </div>
   );
 }
 
+const ALL = "all";
+const UNASSIGNED = "unassigned";
+
+function operatorKey(row: CallCaseRow): string {
+  return row.assignedEmail ?? row.assignedName ?? UNASSIGNED;
+}
+
 export function CallsList({ rows }: { rows: CallCaseRow[] }) {
+  const [operator, setOperator] = useState(ALL);
+  const [stage, setStage] = useState(ALL);
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  // Counts come off the full list, not the filtered one, so the dropdown always
+  // reads as a book size ("Maya, 14") rather than collapsing to the current view.
+  const operatorOptions = useMemo(() => {
+    const counts = new Map<string, { label: string; n: number }>();
+    for (const r of rows) {
+      const key = operatorKey(r);
+      const label = r.assignedName ?? r.assignedEmail ?? "Unassigned";
+      const cur = counts.get(key);
+      if (cur) cur.n += 1;
+      else counts.set(key, { label, n: 1 });
+    }
+    const entries = [...counts.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label));
+    return [
+      { value: ALL, label: `All operators (${rows.length})` },
+      ...entries.map(([value, v]) => ({ value, label: `${v.label} (${v.n})` })),
+    ];
+  }, [rows]);
+
+  const stageOptions = useMemo(() => {
+    const stages = [...new Set(rows.map((r) => r.callStage))].sort((a, b) => a - b);
+    return [{ value: ALL, label: "Every call" }, ...stages.map((s) => ({ value: String(s), label: `Call ${s}` }))];
+  }, [rows]);
+
+  const shown = rows.filter(
+    (r) => (operator === ALL || operatorKey(r) === operator) && (stage === ALL || String(r.callStage) === stage)
+  );
+
   if (rows.length === 0) return null;
+
   return (
     <div className="space-y-3">
-      <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        Calls to make ({rows.length})
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Operator</span>
+          <Select
+            size="sm"
+            className="min-w-[13rem]"
+            ariaLabel="Filter calls by operator"
+            value={operator}
+            onValueChange={setOperator}
+            options={operatorOptions}
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs text-muted-foreground">Stage</span>
+          <Select
+            size="sm"
+            className="min-w-[9rem]"
+            ariaLabel="Filter calls by stage"
+            value={stage}
+            onValueChange={setStage}
+            options={stageOptions}
+          />
+        </label>
+        <div className="ml-auto text-xs text-muted-foreground">
+          Showing {shown.length} of {rows.length}
+        </div>
       </div>
+
       <p className="text-xs text-muted-foreground">
         Call 1 is the intro call, made the day after the sourcing inquiry goes out while it is still fresh. Call 2 comes
-        five days in, and only for suppliers who never wrote back.
+        five days in, and only for suppliers who never wrote back. Open a row to get the number, the calling window and
+        what to ask for.
       </p>
-      {rows.map((r) => (
-        <CallCard key={r.id} row={r} />
-      ))}
+
+      {shown.length === 0 ? (
+        <p className="py-6 text-center text-sm text-muted-foreground">No calls match this filter.</p>
+      ) : (
+        shown.map((r) => (
+          <CallCard key={r.id} row={r} expanded={openId === r.id} onToggle={() => setOpenId(openId === r.id ? null : r.id)} />
+        ))
+      )}
     </div>
   );
 }

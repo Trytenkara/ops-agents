@@ -26,7 +26,7 @@ export default async function CasesPage({ params }: { params: { slug: string } }
       <ListPageHeader
         level={2}
         title="Escalations"
-        description="Every open escalation for this client in one place. These also appear in their home tab: email escalations in Email Thread Tracker, supplier escalations under Agent Supplier Leads, and quote escalations under Agent Quotes. Calls live on their own Caller Jobs tab."
+        description="Every open escalation for this client in one place. These also appear in their home tab: email escalations in Email Thread Tracker, supplier escalations under Agent Supplier Leads, and quote escalations under Agent Quotes. Calls live on their own Call Tracker tab."
         collectedBy="Agents 05 + 07 + 15"
       />
       <CasesSection openRows={open} resolvedRows={resolved} slug={params.slug} emptyLabel="No open escalations." />
