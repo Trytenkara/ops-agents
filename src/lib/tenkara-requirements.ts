@@ -163,13 +163,13 @@ function parseRequirements(row: RequirementsRow): RequirementItem[] {
   return items;
 }
 
-interface RequiredCert {
+export interface RequiredCert {
   certification_id: string;
   is_required: boolean;
   is_dealbreaker: boolean;
 }
 
-interface RequirementsRow {
+export interface RequirementsRow {
   order_type: RequirementPhase;
   coa_required: boolean;
   coa_dealbreaker: boolean;
@@ -188,16 +188,15 @@ interface RequirementsRow {
   required_certs: RequiredCert[] | null;
 }
 
-// All qualification requirements for one Tenkara org, across pre- and
-// post-order. Returns [] when nothing is configured or the org isn't linked.
+// The raw requirement rows for one org, one per order_type. The single owner of
+// this schema's shape — the fingerprint and the settings mirror read through here
+// rather than repeating the joins, so the next schema move is one edit.
 //
-// One row per order_type, so the LEFT JOINs keep an org that configured
-// documents but no certifications. `order by order_type` leans on the
-// requirement_order_type enum declaring pre_order first, which preserves the
-// pre-then-post item ordering callers already see.
-export async function getClientRequirements(orgTenkaraId: string | null | undefined): Promise<RequirementItem[]> {
-  if (!orgTenkaraId) return [];
-  const rows = await tenkaraQuery<RequirementsRow>(
+// The LEFT JOINs keep an org that configured documents but no certifications.
+// `order by order_type` leans on the requirement_order_type enum declaring
+// pre_order first, which preserves the pre-then-post ordering callers already see.
+export async function fetchRequirementRows(orgTenkaraId: string): Promise<RequirementsRow[]> {
+  return tenkaraQuery<RequirementsRow>(
     `select
        sr.order_type,
        sr.coa_required,
@@ -233,6 +232,13 @@ export async function getClientRequirements(orgTenkaraId: string | null | undefi
      order by sr.order_type`,
     [orgTenkaraId]
   );
+}
+
+// All qualification requirements for one Tenkara org, across pre- and
+// post-order. Returns [] when nothing is configured or the org isn't linked.
+export async function getClientRequirements(orgTenkaraId: string | null | undefined): Promise<RequirementItem[]> {
+  if (!orgTenkaraId) return [];
+  const rows = await fetchRequirementRows(orgTenkaraId);
   return rows.flatMap((row) => parseRequirements(row));
 }
 
