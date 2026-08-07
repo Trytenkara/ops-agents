@@ -1,16 +1,28 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { getOrgAssignmentContext, orgAutoKey, resolveOperatorId, type AssignmentContext } from "@/lib/operator-assignment";
+import {
+  getOrgAssignmentContext,
+  orgAutoKey,
+  poolForWork,
+  spreadOwnerId,
+  type AssignmentContext,
+} from "@/lib/operator-assignment";
+import type { MarketKind } from "@/lib/lead-market";
 import { postAgentAlert } from "@/lib/slack-alert";
 import { deepLink } from "@/lib/slack";
 import { callBriefHeadline, type CallBrief } from "@/lib/call-brief";
 
-// Routing and notification for calling escalations.
+// Routing and notification for call tasks.
 //
-// A call task with nobody's name on it is a task nobody does, so an escalation
-// must land on a person even when the draft it came from was never assigned.
-// Resolution walks the same ladder the rest of the app uses (explicit claim,
-// then the org's sticky-random spread, then the org's default operator) so the
-// supplier keeps one point of contact across email and phone.
+// A call task with nobody's name on it is a task nobody does, so it must land on
+// a person even when the draft it came from was never assigned. Resolution walks
+// the same ladder the rest of the app uses (explicit claim, then the org's
+// sticky-random spread) but asks for the CALL side of the team and the supplier's
+// own lane, so phone work reaches someone who makes calls for this client rather
+// than whoever happens to own the supplier's inbox.
+//
+// Where a client has named no call operators, or none covering that lane, the
+// spread falls back to the whole pool (see poolForWork): an unrouted call task is
+// worse than one routed to an email operator.
 
 export interface OperatorTag {
   userId: string | null;
@@ -23,7 +35,6 @@ export interface OperatorTag {
 // escalates many suppliers for the same org.
 export class CallOperatorResolver {
   private ctxByOrg = new Map<string, AssignmentContext | null>();
-  private defaultByOrg = new Map<string, string | null>();
   private orgById = new Map<string, { slug: string | null; name: string | null }>();
   private userById = new Map<string, OperatorTag>();
 
@@ -34,20 +45,6 @@ export class CallOperatorResolver {
       this.ctxByOrg.set(orgId, await getOrgAssignmentContext(this.admin, orgId).catch(() => null));
     }
     return this.ctxByOrg.get(orgId) ?? null;
-  }
-
-  private async defaultOperator(orgId: string): Promise<string | null> {
-    if (!this.defaultByOrg.has(orgId)) {
-      const { data } = await this.admin
-        .from("org_default_operators")
-        .select("primary_user_id, backup_user_id, primary_user:users!org_default_operators_primary_user_id_fkey(status)")
-        .eq("org_id", orgId)
-        .maybeSingle();
-      const row = data as any;
-      const ooo = row?.primary_user?.status === "out_of_office";
-      this.defaultByOrg.set(orgId, row ? (ooo ? row.backup_user_id ?? row.primary_user_id : row.primary_user_id) ?? null : null);
-    }
-    return this.defaultByOrg.get(orgId) ?? null;
   }
 
   private async org(orgId: string): Promise<{ slug: string | null; name: string | null }> {
@@ -66,26 +63,36 @@ export class CallOperatorResolver {
     return (await this.org(orgId)).name;
   }
 
-  async tag(orgId: string, opts: { assignedOperator: string | null; supplierId: string | null; supplierName: string | null }): Promise<OperatorTag> {
-    let userId = opts.assignedOperator;
-    if (!userId) {
-      const ctx = await this.assignmentContext(orgId);
-      // Key on the supplier the way every other surface does, so the call brief
-      // goes to whoever already owns the supplier.
-      userId = ctx
-        ? resolveOperatorId(
-            ctx,
-            orgAutoKey(ctx, {
-              supplierId: opts.supplierId,
-              supplierName: opts.supplierName,
-              leadId: opts.supplierId ?? opts.supplierName ?? "",
-            }),
-            null,
-            opts.supplierName
-          )
-        : null;
+  async tag(opts: {
+    orgId: string;
+    assignedOperator: string | null;
+    supplierId: string | null;
+    supplierName: string | null;
+    lane?: MarketKind | null;
+  }): Promise<OperatorTag> {
+    const { orgId } = opts;
+    const ctx = await this.assignmentContext(orgId);
+    // An explicit assignment on the source draft only holds if that person does
+    // phone work here; otherwise the call routes on its own.
+    const callPool = ctx ? poolForWork(ctx.pool, { type: "call", lane: opts.lane ?? null }) : [];
+    let userId =
+      opts.assignedOperator && callPool.some((o) => o.id === opts.assignedOperator) ? opts.assignedOperator : null;
+
+    if (!userId && ctx) {
+      // Key on the supplier the way every other surface does, so a supplier that
+      // gets called twice reaches the same operator both times. spreadOwnerId
+      // also covers the org that runs manual assignment: a phone task nobody owns
+      // is a call nobody makes.
+      userId = spreadOwnerId(
+        ctx,
+        orgAutoKey(ctx, {
+          supplierId: opts.supplierId,
+          supplierName: opts.supplierName,
+          leadId: opts.supplierId ?? opts.supplierName ?? "",
+        }),
+        { lane: opts.lane ?? null, nameHint: opts.supplierName, workType: "call" }
+      );
     }
-    if (!userId) userId = await this.defaultOperator(orgId);
     if (!userId) return { userId: null, name: null, email: null, slackUserId: null };
 
     const cached = this.userById.get(userId);
@@ -117,18 +124,18 @@ export async function notifyCallEscalation(args: {
   operator: OperatorTag;
   orgName: string | null;
   orgSlug: string | null;
-  silence: string;
+  reason: string;
 }): Promise<boolean> {
   const { brief, operator, orgSlug } = args;
   const lines = [
-    `:telephone_receiver: *Calling escalation* ${args.orgName ? `for ${args.orgName}` : ""}`.trim(),
+    `:telephone_receiver: *Call ${brief.callStage}* ${args.orgName ? `for ${args.orgName}` : ""}`.trim(),
     callBriefHeadline(brief),
-    `Why: ${args.silence}. ${brief.purpose}`,
+    `Why: ${args.reason}. ${brief.purpose}`,
     brief.phoneStatus === "missing"
-      ? ":warning: No phone number on file. Find one, or add it on the escalation so the next call is one click."
+      ? ":warning: No phone number on file. Find one, or add it on the call task so the next call is one click."
       : null,
     brief.materialNames.length ? `Materials: ${brief.materialNames.join(", ")}` : null,
-    orgSlug ? `Open it: ${deepLink(`/work/orgs/${orgSlug}/threads?tab=escalations`)}` : null,
+    orgSlug ? `Open it: ${deepLink(`/work/orgs/${orgSlug}/calls`)}` : null,
   ].filter(Boolean) as string[];
 
   const owner = operator.name ?? operator.email;

@@ -3,14 +3,15 @@ import type { CaseRow } from "@/components/cases-list";
 import type { CallCaseRow } from "@/components/calls-list";
 import type { CallBrief, CallAttempt } from "@/lib/call-brief";
 
-// Escalations (the `cases` table) are split across three surfaces by what kind
-// of problem they represent, so operators land on them where they already work:
+// Escalations (the `cases` table) are split across four surfaces by what kind of
+// problem they represent, so operators land on them where they already work:
+//   call     → Caller Jobs (a scheduled call task, or a supplier gone silent)
 //   email    → Email Thread Tracker (a supplier reply / form needs a human)
 //   supplier → Agent Supplier Leads "Supplier Escalations" (contact/lead gap)
 //   quote    → Agent Quotes "Quotes Escalations" (a price couldn't be captured)
-export type CaseCategory = "email" | "supplier" | "quote";
+export type CaseCategory = "call" | "email" | "supplier" | "quote";
 
-const EMAIL_CASE_TYPES = new Set(["supplier_form", "calling_escalation"]);
+const EMAIL_CASE_TYPES = new Set(["supplier_form"]);
 const QUOTE_CASE_TYPES = new Set([
   "marketplace_price_pull",
   "price_change",
@@ -24,6 +25,7 @@ const QUOTE_CASE_TYPES = new Set([
 // lead) are supplier-side gaps; anything unrecognized also defaults here so a
 // new case type surfaces somewhere a human will see it rather than vanishing.
 export function caseCategory(type: string | null | undefined): CaseCategory {
+  if (type === "calling_escalation") return "call";
   if (type && EMAIL_CASE_TYPES.has(type)) return "email";
   if (type && QUOTE_CASE_TYPES.has(type)) return "quote";
   return "supplier";
@@ -45,7 +47,7 @@ export async function loadOrgCases(admin: any, orgId: string): Promise<{ openRow
 }
 
 // Calling escalations are a phone worklist, not a row in a table: they render as
-// their own cards inside the email Escalations tab.
+// their own cards on the Caller Jobs tab.
 export function isCallCase(c: any): boolean {
   return c?.type === "calling_escalation";
 }
@@ -60,6 +62,9 @@ export function toCallCaseRow(c: any): CallCaseRow {
     assignedName: c.users?.display_name ?? null,
     assignedEmail: c.users?.email ?? null,
     assignedRole: primaryRole(operatorRoles(c.users)),
+    materialName: (c.metadata?.material_name as string | undefined) ?? null,
+    callStage: (c.metadata?.call_stage as number | undefined) ?? c.metadata?.call_brief?.callStage ?? 1,
+    reason: (c.metadata?.reason as string | undefined) ?? null,
     threadId: (c.metadata?.thread_id as string | undefined) ?? null,
     draftId: (c.metadata?.draft_reference_id as string | undefined) ?? null,
     // Escalations raised before this shipped have no brief. The card degrades to

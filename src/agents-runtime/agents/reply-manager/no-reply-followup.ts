@@ -1,9 +1,7 @@
 import { stageDraft } from "@/lib/draft-staging";
-import { followupDelaysMs, callingEscalateAfterMs } from "@/lib/agent-timing";
+import { followupDelaysMs } from "@/lib/agent-timing";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import type { createAdminClient } from "@/lib/supabase/admin";
-import { buildCallBrief } from "@/lib/call-brief";
-import { CallOperatorResolver, notifyCallEscalation } from "@/lib/call-escalation";
 import { randomUUID } from "crypto";
 
 // Feature #2: pull in any supplier contact we haven't reached yet as CC on this
@@ -60,10 +58,13 @@ async function findUnreachedContacts(
 }
 
 // No-reply follow-ups (part of Agent 15). When a supplier never replies to the
-// initial RFQ, draft up to two gentle nudges — at 4 and 8 days after the RFQ
-// was sent — staged for a human to send. Once both nudges are out and the
-// supplier is still silent, route the supplier to Cases as a calling escalation
-// so a call operator can phone them. Nothing auto-sends.
+// initial RFQ, draft up to two gentle nudges — at 2 and 4 days after the RFQ was
+// sent — staged for a human to send. Nothing auto-sends.
+//
+// Phone work is not raised here. Call tasks run on their own fixed offsets from
+// the RFQ (day 1 and day 5, see ./call-tasks.ts) rather than waiting for email to
+// exhaust itself, so this sweep only marks the conversation as handed over once
+// the last nudge has gone out.
 
 const MAX_PER_RUN = 50;
 
@@ -72,10 +73,9 @@ const MAX_PER_RUN = 50;
 // lie if nudge #1 never left the outbox.
 const PENDING_DRAFT_STATUS = new Set(["staged", "reviewed"]);
 
-// No-reply nudge delays and calling-escalation grace are resolved per-org (see
-// lib/agent-timing.ts): the compressed test cadence applies only to orgs on the
-// fast-track list, every other org uses the prod defaults (4d/8d, ~day-10 call).
-const MAX_ESCALATIONS_PER_RUN = 50;
+// No-reply nudge delays are resolved per-org (see lib/agent-timing.ts): the
+// compressed test cadence applies only to orgs on the fast-track list, every
+// other org uses the prod defaults (2d/4d).
 const TERMINAL = new Set(["stale", "closed_declined", "finalized", "price_captured", "escalated_to_calling"]);
 
 type Ctx = { agentId: string | null; runId: string | null; log: (m: string, o?: any) => Promise<void> };
@@ -98,115 +98,6 @@ function buildFollowupBody(opts: { contactName: string | null; material: string 
   ].join("\n");
 }
 
-// Create a calling-escalation case for a silent supplier and stamp the draft so
-// we never escalate the same conversation twice. Returns true if a case was
-// created. Defensive against duplicates: skips if an open calling case already
-// exists for this supplier × material × org.
-//
-// The case carries a full call brief (number, local calling window, what we
-// already sent them, what to ask for) rather than a one-line "call them": an
-// operator picking this up days later has none of the thread in their head, and
-// an escalation they have to reconstruct by hand is one they defer.
-async function escalateToCalling(
-  ctx: Ctx,
-  admin: Admin,
-  r: any,
-  meta: any,
-  followupsSent: number,
-  opts: { resolver: CallOperatorResolver; inquirySentAt: string | null; followupSentAt: string[] }
-): Promise<boolean> {
-  const { data: existing } = await admin
-    .from("cases")
-    .select("id")
-    .eq("org_id", r.org_id)
-    .eq("type", "calling_escalation")
-    .in("status", ["open", "in_progress"])
-    .eq("supplier_id", r.supplier_id ?? "")
-    .eq("material_id", r.material_id ?? "")
-    .maybeSingle();
-  if (existing) {
-    // Already escalated elsewhere — stamp so we stop reconsidering it.
-    await admin
-      .from("draft_references")
-      .update({ metadata: { ...meta, calling_escalated_at: new Date().toISOString(), flow_status: "escalated_to_calling" } })
-      .eq("id", r.id);
-    return false;
-  }
-
-  const supplierName = meta.supplier_name ?? r.supplier_id ?? "supplier";
-  const materialName = meta.material_name ?? null;
-  const silence =
-    followupsSent > 0
-      ? `no reply after ${followupsSent} email follow-up${followupsSent === 1 ? "" : "s"}`
-      : "no reply to the initial sourcing inquiry";
-
-  const brief = await buildCallBrief(admin as any, {
-    orgId: r.org_id,
-    supplierId: r.supplier_id ?? null,
-    meta,
-    subject: r.subject ?? null,
-    threadId: r.thread_id ?? null,
-    inquirySentAt: opts.inquirySentAt,
-    followupSentAt: opts.followupSentAt,
-    followupsSent,
-  });
-
-  // Route it to a person even when the draft was never assigned: an unowned call
-  // task is one nobody makes.
-  const operator = await opts.resolver.tag(r.org_id, {
-    assignedOperator: r.assigned_operator ?? null,
-    supplierId: r.supplier_id ?? null,
-    supplierName: meta.supplier_name ?? null,
-  });
-
-  const phoneLine = brief.contact.phone ? ` on ${brief.contact.phone}` : " (no number on file, find one first)";
-  const { error: caseErr } = await admin.from("cases").insert({
-    org_id: r.org_id,
-    type: "calling_escalation",
-    status: "open",
-    supplier_id: r.supplier_id ?? null,
-    material_id: r.material_id ?? null,
-    originating_thread_id: r.thread_id ?? null,
-    recommended_action: `Call ${supplierName}${phoneLine}${materialName ? ` re: ${materialName}` : ""}, ${silence}. Confirm the sourcing inquiry was received and the right contact, and request a quote.`,
-    assigned_operator: operator.userId,
-    metadata: {
-      source_agent: "agent-15-reply-manager",
-      source_run_id: ctx.runId,
-      reason: "no_reply_after_followups",
-      draft_reference_id: r.id,
-      thread_id: r.thread_id ?? null,
-      followup_count: Number(meta.followup_count ?? 0),
-      last_followup_at: meta.last_followup_at ?? null,
-      supplier_name: meta.supplier_name ?? null,
-      supplier_contact_email: meta.supplier_contact_email ?? null,
-      material_name: materialName,
-      lead_id: brief.leadId,
-      call_brief: brief,
-    },
-  });
-  if (caseErr) {
-    await ctx.log(`Calling escalation insert failed for ${supplierName}: ${caseErr.message}`, { level: "warn", step: "calling_escalation" });
-    return false;
-  }
-
-  await admin
-    .from("draft_references")
-    .update({ metadata: { ...meta, calling_escalated_at: new Date().toISOString(), flow_status: "escalated_to_calling" } })
-    .eq("id", r.id);
-
-  const [orgSlug, orgName] = await Promise.all([
-    opts.resolver.orgSlug(r.org_id),
-    opts.resolver.orgName(r.org_id),
-  ]);
-  await notifyCallEscalation({ brief, operator, orgName, orgSlug, silence });
-
-  await ctx.log(
-    `Calling escalation opened for ${supplierName} (${silence})${operator.name ? `, assigned to ${operator.name}` : ", unassigned"}${brief.contact.phone ? "" : ", no phone on file"}`,
-    { step: "calling_escalation" }
-  );
-  return true;
-}
-
 // Follow-up drafts already staged into a thread, keyed by thread id, plus the set
 // of threads a supplier has actually replied on. The sequence position is derived
 // from these rows rather than from a counter stamped at stage time, so a nudge the
@@ -217,7 +108,7 @@ async function escalateToCalling(
 // reference, so from the first reply onward that stamp lands on an Agent 15 reply
 // row and the outreach row it answers stays null forever. Keying "did they reply"
 // off that one row nudged suppliers who had already written back, quote attached.
-async function loadThreadState(
+export async function loadThreadState(
   admin: Admin,
   threadIds: string[]
 ): Promise<{ followups: Map<string, any[]>; replied: Set<string> }> {
@@ -241,17 +132,17 @@ async function loadThreadState(
   return { followups, replied };
 }
 
-export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ drafted: number; skipped: number; escalated: number }> {
+export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ drafted: number; skipped: number; handedOff: number }> {
   let drafted = 0;
   let skipped = 0;
-  let escalated = 0;
+  let handedOff = 0;
 
   // Only follow up on Agent 04's initial cold outreach — not re-quotes (Agent 02)
   // or reply responses (Agent 15 itself).
   const { data: a4 } = await admin.from("agents").select("id").eq("slug", "agent-04-outreach").maybeSingle();
   if (!a4?.id) {
     await ctx.log("follow-up: agent-04-outreach not found, skipping", { step: "followup" });
-    return { drafted, skipped, escalated };
+    return { drafted, skipped, handedOff };
   }
 
   const { data: sent } = await admin
@@ -273,7 +164,6 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
   );
 
   const now = Date.now();
-  const resolver = new CallOperatorResolver(admin as any);
   for (const r of (sent ?? []) as any[]) {
     if (drafted >= MAX_PER_RUN) break;
     const meta = (r.metadata ?? {}) as any;
@@ -305,28 +195,16 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
     // Per-org cadence: compressed only for the fast-track orgs, prod defaults elsewhere.
     const followupDelays = followupDelaysMs(r.org_id);
 
-    // Both follow-ups out and still silent → escalate to a phone call once the
-    // grace window has elapsed. Stamped via calling_escalated_at so we only do
-    // this once per conversation.
+    // Every nudge is out and they are still silent. Email is done with this
+    // conversation; the day-5 call task (./call-tasks.ts) is the next touch, so
+    // this just closes the email sequence out rather than raising anything.
     if (fu >= followupDelays.length) {
-      if (meta.calling_escalated_at) continue;
-      if (escalated >= MAX_ESCALATIONS_PER_RUN) continue;
-      if ((now - lastOutboundAt) < callingEscalateAfterMs(r.org_id)) continue; // grace not elapsed
-      // The dates the operator will read back to the supplier on the call, taken
-      // from the nudges that actually went out rather than when they were staged.
-      const followupSentAt = acted
-        .filter((d) => d.status === "sent")
-        .map((d) => (d.reviewed_at ?? d.created_at) as string)
-        .filter(Boolean)
-        .sort();
-      if (
-        await escalateToCalling(ctx, admin, r, meta, followupsSent, {
-          resolver,
-          inquirySentAt: r.reviewed_at ?? null,
-          followupSentAt,
-        })
-      )
-        escalated++;
+      if (meta.flow_status === "escalated_to_calling") continue;
+      await admin
+        .from("draft_references")
+        .update({ metadata: { ...meta, flow_status: "escalated_to_calling" } })
+        .eq("id", r.id);
+      handedOff++;
       continue;
     }
 
@@ -412,5 +290,5 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
     }
   }
 
-  return { drafted, skipped, escalated };
+  return { drafted, skipped, handedOff };
 }

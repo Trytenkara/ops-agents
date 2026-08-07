@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ListPageHeader } from "@/components/list-page-header";
 import { CasesSection } from "@/components/cases-section";
-import { loadOrgCases } from "@/lib/org-cases";
+import { loadOrgCases, caseCategory } from "@/lib/org-cases";
 
 export const dynamic = "force-dynamic";
 
@@ -16,16 +16,20 @@ export default async function CasesPage({ params }: { params: { slug: string } }
   if (!org) notFound();
 
   const { openRows, resolvedRows } = await loadOrgCases(admin, org.id);
+  // Calls are excluded: they carry a full phone brief that does not fit a table
+  // row, and they have their own tab.
+  const open = openRows.filter((c: any) => caseCategory(c.type) !== "call");
+  const resolved = resolvedRows.filter((c: any) => caseCategory(c.type) !== "call");
 
   return (
     <div className="space-y-6">
       <ListPageHeader
         level={2}
         title="Escalations"
-        description="Every open escalation for this client in one place. These also appear in their home tab: email escalations in Email Thread Tracker, supplier escalations under Agent Supplier Leads, and quote escalations under Agent Quotes."
+        description="Every open escalation for this client in one place. These also appear in their home tab: email escalations in Email Thread Tracker, supplier escalations under Agent Supplier Leads, and quote escalations under Agent Quotes. Calls live on their own Caller Jobs tab."
         collectedBy="Agents 05 + 07 + 15"
       />
-      <CasesSection openRows={openRows} resolvedRows={resolvedRows} slug={params.slug} emptyLabel="No open escalations." />
+      <CasesSection openRows={open} resolvedRows={resolved} slug={params.slug} emptyLabel="No open escalations." />
     </div>
   );
 }

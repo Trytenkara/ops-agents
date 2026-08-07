@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authenticateAgent, unauthorized } from "@/lib/agent-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getOrgAssignmentContext, orgAutoKey, spreadOwnerId } from "@/lib/operator-assignment";
 
 const postSchema = z.object({
   email_client: z.literal("rod_app").default("rod_app"),
@@ -41,26 +42,27 @@ export async function POST(request: NextRequest) {
   if (parsed.data.tenkara_org_id) {
     const { data } = await admin
       .from("orgs")
-      .select("id, org_default_operators(primary_user_id, backup_user_id, primary_user:users!org_default_operators_primary_user_id_fkey(status))")
+      .select("id")
       .eq("tenkara_org_id", parsed.data.tenkara_org_id)
       .maybeSingle();
     orgRow = data;
   } else if (parsed.data.org_slug) {
-    const { data } = await admin
-      .from("orgs")
-      .select("id, org_default_operators(primary_user_id, backup_user_id, primary_user:users!org_default_operators_primary_user_id_fkey(status))")
-      .eq("slug", parsed.data.org_slug)
-      .maybeSingle();
+    const { data } = await admin.from("orgs").select("id").eq("slug", parsed.data.org_slug).maybeSingle();
     orgRow = data;
   }
   if (orgRow) {
     org_id = orgRow.id;
-    const ops = orgRow.org_default_operators?.[0] ?? orgRow.org_default_operators;
-    if (ops) {
-      const primaryOoo = ops.primary_user?.status === "out_of_office";
-      assigned_operator = primaryOoo
-        ? (ops.backup_user_id ?? ops.primary_user_id)
-        : ops.primary_user_id;
+    // Route on the supplier where the caller sent one, so an externally-staged
+    // draft lands on the same operator as the rest of that supplier's thread.
+    // Without a supplier the draft still gets an owner, spread on its thread id.
+    const assignCtx = await getOrgAssignmentContext(admin, org_id!).catch(() => null);
+    if (assignCtx) {
+      assigned_operator = spreadOwnerId(
+        assignCtx,
+        parsed.data.supplier_id
+          ? orgAutoKey(assignCtx, { supplierId: parsed.data.supplier_id, leadId: parsed.data.thread_id })
+          : parsed.data.thread_id
+      );
     }
   }
 

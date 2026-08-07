@@ -13,6 +13,11 @@ import { selectAllPaged } from "@/lib/supabase-paging";
 // rather than calling pickSupplierOperator directly, or a caller silently
 // auto-assigns for an org that asked for manual.
 
+// Phone work or email work. Held per (user, org), so someone can be a call
+// operator for one client and an email operator for another but never both on
+// the same one.
+export type OperatorType = "call" | "email";
+
 export interface OperatorRef {
   id: string;
   name: string;
@@ -20,6 +25,10 @@ export interface OperatorRef {
   // In this org's AUTO loop. False = still a member and still manually
   // assignable, just skipped by the sticky-random spread.
   autoAssignable: boolean;
+  operatorType: OperatorType;
+  // Market lanes this operator takes for this org. Defaults to all three, so an
+  // org that hasn't split its team behaves exactly as it did before lanes.
+  lanes: MarketKind[];
 }
 
 // manual   — only explicit claims own anything; the auto spread is off.
@@ -110,9 +119,18 @@ export async function getOrgOperatorPool(
   const ASSIGNABLE = new Set<string>(ASSIGNABLE_OPERATOR_ROLES);
   const isOperator = (u: any): boolean =>
     Array.isArray(u?.user_roles) && u.user_roles.some((r: any) => ASSIGNABLE.has(r?.role));
-  const toRef = (u: any, autoAssignable: boolean): OperatorRef | null =>
+  const toRef = (u: any, a: any): OperatorRef | null =>
     u && u.status !== "out_of_office" && !u.deactivated_at && isOperator(u)
-      ? { id: u.id, name: u.display_name ?? u.email ?? "-", email: u.email ?? null, autoAssignable }
+      ? {
+          id: u.id,
+          name: u.display_name ?? u.email ?? "-",
+          email: u.email ?? null,
+          autoAssignable: a.auto_assignable !== false,
+          operatorType: a.operator_type === "call" ? "call" : "email",
+          lanes: Array.isArray(a.lanes)
+            ? (a.lanes.filter((l: string) => (ALL_SUPPLIER_TYPES as string[]).includes(l)) as MarketKind[])
+            : ALL_SUPPLIER_TYPES,
+        }
       : null;
 
   // user_org_assignments has two FKs to users (user_id + assigned_by), so the
@@ -120,11 +138,11 @@ export async function getOrgOperatorPool(
   const { data: assigns } = await admin
     .from("user_org_assignments")
     .select(
-      "auto_assignable, users:users!user_org_assignments_user_id_fkey(id, display_name, email, status, deactivated_at, user_roles(role))"
+      "auto_assignable, operator_type, lanes, users:users!user_org_assignments_user_id_fkey(id, display_name, email, status, deactivated_at, user_roles(role))"
     )
     .eq("org_id", orgId);
   const pool = (assigns ?? [])
-    .map((a: any) => toRef(a.users, a.auto_assignable !== false))
+    .map((a: any) => toRef(a.users, a))
     .filter((r: OperatorRef | null): r is OperatorRef => !!r);
 
   const seen = new Set<string>();
@@ -409,20 +427,52 @@ function inAutoScope(
   return ctx.config.supplierTypes.includes(kind);
 }
 
+// Narrow a pool to the people who actually do this work: the right type (phone
+// vs email) and the right market lane.
+//
+// Each filter falls back to the unnarrowed pool rather than returning nobody. A
+// client with no call operator named yet, or no one covering aggregators, must
+// still have its work land on a person — an empty pool here would mean silently
+// unowned suppliers, which is the failure the whole module exists to prevent.
+// The two filters degrade independently, so naming a call operator who covers
+// only marketplace still routes direct calls to them rather than to the email team.
+export function poolForWork(
+  pool: OperatorRef[],
+  opts: { type?: OperatorType | null; lane?: MarketKind | null }
+): OperatorRef[] {
+  let out = pool;
+  if (opts.type) {
+    const byType = out.filter((o) => o.operatorType === opts.type);
+    if (byType.length) out = byType;
+  }
+  if (opts.lane) {
+    const lane = opts.lane;
+    const byLane = out.filter((o) => o.lanes.includes(lane));
+    if (byLane.length) out = byLane;
+  }
+  return out;
+}
+
 // The sticky-random owner, or null when the org's mode or supplier-type scope
 // says this supplier is not the auto loop's business. Pass the supplier name
 // wherever it's on hand: an org whose suppliers carry no supplier_id on any lead
 // can only be classified by name, and misclassifying one as "direct" drops it out
 // of a marketplace-only scope.
+//
+// `workType` defaults to email: everything routed through here (outreach drafts,
+// leads, quotes) is desk work. Phone work resolves through CallOperatorResolver,
+// which asks for the call pool instead.
 export function autoOperator(
   ctx: AssignmentContext,
   supplierId: string | null | undefined,
   kindHint?: MarketKind | null,
-  nameHint?: string | null
+  nameHint?: string | null,
+  workType: OperatorType = "email"
 ): OperatorRef | null {
   if (ctx.config.mode === "manual") return null;
   if (!inAutoScope(ctx, supplierId, kindHint, nameHint)) return null;
-  return pickSupplierOperator(ctx.autoPool, supplierId);
+  const lane = kindHint ?? supplierKind(ctx.supplierTypes, supplierId, nameHint) ?? "direct";
+  return pickSupplierOperator(poolForWork(ctx.autoPool, { type: workType, lane }), supplierId);
 }
 
 // Does a claim made at `at` beat the auto spread? Everywhere but auto_all a claim
@@ -444,12 +494,41 @@ export function resolveOperatorId(
   ctx: AssignmentContext,
   supplierId: string | null | undefined,
   kindHint?: MarketKind | null,
-  nameHint?: string | null
+  nameHint?: string | null,
+  workType: OperatorType = "email"
 ): string | null {
   const claim = supplierId ? ctx.manual.get(supplierId) ?? null : null;
-  const auto = autoOperator(ctx, supplierId, kindHint, nameHint)?.id ?? null;
-  const claimWins = claim ? overridesAuto(ctx, supplierId ? ctx.manualAt.get(supplierId) : null) : false;
-  return claimWins ? claim : auto ?? claim;
+  const auto = autoOperator(ctx, supplierId, kindHint, nameHint, workType)?.id ?? null;
+  // A claim says who owns the supplier, which historically meant its email. It
+  // must not drag phone work onto someone who doesn't do phone work: when the
+  // client has call operators, only a claim held by one of them counts for a call.
+  // Where the client has none, poolForWork returns everyone and the claim stands.
+  const claimDoesThisWork = claim ? poolForWork(ctx.pool, { type: workType }).some((o) => o.id === claim) : false;
+  const claimWins =
+    claim && claimDoesThisWork ? overridesAuto(ctx, supplierId ? ctx.manualAt.get(supplierId) : null) : false;
+  return claimWins ? claim : auto ?? (claimDoesThisWork ? claim : null);
+}
+
+// The owner of one piece of work, which lands on a person whenever the client
+// has any operators at all.
+//
+// resolveOperatorId is allowed to decline: the org runs manual assignment, the
+// supplier's kind is outside the auto scope, or there is simply no claim. What
+// used to catch those was the org's Primary operator, which meant every unrouted
+// item in the client piled onto one desk (and onto the Backup whenever that
+// person was out). This spreads them over the people who do this kind of work
+// instead, keyed on the supplier so the same supplier keeps reaching the same
+// operator.
+export function spreadOwnerId(
+  ctx: AssignmentContext,
+  key: string | null | undefined,
+  opts: { lane?: MarketKind | null; nameHint?: string | null; workType?: OperatorType } = {}
+): string | null {
+  const workType = opts.workType ?? "email";
+  const resolved = resolveOperatorId(ctx, key, opts.lane ?? null, opts.nameHint ?? null, workType);
+  if (resolved) return resolved;
+  const lane = opts.lane ?? supplierKind(ctx.supplierTypes, key, opts.nameHint) ?? null;
+  return pickSupplierOperator(poolForWork(ctx.pool, { type: workType, lane }), key ?? opts.nameHint ?? null)?.id ?? null;
 }
 
 // Sticky-random owner per supplier id, for tables that show the auto default

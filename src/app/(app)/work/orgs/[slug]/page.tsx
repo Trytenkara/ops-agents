@@ -2,11 +2,11 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { notFound } from "next/navigation";
-import { getSession, hasAnyRole, type AppRole } from "@/lib/auth";
+import { getSession, hasAnyRole } from "@/lib/auth";
 import { operatorRoles, primaryRole } from "@/lib/operator";
-import { OrgOperatorsEditor } from "@/components/org-operators-editor";
 import { OrgAssignmentSettings } from "@/components/org-assignment-settings";
 import { ALL_SUPPLIER_TYPES } from "@/lib/operator-assignment";
+import type { MarketKind } from "@/lib/lead-market";
 import { OrgSourcingToggle } from "@/components/org-sourcing-toggle";
 import { OrgOnboardingToggle } from "@/components/org-onboarding-toggle";
 import { OrgTenkaraInbox } from "@/components/org-tenkara-inbox";
@@ -26,33 +26,17 @@ export default async function OrgOverview({ params }: { params: { slug: string }
     .maybeSingle();
   if (!org) notFound();
 
-  const [draftsRes, casesRes, approvalsRes, quotesRes, opsRes, candidatesRes, membersRes] = await Promise.all([
+  const [draftsRes, casesRes, approvalsRes, quotesRes, membersRes] = await Promise.all([
     admin.from("draft_references").select("id, status").eq("org_id", org.id),
     admin.from("cases").select("id, status").eq("org_id", org.id).eq("status", "open"),
     admin.from("pending_approvals").select("id").eq("org_id", org.id).eq("status", "pending"),
     admin.from("staged_quotes").select("id", { count: "exact", head: true }).eq("org_id", org.id).eq("status", "pending_review"),
-    admin
-      .from("org_default_operators")
-      .select(
-        "primary_user_id, backup_user_id, " +
-        "primary_user:users!org_default_operators_primary_user_id_fkey(id, display_name, email, status, user_roles(role)), " +
-        "backup_user:users!org_default_operators_backup_user_id_fkey(id, display_name, email, status, user_roles(role))"
-      )
-      .eq("org_id", org.id)
-      .maybeSingle(),
-    // Candidates for primary/backup: anyone active with a role that can act on supplier-facing work
-    // (Lead Operator, Operator, Admin). Account Manager can't be primary on supplier work.
-    admin
-      .from("users")
-      .select("id, display_name, email, status, deactivated_at, user_roles(role)")
-      .is("deactivated_at", null)
-      .order("display_name", { nullsFirst: false }),
     // Org members for the auto-loop include/exclude list. Unlike the assignment
     // pool this keeps out-of-office people visible, so an ops lead can see the
     // whole membership they're toggling.
     admin
       .from("user_org_assignments")
-      .select("auto_assignable, users:users!user_org_assignments_user_id_fkey(id, display_name, email, status, deactivated_at, user_roles(role))")
+      .select("auto_assignable, operator_type, lanes, users:users!user_org_assignments_user_id_fkey(id, display_name, email, status, deactivated_at, user_roles(role))")
       .eq("org_id", org.id),
   ]);
 
@@ -60,43 +44,8 @@ export default async function OrgOverview({ params }: { params: { slug: string }
   const staged = drafts.filter((d: any) => d.status === "staged").length;
   const reviewed = drafts.filter((d: any) => d.status === "reviewed").length;
   const nudges = await getOrgNudgeCounts(admin, org.id);
-  const ops = opsRes.data as any;
   const base = `/work/orgs/${org.slug}`;
 
-  // Filter candidates: only people who can act as primary/backup operators for an org.
-  const eligibleRoles: AppRole[] = ["admin", "ops_lead", "ops_operator"];
-  const candidates = (candidatesRes.data ?? [])
-    .map((u: any) => {
-      const roles = operatorRoles(u);
-      const role = primaryRole(roles);
-      return {
-        id: u.id,
-        display_name: u.display_name,
-        email: u.email,
-        role,
-        status: u.status,
-      };
-    })
-    .filter((c) => c.role && eligibleRoles.includes(c.role));
-
-  const initialPrimary = ops?.primary_user
-    ? {
-        id: ops.primary_user.id,
-        display_name: ops.primary_user.display_name,
-        email: ops.primary_user.email,
-        role: primaryRole(operatorRoles(ops.primary_user)),
-        status: ops.primary_user.status,
-      }
-    : null;
-  const initialBackup = ops?.backup_user
-    ? {
-        id: ops.backup_user.id,
-        display_name: ops.backup_user.display_name,
-        email: ops.backup_user.email,
-        role: primaryRole(operatorRoles(ops.backup_user)),
-        status: ops.backup_user.status,
-      }
-    : null;
   const canEditSourcing = hasAnyRole(session, ["admin", "ops_lead"]);
   const canEditAssignment = hasAnyRole(session, ["admin", "ops_lead", "ops_operator"]);
 
@@ -112,6 +61,10 @@ export default async function OrgOverview({ params }: { params: { slug: string }
         email: (u.email ?? null) as string | null,
         role,
         autoAssignable: m.auto_assignable !== false,
+        operatorType: m.operator_type === "call" ? ("call" as const) : ("email" as const),
+        lanes: (Array.isArray(m.lanes)
+          ? m.lanes.filter((l: string) => (ALL_SUPPLIER_TYPES as string[]).includes(l))
+          : ALL_SUPPLIER_TYPES) as MarketKind[],
       };
     })
     .filter((m): m is NonNullable<typeof m> => !!m)
@@ -167,27 +120,17 @@ export default async function OrgOverview({ params }: { params: { slug: string }
         <CardHeader>
           <CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Operator assignment</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-6">
-          <OrgOperatorsEditor
+        <CardContent>
+          <OrgAssignmentSettings
             orgId={org.id}
+            orgSlug={org.slug}
             orgName={orgDisplayName(org)}
-            initialPrimary={initialPrimary as any}
-            initialBackup={initialBackup as any}
-            candidates={candidates as any}
+            initialMode={((org as any).assignment_mode ?? "auto_new") as any}
+            initialSupplierTypes={(((org as any).assignment_supplier_types ?? ALL_SUPPLIER_TYPES) as any)}
+            operators={assignmentOperators}
             canEdit={canEditAssignment}
+            canRebalance={canEditSourcing}
           />
-          <div className="border-t pt-5">
-            <OrgAssignmentSettings
-              orgId={org.id}
-              orgSlug={org.slug}
-              orgName={orgDisplayName(org)}
-              initialMode={((org as any).assignment_mode ?? "auto_new") as any}
-              initialSupplierTypes={(((org as any).assignment_supplier_types ?? ALL_SUPPLIER_TYPES) as any)}
-              operators={assignmentOperators}
-              canEdit={canEditAssignment}
-              canRebalance={canEditSourcing}
-            />
-          </div>
         </CardContent>
       </Card>
     </div>

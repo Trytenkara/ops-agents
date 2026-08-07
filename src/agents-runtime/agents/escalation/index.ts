@@ -1,6 +1,12 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { postSlackMessage, deepLink } from "@/lib/slack";
+import {
+  getOrgAssignmentContext,
+  orgAutoKey,
+  spreadOwnerId,
+  type AssignmentContext,
+} from "@/lib/operator-assignment";
 
 // Escalation has two jobs:
 //   1. (cases) open a case for any lead that's been sitting at status='active'
@@ -50,19 +56,17 @@ registerAgent({
     // needs to run to chase un-actioned drafts/leads.
     await ctx.log(`Found ${staleLeads.length} stale leads (>${STALE_DAYS}d at status=active)`, { step: "pull" });
 
-    // Look up operators in one round-trip.
+    // Assignment context per org, once. A stale lead is routed to whoever owns
+    // that supplier for the client, so the case lands next to the rest of that
+    // supplier's work rather than on a single default desk.
     const orgIds = Array.from(new Set(staleLeads.map((l) => l.org_id).filter(Boolean) as string[]));
-    const opByOrg = new Map<string, string | null>();
-    if (orgIds.length) {
-      const { data: opRows } = await admin
-        .from("org_default_operators")
-        .select("org_id, primary_user_id, backup_user_id, primary_user:users!org_default_operators_primary_user_id_fkey(status)")
-        .in("org_id", orgIds);
-      for (const r of (opRows ?? []) as any[]) {
-        const ooo = r.primary_user?.status === "out_of_office";
-        opByOrg.set(r.org_id, ooo ? (r.backup_user_id ?? r.primary_user_id) : r.primary_user_id);
-      }
-    }
+    const ctxByOrg = new Map<string, AssignmentContext>();
+    await Promise.all(
+      orgIds.map(async (orgId) => {
+        const c = await getOrgAssignmentContext(admin, orgId).catch(() => null);
+        if (c) ctxByOrg.set(orgId, c);
+      })
+    );
 
     // Dedup guard: an operator only needs one open case per supplier×material.
     // Without this, every stale lead for the same item opens another identical
@@ -148,7 +152,18 @@ registerAgent({
         continue;
       }
 
-      const assignedOperator = opByOrg.get(lead.org_id) ?? null;
+      const assignCtx = ctxByOrg.get(lead.org_id) ?? null;
+      const assignedOperator = assignCtx
+        ? spreadOwnerId(
+            assignCtx,
+            orgAutoKey(assignCtx, {
+              supplierId: lead.supplier_id,
+              supplierName: lead.supplier_name,
+              leadId: lead.id,
+            }),
+            { nameHint: lead.supplier_name }
+          )
+        : null;
 
       const { data: inserted, error: caseErr } = await admin
         .from("cases")

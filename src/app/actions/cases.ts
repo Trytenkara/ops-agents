@@ -98,6 +98,154 @@ export async function logCallAttempt(caseId: string, outcome: CallOutcome, note:
   return { ok: true, resolved: spec.terminal } as const;
 }
 
+// Load a calling escalation an operator is allowed to act on. Every caller-jobs
+// action needs the same four checks, and getting one of them wrong would let a
+// resolved case be reopened or a non-call case be dropped through the phone UI.
+async function openCallCase(caseId: string) {
+  const session = await getSession();
+  if (!session) return { error: "unauthenticated" } as const;
+  if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator"])) return { error: "forbidden" } as const;
+
+  const admin = createAdminClient();
+  const { data: row } = await admin.from("cases").select("id, org_id, type, status, metadata").eq("id", caseId).maybeSingle();
+  if (!row) return { error: "case not found" } as const;
+  if (row.type !== "calling_escalation") return { error: "not a calling escalation" } as const;
+  if (row.status === "resolved") return { error: "already resolved" } as const;
+  return { session, admin, row } as const;
+}
+
+// The supplier is workable again, so hand them back to the email cadence.
+//
+// The nudge sweep stops at flow_status='escalated_to_calling' (that is how the
+// email side closes a conversation out), so clearing it is what actually resumes
+// the sequence. The call stages already raised are left stamped: a supplier who
+// came back to life does not owe us the calls that got them there.
+export async function deescalateCallCase(
+  caseId: string,
+  input: { callResults: Record<string, "success" | "failure">; note: string }
+) {
+  const guard = await openCallCase(caseId);
+  if ("error" in guard) return { ok: false, error: guard.error } as const;
+  const { session, admin, row } = guard;
+
+  const note = (input.note ?? "").trim();
+  const results = Object.entries(input.callResults ?? {})
+    .filter(([, v]) => v === "success" || v === "failure")
+    .map(([stage, v]) => `call ${stage} ${v}`);
+
+  const metadata = (row.metadata ?? {}) as Record<string, any>;
+  const { error } = await admin
+    .from("cases")
+    .update({
+      status: "resolved",
+      resolved_at: new Date().toISOString(),
+      resolution_note: `Back in the email loop${results.length ? ` (${results.join(", ")})` : ""}${note ? `: ${note}` : ""}`,
+      metadata: {
+        ...metadata,
+        deescalated_at: new Date().toISOString(),
+        deescalated_by: session.userId,
+        call_results: input.callResults ?? {},
+        deescalation_note: note || null,
+      },
+    })
+    .eq("id", caseId);
+  if (error) return { ok: false, error: error.message } as const;
+
+  const draftId = metadata.draft_reference_id as string | undefined;
+  if (draftId) {
+    const { data: draft } = await admin.from("draft_references").select("id, metadata").eq("id", draftId).maybeSingle();
+    if (draft) {
+      const meta = ((draft as any).metadata ?? {}) as Record<string, any>;
+      if (meta.flow_status === "escalated_to_calling") {
+        await admin
+          .from("draft_references")
+          .update({ metadata: { ...meta, flow_status: "outreach_sent", deescalated_from_calling_at: new Date().toISOString() } })
+          .eq("id", draftId);
+      }
+    }
+  }
+
+  await admin.from("audit_log").insert({
+    actor_user_id: session.userId,
+    action: "case.call_deescalated",
+    target_table: "cases",
+    target_id: caseId,
+    diff: { call_results: input.callResults ?? {}, note: note || null, draft_reference_id: draftId ?? null },
+  });
+
+  revalidatePath(`/work/orgs/[slug]/calls`, "page");
+  return { ok: true } as const;
+}
+
+// Nobody ever answered, by email or by phone. Drop the supplier's lead so it
+// stops being worked, and resolve the call task with the operator's reason.
+export async function dropSupplierFromCallCase(caseId: string, note: string) {
+  const guard = await openCallCase(caseId);
+  if ("error" in guard) return { ok: false, error: guard.error } as const;
+  const { session, admin, row } = guard;
+
+  const clean = (note ?? "").trim();
+  if (!clean) return { ok: false, error: "say why you are dropping them" } as const;
+
+  const metadata = (row.metadata ?? {}) as Record<string, any>;
+  const leadId = (metadata.lead_id ?? metadata.call_brief?.leadId) as string | undefined;
+  if (leadId) {
+    const { data: lead } = await admin.from("leads_in_flight").select("id, payload").eq("id", leadId).maybeSingle();
+    if (lead) {
+      const payload = ((lead as any).payload ?? {}) as Record<string, any>;
+      await admin
+        .from("leads_in_flight")
+        .update({
+          status: "terminal",
+          drop_reason: `no_reply_after_calling: ${clean}`,
+          payload: {
+            ...payload,
+            dropped_by: session.userId,
+            dropped_at: new Date().toISOString(),
+            drop_reason_code: "no_reply_after_calling",
+            drop_reason_note: clean,
+          },
+        })
+        .eq("id", leadId)
+        .eq("status", "active");
+    }
+  }
+
+  const { error } = await admin
+    .from("cases")
+    .update({
+      status: "resolved",
+      resolved_at: new Date().toISOString(),
+      resolution_note: `Supplier dropped, never reached: ${clean}`,
+      metadata: { ...metadata, dropped_at: new Date().toISOString(), dropped_by: session.userId, drop_note: clean },
+    })
+    .eq("id", caseId);
+  if (error) return { ok: false, error: error.message } as const;
+
+  const draftId = metadata.draft_reference_id as string | undefined;
+  if (draftId) {
+    const { data: draft } = await admin.from("draft_references").select("id, metadata").eq("id", draftId).maybeSingle();
+    if (draft) {
+      const meta = ((draft as any).metadata ?? {}) as Record<string, any>;
+      await admin
+        .from("draft_references")
+        .update({ metadata: { ...meta, flow_status: "closed_declined", dropped_after_calling_at: new Date().toISOString() } })
+        .eq("id", draftId);
+    }
+  }
+
+  await admin.from("audit_log").insert({
+    actor_user_id: session.userId,
+    action: "case.supplier_dropped",
+    target_table: "cases",
+    target_id: caseId,
+    diff: { note: clean, lead_id: leadId ?? null },
+  });
+
+  revalidatePath(`/work/orgs/[slug]/calls`, "page");
+  return { ok: true } as const;
+}
+
 // Operator found a number for a supplier we had none for. Store it on the brief
 // AND write it back to the lead, so the next escalation for this supplier and
 // every export carries it too.

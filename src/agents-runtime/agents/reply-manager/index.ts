@@ -1,22 +1,23 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runNoReplyFollowups } from "./no-reply-followup";
+import { runCallTasks } from "./call-tasks";
 import { runThreadReconcile } from "./thread-reconcile";
 
 // Agent 15 - Supplier Reply Manager.
 //
 // Inbound replies are drafted by the Tenkara message.received webhook
 // (lib/tenkara-inbound.ts), which classifies the reply, extracts pricing, and
-// advances flow_status. What is left for a scheduled agent is the sweep the
+// advances flow_status. What is left for a scheduled agent is the work the
 // webhook cannot do, because it fires on a message that never arrived: nudging
-// suppliers who went silent on a sent sourcing inquiry (4d and 8d), then
-// escalating to a call.
+// suppliers who went silent on a sent sourcing inquiry (2d and 4d), and raising
+// the interleaved call tasks (1d and 5d).
 
 registerAgent({
   slug: "agent-15-reply-manager",
   displayName: "Agent 15 - Supplier Reply Manager",
   description:
-    "Drafts no-reply follow-ups for suppliers who went silent on a sent sourcing inquiry (at 4d and 8d), then escalates to a Case for a call. Reply handling itself lives on the Tenkara inbound webhook. Never sends.",
+    "Runs the supplier cadence after a sourcing inquiry goes out: no-reply email nudges at 2d and 4d, and call tasks at 1d (intro, always) and 5d (silence only). Reply handling itself lives on the Tenkara inbound webhook. Never sends.",
   async run(ctx) {
     const admin = createAdminClient();
 
@@ -39,7 +40,7 @@ registerAgent({
       degraded = true;
     }
 
-    let followups = { drafted: 0, skipped: 0, escalated: 0 };
+    let followups = { drafted: 0, skipped: 0, handedOff: 0 };
     try {
       followups = await runNoReplyFollowups(
         { agentId: ctx.agentId, runId: ctx.runId, log: (m, o) => ctx.log(m, o) },
@@ -51,7 +52,20 @@ registerAgent({
       ctx.setSummary(`No-reply sweep failed: ${e?.message ?? e}`);
       return;
     }
-    ctx.setItemsProcessed(followups.drafted + followups.escalated + reconcile.drafted);
+
+    // Call tasks run on their own offsets from the RFQ, so a failure here must
+    // not cost us the nudges that already drafted above.
+    let calls = { raised: 0, skipped: 0 };
+    try {
+      calls = await runCallTasks(
+        { agentId: ctx.agentId, runId: ctx.runId, log: (m, o) => ctx.log(m, o) },
+        admin
+      );
+    } catch (e: any) {
+      await ctx.log(`Call task sweep failed: ${e?.message ?? e}`, { level: "warn", step: "call_task" });
+      degraded = true;
+    }
+    ctx.setItemsProcessed(followups.drafted + calls.raised + reconcile.drafted);
     ctx.setStatus(degraded ? "partial" : "success");
     ctx.setSummary(
       `Reconcile: ${reconcile.threadsChecked} threads · ${reconcile.replayed} unseen replies replayed · ${reconcile.drafted} drafted` +
@@ -60,7 +74,8 @@ registerAgent({
         `${reconcile.unreadable ? ` · ${reconcile.unreadable} unreadable` : ""}` +
         `${reconcile.failed ? ` · ${reconcile.failed} failed` : ""}` +
         ` · ${reconcile.backlog} due${reconcile.oldestDueMinutes !== null ? ` (oldest ${reconcile.oldestDueMinutes}m overdue)` : ""}. ` +
-        `No-reply sweep: ${followups.drafted} follow-ups · ${followups.escalated} calling-escalations · ${followups.skipped} skipped.`
+        `No-reply sweep: ${followups.drafted} follow-ups · ${followups.handedOff} handed to phone · ${followups.skipped} skipped. ` +
+        `Call tasks: ${calls.raised} raised · ${calls.skipped} aged out.`
     );
   },
 });

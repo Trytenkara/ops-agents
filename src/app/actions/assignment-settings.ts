@@ -3,7 +3,7 @@ import { revalidatePath } from "next/cache";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { freezeDerivedOwners } from "@/lib/freeze-assignments";
-import { ALL_SUPPLIER_TYPES, type AssignmentMode } from "@/lib/operator-assignment";
+import { ALL_SUPPLIER_TYPES, type AssignmentMode, type OperatorType } from "@/lib/operator-assignment";
 import type { MarketKind } from "@/lib/lead-market";
 
 interface Result {
@@ -13,6 +13,7 @@ interface Result {
 }
 
 const MODES: AssignmentMode[] = ["manual", "auto_new", "auto_all"];
+const OPERATOR_TYPES: OperatorType[] = ["call", "email"];
 
 export async function setOrgAssignmentSettings(input: {
   orgId: string;
@@ -72,6 +73,54 @@ export async function setOrgAssignmentSettings(input: {
   });
   if (input.orgSlug) revalidatePath(`/work/orgs/${input.orgSlug}`);
   return { ok: true, frozen };
+}
+
+// What kind of work one operator takes on one client: phone or email, and which
+// market lanes. Held per (user, org), so somebody can be a caller for one client
+// and on the email desk for another, and never both on the same one.
+export async function setOperatorWork(input: {
+  orgId: string;
+  orgSlug?: string;
+  userId: string;
+  operatorType?: OperatorType;
+  lanes?: MarketKind[];
+}): Promise<Result> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" };
+  if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator"])) return { ok: false, error: "forbidden" };
+
+  const patch: Record<string, unknown> = {};
+  if (input.operatorType) {
+    if (!OPERATOR_TYPES.includes(input.operatorType)) return { ok: false, error: "unknown operator type" };
+    patch.operator_type = input.operatorType;
+  }
+  if (input.lanes) {
+    const lanes = input.lanes.filter((l) => ALL_SUPPLIER_TYPES.includes(l));
+    // An operator on no lanes would silently drop out of every spread while still
+    // looking assigned to the client, so an empty selection is rejected rather
+    // than saved.
+    if (!lanes.length) return { ok: false, error: "pick at least one lane" };
+    patch.lanes = lanes;
+  }
+  if (!Object.keys(patch).length) return { ok: true };
+
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("user_org_assignments")
+    .update(patch)
+    .eq("org_id", input.orgId)
+    .eq("user_id", input.userId);
+  if (error) return { ok: false, error: error.message };
+
+  await admin.from("audit_log").insert({
+    actor_user_id: session.userId,
+    action: "org.operator_work_set",
+    target_table: "user_org_assignments",
+    target_id: input.userId,
+    diff: { org_id: input.orgId, ...patch },
+  });
+  if (input.orgSlug) revalidatePath(`/work/orgs/${input.orgSlug}`);
+  return { ok: true };
 }
 
 // Take one operator out of (or back into) an org's auto loop. Membership and

@@ -63,7 +63,7 @@ export const RULES: Record<string, Rule> = {
     return [{
       severity: "warn",
       code: "missing_operator",
-      message: "Draft has no assigned_operator — operator org_default_operators row likely missing.",
+      message: "Draft has no assigned_operator. The client likely has no operators assigned to it.",
     }];
   },
   empty_body: ({ body_preview }) => {

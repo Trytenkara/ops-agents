@@ -34,6 +34,8 @@ export interface CallBrief {
   requiredGrade: string | null;
   threadId: string | null;
   leadId: string | null;
+  // Which call in the cadence this is (1-based), shown to the operator as "Call N".
+  callStage: number;
   builtAt: string;
 }
 
@@ -94,6 +96,14 @@ export interface BuildCallBriefInput {
   inquirySentAt: string | null;
   followupSentAt: string[];
   followupsSent: number;
+  // Which call in the cadence this is (1-based). Stage 1 is the day-1 intro call,
+  // made while the inquiry is still warm and regardless of whether they replied;
+  // later stages are silence escalations. The two need different scripts, so an
+  // operator on an intro call doesn't open with "we haven't heard from you".
+  callStage?: number;
+  // Whether the supplier has written back on this thread. Only ever true on an
+  // intro call, since the silence stages don't fire once a reply lands.
+  replied?: boolean;
   now?: Date;
 }
 
@@ -189,25 +199,36 @@ export async function buildCallBrief(admin: SupabaseClient, input: BuildCallBrie
       `Email follow-up${nudgeDates.length === 1 ? "" : "s"} sent ${nudgeDates.join(" and ")}, still no reply.`
     );
   }
-  const silentDays = daysSince(input.followupSentAt[input.followupSentAt.length - 1] ?? input.inquirySentAt, now.getTime());
-  if (silentDays != null) {
-    context.push(`Silent for ${silentDays} day${silentDays === 1 ? "" : "s"} since our last email.`);
+  const isIntro = (input.callStage ?? 1) === 1;
+  if (input.replied) {
+    context.push("They have already replied on this thread, so read it before dialling.");
+  } else {
+    const silentDays = daysSince(input.followupSentAt[input.followupSentAt.length - 1] ?? input.inquirySentAt, now.getTime());
+    if (silentDays != null) {
+      context.push(`Silent for ${silentDays} day${silentDays === 1 ? "" : "s"} since our last email.`);
+    }
   }
 
-  const purpose =
-    input.followupsSent > 0
-      ? `Email is not landing. ${input.followupsSent + 1} messages sent, zero replies, so the address may be wrong, unmonitored, or filtered. The call is to find a human and confirm whether they can quote at all.`
-      : `No reply to the initial sourcing inquiry. The call is to confirm it arrived and find the right person to quote.`;
+  const purpose = input.replied
+    ? "They have replied by email. This is the scheduled intro call, so use it to build the relationship and fill whatever the thread is still missing rather than re-asking what they already answered."
+    : isIntro
+      ? "Scheduled intro call, made the day after the sourcing inquiry went out while it is still fresh. The call is to reach a human, confirm the inquiry landed with the right person, and get the quote moving before we rely on email alone."
+      : `Email is not landing. ${input.followupsSent + 1} messages sent, zero replies, so the address may be wrong, unmonitored, or filtered. The call is to find a human and confirm whether they can quote at all.`;
 
-  const asks = [
-    `Confirm they received our email about ${materialList}${contactEmail ? ` at ${contactEmail}` : ""}.`,
-    "If that is the wrong address, get the name and direct email of whoever handles quotes.",
-    `Ask whether they can supply ${materialList}, and if so request price, pack size, MOQ, and lead time.`,
-  ];
+  const asks = input.replied
+    ? [
+        "Read the thread first and pick up where their reply left off.",
+        `Fill any gap still outstanding on ${materialList}: price, pack size, MOQ, lead time.`,
+      ]
+    : [
+        `Confirm they received our email about ${materialList}${contactEmail ? ` at ${contactEmail}` : ""}.`,
+        "If that is the wrong address, get the name and direct email of whoever handles quotes.",
+        `Ask whether they can supply ${materialList}, and if so request price, pack size, MOQ, and lead time.`,
+      ];
   if (requiredGrade) {
     asks.push(`${requiredGrade} grade is a hard requirement. Do not accept an offer of a different grade.`);
   }
-  asks.push("Log the outcome on this escalation so the email sequence knows whether to resume.");
+  asks.push("Log the outcome on this call task so the email sequence knows whether to resume.");
 
   return {
     contact: { name: contactName, email: contactEmail, phone: contactPhone, phoneSource: source },
@@ -223,6 +244,7 @@ export async function buildCallBrief(admin: SupabaseClient, input: BuildCallBrie
     requiredGrade,
     threadId: input.threadId,
     leadId,
+    callStage: input.callStage ?? 1,
     builtAt: now.toISOString(),
   };
 }

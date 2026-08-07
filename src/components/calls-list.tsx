@@ -3,7 +3,7 @@
 import { useEffect, useState, useTransition } from "react";
 import { relativeTime } from "@/lib/utils";
 import { OperatorChip } from "@/components/operator-chip";
-import { logCallAttempt, addSupplierPhoneToCase } from "@/app/actions/cases";
+import { logCallAttempt, addSupplierPhoneToCase, deescalateCallCase, dropSupplierFromCallCase } from "@/app/actions/cases";
 import { CALL_OUTCOMES, type CallOutcome, type CallBrief, type CallAttempt } from "@/lib/call-brief";
 import { zoneOffsetMinutes, isWithinWindow, shiftRangeLabel } from "@/lib/call-window";
 
@@ -16,6 +16,9 @@ export type CallCaseRow = {
   assignedName: string | null;
   assignedEmail: string | null;
   assignedRole: string | null;
+  materialName: string | null;
+  callStage: number;
+  reason: string | null;
   threadId: string | null;
   draftId: string | null;
   brief: CallBrief | null;
@@ -194,6 +197,153 @@ function OutcomeButtons({ row }: { row: CallCaseRow }) {
   );
 }
 
+// Why the task was raised, in the words an operator would use. Falls back to the
+// raw code so a reason added later still shows something rather than nothing.
+const REASON_LABEL: Record<string, string> = {
+  scheduled_intro_call: "Scheduled intro call, the day after the inquiry went out",
+  scheduled_intro_call_replied: "Scheduled intro call, they already replied by email",
+  no_reply_after_followups: "No reply to the inquiry or the follow-ups",
+};
+
+// The two ways a call task ends other than by outcome: hand the supplier back to
+// the email cadence, or drop them for good. Both take notes, because the next
+// person to look at this supplier has only what was written here.
+function ClosingActions({ row }: { row: CallCaseRow }) {
+  const [open, setOpen] = useState<"back" | "drop" | null>(null);
+  const [results, setResults] = useState<Record<string, "success" | "failure">>({});
+  const [note, setNote] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+
+  const stages = Array.from({ length: Math.max(row.callStage, 1) }, (_, i) => String(i + 1));
+
+  function reset() {
+    setOpen(null);
+    setResults({});
+    setNote("");
+    setErr(null);
+  }
+
+  return (
+    <div className="space-y-2 border-t pt-3">
+      {open === null ? (
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setOpen("back")}
+            className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
+          >
+            Send back to the email loop
+          </button>
+          <button
+            type="button"
+            onClick={() => setOpen("drop")}
+            className="rounded-md border border-destructive/50 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+          >
+            Drop this supplier
+          </button>
+        </div>
+      ) : open === "back" ? (
+        <div className="space-y-2">
+          <div className="text-xs font-medium">Send back to the email loop</div>
+          <p className="text-xs text-muted-foreground">
+            The follow-up emails start again from where they stopped. Mark how each call went first.
+          </p>
+          <div className="flex flex-wrap gap-4">
+            {stages.map((stage) => (
+              <div key={stage} className="flex items-center gap-3 text-xs">
+                <span className="text-muted-foreground">Call {stage}</span>
+                {(["success", "failure"] as const).map((v) => (
+                  <label key={v} className="flex items-center gap-1.5">
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5"
+                      checked={results[stage] === v}
+                      disabled={pending}
+                      onChange={() =>
+                        setResults((r) => {
+                          const next = { ...r };
+                          if (next[stage] === v) delete next[stage];
+                          else next[stage] = v;
+                          return next;
+                        })
+                      }
+                    />
+                    <span className={results[stage] === v ? "" : "text-muted-foreground"}>{v}</span>
+                  </label>
+                ))}
+              </div>
+            ))}
+          </div>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="What happened, and what the email side should know"
+            rows={2}
+            className="w-full rounded-md border border-border px-2 py-1 text-xs"
+          />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => {
+                setErr(null);
+                start(async () => {
+                  const r = await deescalateCallCase(row.id, { callResults: results, note });
+                  if (!r.ok) setErr(r.error ?? "failed");
+                  else reset();
+                });
+              }}
+              className="rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground disabled:opacity-50"
+            >
+              {pending ? "Sending..." : "Send back"}
+            </button>
+            <button type="button" disabled={pending} onClick={reset} className="rounded-md border border-border px-2 py-1 text-xs">
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="text-xs font-medium text-destructive">Drop this supplier</div>
+          <p className="text-xs text-muted-foreground">
+            Use this when they never came back, by email or by phone. The lead stops being worked and no further emails go
+            out.
+          </p>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Why they are being dropped (required)"
+            rows={2}
+            className="w-full rounded-md border border-border px-2 py-1 text-xs"
+          />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              disabled={pending || !note.trim()}
+              onClick={() => {
+                setErr(null);
+                start(async () => {
+                  const r = await dropSupplierFromCallCase(row.id, note);
+                  if (!r.ok) setErr(r.error ?? "failed");
+                  else reset();
+                });
+              }}
+              className="rounded-md bg-destructive px-2 py-1 text-xs text-destructive-foreground disabled:opacity-50"
+            >
+              {pending ? "Dropping..." : "Drop supplier"}
+            </button>
+            <button type="button" disabled={pending} onClick={reset} className="rounded-md border border-border px-2 py-1 text-xs">
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {err && <div className="text-xs text-destructive">{err}</div>}
+    </div>
+  );
+}
+
 function CallCard({ row }: { row: CallCaseRow }) {
   const brief = row.brief;
 
@@ -201,9 +351,15 @@ function CallCard({ row }: { row: CallCaseRow }) {
     <div className="rounded-lg border border-border p-4 space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="font-medium">{row.supplierName ?? row.supplierId ?? "Unknown supplier"}</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium uppercase tracking-wider">
+              Call {row.callStage}
+            </span>
+            <span className="font-medium">{row.supplierName ?? row.supplierId ?? "Unknown supplier"}</span>
+            {row.materialName && <span className="text-sm text-muted-foreground">for {row.materialName}</span>}
+          </div>
           <div className="text-xs text-muted-foreground">
-            Escalated {relativeTime(row.createdAt)}
+            {REASON_LABEL[row.reason ?? ""] ?? "Call this supplier"}, raised {relativeTime(row.createdAt)}
             {row.status === "in_progress" ? ", attempted" : ""}
             {brief?.country ? `, ${brief.country}` : ""}
           </div>
@@ -222,6 +378,13 @@ function CallCard({ row }: { row: CallCaseRow }) {
         <p className="text-sm text-muted-foreground">{row.recommendedAction ?? "Call this supplier."}</p>
       ) : (
         <>
+          {brief.materialNames.length > 0 && (
+            <div className="text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">Quoting:</span> {brief.materialNames.join(", ")}
+              {brief.requiredGrade ? `, ${brief.requiredGrade} grade` : ""}
+            </div>
+          )}
+
           <div className="grid gap-3 sm:grid-cols-2">
             <PhoneBlock row={row} />
             <CallWindowBlock brief={brief} />
@@ -261,6 +424,7 @@ function CallCard({ row }: { row: CallCaseRow }) {
       )}
 
       <OutcomeButtons row={row} />
+      <ClosingActions row={row} />
     </div>
   );
 }
@@ -273,8 +437,8 @@ export function CallsList({ rows }: { rows: CallCaseRow[] }) {
         Calls to make ({rows.length})
       </div>
       <p className="text-xs text-muted-foreground">
-        These suppliers stopped answering email. Each one already had a sourcing inquiry and both follow-ups, so the next
-        move is a phone call.
+        Call 1 is the intro call, made the day after the sourcing inquiry goes out while it is still fresh. Call 2 comes
+        five days in, and only for suppliers who never wrote back.
       </p>
       {rows.map((r) => (
         <CallCard key={r.id} row={r} />

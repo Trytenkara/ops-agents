@@ -4,8 +4,8 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { setOrgAssignmentSettings, setOperatorAutoAssignable } from "@/app/actions/assignment-settings";
-import type { AssignmentMode } from "@/lib/operator-assignment";
+import { setOrgAssignmentSettings, setOperatorAutoAssignable, setOperatorWork } from "@/app/actions/assignment-settings";
+import type { AssignmentMode, OperatorType } from "@/lib/operator-assignment";
 import type { MarketKind } from "@/lib/lead-market";
 
 const MODES: { value: AssignmentMode; label: string; hint: string }[] = [
@@ -26,7 +26,14 @@ export interface AssignmentOperator {
   email: string | null;
   role: string | null;
   autoAssignable: boolean;
+  operatorType: OperatorType;
+  lanes: MarketKind[];
 }
+
+const OPERATOR_TYPES: { value: OperatorType; label: string }[] = [
+  { value: "email", label: "Email" },
+  { value: "call", label: "Calls" },
+];
 
 // Operators who actually end up holding something. Not the pool size: everyone
 // excluded from the auto loop stays in the pool and receives nothing, so quoting
@@ -70,6 +77,9 @@ export function OrgAssignmentSettings({
   const [types, setTypes] = useState(initialSupplierTypes);
   const [excluded, setExcluded] = useState<Set<string>>(
     () => new Set(operators.filter((o) => !o.autoAssignable).map((o) => o.id))
+  );
+  const [work, setWork] = useState<Record<string, { operatorType: OperatorType; lanes: MarketKind[] }>>(() =>
+    Object.fromEntries(operators.map((o) => [o.id, { operatorType: o.operatorType, lanes: o.lanes }]))
   );
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
@@ -136,6 +146,29 @@ export function OrgAssignmentSettings({
     } finally {
       setRebalancing(false);
     }
+  }
+
+  // Type and lanes save on the spot (no Save button): each is one field on one
+  // person, and holding a half-edited team in local state would let an operator
+  // navigate away thinking a lane had been assigned.
+  function saveWork(userId: string, patch: { operatorType?: OperatorType; lanes?: MarketKind[] }) {
+    setErr(null);
+    const before = work[userId] ?? operators.find((o) => o.id === userId)!;
+    const next = { operatorType: patch.operatorType ?? before.operatorType, lanes: patch.lanes ?? before.lanes };
+    if (!next.lanes.length) {
+      setErr("Pick at least one lane, or untick the operator to take them out of the auto loop.");
+      return;
+    }
+    setWork({ ...work, [userId]: next });
+    start(async () => {
+      const res = await setOperatorWork({ orgId, orgSlug, userId, ...patch });
+      if (!res.ok) {
+        setErr(res.error ?? "failed");
+        setWork({ ...work, [userId]: { operatorType: before.operatorType, lanes: before.lanes } });
+        return;
+      }
+      router.refresh();
+    });
   }
 
   function toggleOperator(userId: string, next: boolean) {
@@ -213,32 +246,72 @@ export function OrgAssignmentSettings({
       </div>
 
       <div className="space-y-2">
-        <div className="text-xs uppercase tracking-wider text-muted-foreground">Operators in the auto loop</div>
+        <div className="text-xs uppercase tracking-wider text-muted-foreground">The team on this client</div>
         {operators.length === 0 ? (
           <p className="text-xs text-muted-foreground">No operators are assigned to this org yet.</p>
         ) : (
-          <div className="space-y-1">
+          <div className="space-y-3">
             {operators.map((o) => {
               const on = !excluded.has(o.id);
+              const w = work[o.id] ?? { operatorType: o.operatorType, lanes: o.lanes };
               return (
-                <label key={o.id} className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4"
-                    checked={on}
-                    disabled={!canEdit || pending}
-                    onChange={(e) => toggleOperator(o.id, e.target.checked)}
-                  />
-                  <span className={on ? "" : "text-muted-foreground line-through"}>{o.name}</span>
-                  {o.role && <span className="text-xs text-muted-foreground">{o.role === "ops_lead" ? "lead operator" : "operator"}</span>}
+                <div key={o.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border p-3">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={on}
+                      disabled={!canEdit || pending}
+                      onChange={(e) => toggleOperator(o.id, e.target.checked)}
+                    />
+                    <span className={on ? "" : "text-muted-foreground line-through"}>{o.name}</span>
+                  </label>
+                  {o.role && (
+                    <span className="text-xs text-muted-foreground">{o.role === "ops_lead" ? "lead operator" : "operator"}</span>
+                  )}
                   {!on && <span className="text-xs text-muted-foreground">(manual only)</span>}
-                </label>
+                  <div className="min-w-[130px]">
+                    <Select
+                      value={w.operatorType}
+                      onValueChange={(v) => saveWork(o.id, { operatorType: v as OperatorType })}
+                      ariaLabel={`Work type for ${o.name} on ${orgName}`}
+                      options={OPERATOR_TYPES.map((t) => ({ value: t.value, label: t.label }))}
+                      disabled={!canEdit || pending}
+                    />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    {TYPES.map((t) => {
+                      const lane = w.lanes.includes(t.value);
+                      return (
+                        <label key={t.value} className="flex items-center gap-1.5 text-xs">
+                          <input
+                            type="checkbox"
+                            className="h-3.5 w-3.5"
+                            checked={lane}
+                            disabled={!canEdit || pending}
+                            onChange={() =>
+                              saveWork(o.id, {
+                                lanes: lane ? w.lanes.filter((x) => x !== t.value) : [...w.lanes, t.value],
+                              })
+                            }
+                          />
+                          <span className={lane ? "" : "text-muted-foreground"}>{t.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
               );
             })}
           </div>
         )}
         <p className="text-xs text-muted-foreground">
-          Excluded operators stay on the org and can still be assigned by hand, they just never get picked automatically.
+          Each person does calls or email on this client, never both, and covers the lanes ticked next to their name.
+          Work spreads only across the people who do it, so naming three marketplace operators gives them the
+          marketplace book between them. Where nobody covers a lane the whole team shares it, so nothing goes unowned.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Unticking someone keeps them on the org and manually assignable, they just never get picked automatically.
           {autoOn ? ` ${inLoop.length} of ${operators.length} in the loop.` : " Auto is off, so this applies once it is turned on."}
         </p>
       </div>

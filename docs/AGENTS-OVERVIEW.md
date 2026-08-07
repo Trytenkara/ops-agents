@@ -399,7 +399,7 @@ select slug, schedule_cron, schedule_tz, training_wheels, status, last_run_at fr
 | `LEAD_CREATOR_MIN_LEADS_PER_MATERIAL` (default 100), `LEAD_CREATOR_RESCOUT_BACKOFF_HOURS`, `LEAD_CREATOR_LOOKBACK_HOURS` | 03 (optional) |
 | `OUTREACH_MAX_DRAFTS_PER_RUN` (default 5), `OUTREACH_FIRST_POOL_SIZE`, `OUTREACH_MAX_CONTACTS_PER_SUPPLIER`, `OUTREACH_MULTI_CONTACT` | 04, 06 (optional) |
 | `PRICE_PULL_MODE`, `PRICE_PULL_DAILY_SOFT_LIMIT`, `MARKETPLACE_RECHECK_MODEL` | 05 (optional) |
-| `FOLLOWUP_MINUTES`, `OUTREACH_COMPILE_WAIT_MINUTES`, `CALLING_ESCALATE_AFTER_MINUTES`, `FAST_TRACK_ORG_IDS`, `MOTHERLODE_ORG_IDS` | per-org timing and tiering |
+| `FOLLOWUP_MINUTES`, `OUTREACH_COMPILE_WAIT_MINUTES`, `CALL_TASK_MINUTES`, `FAST_TRACK_ORG_IDS`, `MOTHERLODE_ORG_IDS` | per-org timing and tiering |
 | `COMPLETENESS_FOLLOWUP_ENABLED` | `quote-completeness.ts` |
 | `ONLY_ORG`, `QR_ONLY_ORG` | legacy env scoping, superseded by `orgs.sourcing_status` |
 | `SUPABASE_DEV_URL`, `SUPABASE_DEV_SERVICE_KEY` | `campaign-suppliers.ts` (dev project) |

@@ -9,7 +9,7 @@ import { createTenkaraConversation, createTenkaraDraft, tenkaraEmailAccountIdFor
 import { bodyToHtml } from "@/lib/email-style";
 import { lintDraft } from "../outreach-qa/lint";
 import { postQrSummary } from "./slack-notifier";
-import { getOrgAssignmentContext, orgAutoKey, resolveOperatorId } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, orgAutoKey, spreadOwnerId } from "@/lib/operator-assignment";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import { mirrorDraftAssignee, threadCcContacts } from "@/lib/draft-staging";
 
@@ -349,29 +349,23 @@ registerAgent({
         // Map Tenkara org_id → Tackle Box org_id (one row per (client × supplier)).
         const { data: oaOrg } = await admin
           .from("orgs")
-          .select("id, org_default_operators(primary_user_id, backup_user_id, primary_user:users!org_default_operators_primary_user_id_fkey(status))")
+          .select("id")
           .eq("tenkara_org_id", r.group.client_org_id)
           .maybeSingle();
         let assignedOperator: string | null = null;
         if (oaOrg) {
-          const ops = (oaOrg as any).org_default_operators?.[0] ?? (oaOrg as any).org_default_operators;
-          if (ops) {
-            const ooo = ops.primary_user?.status === "out_of_office";
-            assignedOperator = ooo ? (ops.backup_user_id ?? ops.primary_user_id) : ops.primary_user_id;
-          }
-          // Manual claim or sticky-random owner, per the client's assignment mode.
+          // Manual claim, sticky-random owner, or a spread over the client's
+          // pool, in that order.
           const assignmentCtx = await getOrgAssignmentContext(admin, (oaOrg as any).id);
-          const resolved = resolveOperatorId(
+          assignedOperator = spreadOwnerId(
             assignmentCtx,
             orgAutoKey(assignmentCtx, {
               supplierId: r.group.supplier_id,
               supplierName: r.group.supplier_name,
               leadId: r.group.supplier_id ?? r.group.supplier_name ?? "",
             }),
-            null,
-            r.group.supplier_name
+            { nameHint: r.group.supplier_name }
           );
-          if (resolved) assignedOperator = resolved;
         }
         // Mirror the Control Room operator onto the Tenkara conversation so the
         // email app shows the same assignee (Agent 02 creates conversations

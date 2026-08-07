@@ -1,6 +1,6 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getOrgAssignmentContext, resolveOperatorId, overridesAuto, orgAutoKey, type AssignmentContext } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, spreadOwnerId, overridesAuto, orgAutoKey, type AssignmentContext } from "@/lib/operator-assignment";
 import { classifyClient } from "../quote-revalidation/config";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import { compileWaitMs } from "@/lib/agent-timing";
@@ -145,22 +145,18 @@ registerAgent({
     // 2. Resolve org info + classify in one pass. We only contact suppliers on
     //    behalf of orgs that map cleanly to a known active/ghost label.
     const orgIds = Array.from(new Set(leads.map((l) => l.org_id).filter(Boolean) as string[]));
-    let orgsById = new Map<string, { id: string; name: string; tenkara_org_id: string | null; tenkara_email_account_id: string | null; primary_user_id: string | null; backup_user_id: string | null }>();
+    let orgsById = new Map<string, { id: string; name: string; tenkara_org_id: string | null; tenkara_email_account_id: string | null }>();
     if (orgIds.length) {
       const { data: orgRows } = await admin
         .from("orgs")
-        .select("id, name, tenkara_org_id, tenkara_email_account_id, org_default_operators(primary_user_id, backup_user_id, primary_user:users!org_default_operators_primary_user_id_fkey(status))")
+        .select("id, name, tenkara_org_id, tenkara_email_account_id")
         .in("id", orgIds);
       for (const r of (orgRows ?? []) as any[]) {
-        const ops = r.org_default_operators?.[0] ?? r.org_default_operators ?? null;
-        const ooo = ops?.primary_user?.status === "out_of_office";
         orgsById.set(r.id, {
           id: r.id,
           name: r.name,
           tenkara_org_id: r.tenkara_org_id ?? null,
           tenkara_email_account_id: r.tenkara_email_account_id ?? null,
-          primary_user_id: ops ? (ooo ? (ops.backup_user_id ?? ops.primary_user_id) : ops.primary_user_id) : null,
-          backup_user_id: ops?.backup_user_id ?? null,
         });
       }
     }
@@ -435,16 +431,19 @@ registerAgent({
         // default on the EMAIL consolidation key (matching supplierKeyOf below) so
         // every material row of one supplier collapses to ONE operator, consistent
         // with the single consolidated thread we actually send. Fall back to lead
-        // id only when there's no email (manual-contact leads). Else org primary.
+        // id only when there's no email (manual-contact leads).
         assignedOperator: (() => {
           const ctx = assignmentCtxByOrg.get(lead.org_id);
-          // Kind is left for resolveOperatorId to derive from ctx.supplierTypes
+          // Kind is left for the resolver to derive from ctx.supplierTypes
           // (nameHint below), not passed as a hard kindHint here: that map already
           // layers Agent 06's validated profile over the scanner's site_type guess,
           // and a raw site_type passed as kindHint would short-circuit past it,
           // exactly the outranking the leads page already does for the same reason.
+          // spreadOwnerId, not resolveOperatorId: a client running manual
+          // assignment used to fall through to its Primary operator, and with
+          // that gone the draft would go out unowned. The spread catches it.
           const auto = ctx
-            ? resolveOperatorId(
+            ? spreadOwnerId(
                 ctx,
                 orgAutoKey(ctx, {
                   supplierId: lead.supplier_id,
@@ -452,15 +451,14 @@ registerAgent({
                   email: hasEmail ? email : null,
                   leadId: lead.id,
                 }),
-                null,
-                lead.supplier_name
+                { nameHint: lead.supplier_name }
               )
             : null;
           // "auto, reassign all" governs the lead-level claim too, so one setting
           // decides the whole client instead of leaving Scout leads behind. A claim
           // made since that spread is a deliberate correction and still wins.
           const claimWins = ctx ? overridesAuto(ctx, (lead as any).assigned_operator_at ?? null) : true;
-          return (claimWins ? lead.assigned_operator_id ?? auto : auto ?? lead.assigned_operator_id) ?? org.primary_user_id;
+          return (claimWins ? lead.assigned_operator_id ?? auto : auto ?? lead.assigned_operator_id) ?? null;
         })(),
       });
     }
