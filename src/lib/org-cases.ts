@@ -1,4 +1,10 @@
 import { operatorRoles, primaryRole } from "@/lib/operator";
+import {
+  getOrgAssignmentContext,
+  orgAutoKey,
+  spreadOwnerId,
+  type AssignmentContext,
+} from "@/lib/operator-assignment";
 import type { CaseRow } from "@/components/cases-list";
 import type { CallCaseRow } from "@/components/calls-list";
 import type { CallBrief, CallAttempt } from "@/lib/call-brief";
@@ -37,14 +43,63 @@ const OPEN_SELECT =
 const RESOLVED_SELECT =
   "id, supplier_id, type, recommended_action, status, resolved_at, resolution_note, metadata, users:users!cases_assigned_operator_fkey(display_name, email)";
 
+// An escalation stamps `cases.assigned_operator` when the agent raises it, and
+// nothing ever revisits that stamp. Every other tab derives its owner at read
+// time, so once the client's pool changed (an operator left the auto loop, a
+// rebalance ran, lanes were split) the escalation lists were the only surface
+// still naming the old operator, which reads as "the assignees didn't carry
+// over". Derive them here, keyed on the SUPPLIER so a case lands on whoever owns
+// that supplier today, exactly as Leads, Suppliers and Quotes Validation resolve
+// theirs. The stored stamp stays the fallback for what derivation declines to
+// own (empty pool, manual mode with no claim, a client with no call operator).
+async function deriveCaseOwners(admin: any, orgId: string, rows: any[], ctx?: AssignmentContext): Promise<void> {
+  if (rows.length === 0) return;
+  const assignment = ctx ?? (await getOrgAssignmentContext(admin, orgId));
+  const byId = new Map(assignment.pool.map((op) => [op.id, op]));
+  for (const c of rows) {
+    const supplierName = (c.metadata?.supplier_name as string | undefined) ?? null;
+    const ownerId = spreadOwnerId(
+      assignment,
+      orgAutoKey(assignment, {
+        supplierId: c.supplier_id,
+        supplierName,
+        email: (c.metadata?.supplier_contact_email as string | undefined) ?? null,
+        leadId: (c.metadata?.lead_id as string | undefined) ?? c.id,
+      }),
+      // Calls resolve over the client's call operators; everything else is desk
+      // work. A client with no caller gets an unowned call rather than a ping to
+      // someone who does not make calls.
+      { nameHint: supplierName, workType: isCallCase(c) ? "call" : "email" }
+    );
+    const owner = ownerId ? byId.get(ownerId) : null;
+    if (!owner) continue;
+    c.assigned_operator = owner.id;
+    c.users = {
+      display_name: owner.name,
+      email: owner.email,
+      user_roles: owner.roles.map((role) => ({ role })),
+    };
+  }
+}
+
 // Load an org's open/in-progress cases and its recently-resolved ones once, so
 // a page can split them by caseCategory() without three separate round-trips.
-export async function loadOrgCases(admin: any, orgId: string): Promise<{ openRows: any[]; resolvedRows: any[] }> {
+// Pass `ctx` on a page that already built one: the context pages every active
+// lead for the org, and building it twice per render is the expensive half.
+export async function loadOrgCases(
+  admin: any,
+  orgId: string,
+  ctx?: AssignmentContext
+): Promise<{ openRows: any[]; resolvedRows: any[] }> {
   const [openRes, resolvedRes] = await Promise.all([
     admin.from("cases").select(OPEN_SELECT).eq("org_id", orgId).in("status", ["open", "in_progress"]).order("created_at", { ascending: false }),
     admin.from("cases").select(RESOLVED_SELECT).eq("org_id", orgId).eq("status", "resolved").order("resolved_at", { ascending: false }).limit(50),
   ]);
-  return { openRows: openRes.data ?? [], resolvedRows: resolvedRes.data ?? [] };
+  const openRows = openRes.data ?? [];
+  // Only the open worklist: a resolved case's operator is the record of who
+  // actually handled it, which must not be re-pointed at today's owner.
+  await deriveCaseOwners(admin, orgId, openRows, ctx).catch(() => {});
+  return { openRows, resolvedRows: resolvedRes.data ?? [] };
 }
 
 // Calling escalations are a phone worklist, not a row in a table: they render as

@@ -22,6 +22,9 @@ export interface OperatorRef {
   id: string;
   name: string;
   email: string | null;
+  // Carried so a surface that resolves an owner can render the same
+  // "<name> · <role>" chip as one that read the operator off a join.
+  roles: string[];
   // In this org's AUTO loop. False = still a member and still manually
   // assignable, just skipped by the sticky-random spread.
   autoAssignable: boolean;
@@ -125,6 +128,7 @@ export async function getOrgOperatorPool(
           id: u.id,
           name: u.display_name ?? u.email ?? "-",
           email: u.email ?? null,
+          roles: (u.user_roles ?? []).map((r: any) => r?.role).filter(Boolean),
           autoAssignable: a.auto_assignable !== false,
           operatorType: a.operator_type === "call" ? "call" : "email",
           lanes: Array.isArray(a.lanes)

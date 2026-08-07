@@ -314,7 +314,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
 
   // Supplier-side escalations (bounced/no-contact leads, stale leads) surfaced in
   // the "Supplier Escalations" tab alongside the leads the fleet stalled on.
-  const { openRows: caseOpen, resolvedRows: caseResolved } = await loadOrgCases(admin, org.id);
+  const { openRows: caseOpen, resolvedRows: caseResolved } = await loadOrgCases(admin, org.id, assignmentCtx);
   const supplierCasesOpen = caseOpen.filter((c) => caseCategory(c.type) === "supplier");
   const supplierCasesResolved = caseResolved.filter((c) => caseCategory(c.type) === "supplier");
   const enrichmentCases =

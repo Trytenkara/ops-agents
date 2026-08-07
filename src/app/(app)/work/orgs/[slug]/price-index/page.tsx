@@ -400,7 +400,7 @@ export default async function OrgPriceIndexPage({
   // so a value sourced for one client is valid for every client's same material.
   const densities = await loadMaterialDensities(admin);
 
-  const { openRows: caseOpen, resolvedRows: caseResolved } = await loadOrgCases(admin, org.id);
+  const { openRows: caseOpen, resolvedRows: caseResolved } = await loadOrgCases(admin, org.id, assignmentCtx);
   const quoteCasesOpen = caseOpen.filter((c) => caseCategory(c.type) === "quote");
   const quoteCasesResolved = caseResolved.filter((c) => caseCategory(c.type) === "quote");
 
