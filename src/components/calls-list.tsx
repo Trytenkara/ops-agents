@@ -66,10 +66,10 @@ function CallWindowBlock({ brief }: { brief: CallBrief }) {
   const tz = brief.window.timezone;
   if (!tz) {
     return (
-      <div className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-        <div className="font-medium text-foreground">When to call</div>
-        <div>{brief.window.note ?? "Calling window unknown."}</div>
-      </div>
+      <Panel>
+        <PanelLabel>When to call</PanelLabel>
+        <div className="mt-1 text-sm text-muted-foreground">{brief.window.note ?? "Calling window unknown."}</div>
+      </Panel>
     );
   }
 
@@ -77,35 +77,45 @@ function CallWindowBlock({ brief }: { brief: CallBrief }) {
   const open = mounted ? isWithinWindow(tz) : false;
 
   return (
-    <div className="rounded-md border border-border px-3 py-2 text-xs">
+    <Panel>
       <div className="flex items-center justify-between gap-2">
-        <span className="font-medium">When to call</span>
+        <PanelLabel>When to call</PanelLabel>
         {mounted && (
           <span
-            className={`rounded-full px-2 py-0.5 text-[11px] ${
-              open ? "bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200" : "bg-secondary text-muted-foreground"
+            className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+              open
+                ? "bg-emerald-600 text-white"
+                : "bg-secondary text-secondary-foreground"
             }`}
           >
             {open ? "Open now" : "Closed now"}
           </span>
         )}
       </div>
-      <div className="mt-1 text-muted-foreground">
-        {viewer ? (
-          <>
-            <span className="text-foreground font-medium">{viewer.label}</span> your time ({viewer.viewerZone})
-          </>
-        ) : (
-          <span className="text-foreground font-medium">{brief.window.localLabel}</span>
-        )}
+      <div className="mt-1 text-base font-semibold tracking-tight">
+        {viewer ? viewer.label : brief.window.localLabel}
       </div>
-      <div className="text-muted-foreground">
+      <div className="text-xs text-muted-foreground">
+        {viewer ? `your time (${viewer.viewerZone})` : "their local time"}
+      </div>
+      <div className="mt-1 text-xs text-muted-foreground">
         {brief.window.localLabel} in {tz}
         {mounted ? `, now ${supplierClock(tz)} there` : ""}
       </div>
-      {brief.window.note && <div className="mt-1 text-amber-700 dark:text-amber-500">{brief.window.note}</div>}
-    </div>
+      {brief.window.note && <div className="mt-1 text-xs text-amber-700 dark:text-amber-500">{brief.window.note}</div>}
+    </Panel>
   );
+}
+
+// One visual language for every block inside an open call: an ivory panel on the
+// parchment page. The card used to be transparent with hairline borders, which
+// left the number, the window and the brief all reading as the same flat text.
+function Panel({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <div className={`rounded-md border border-border bg-card p-3 ${className}`}>{children}</div>;
+}
+
+function PanelLabel({ children }: { children: React.ReactNode }) {
+  return <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{children}</div>;
 }
 
 function PhoneBlock({ row }: { row: CallCaseRow }) {
@@ -116,29 +126,32 @@ function PhoneBlock({ row }: { row: CallCaseRow }) {
 
   if (known) {
     return (
-      <div>
-        <div className="text-xs text-muted-foreground">Call this number</div>
-        <a href={`tel:${known.replace(/[^\d+]/g, "")}`} className="text-lg font-semibold tracking-tight text-primary hover:underline">
+      <Panel>
+        <PanelLabel>Call this number</PanelLabel>
+        <a
+          href={`tel:${known.replace(/[^\d+]/g, "")}`}
+          className="mt-1 block text-xl font-semibold tracking-tight text-primary hover:underline"
+        >
           {known}
         </a>
         <div className="text-xs text-muted-foreground">
           {row.brief?.contact.name ? `${row.brief.contact.name}, ` : ""}
           {row.brief?.contact.email ?? "no email on file"}
         </div>
-      </div>
+      </Panel>
     );
   }
 
   return (
-    <div className="space-y-1">
-      <div className="text-xs font-medium text-amber-700 dark:text-amber-500">No phone number on file</div>
+    <Panel className="space-y-2">
+      <div className="text-sm font-medium text-amber-700 dark:text-amber-500">No phone number on file</div>
       <div className="flex items-center gap-2">
         <input
           type="tel"
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
           placeholder="+1 555 123 4567"
-          className="w-48 rounded-md border border-border px-2 py-1 text-xs"
+          className="w-48 rounded-md border border-border bg-background px-2 py-1.5 text-sm"
         />
         <button
           type="button"
@@ -151,7 +164,7 @@ function PhoneBlock({ row }: { row: CallCaseRow }) {
               else setPhone("");
             });
           }}
-          className="rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground disabled:opacity-50"
+          className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
         >
           {pending ? "…" : "Save number"}
         </button>
@@ -161,13 +174,13 @@ function PhoneBlock({ row }: { row: CallCaseRow }) {
           href={row.brief.supplierWebsite}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs text-primary underline hover:no-underline"
+          className="text-sm text-primary underline hover:no-underline"
         >
           Open their site to find one
         </a>
       )}
       {err && <div className="text-xs text-destructive">{err}</div>}
-    </div>
+    </Panel>
   );
 }
 
@@ -177,14 +190,14 @@ function OutcomeButtons({ row }: { row: CallCaseRow }) {
   const [pending, start] = useTransition();
 
   return (
-    <div className="space-y-2">
-      <div className="text-xs font-medium">Log the outcome</div>
+    <Panel className="space-y-2">
+      <PanelLabel>Log the outcome</PanelLabel>
       <input
         type="text"
         value={note}
         onChange={(e) => setNote(e.target.value)}
         placeholder="What they said (optional)"
-        className="w-full rounded-md border border-border px-2 py-1 text-xs"
+        className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
       />
       <div className="flex flex-wrap gap-2">
         {(Object.keys(CALL_OUTCOMES) as CallOutcome[]).map((outcome) => (
@@ -200,14 +213,14 @@ function OutcomeButtons({ row }: { row: CallCaseRow }) {
                 else setNote("");
               });
             }}
-            className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+            className="rounded-md border border-border bg-background px-3 py-1.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
           >
             {CALL_OUTCOMES[outcome].label}
           </button>
         ))}
       </div>
       {err && <div className="text-xs text-destructive">{err}</div>}
-    </div>
+    </Panel>
   );
 }
 
@@ -239,39 +252,39 @@ function ClosingActions({ row }: { row: CallCaseRow }) {
   }
 
   return (
-    <div className="space-y-2 border-t pt-3">
+    <Panel className="space-y-2">
       {open === null ? (
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => setOpen("back")}
-            className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted"
+            className="rounded-md border border-border bg-background px-3 py-1.5 text-sm font-medium hover:bg-muted"
           >
             Send back to the email loop
           </button>
           <button
             type="button"
             onClick={() => setOpen("drop")}
-            className="rounded-md border border-destructive/50 px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+            className="rounded-md border border-destructive/50 bg-background px-3 py-1.5 text-sm font-medium text-destructive hover:bg-destructive/10"
           >
             Drop this supplier
           </button>
         </div>
       ) : open === "back" ? (
         <div className="space-y-2">
-          <div className="text-xs font-medium">Send back to the email loop</div>
-          <p className="text-xs text-muted-foreground">
+          <PanelLabel>Send back to the email loop</PanelLabel>
+          <p className="text-sm text-muted-foreground">
             The follow-up emails start again from where they stopped. Mark how each call went first.
           </p>
           <div className="flex flex-wrap gap-4">
             {stages.map((stage) => (
-              <div key={stage} className="flex items-center gap-3 text-xs">
+              <div key={stage} className="flex items-center gap-3 text-sm">
                 <span className="text-muted-foreground">Call {stage}</span>
                 {(["success", "failure"] as const).map((v) => (
                   <label key={v} className="flex items-center gap-1.5">
                     <input
                       type="checkbox"
-                      className="h-3.5 w-3.5"
+                      className="h-4 w-4"
                       checked={results[stage] === v}
                       disabled={pending}
                       onChange={() =>
@@ -294,7 +307,7 @@ function ClosingActions({ row }: { row: CallCaseRow }) {
             onChange={(e) => setNote(e.target.value)}
             placeholder="What happened, and what the email side should know"
             rows={2}
-            className="w-full rounded-md border border-border px-2 py-1 text-xs"
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
           />
           <div className="flex gap-2">
             <button
@@ -308,19 +321,19 @@ function ClosingActions({ row }: { row: CallCaseRow }) {
                   else reset();
                 });
               }}
-              className="rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground disabled:opacity-50"
+              className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground disabled:opacity-50"
             >
               {pending ? "Sending..." : "Send back"}
             </button>
-            <button type="button" disabled={pending} onClick={reset} className="rounded-md border border-border px-2 py-1 text-xs">
+            <button type="button" disabled={pending} onClick={reset} className="rounded-md border border-border bg-background px-3 py-1.5 text-sm">
               Cancel
             </button>
           </div>
         </div>
       ) : (
         <div className="space-y-2">
-          <div className="text-xs font-medium text-destructive">Drop this supplier</div>
-          <p className="text-xs text-muted-foreground">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-destructive">Drop this supplier</div>
+          <p className="text-sm text-muted-foreground">
             Use this when they never came back, by email or by phone. The lead stops being worked and no further emails go
             out.
           </p>
@@ -329,7 +342,7 @@ function ClosingActions({ row }: { row: CallCaseRow }) {
             onChange={(e) => setNote(e.target.value)}
             placeholder="Why they are being dropped (required)"
             rows={2}
-            className="w-full rounded-md border border-border px-2 py-1 text-xs"
+            className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
           />
           <div className="flex gap-2">
             <button
@@ -343,18 +356,18 @@ function ClosingActions({ row }: { row: CallCaseRow }) {
                   else reset();
                 });
               }}
-              className="rounded-md bg-destructive px-2 py-1 text-xs text-destructive-foreground disabled:opacity-50"
+              className="rounded-md bg-destructive px-3 py-1.5 text-sm font-medium text-destructive-foreground disabled:opacity-50"
             >
               {pending ? "Dropping..." : "Drop supplier"}
             </button>
-            <button type="button" disabled={pending} onClick={reset} className="rounded-md border border-border px-2 py-1 text-xs">
+            <button type="button" disabled={pending} onClick={reset} className="rounded-md border border-border bg-background px-3 py-1.5 text-sm">
               Cancel
             </button>
           </div>
         </div>
       )}
       {err && <div className="text-xs text-destructive">{err}</div>}
-    </div>
+    </Panel>
   );
 }
 
@@ -369,34 +382,46 @@ const THREAD_STATE_LABEL: Record<string, string> = {
 // The brief says what we sent; this says where the conversation stands now,
 // which is what an operator needs in the ten seconds before they dial.
 function InboxBlock({ inbox }: { inbox: InboxContext }) {
+  const [full, setFull] = useState(false);
   if (!inbox.summary && !inbox.openAsk) return null;
   const replied = inbox.threadState === "they_replied";
   return (
     <div
-      className={`rounded-md border px-3 py-2 text-xs ${
-        replied ? "border-emerald-300 bg-emerald-50/60 dark:border-emerald-900 dark:bg-emerald-950/30" : "border-border bg-muted/40"
+      className={`rounded-md border p-3 ${
+        replied ? "border-emerald-300 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/40" : "border-border bg-card"
       }`}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-medium">
+        <PanelLabel>
           From the inbox
           {inbox.threadState ? `: ${THREAD_STATE_LABEL[inbox.threadState] ?? inbox.threadState}` : ""}
           {inbox.lastInboundAt ? `, last heard ${relativeTime(inbox.lastInboundAt)}` : ""}
-        </span>
+        </PanelLabel>
         {inbox.conversationUrl && (
           <a
             href={inbox.conversationUrl}
             target="_blank"
             rel="noreferrer"
-            className="text-primary underline hover:no-underline"
+            className="text-xs text-primary underline hover:no-underline"
           >
             Open in Tenkara
           </a>
         )}
       </div>
-      {inbox.summary && <p className="mt-1 text-muted-foreground">{inbox.summary}</p>}
+      {inbox.summary && (
+        <>
+          <p className={`mt-1 text-sm text-muted-foreground ${full ? "" : "line-clamp-2"}`}>{inbox.summary}</p>
+          <button
+            type="button"
+            onClick={() => setFull(!full)}
+            className="mt-1 text-xs text-primary underline hover:no-underline"
+          >
+            {full ? "Show less" : "Show the whole thread summary"}
+          </button>
+        </>
+      )}
       {inbox.openAsk && (
-        <p className="mt-1">
+        <p className="mt-2 text-sm">
           <span className="font-medium">Still owed:</span> <span className="text-muted-foreground">{inbox.openAsk}</span>
         </p>
       )}
@@ -408,23 +433,30 @@ function CallCard({ row, expanded, onToggle }: { row: CallCaseRow; expanded: boo
   const brief = row.brief;
 
   return (
-    <div className="rounded-lg border border-border">
-      <div className="flex flex-wrap items-start justify-between gap-3 p-3">
-        <button type="button" onClick={onToggle} className="min-w-0 flex-1 text-left" aria-expanded={expanded}>
+    <div className="tb-surface overflow-hidden rounded-lg">
+      <div className={`flex flex-wrap items-start justify-between gap-3 p-3 ${expanded ? "bg-muted/60" : ""}`}>
+        <button
+          type="button"
+          onClick={onToggle}
+          className="min-w-0 flex-1 rounded text-left hover:opacity-80"
+          aria-expanded={expanded}
+        >
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-muted-foreground">{expanded ? "▾" : "▸"}</span>
-            <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium uppercase tracking-wider">
+            <span className="rounded-full bg-foreground px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-background">
               Call {row.callStage}
             </span>
-            <span className="font-medium">{row.supplierName ?? row.supplierId ?? "Unknown supplier"}</span>
+            <span className="text-base font-semibold tracking-tight">
+              {row.supplierName ?? row.supplierId ?? "Unknown supplier"}
+            </span>
             {row.materialName && <span className="text-sm text-muted-foreground">for {row.materialName}</span>}
             {row.inbox?.threadState === "they_replied" && (
-              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                replied
-              </span>
+              <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[11px] font-medium text-white">replied</span>
             )}
             {!brief?.contact.phone && (
-              <span className="text-[11px] text-amber-700 dark:text-amber-500">no number</span>
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-900 dark:bg-amber-950 dark:text-amber-300">
+                no number
+              </span>
             )}
           </div>
           <div className="pl-5 text-xs text-muted-foreground">
@@ -444,7 +476,7 @@ function CallCard({ row, expanded, onToggle }: { row: CallCaseRow; expanded: boo
       </div>
 
       {expanded && (
-      <div className="space-y-3 border-t border-border p-4">
+      <div className="space-y-3 border-t border-border bg-muted/30 p-4">
       {row.inbox && <InboxBlock inbox={row.inbox} />}
 
       {!brief ? (
@@ -452,7 +484,7 @@ function CallCard({ row, expanded, onToggle }: { row: CallCaseRow; expanded: boo
       ) : (
         <>
           {brief.materialNames.length > 0 && (
-            <div className="text-xs text-muted-foreground">
+            <div className="text-sm text-muted-foreground">
               <span className="font-medium text-foreground">Quoting:</span> {brief.materialNames.join(", ")}
               {brief.requiredGrade ? `, ${brief.requiredGrade} grade` : ""}
             </div>
@@ -463,37 +495,38 @@ function CallCard({ row, expanded, onToggle }: { row: CallCaseRow; expanded: boo
             <CallWindowBlock brief={brief} />
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <div className="text-xs font-medium">Why we are calling</div>
-              <p className="mt-1 text-xs text-muted-foreground">{brief.purpose}</p>
-              <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Panel>
+              <PanelLabel>Why we are calling</PanelLabel>
+              <p className="mt-1 text-sm">{brief.purpose}</p>
+              <ul className="mt-2 space-y-1 text-sm text-muted-foreground">
                 {brief.context.map((line, i) => (
                   <li key={i}>• {line}</li>
                 ))}
               </ul>
-            </div>
-            <div>
-              <div className="text-xs font-medium">What to ask for</div>
-              <ol className="mt-1 space-y-1 text-xs text-muted-foreground">
+            </Panel>
+            <Panel>
+              <PanelLabel>What to ask for</PanelLabel>
+              <ol className="mt-1 space-y-1.5 text-sm">
                 {brief.asks.map((line, i) => (
-                  <li key={i}>
-                    {i + 1}. {line}
+                  <li key={i} className="flex gap-2">
+                    <span className="font-semibold text-muted-foreground">{i + 1}.</span>
+                    <span>{line}</span>
                   </li>
                 ))}
               </ol>
-            </div>
+            </Panel>
           </div>
         </>
       )}
 
       {row.callLog.length > 0 && (
-        <div className="rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+        <Panel className="text-sm text-muted-foreground">
           <span className="font-medium text-foreground">Attempts:</span>{" "}
           {row.callLog
             .map((a) => `${CALL_OUTCOMES[a.outcome]?.label ?? a.outcome} ${relativeTime(a.at)}${a.note ? ` (${a.note})` : ""}`)
             .join("; ")}
-        </div>
+        </Panel>
       )}
 
       <OutcomeButtons row={row} />
