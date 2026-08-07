@@ -15,6 +15,7 @@ import "./outreach-qa";
 import "./client-profile";
 import "./inbox-context";
 import "./qa-watchdog";
+import "./sourcing-health";
 import "./reply-manager";
 import "./fleet-summary";
 import "./fx-refresh";
