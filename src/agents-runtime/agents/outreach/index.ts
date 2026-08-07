@@ -25,7 +25,17 @@ import { randomUUID } from "crypto";
 //
 // Safety: drafts are staged, never sent. No email leaves Tenkara without a human
 // pressing Send.
-const DEFAULT_MAX_DRAFTS_PER_RUN = 5;
+// Sized against the real per-draft cost, not the old 300s function timeout this
+// was originally picked for: drafting is a strictly serial loop measured at
+// 15-20s per draft, and maxDuration is 800s. 25 drafts is ~500s worst case, and
+// DRAFT_BUDGET_MS below stops the loop before the ceiling either way, so the run
+// ends on its own terms with every draft it managed to stage.
+const DEFAULT_MAX_DRAFTS_PER_RUN = 25;
+
+// Wall-clock stop for the drafting loop. Vercel kills the invocation at 800s
+// with no chance to write a summary, so leave room for the post-loop bookkeeping
+// (holds, alias reconcile, summary) rather than running to the edge.
+const DRAFT_BUDGET_MS = 600_000;
 
 function envMaxDrafts(): number {
   const v = process.env.OUTREACH_MAX_DRAFTS_PER_RUN;
@@ -128,8 +138,11 @@ registerAgent({
     // Over-fetch to allow filtering before capping. Wide enough that a run still
     // finds actionable leads while the parked backlog is being stamped out for
     // the first time — once drained, the extra rows cost one larger select and
-    // are discarded by the maxDrafts cap anyway.
-    const cap = maxDrafts * 20;
+    // are discarded by the maxDrafts cap anyway. Bounded absolutely because these
+    // rows carry the full jsonb payload: past a couple hundred the select costs
+    // more than the extra reach is worth, now that parking keeps the un-parked
+    // set dense with actionable leads.
+    const cap = Math.min(maxDrafts * 20, 200);
     const realRes = await fetchEnriched(realOrgIds, cap);
     if (realRes.error) {
       await ctx.log(`Pull failed: ${realRes.error.message}`, { level: "error", step: "pull" });
@@ -756,8 +769,15 @@ registerAgent({
       }
     };
 
+    const draftDeadline = Date.now() + DRAFT_BUDGET_MS;
+    let budgetStopped = 0;
+
     for (const [key, group] of emailBySupplier) {
       if (staged >= maxDrafts) break;
+      if (Date.now() > draftDeadline) {
+        budgetStopped++;
+        continue;
+      }
       const primary = group[0];
       const supplierId = primary.lead.supplier_id;
 
@@ -951,6 +971,7 @@ registerAgent({
         (equipmentSkipped ? ` · skipped ${equipmentSkipped} equipment-supplier` : "") +
         (marketplacePricingLeft ? ` · left ${marketplacePricingLeft} marketplace for price-pull` : "") +
         (parkedThisRun ? ` · parked ${parkedThisRun} marketplace out of the outreach window` : "") +
+        (budgetStopped ? ` · ${budgetStopped} supplier${budgetStopped === 1 ? "" : "s"} deferred (run budget)` : "") +
         (filteredNoContact || droppedNoOrg || droppedSkipClient
           ? ` · filtered ${filteredNoContact + droppedNoOrg + droppedSkipClient} pre-outreach`
           : "")
