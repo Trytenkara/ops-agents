@@ -347,6 +347,11 @@ async function attempt(opts: {
     projectId: process.env.BROWSERBASE_PROJECT_ID,
     model: NAV_MODEL,
     verbose: 0,
+    // An explicit logger is required, not cosmetic: left unset, Stagehand builds
+    // a pino transport that resolves "pino-pretty" at runtime, which is not in
+    // the serverless bundle, and every pull fails with "unable to determine
+    // transport target for pino-pretty" before a browser is ever opened.
+    logger: () => {},
     browserbaseSessionCreateParams: {
       projectId: process.env.BROWSERBASE_PROJECT_ID!,
       proxies: true,
