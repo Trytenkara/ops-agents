@@ -17,6 +17,7 @@ import "./inbox-context";
 import "./qa-watchdog";
 import "./sourcing-health";
 import "./california-watch";
+import "./materials-expiry";
 import "./reply-manager";
 import "./fleet-summary";
 import "./fx-refresh";
