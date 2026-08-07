@@ -101,6 +101,7 @@ registerAgent({
       [TENKARA_ORG_ID]
     );
     const materialNames = materialRows.map((r) => r.name).filter(Boolean);
+    const knownMaterials = new Set(materialNames);
     const nMaterials = materialNames.length;
     if (nMaterials === 0) {
       ctx.setStatus("success");
@@ -127,7 +128,11 @@ registerAgent({
     for (const name of materialNames) perMaterial.set(name, { total: 0, raw: 0, enriched: 0, other: 0 });
     const nameToId = new Map<string, string>();
     for (const row of leads) {
-      const name = row.material_name || "(unnamed)";
+      // A lead with no material_name is a data defect, not a material. Bucketing
+      // it produced an "(unnamed)" line in the breadth report and, worse, an
+      // extra entry that skewed the all-saturated completion check below.
+      const name = row.material_name;
+      if (!name) continue;
       if (row.material_id && !nameToId.has(name)) nameToId.set(name, row.material_id);
       const d = perMaterial.get(name) ?? { total: 0, raw: 0, enriched: 0, other: 0 };
       d.total += 1;
@@ -219,7 +224,11 @@ registerAgent({
       // a problem — worded so ops can close the material rather than chase it.
       const dry = saturation.get(name) ?? 0;
       if (dry >= DRY_STREAK_LIMIT) {
-        saturatedCount += 1;
+        // Only materials Tenkara actually knows about count toward completion.
+        // perMaterial also holds names seen on leads but absent from Tenkara
+        // (renames, stale labels), so counting those could reach nMaterials
+        // while a real material was still being scouted.
+        if (knownMaterials.has(name)) saturatedCount += 1;
         if (!ms.saturated_flagged) {
           ms.saturated_flagged = true;
           outbox.push(
