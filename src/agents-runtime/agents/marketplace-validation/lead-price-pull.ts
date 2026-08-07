@@ -22,7 +22,18 @@ type Admin = ReturnType<typeof createAdminClient>;
 // Per-run throughput is split so a re-check backlog can never starve first pulls
 // of freshly-discovered leads (and vice-versa). Both share the same run deadline.
 const FIRST_PULL_CAP = 20; // brand-new marketplace leads with no price yet (Sonnet+web_fetch, ~25s each).
-const RECHECK_CAP = 50;    // already-pulled leads due for re-validation. Raised for FULL mode so the whole pool clears daily across the hourly runs (each run is still bounded by the 800s deadline; leftovers resume next run).
+// Already-pulled leads due for re-validation. Sized against the run deadline, not
+// against the pool: 14 consecutive hourly runs each processed exactly the old
+// 20+50 cap in 331-705s (mean ~500s) of the 700s budget, so the cap was binding
+// while ~30% of the wall clock went unused. In FULL mode every pulled lead wants a
+// daily re-check, and active-org demand (1,144) had only 1,200/day of capacity —
+// 95% utilisation, which a single slow day pushes into permanent arrears.
+//
+// Overshooting the average on purpose: the batch loop checks the deadline BEFORE
+// each batch's model calls, so a slow run truncates without wasting a pull and its
+// leftovers roll to the next run (the pre-existing behaviour). A fast run now
+// converts its spare budget into throughput instead of idling.
+const RECHECK_CAP = 85;
 const CONCURRENCY = 4;
 const FLAG_AFTER_ATTEMPTS = 3; // needs_review is read this many times before a case is opened, so one flaky web_search result isn't a premature escalation. It does NOT stop the retries.
 
