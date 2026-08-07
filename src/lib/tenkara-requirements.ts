@@ -75,17 +75,22 @@ function readGroup(group: any): { requested: boolean; dealbreaker: boolean; name
 function readCertifications(row: RequirementsRow): { requested: boolean; dealbreaker: boolean; names: string[] } {
   const certs = Array.isArray(row.required_certs) ? row.required_certs : [];
   // is_required defaults true in the table, so an explicitly unrequired entry is
-  // the only thing this drops.
+  // the only thing this drops. Both the names and the dealbreaker flag read from
+  // this same list: an unrequired certification that still carries
+  // is_dealbreaker must not mark the group, because its own name never reaches
+  // `names` and dealbreakerCertNames() would then hand the leads filter the
+  // OTHER certifications as if the client had flagged them.
+  const required = certs.filter((c) => c.is_required !== false);
   const names = [
     ...documentNames(row.cert_documents),
-    ...certs.filter((c) => c.is_required !== false).map((c) => certLabel(c.certification_id)),
+    ...required.map((c) => certLabel(c.certification_id)),
   ];
   const requested = asBool(row.cert_custom_requests) || names.length > 0;
   // Before the split this was one group-level flag; it is per-certification now,
   // so the group counts as a dealbreaker when any required certification is one.
   // That keeps dealbreakerCertNames()'s "supplier must hold ALL of them" reading
   // intact — see the note on that function.
-  const dealbreaker = certs.some((c) => c.is_dealbreaker === true);
+  const dealbreaker = required.some((c) => c.is_dealbreaker === true);
   return { requested, dealbreaker, names };
 }
 
