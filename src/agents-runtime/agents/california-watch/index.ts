@@ -35,6 +35,12 @@ const STALL_HOURS = 16;
 // resource_attempt:<material_id> markers; keep aligned with its DISCOVERY_* envs.
 const DRY_STREAK_LIMIT = Number(process.env.DISCOVERY_DRY_STREAK_LIMIT ?? 3);
 const MIN_NEW_PER_CYCLE = Number(process.env.DISCOVERY_MIN_NEW_PER_CYCLE ?? 5);
+// How far the lead total must move before the breadth report is worth re-posting.
+// Any-change was right during onboarding, when the count going 0 -> 4 was the
+// news. California now sits near 1800 and drifts by one or two constantly, which
+// posted a full report for a net loss of a single lead. Milestones and stalls are
+// unaffected — they fire on their own conditions, not this gate.
+const MIN_BREADTH_DELTA = Number(process.env.CALIFORNIA_MIN_BREADTH_DELTA ?? 10);
 
 interface MaterialState {
   last_total: number;
@@ -47,6 +53,7 @@ interface MaterialState {
 interface WatchState {
   announced_kickoff: boolean;
   last_total_leads: number;
+  last_material_count: number;
   last_report_at: string | null;
   materials_first_seen_at: string | null;
   over_24h_flagged: boolean;
@@ -57,6 +64,7 @@ interface WatchState {
 const EMPTY_STATE: WatchState = {
   announced_kickoff: false,
   last_total_leads: 0,
+  last_material_count: 0,
   last_report_at: null,
   materials_first_seen_at: null,
   over_24h_flagged: false,
@@ -172,8 +180,12 @@ registerAgent({
       state.announced_kickoff = true;
     }
 
-    // 5. Breadth report, only when the total moved.
-    if (totalLeads !== state.last_total_leads) {
+    // 5. Breadth report, once the total has moved enough to be worth reading, or
+    // whenever a material is added or removed. last_total_leads is only advanced
+    // when the report actually posts, so a long run of small changes accumulates
+    // and still reports rather than drifting silently.
+    const materialCountChanged = nMaterials !== state.last_material_count;
+    if (Math.abs(totalLeads - state.last_total_leads) >= MIN_BREADTH_DELTA || materialCountChanged) {
       const lines = [`*California Chemicals — supplier breadth* (${nMaterials} materials)`];
       for (const [name, d] of [...perMaterial.entries()].sort((a, b) => b[1].total - a[1].total)) {
         const pct = Math.min(100, Math.round((100 * d.total) / TARGET_LEADS));
@@ -185,6 +197,7 @@ registerAgent({
       lines.push(await outreachLine(admin));
       outbox.push(lines.join("\n"));
       state.last_total_leads = totalLeads;
+      state.last_material_count = nMaterials;
     }
 
     // 6. Per-material milestones.
