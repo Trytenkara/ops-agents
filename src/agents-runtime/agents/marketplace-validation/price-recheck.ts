@@ -70,6 +70,11 @@ export interface RecheckResult {
   aggregator: string | null;           // display name of the aggregator, e.g. "IndiaMART"
   current_price: number | null;
   currency: string | null;             // ISO code of current_price/tiers as listed (e.g. "USD","EUR")
+  // The currency was READ from a machine-readable source that states it (a
+  // Shopify /meta.json base currency), not inferred from page text. The caller's
+  // currency safety net second-guesses inferred labels using host heuristics;
+  // those heuristics are weaker than this and must not override it.
+  currency_authoritative?: boolean;
   pack_size: string | null;            // free-text e.g. "50 lb"
   unit_price: number | null;           // best (lowest) per-unit price seen
   tiers: PriceTier[];                  // every visible pack-size / volume-break tier

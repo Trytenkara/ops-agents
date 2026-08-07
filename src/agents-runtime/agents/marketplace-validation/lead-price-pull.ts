@@ -1,5 +1,6 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { recheckMarketplaceQuote, type AggregatorSeller } from "./price-recheck";
+import { shopifyFeedPull } from "./shopify-feed";
 import { convertToUsd, roundUsd } from "@/lib/fx";
 import { ensureMarketplaceCaseDims } from "@/lib/marketplace-case-dims-fill";
 import { neverMarketplaceHostOf } from "@/lib/marketplace-hosts";
@@ -507,6 +508,25 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         index_page: false, sellers: [] as any[],
       };
     } else {
+    // Tier A½: if this is a Shopify store, its own product feed states every
+    // variant price and the shop's base currency, so read that instead of
+    // paying a model to interpret the rendered page. Cheaper, faster, and more
+    // accurate on ladders — the DOM often shows one geo-localized number where
+    // the feed lists the whole ladder. Falls through on any miss.
+    //
+    // Skipped when we need the seller roster: that is a question about the page,
+    // which a single-product feed cannot answer.
+    let shopify: Awaited<ReturnType<typeof shopifyFeedPull>> = null;
+    if (!enumerateSellers) {
+      shopify = await shopifyFeedPull({
+        url,
+        material: l.material_name ?? "",
+        supplier: l.supplier_name,
+      }).catch(() => null);
+    }
+    if (shopify) {
+      result = shopify;
+    } else {
     try {
       result = await recheckMarketplaceQuote({
         supplier_name: l.supplier_name ?? "",
@@ -523,6 +543,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       });
     } catch (e: any) {
       result = { classification: "needs_review" as const, market_kind: (aggregatorNameOf(url) ? "aggregator" : "marketplace") as "marketplace" | "aggregator", aggregator: aggregatorNameOf(url), current_price: null, currency: null, pack_size: null, unit_price: null, tiers: [], moq: null, lead_time: null, shipping: null, source_url: url, source_citations: [], notes: `pull failed: ${e?.message ?? e}`, index_page: false, sellers: [], infra_failure: true };
+    }
     }
     }
 
@@ -636,7 +657,11 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     // currency label so the conversion step actually fires, and quarantine prices
     // from domestic-currency hosts whose currency we can't confirm — rather than
     // letting a raw foreign number publish as USD.
-    if (result.classification === "current_price_found") {
+    // Skipped when the currency was read from a source that states it outright
+    // (a Shopify /meta.json). Both branches below are heuristics over page text
+    // and the TLD, so on a .in-hosted store whose feed authoritatively says USD
+    // they would quarantine a correct price as "unconfirmed".
+    if (result.classification === "current_price_found" && !result.currency_authoritative) {
       const priceText = [result.pack_size, result.notes, ...result.tiers.map((t) => t.pack_size)]
         .filter(Boolean)
         .join(" | ");
