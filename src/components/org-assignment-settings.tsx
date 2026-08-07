@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { setOrgAssignmentSettings, setOperatorAutoAssignable, setOperatorWork } from "@/app/actions/assignment-settings";
 import type { AssignmentMode, OperatorType } from "@/lib/operator-assignment";
 import type { MarketKind } from "@/lib/lead-market";
@@ -220,8 +221,8 @@ export function OrgAssignmentSettings({
       </div>
 
       <div className="space-y-2">
-        <div className="text-xs uppercase tracking-wider text-muted-foreground">Supplier types in the auto loop</div>
-        <div className="flex flex-wrap items-center gap-4">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <span className="text-xs uppercase tracking-wider text-muted-foreground">Supplier types in the auto loop</span>
           {TYPES.map((t) => {
             const on = types.includes(t.value);
             return (
@@ -250,43 +251,62 @@ export function OrgAssignmentSettings({
         {operators.length === 0 ? (
           <p className="text-xs text-muted-foreground">No operators are assigned to this org yet.</p>
         ) : (
-          <div className="space-y-3">
-            {operators.map((o) => {
-              const on = !excluded.has(o.id);
-              const w = work[o.id] ?? { operatorType: o.operatorType, lanes: o.lanes };
-              return (
-                <div key={o.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-md border p-3">
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4"
-                      checked={on}
-                      disabled={!canEdit || pending}
-                      onChange={(e) => toggleOperator(o.id, e.target.checked)}
-                    />
-                    <span className={on ? "" : "text-muted-foreground line-through"}>{o.name}</span>
-                  </label>
-                  {o.role && (
-                    <span className="text-xs text-muted-foreground">{o.role === "ops_lead" ? "lead operator" : "operator"}</span>
-                  )}
-                  {!on && <span className="text-xs text-muted-foreground">(manual only)</span>}
-                  <div className="min-w-[130px]">
-                    <Select
-                      value={w.operatorType}
-                      onValueChange={(v) => saveWork(o.id, { operatorType: v as OperatorType })}
-                      ariaLabel={`Work type for ${o.name} on ${orgName}`}
-                      options={OPERATOR_TYPES.map((t) => ({ value: t.value, label: t.label }))}
-                      disabled={!canEdit || pending}
-                    />
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Operator</TableHead>
+                <TableHead className="text-center">In auto loop</TableHead>
+                <TableHead>Does</TableHead>
+                {TYPES.map((t) => (
+                  <TableHead key={t.value} className="text-center">
+                    {t.label}
+                  </TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {operators.map((o) => {
+                const on = !excluded.has(o.id);
+                const w = work[o.id] ?? { operatorType: o.operatorType, lanes: o.lanes };
+                return (
+                  <TableRow key={o.id}>
+                    <TableCell className="py-1.5">
+                      <span className={on ? "font-medium" : "text-muted-foreground"}>{o.name}</span>
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        {o.role === "ops_lead" ? "lead" : "operator"}
+                        {on ? "" : ", manual only"}
+                      </span>
+                    </TableCell>
+                    <TableCell className="py-1.5 text-center">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 align-middle"
+                        aria-label={`Include ${o.name} in the auto loop`}
+                        checked={on}
+                        disabled={!canEdit || pending}
+                        onChange={(e) => toggleOperator(o.id, e.target.checked)}
+                      />
+                    </TableCell>
+                    <TableCell className="py-1.5">
+                      <div className="w-[104px]">
+                        <Select
+                          size="sm"
+                          value={w.operatorType}
+                          onValueChange={(v) => saveWork(o.id, { operatorType: v as OperatorType })}
+                          ariaLabel={`Work type for ${o.name} on ${orgName}`}
+                          options={OPERATOR_TYPES.map((t) => ({ value: t.value, label: t.label }))}
+                          disabled={!canEdit || pending}
+                        />
+                      </div>
+                    </TableCell>
                     {TYPES.map((t) => {
                       const lane = w.lanes.includes(t.value);
                       return (
-                        <label key={t.value} className="flex items-center gap-1.5 text-xs">
+                        <TableCell key={t.value} className="py-1.5 text-center">
                           <input
                             type="checkbox"
-                            className="h-3.5 w-3.5"
+                            className="h-4 w-4 align-middle"
+                            aria-label={`${t.label} for ${o.name}`}
                             checked={lane}
                             disabled={!canEdit || pending}
                             onChange={() =>
@@ -295,23 +315,20 @@ export function OrgAssignmentSettings({
                               })
                             }
                           />
-                          <span className={lane ? "" : "text-muted-foreground"}>{t.label}</span>
-                        </label>
+                        </TableCell>
                       );
                     })}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
         )}
         <p className="text-xs text-muted-foreground">
-          Each person does calls or email on this client, never both, and covers the lanes ticked next to their name.
-          Work spreads only across the people who do it, so naming three marketplace operators gives them the
-          marketplace book between them. Where nobody covers a lane the whole team shares it, so nothing goes unowned.
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Unticking someone keeps them on the org and manually assignable, they just never get picked automatically.
+          Each person does calls or email on this client, never both, and covers the lanes ticked on their row. Work
+          spreads only across the people who do it, so ticking three people into Marketplaces gives them that book
+          between them. Where nobody covers a lane the whole team shares it, so nothing goes unowned. Out of the auto
+          loop means they stay on the org and manually assignable, they are just never picked automatically.
           {autoOn ? ` ${inLoop.length} of ${operators.length} in the loop.` : " Auto is off, so this applies once it is turned on."}
         </p>
       </div>
