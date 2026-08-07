@@ -320,6 +320,7 @@ export interface LeadPullResult {
   expanded: number;   // aggregator index pages split into one lead per seller
   sellersStaged: number;
   stoppedEarly: boolean;
+  timedOut: number;   // leads abandoned at LEAD_TIMEOUT_MS; nothing written, they roll over
 }
 
 export async function pullPricesForNewMarketplaceLeads(opts: {
@@ -329,7 +330,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   log: (msg: string, meta?: any) => Promise<void> | void;
 }): Promise<LeadPullResult> {
   const { admin, runId, deadline, log } = opts;
-  const empty: LeadPullResult = { processed: 0, pulled: 0, flagged: 0, pending: 0, notMarketplace: 0, expanded: 0, sellersStaged: 0, stoppedEarly: false };
+  const empty: LeadPullResult = { processed: 0, pulled: 0, flagged: 0, pending: 0, notMarketplace: 0, expanded: 0, sellersStaged: 0, stoppedEarly: false, timedOut: 0 };
   if (Date.now() > deadline) return empty;
 
   // Only pull for orgs that are actively sourcing. Paused ('off') orgs otherwise
@@ -472,6 +473,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   let expanded = 0;
   let sellersStaged = 0;
   let stoppedEarly = false;
+  let timedOut = 0;
 
   const expandIndexPage = (l: LeadRow, indexUrl: string, sellers: AggregatorSeller[], retireParent: boolean) =>
     expandAggregatorIndexPage({ admin, log, runId, lead: l, indexUrl, sellers, retireParent });
@@ -1352,15 +1354,31 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   // a batch, so an unbounded lead can always overrun it. Cap the lead instead.
   // A timed-out lead resolves to null, which the loop already treats as "not
   // processed" — nothing is written, so it stays queued and rolls to the next run.
+  // Counted and logged rather than swallowed: a timed-out lead and a lead that
+  // simply produced no outcome are indistinguishable at the `o == null` check,
+  // and a rising timeout count is the early warning that concurrency is now too
+  // high for the current per-call latency.
   const runWithTimeout = async (l: LeadRow) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([
+      const outcome = await Promise.race([
         processOne(l),
         new Promise<null>((resolve) => {
           timer = setTimeout(() => resolve(null), LEAD_TIMEOUT_MS);
         }),
       ]);
+      if (outcome == null) {
+        timedOut++;
+        await log(
+          `Marketplace price read exceeded ${Math.round(LEAD_TIMEOUT_MS / 1000)}s and was abandoned (nothing written, retrying next run): ${l.supplier_name} × ${l.material_name}`,
+          {
+            level: "warn",
+            step: "mp_leads",
+            data: { lead_id: l.id, timeout_ms: LEAD_TIMEOUT_MS, source_url: listingUrl(l.payload) },
+          },
+        );
+      }
+      return outcome;
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -1384,5 +1402,5 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     }
   }
 
-  return { processed, pulled, flagged, pending, notMarketplace, expanded, sellersStaged, stoppedEarly };
+  return { processed, pulled, flagged, pending, notMarketplace, expanded, sellersStaged, stoppedEarly, timedOut };
 }
