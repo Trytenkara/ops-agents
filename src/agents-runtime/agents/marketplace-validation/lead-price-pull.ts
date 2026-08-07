@@ -22,7 +22,13 @@ type Admin = ReturnType<typeof createAdminClient>;
 
 // Per-run throughput is split so a re-check backlog can never starve first pulls
 // of freshly-discovered leads (and vice-versa). Both share the same run deadline.
-const FIRST_PULL_CAP = 20; // brand-new marketplace leads with no price yet (Sonnet+web_fetch, ~25s each).
+// Brand-new marketplace leads with no price yet (Sonnet+web_fetch, ~25s each).
+// Raised from 20 once the re-check cap stopped being the binding constraint:
+// measured 2,157 never-pulled leads for real clients against 480/day of capacity,
+// a 4.5-day backlog that discovery adds to faster than the cap drains it. The
+// re-check pool is deliberately left alone — a lead that has never had a price is
+// worth more than re-confirming one that already has.
+const FIRST_PULL_CAP = 60;
 // Already-pulled leads due for re-validation. Sized against the run deadline, not
 // against the pool: 14 consecutive hourly runs each processed exactly the old
 // 20+50 cap in 331-705s (mean ~500s) of the 700s budget, so the cap was binding
@@ -35,7 +41,14 @@ const FIRST_PULL_CAP = 20; // brand-new marketplace leads with no price yet (Son
 // leftovers roll to the next run (the pre-existing behaviour). A fast run now
 // converts its spare budget into throughput instead of idling.
 const RECHECK_CAP = 85;
-const CONCURRENCY = 4;
+// Raised 4 → 10 so the higher first-pull cap fits the same wall clock rather than
+// pushing runs into the deadline. These are I/O-bound Anthropic web_fetch calls,
+// not local work: 14 hourly runs measured 66-103 leads in 377-672s of the 700s
+// budget (~7.7s wall per lead at 4), so ~2.5x concurrency puts ~145 leads at
+// roughly today's duration. Agent 19 sustains 40 concurrent on heavier work.
+// The batch loop still checks the deadline before each batch, so if per-call
+// latency degrades the run truncates and rolls over instead of overrunning.
+const CONCURRENCY = 10;
 const FLAG_AFTER_ATTEMPTS = 3; // needs_review is read this many times before a case is opened, so one flaky web_search result isn't a premature escalation. It does NOT stop the retries.
 
 // A lead is never given up on. Only a structural verdict ends a pull (price
