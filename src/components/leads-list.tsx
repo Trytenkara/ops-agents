@@ -129,7 +129,7 @@ export function LeadsList({
     .filter((r: any) => (match === "all" ? true : deriveMatchTier(r).tier === match))
     .filter((r: any) => (source === "all" ? true : r.source === source));
 
-  const { filtered, controls } = useListFilter(typeRows, {
+  const { filtered, searchControl, sortControl, countLabel, hasSearch, clearSearch } = useListFilter(typeRows, {
     searchText: (r) =>
       `${r.supplier_name ?? ""} ${r.material_name ?? ""} ${r.grade ?? ""} ${countryOf(r)} ${r.operator_name ?? ""}`,
     searchPlaceholder: "supplier, material, grade, country, operator…",
@@ -161,6 +161,19 @@ export function LeadsList({
     defaultSort: "match",
     persistKey: "leads",
   });
+
+  // These four persist across tabs and visits, so a "Confirmed only" left on
+  // days ago silently hides rows a tab badge still counts. Say how many, and
+  // give one click to get them back.
+  const dropdownsActive = match !== "all" || source !== "all" || type !== "all" || recency !== "all";
+  const hiddenByFilters = rows.length - filtered.length;
+  const clearFilters = () => {
+    setMatch("all");
+    setSource("all");
+    setType("all");
+    setRecency("all");
+    clearSearch();
+  };
 
   const selectable = canAct;
   const filteredIds = filtered.map((r: any) => r.id);
@@ -257,9 +270,22 @@ export function LeadsList({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-end gap-3">
+        {searchControl}
+        {countLabel}
+        {(dropdownsActive || hasSearch) && hiddenByFilters > 0 && (
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="mb-0.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-500/20 dark:text-amber-400"
+          >
+            {hiddenByFilters} lead{hiddenByFilters !== 1 ? "s" : ""} hidden by filters · Clear
+          </button>
+        )}
+      </div>
+      <div className="flex flex-wrap items-end gap-3">
         <div className="flex flex-wrap items-end gap-3">
           {filters}
-          {controls}
+          {sortControl}
           <label className="flex flex-col gap-1">
             <span className="text-xs text-muted-foreground">Match</span>
             <Select size="sm" className="min-w-[9rem]" ariaLabel="Match" value={match} onValueChange={setMatch} options={MATCH_OPTIONS} />

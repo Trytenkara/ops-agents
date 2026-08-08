@@ -47,7 +47,17 @@ export function useListFilter<T>(
     // When set, the search text and sort selection persist under this key.
     persistKey?: string;
   }
-): { filtered: T[]; controls: React.ReactNode } {
+): {
+  filtered: T[];
+  controls: React.ReactNode;
+  // The same three controls, separately, for lists that lay them out themselves
+  // (search on its own line above a row of dropdowns).
+  searchControl: React.ReactNode;
+  sortControl: React.ReactNode;
+  countLabel: React.ReactNode;
+  hasSearch: boolean;
+  clearSearch: () => void;
+} {
   const [q, setQ] = useState(() => readStored(opts.persistKey, "q") ?? "");
   const [sortKey, setSortKey] = useState(
     () => readStored(opts.persistKey, "sort") ?? opts.defaultSort ?? opts.sorts[0]?.value ?? ""
@@ -65,37 +75,47 @@ export function useListFilter<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, q, sortKey]);
 
+  const searchControl = (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs text-muted-foreground">Search</span>
+      <input
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder={opts.searchPlaceholder ?? "supplier or material…"}
+        className="h-8 w-64 rounded-md border border-input bg-transparent px-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      />
+    </label>
+  );
+
+  const sortControl = opts.sorts.length > 0 && (
+    <label className="flex flex-col gap-1">
+      <span className="text-xs text-muted-foreground">Sort by</span>
+      <Select
+        size="sm"
+        className="min-w-[11rem]"
+        ariaLabel="Sort"
+        value={sortKey}
+        onValueChange={setSortKey}
+        options={opts.sorts.map((s) => ({ value: s.value, label: s.label }))}
+      />
+    </label>
+  );
+
+  const countLabel = (
+    <span className="text-xs text-muted-foreground pb-1.5">
+      {filtered.length} of {rows.length}
+    </span>
+  );
+
   const controls = (
     <div className="flex flex-wrap items-end gap-3 text-sm">
-      <label className="flex flex-col gap-1">
-        <span className="text-xs text-muted-foreground">Search</span>
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder={opts.searchPlaceholder ?? "supplier or material…"}
-          className="h-8 w-64 rounded-md border border-input bg-transparent px-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        />
-      </label>
-      {opts.sorts.length > 0 && (
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-muted-foreground">Sort by</span>
-          <Select
-            size="sm"
-            className="min-w-[11rem]"
-            ariaLabel="Sort"
-            value={sortKey}
-            onValueChange={setSortKey}
-            options={opts.sorts.map((s) => ({ value: s.value, label: s.label }))}
-          />
-        </label>
-      )}
-      <span className="text-xs text-muted-foreground pb-1.5">
-        {filtered.length} of {rows.length}
-      </span>
+      {searchControl}
+      {sortControl}
+      {countLabel}
     </div>
   );
 
-  return { filtered, controls };
+  return { filtered, controls, searchControl, sortControl, countLabel, hasSearch: q.trim() !== "", clearSearch: () => setQ("") };
 }
 
 // Common comparators.
