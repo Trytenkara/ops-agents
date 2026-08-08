@@ -158,15 +158,15 @@ function Metric({ label, value, note, href, tone }: { label: string; value: numb
   // Zero is a non-event — keep it muted; only color a value that needs attention.
   const valueColor = value > 0 && t ? t.value : "text-foreground";
   const card = (
-    <Card className={`tb-surface shadow-none border-l-4 ${t ? t.border : "border-l-transparent"} ${href ? "transition-colors hover:bg-secondary/40" : ""}`}>
+    <Card className={`tb-surface shadow-none h-full border-l-4 ${t ? t.border : "border-l-transparent"} ${href ? "transition-colors hover:bg-secondary/40" : ""}`}>
       <CardHeader>
         <CardTitle className="text-xs uppercase tracking-wider text-muted-foreground font-medium">{label}</CardTitle>
       </CardHeader>
       <CardContent>
         <div className={`font-serif text-4xl ${valueColor}`}>{value}</div>
-        {note && <p className="text-xs text-muted-foreground mt-1">{note}</p>}
+        <p className="text-xs text-muted-foreground mt-1">{note ?? " "}</p>
       </CardContent>
     </Card>
   );
-  return href ? <Link href={href} className="block">{card}</Link> : card;
+  return href ? <Link href={href} className="block h-full">{card}</Link> : card;
 }
