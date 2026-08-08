@@ -167,6 +167,10 @@ export async function enrichAndStageLead(
       // whole enrichment block is rebuilt each run, so this stays idempotent.
       dealbreaker_fit: result.dealbreaker_fit,
       aggregator_contact_email: result.aggregator_contact_email,
+      // What the storefront resolver learned about the real company behind a
+      // marketplace-only listing, including the note explaining why it did or
+      // did not land a domain. Null for every other lead.
+      storefront_resolution: result.storefront_resolution,
       completeness_score: result.completeness_score,
       completeness_factors: result.completeness_factors,
       // Preserve the pre-penalty confidence so re-runs stay idempotent.
@@ -184,7 +188,14 @@ export async function enrichAndStageLead(
     additional_contacts: result.additional_contacts,
     supplier_phone: result.contact.phone ?? result.tenkara_supplier?.poc_phone ?? lead.payload?.supplier_phone ?? null,
     contact_url: result.contact.contact_url ?? lead.payload?.contact_url ?? null,
-    supplier_country: lead.payload?.supplier_country ?? result.tenkara_supplier?.country ?? null,
+    supplier_country: lead.payload?.supplier_country ?? result.tenkara_supplier?.country ?? result.storefront_resolution?.country ?? null,
+    // A storefront lead had no website by design. Once the resolver confirms the
+    // company's own domain, persist it: every later pass, and every other agent
+    // that keys off supplier_website, then treats this as an ordinary supplier
+    // instead of re-resolving it from scratch.
+    ...(result.storefront_resolution?.own_website
+      ? { supplier_website: result.storefront_resolution.own_website }
+      : {}),
     completeness_score: result.completeness_score,
     completeness_factors: result.completeness_factors,
   };

@@ -78,7 +78,11 @@ let client: Anthropic | null = null;
 function anthropic(): Anthropic {
   if (!client) {
     if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY not set");
-    client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    // Same unbounded-call defect that killed 14 Agent 06 runs via contact-read.ts:
+    // the SDK defaults to a 10-minute timeout with 2 retries, so one stalled
+    // fetch-and-search here could hold a phase for half an hour. This step reads
+    // a handful of pages, so a call still running at 90s is stuck, not slow.
+    client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY, timeout: 90_000, maxRetries: 1 });
   }
   return client;
 }

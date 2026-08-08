@@ -16,6 +16,7 @@ import {
 import { assessDealbreakerFit, type DealbreakerFit, type DealbreakerSpec } from "@/lib/dealbreaker-fit";
 import { collectProductText } from "@/lib/product-text";
 import { readContactsFromPages } from "./contact-read";
+import { resolveStorefrontSupplier, storefrontRetryDue, type StorefrontResolution } from "./storefront-resolve";
 
 // Pre-outreach enrichment building blocks. No LLM, no email — those land
 // when Agent 04 (Outreach) and Agent 08 (Email Scanner) ship.
@@ -316,6 +317,10 @@ export interface EnrichmentResult {
   // no verified email), null when there is no email. Operators see this on the
   // draft; guessed drafts are always human-reviewed before send.
   contact_confidence: "verified" | "guessed" | null;
+  // Set only for storefront-only leads (no website, contact is a platform
+  // inquiry path). Records what the resolver learned about the real company so
+  // the operator can see it and the next pass knows what was already tried.
+  storefront_resolution: StorefrontResolution | null;
 }
 
 const PROBE_TIMEOUT_MS = 8_000;
@@ -1043,7 +1048,40 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // month is ~1 day of fleet volume). The free website crawl + Tenkara lookup,
   // which do ~97% of contact finding, still run for every org.
   const allowPaidProviders = !lead.is_internal;
-  const website = (payload.supplier_website as string | null) || null;
+  let website = (payload.supplier_website as string | null) || null;
+  const sourceUrl = (payload.source_url as string | null) || null;
+  const scoutEmail = (payload.supplier_contact_email as string | null) || null;
+  const scoutPhone = (payload.supplier_phone as string | null) || null;
+
+  // Storefront-only leads: found on a marketplace, no website, and a prose
+  // "via IndiaMART inquiry" where an address should be. Roughly 1,380 suppliers
+  // arrive this way and every pass they fail the one test applied here (is
+  // there an address to write to?), so they are re-enriched daily and can never
+  // promote. They are unresolved, not unreachable: the storefront subdomain,
+  // an outbound link, or a locality-verified search usually finds the company's
+  // own domain. Resolving it BEFORE the probe is what matters — once the domain
+  // is set, the entire existing crawl / extract / provider cascade below runs on
+  // it unchanged, so this adds a resolution step rather than a second pipeline.
+  const priorStorefront = (payload.enrichment?.storefront_resolution as StorefrontResolution | null) ?? null;
+  let storefront: StorefrontResolution | null = priorStorefront;
+  if (!website && sourceUrl && (isContactPath(scoutEmail) || isContactPath(scoutPhone))) {
+    // Retried forever, but on a backoff curve rather than every pass: a supplier
+    // that has no own site today is not a permanent verdict, while re-running
+    // the identical search daily just re-buys the same answer. Carrying the
+    // prior result forward keeps the identity and the note visible meanwhile.
+    if (storefrontRetryDue(priorStorefront)) {
+      storefront =
+        (await resolveStorefrontSupplier({
+          supplierName: lead.supplier_name,
+          sourceUrl,
+          // The search step is a model call, so it follows the same real-clients-
+          // first rule as the paid providers. The free steps run for every org.
+          allowSearch: allowPaidProviders,
+          prior: priorStorefront,
+        }).catch(() => null)) ?? priorStorefront;
+    }
+    if (storefront?.own_website) website = storefront.own_website;
+  }
   // Paid providers DO resolve aggregator storefronts, because they search by
   // company name and not only by domain: hbderek.en.alibaba.com comes back as
   // carl.export@derekchem.com. Measured over 30 days, LeadMagic hits 8.1% on
@@ -1056,8 +1094,6 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   const domainKey = contactDomainKey(website);
   let cached: CachedContact | null = null;
   let cacheServed = false;
-  const scoutEmail = (payload.supplier_contact_email as string | null) || null;
-  const scoutPhone = (payload.supplier_phone as string | null) || null;
 
   const [website_probe, tenkara_supplier] = await Promise.all([
     website ? probeWebsite(website) : Promise.resolve(null),
@@ -1353,8 +1389,16 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   }
 
   // A scout-supplied contact path (e.g. "via IndiaMART inquiry") still counts.
+  //
+  // It has to fall back to the listing URL, not just the website: this branch
+  // exists for storefront-only leads, and those have no website by design (the
+  // storefront URL is deliberately kept in source_url so it is never mistaken
+  // for the supplier's own domain). Reaching only for `website` made the branch
+  // a no-op for the exact cohort it was written for, which is why ~2,300 leads
+  // sat at raw being re-enriched every day. The listing page IS the channel:
+  // it is where the operator sends the inquiry.
   if (!email && !phone && !contactUrl && (isContactPath(scoutEmail) || isContactPath(scoutPhone))) {
-    contactUrl = website || null;
+    contactUrl = website || sourceUrl;
     contactSource = "path";
   }
 
@@ -1532,5 +1576,6 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     blocked_reason,
     aggregator_contact_email: email ? null : aggregatorEmail,
     contact_confidence: email ? contactConfidence : null,
+    storefront_resolution: storefront,
   };
 }
