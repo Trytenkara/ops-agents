@@ -13,7 +13,6 @@ const sections = [
   { href: "/materials", label: "Platform Data", match: ["/suppliers"] },
   { href: "/leads", label: "Agent Supplier Leads" },
   { href: "/price-index", label: "Agent Quotes" },
-  { href: "/extraction", label: "Platform Extraction" },
   { href: "/threads", label: "Email Thread Tracker" },
   { href: "/calls", label: "Call Tracker" },
   { href: "/savings", label: "Cost Savings and Reports" },
