@@ -192,15 +192,15 @@ registerAgent({
           : null;
 
         const existing = v.existingNames.slice(0, 3).join(", ");
+        const more = v.existingNames.length > 3 ? ` +${v.existingNames.length - 3} more` : "";
         const { error: caseErr } = await admin.from("cases").insert({
           org_id: org.id,
           type: "duplicate_supplier",
           status: "open",
           material_id: lead.material_id,
-          recommended_action:
-            `"${lead.supplier_name}" looks like a supplier we already have on ${v.domain} (${existing}). ` +
-            `It is parked so Tenkara will not create a second row. Drop the lead if it is the same company, ` +
-            `or send it back to Enriched if it is genuinely different.`,
+          // One line. The decision itself is two buttons on the leads page's
+          // "Possible duplicates" tab, which resolves this case when used.
+          recommended_action: `Possible duplicate of ${existing}${more} on ${v.domain}. Held. Decide on the Possible duplicates tab.`,
           assigned_operator: assignedOperator,
           metadata: {
             source_agent: "agent-20-duplicate-guard",

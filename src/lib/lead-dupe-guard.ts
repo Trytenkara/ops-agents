@@ -125,6 +125,19 @@ function leadWebsite(payload: Record<string, any> | null): string | null {
 }
 
 /**
+ * True when the NAME itself declares which side of the split it is.
+ *
+ * Tenkara marks the deliberate pair in the name ("Univar Solutions - Marketplace"
+ * / "Colonial Chemical - Nonmarketplace"). Those leads often carry no site_type
+ * or supplier_role at all, so the payload check above cannot see them and they
+ * read as an ordinary second company on the same domain. The qualifier is the
+ * whole point of the row, so it is the reliable signal here.
+ */
+function nameDeclaresSplit(raw: string | null | undefined): boolean {
+  return /\b(non[\s-]?marketplace|marketplace)\b/i.test(raw ?? "");
+}
+
+/**
  * Leads that will create a duplicate supplier on Tenkara's next promote run.
  *
  * `suppliers` must be every Tenkara supplier already linked to this org, and
@@ -160,7 +173,7 @@ export function findDuplicateBoundLeads(
 
   const out: DupeVerdict[] = [];
   for (const lead of leads) {
-    if (leadIsMarketplace(lead.payload)) continue;
+    if (leadIsMarketplace(lead.payload) || nameDeclaresSplit(lead.supplier_name)) continue;
     const name = normalizeName(lead.supplier_name);
     const host = registrableDomain(leadWebsite(lead.payload));
     if (!name || !host) continue;

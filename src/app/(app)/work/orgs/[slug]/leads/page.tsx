@@ -334,8 +334,9 @@ export default async function OrgLeadsPage({ params, searchParams }: { params: {
         <div>
           <h3 className="text-sm font-semibold text-foreground">Escalations</h3>
           <p className="text-sm text-muted-foreground">
-            Supplier leads that need a human: a bounced or missing contact to re-enter, or a lead that stalled with no
-            movement. Take the recommended action and resolve.
+            Supplier leads that need a human: a bounced or missing contact to re-enter, a lead that stalled with no
+            movement, or a possible duplicate (decide those on the Possible duplicates tab). Take the recommended
+            action and resolve.
           </p>
         </div>
         <CasesSection openRows={supplierCasesOpen} resolvedRows={supplierCasesResolved} resolvedTotal={supplierCasesResolvedTotal} slug={org.slug} emptyLabel="No supplier escalations right now." />
@@ -385,7 +386,7 @@ export default async function OrgLeadsPage({ params, searchParams }: { params: {
           </p>
         </div>
       )}
-      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} currentUserName={assignmentCtx.pool.find((op) => op.id === session.userId)?.name ?? null} tracker={tracker} initialTab={initialTab} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} profileOperators={profileOperators} marketplaceAccounts={marketplaceAccounts} enrichmentCases={enrichmentCases} supplierDocs={supplierDocs} mergePrompt={<MaterialMergePrompt flags={mergeFlags} />} />
+      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} currentUserName={assignmentCtx.pool.find((op) => op.id === session.userId)?.name ?? null} tracker={tracker} initialTab={initialTab} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} profileOperators={profileOperators} marketplaceAccounts={marketplaceAccounts} enrichmentCases={enrichmentCases} enrichmentCaseCount={supplierCasesOpen.length} supplierDocs={supplierDocs} mergePrompt={<MaterialMergePrompt flags={mergeFlags} />} />
     </div>
   );
 }

@@ -13,8 +13,9 @@ import { leadMarketKind, isOperatorDropped } from "@/components/lead-rich-row";
 import type { OutreachTracker } from "@/lib/outreach-tracker";
 import type { CaseDims } from "@/lib/marketplace-case-dims";
 import type { SupplierProfile } from "@/lib/supplier-profiles";
+import { DuplicateReviewSection, type DuplicateReviewRow } from "@/components/duplicate-review-section";
 
-type Tab = "all" | "raw" | "enriched" | "ready" | "held" | "marketplace" | "aggregator" | "outreach" | "removed" | "dropped" | "suppliers";
+type Tab = "all" | "raw" | "enriched" | "ready" | "held" | "marketplace" | "aggregator" | "outreach" | "removed" | "stuck" | "duplicates" | "dropped" | "suppliers";
 
 // The sourcing pipeline as a live funnel: each stage is the output of one agent,
 // so surfacing raw -> enriched -> ready-to-send -> held (with counts + the
@@ -53,6 +54,7 @@ export function LeadsTabs({
   profileOperators = {},
   marketplaceAccounts = [],
   enrichmentCases = null,
+  enrichmentCaseCount = 0,
   supplierDocs,
   mergePrompt = null,
 }: {
@@ -72,6 +74,7 @@ export function LeadsTabs({
   profileOperators?: Record<string, string>;
   marketplaceAccounts?: MarketplaceAccount[];
   enrichmentCases?: React.ReactNode;
+  enrichmentCaseCount?: number;
   supplierDocs?: SupplierDocIndex;
   // Sits under each tab's own filter row, so it reads as a note on the list
   // being shown rather than a page-level banner above the tabs.
@@ -119,6 +122,21 @@ export function LeadsTabs({
       r.payload?.marketplace_pull?.status === "needs_manual_pull"
   );
   const enrichmentDisplay = [...enrichmentRows, ...needsPriceInput];
+
+  // Leads Agent 20 held back because they look like a supplier this client
+  // already has. They are active but parked outside the stages Tenkara promotes,
+  // so nothing is created while they wait for an operator's yes/no.
+  const duplicateRows: DuplicateReviewRow[] = visibleRows
+    .filter((r: any) => r.payload?.duplicate_review?.pending)
+    .map((r: any) => ({
+      leadId: r.id,
+      supplierName: r.supplier_name ?? "Unnamed supplier",
+      materialName: r.material_name ?? null,
+      domain: r.payload.duplicate_review.domain,
+      existingNames: r.payload.duplicate_review.existing_supplier_names ?? [],
+      website: r.payload.supplier_website ?? null,
+      parkedAt: r.payload.duplicate_review.parked_at ?? null,
+    }));
 
   const marketCount = visibleRows.filter((r) => kindOf(r) === "marketplace").length;
   const aggregatorCount = visibleRows.filter((r) => kindOf(r) === "aggregator").length;
@@ -199,7 +217,9 @@ export function LeadsTabs({
         {tabBtn("marketplace", "Marketplace pricing", marketCount)}
         {tabBtn("aggregator", "Aggregator pricing", aggregatorCount)}
         {tabBtn("outreach", "Outreach", trackerCount)}
-        {tabBtn("removed", "Supplier Escalations", enrichmentDisplay.length)}
+        {tabBtn("duplicates", "Possible duplicates", duplicateRows.length)}
+        {tabBtn("removed", "Supplier Escalations", enrichmentCaseCount)}
+        {tabBtn("stuck", "Stuck leads", enrichmentDisplay.length)}
         {tabBtn("dropped", "Dropped", droppedRows.length)}
       </div>
 
@@ -235,23 +255,22 @@ export function LeadsTabs({
           filters={pageFilters}
         />
       )}
-      {tab === "removed" && (
-        <div className="space-y-6">
-          {enrichmentCases}
-          {enrichmentDisplay.length > 0 ? (
-            <div className="space-y-4">
-              <p className="text-sm text-muted-foreground -mb-1">
-                Leads the fleet could not complete on its own: no contact recovered, deduped, freight/logistics filtered, suppressed before outreach (do-not-contact, excluded country, prior relationship), or a marketplace price the auto-scrape couldn&apos;t get (needs a manual price). Each row shows the reason.
-              </p>
-              <LeadsList rows={enrichmentDisplay} canAct={false} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
-            </div>
-          ) : (
-            !enrichmentCases && (
-              <p className="text-sm text-muted-foreground py-4">No supplier escalations for this client yet.</p>
-            )
-          )}
-        </div>
-      )}
+      {tab === "duplicates" && <DuplicateReviewSection rows={duplicateRows} canAct={canAct} />}
+      {tab === "removed" &&
+        (enrichmentCases ?? (
+          <p className="text-sm text-muted-foreground py-4">No supplier escalations for this client yet.</p>
+        ))}
+      {tab === "stuck" &&
+        (enrichmentDisplay.length > 0 ? (
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground -mb-1">
+              Leads the fleet could not complete on its own: no contact recovered, deduped, freight/logistics filtered, suppressed before outreach (do-not-contact, excluded country, prior relationship), or a marketplace price the auto-scrape couldn&apos;t get (needs a manual price). Each row shows the reason.
+            </p>
+            <LeadsList rows={enrichmentDisplay} canAct={false} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground py-4">No stuck leads for this client.</p>
+        ))}
       {tab === "dropped" &&
         (droppedRows.length > 0 ? (
           <>
