@@ -136,23 +136,42 @@ export function SupplierLeadsView({
     profileByName.set(p.supplier_name.toLowerCase(), p);
   }
 
+  // One company's leads do not all carry a supplier_id: discovery writes the name,
+  // and the id is filled in later, per lead. Keying on `supplier_id ?? name` then
+  // splits that company into two cards, one linked and one not (5 "Alliance
+  // Chemical" leads showed as 2+3). So resolve the name to its id first and let
+  // every lead for that name join the id's group.
+  const idByName = new Map<string, string>();
+  for (const lead of rows) {
+    const name = lead.supplier_name?.toLowerCase();
+    if (name && lead.supplier_id && !idByName.has(name)) idByName.set(name, lead.supplier_id);
+  }
+  for (const p of profiles) {
+    const name = p.supplier_name.toLowerCase();
+    if (p.supplier_id && !idByName.has(name)) idByName.set(name, p.supplier_id);
+  }
+  const groupKeyFor = (supplierId: string | null, supplierName: string | null | undefined) => {
+    const name = supplierName?.toLowerCase();
+    return supplierId ?? (name ? idByName.get(name) ?? name : "unknown");
+  };
+
   // Group leads by supplier
   const groupMap = new Map<string, SupplierGroup>();
   for (const lead of rows) {
-    // Lowercased so a lead and a profile for the same unlinked supplier land in one
-    // group instead of two cards for the same company.
-    const key = lead.supplier_id ?? lead.supplier_name?.toLowerCase() ?? "unknown";
+    const key = groupKeyFor(lead.supplier_id ?? null, lead.supplier_name);
     let group = groupMap.get(key);
     if (!group) {
-      const profile = lead.supplier_id
-        ? profileBySupplier.get(lead.supplier_id) ?? null
-        : profileByName.get((lead.supplier_name ?? "").toLowerCase()) ?? null;
+      const resolvedId = lead.supplier_id ?? idByName.get((lead.supplier_name ?? "").toLowerCase()) ?? null;
+      const profile =
+        (resolvedId ? profileBySupplier.get(resolvedId) : null) ??
+        profileByName.get((lead.supplier_name ?? "").toLowerCase()) ??
+        null;
       const mk = (lead.market_kind as MarketKind | null) ?? leadMarketKind(lead.payload?.site_type);
       const leadKind = mk === "marketplace" || mk === "aggregator" || mk === "direct" ? mk : null;
       group = {
         key,
         supplierName: lead.supplier_name ?? "Unknown",
-        supplierId: lead.supplier_id ?? null,
+        supplierId: resolvedId,
         profile,
         operatorName: null,
         leads: [],
@@ -175,7 +194,7 @@ export function SupplierLeadsView({
 
   // Also add profiles that have no matching leads yet
   for (const p of profiles) {
-    const key = p.supplier_id ?? p.supplier_name.toLowerCase();
+    const key = groupKeyFor(p.supplier_id, p.supplier_name);
     if (!groupMap.has(key)) {
       groupMap.set(key, {
         key,

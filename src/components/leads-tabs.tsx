@@ -147,7 +147,18 @@ export function LeadsTabs({
   const aggregatorCount = visibleRows.filter((r) => kindOf(r) === "aggregator").length;
   const trackerCount = tracker.materials.length;
 
-  const supplierCount = new Set(visibleRows.map((r: any) => r.supplier_id ?? r.supplier_name).filter(Boolean)).size;
+  // Same resolution SupplierLeadsView groups by: a company whose leads are only
+  // partly linked to a Tenkara supplier_id is one supplier, not two.
+  const supplierIdByName = new Map<string, string>();
+  for (const r of visibleRows as any[]) {
+    const name = r.supplier_name?.toLowerCase();
+    if (name && r.supplier_id && !supplierIdByName.has(name)) supplierIdByName.set(name, r.supplier_id);
+  }
+  const supplierCount = new Set(
+    (visibleRows as any[])
+      .map((r) => r.supplier_id ?? (r.supplier_name ? supplierIdByName.get(r.supplier_name.toLowerCase()) ?? r.supplier_name.toLowerCase() : null))
+      .filter(Boolean)
+  ).size;
 
   // A stage deep-link (?stage=raw) opens the All-leads list with the Stage
   // dropdown preset, rather than a dedicated stage tab.
