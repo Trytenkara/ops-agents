@@ -30,7 +30,15 @@ import { Tooltip } from "@/components/ui/tooltip";
 
 export const dynamic = "force-dynamic";
 
-export default async function OrgLeadsPage({ params }: { params: { slug: string } }) {
+const STAGE_TABS: Record<string, "raw" | "enriched" | "ready" | "held"> = {
+  raw: "raw",
+  enriched: "enriched",
+  ready: "ready",
+  held: "held",
+};
+
+export default async function OrgLeadsPage({ params, searchParams }: { params: { slug: string }; searchParams?: { stage?: string } }) {
+  const initialTab = (searchParams?.stage && STAGE_TABS[searchParams.stage]) || "suppliers";
   const admin = createAdminClient();
   const marketplaceDims = await loadMarketplaceCaseDims(admin);
   const { data: org } = await admin.from("orgs").select("id, slug, name, display_name, tenkara_org_id").eq("slug", params.slug).maybeSingle();
@@ -377,7 +385,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
           </p>
         </div>
       )}
-      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} currentUserName={assignmentCtx.pool.find((op) => op.id === session.userId)?.name ?? null} tracker={tracker} runs={runStats} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} profileOperators={profileOperators} marketplaceAccounts={marketplaceAccounts} enrichmentCases={enrichmentCases} supplierDocs={supplierDocs} mergePrompt={<MaterialMergePrompt flags={mergeFlags} />} />
+      <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} currentUserName={assignmentCtx.pool.find((op) => op.id === session.userId)?.name ?? null} tracker={tracker} initialTab={initialTab} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} profileOperators={profileOperators} marketplaceAccounts={marketplaceAccounts} enrichmentCases={enrichmentCases} supplierDocs={supplierDocs} mergePrompt={<MaterialMergePrompt flags={mergeFlags} />} />
     </div>
   );
 }

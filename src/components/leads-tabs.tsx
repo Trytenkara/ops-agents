@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, Fragment } from "react";
+import { useState } from "react";
 import { Select } from "@/components/ui/select";
-import { cn, relativeTime } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { LeadsList } from "@/components/leads-list";
 import type { SupplierDocIndex } from "@/lib/supplier-doc-index";
 import { MarketplacePricing } from "@/components/marketplace-pricing";
@@ -11,7 +11,6 @@ import { SupplierLeadsView } from "@/components/supplier-leads-view";
 import type { MarketplaceAccount } from "@/components/marketplace-logins";
 import { leadMarketKind, isOperatorDropped } from "@/components/lead-rich-row";
 import type { OutreachTracker } from "@/lib/outreach-tracker";
-import type { RunStat } from "@/components/agent-runs-strip";
 import type { CaseDims } from "@/lib/marketplace-case-dims";
 import type { SupplierProfile } from "@/lib/supplier-profiles";
 
@@ -46,7 +45,7 @@ export function LeadsTabs({
   operatorOptions,
   currentUserName = null,
   tracker,
-  runs = [],
+  initialTab = "suppliers",
   orgClients = [],
   tagsByMaterialId = {},
   dimsByPack = {},
@@ -65,7 +64,7 @@ export function LeadsTabs({
   operatorOptions?: { id: string; name: string }[];
   currentUserName?: string | null;
   tracker: OutreachTracker;
-  runs?: RunStat[];
+  initialTab?: Tab;
   orgClients?: { id: string; name: string }[];
   tagsByMaterialId?: Record<string, string>; // tenkara_material_id → org_client_id
   dimsByPack?: Record<string, CaseDims>;
@@ -124,18 +123,10 @@ export function LeadsTabs({
   const marketCount = visibleRows.filter((r) => kindOf(r) === "marketplace").length;
   const aggregatorCount = visibleRows.filter((r) => kindOf(r) === "aggregator").length;
   const trackerCount = tracker.materials.length;
-  const runByLabel = new Map(runs.map((r) => [r.label, r]));
-
-  // Live per-stage counts off the filtered lead set.
-  const stageCount = (key: Tab): number => {
-    if (key === "held") return visibleRows.filter((r) => r.needs_material_name).length;
-    const stage = PIPELINE.find((p) => p.key === key)?.stage;
-    return visibleRows.filter((r) => r.stage === stage).length;
-  };
 
   const supplierCount = new Set(visibleRows.map((r: any) => r.supplier_id ?? r.supplier_name).filter(Boolean)).size;
 
-  const [tab, setTab] = useState<Tab>("suppliers");
+  const [tab, setTab] = useState<Tab>(initialTab);
 
   const tabBtn = (key: Tab, label: string, count?: number) => (
     <button
@@ -150,9 +141,6 @@ export function LeadsTabs({
       {count != null && <span className="ml-1.5 text-xs text-muted-foreground">{count}</span>}
     </button>
   );
-
-  const dotFor = (status: string | null | undefined) =>
-    status === "failure" ? "bg-destructive" : status === "partial" ? "bg-yellow-500" : "bg-emerald-500";
 
   // These filter every tab, but they render inside the active tab's own filter
   // row so an operator reads one filter bar instead of a stray row above the page.
@@ -201,60 +189,8 @@ export function LeadsTabs({
 
   return (
     <div className="space-y-4">
-      {/* Live sourcing pipeline — stage cards double as tabs. */}
-      <div className="rounded-xl border border-border bg-gradient-to-br from-secondary/40 to-secondary/10 p-3">
-        <div className="mb-2.5 flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-          <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
-          </span>
-          Live sourcing pipeline
-        </div>
-        <div className="flex flex-wrap items-stretch gap-1.5">
-          {PIPELINE.map((s, i) => {
-            const active = tab === s.key;
-            const run = s.runLabel ? runByLabel.get(s.runLabel) : undefined;
-            const count = stageCount(s.key);
-            const empty = count === 0;
-            return (
-              <Fragment key={s.key}>
-                <button
-                  type="button"
-                  onClick={() => setTab(s.key)}
-                  className={cn(
-                    "flex min-w-[9rem] flex-1 flex-col gap-1 rounded-lg border px-3.5 py-2.5 text-left transition-all",
-                    active
-                      ? "border-primary/50 bg-card shadow-sm ring-1 ring-primary/30"
-                      : "border-border bg-card/50 hover:bg-card hover:shadow-sm",
-                    empty && !active && "opacity-55"
-                  )}
-                >
-                  <div className="flex items-center gap-1.5">
-                    <span className={cn("inline-block h-2 w-2 rounded-full", empty ? "bg-muted-foreground/30" : s.dot, active && "animate-pulse")} />
-                    <span className="text-[11px] uppercase tracking-wide text-muted-foreground">{s.label}</span>
-                  </div>
-                  <div className={cn("text-2xl font-semibold leading-none tabular-nums", empty && "text-muted-foreground")}>{count}</div>
-                  <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                    {run ? (
-                      <>
-                        <span className={cn("inline-block h-1.5 w-1.5 rounded-full", dotFor(run.status))} />
-                        <span>{s.agent.split(" · ")[0]} · {run.at ? relativeTime(run.at) : "idle"}</span>
-                      </>
-                    ) : (
-                      <span>{s.agent}</span>
-                    )}
-                  </div>
-                </button>
-                {i < PIPELINE.length - 1 && (
-                  <div className="flex items-center px-0.5 text-muted-foreground/40" aria-hidden>
-                    →
-                  </div>
-                )}
-              </Fragment>
-            );
-          })}
-        </div>
-      </div>
+      {/* The live sourcing funnel now lives on the org Overview; the stage-filtered
+          lists here are reached by deep-linking from those cards (?stage=). */}
 
       {/* Lenses over the same client. Export lives with the filters below. */}
       <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1">

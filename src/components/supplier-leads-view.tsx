@@ -18,7 +18,7 @@ import { normalizeHost } from "@/lib/marketplace-accounts";
 import { deriveMatchTier } from "@/lib/lead-match-tier";
 import { dealbreakerFitRank } from "@/lib/dealbreaker-fit";
 import { leadMarketKind, MARKET_KIND_LABEL, MARKET_KIND_TITLE, MARKET_KIND_VARIANT, type MarketKind } from "@/lib/lead-market";
-import { relativeTime } from "@/lib/utils";
+import { cn, relativeTime } from "@/lib/utils";
 
 interface SupplierGroup {
   // Identity of the group itself, distinct from supplierId: a supplier with no
@@ -543,8 +543,9 @@ export function SupplierLeadsView({
                       <button
                         type="button"
                         onClick={() => setShowLeadsFor(isShowingLeads ? null : key)}
-                        className="text-xs text-muted-foreground hover:text-foreground mb-2"
+                        className="mb-2 inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary/60 px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-secondary"
                       >
+                        <span aria-hidden className={cn("transition-transform", isShowingLeads && "rotate-90")}>›</span>
                         {isShowingLeads ? "Hide" : "Show"} {g.leads.length} lead{g.leads.length !== 1 ? "s" : ""}
                       </button>
                       {isShowingLeads && (

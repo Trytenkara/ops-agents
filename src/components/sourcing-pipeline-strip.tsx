@@ -46,7 +46,7 @@ export function SourcingPipelineStrip({
           return (
             <div key={s.key} className="flex flex-1 items-stretch gap-1.5">
               <Link
-                href={leadsHref}
+                href={`${leadsHref}?stage=${s.key}`}
                 className={cn(
                   "flex min-w-[9rem] flex-1 flex-col gap-1 rounded-lg border px-3.5 py-2.5 text-left transition-all",
                   "border-border bg-card/50 hover:bg-card hover:shadow-sm",
