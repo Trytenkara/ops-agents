@@ -144,6 +144,15 @@ export function LeadsTabs({
 
   const supplierCount = new Set(visibleRows.map((r: any) => r.supplier_id ?? r.supplier_name).filter(Boolean)).size;
 
+  // Per-stage counts for the Pipeline group, matching LeadsList's forceStage
+  // filter exactly (held = needs_material_name, ready = ready_for_outreach).
+  const stageCount = (key: Extract<Tab, "raw" | "enriched" | "ready" | "held">) => {
+    const stage = PIPELINE.find((p) => p.key === key)!.stage;
+    return stage === "held"
+      ? visibleRows.filter((r: any) => r.needs_material_name).length
+      : visibleRows.filter((r: any) => r.stage === stage).length;
+  };
+
   const [tab, setTab] = useState<Tab>(initialTab);
 
   const tabBtn = (key: Tab, label: string, count?: number) => (
@@ -158,6 +167,15 @@ export function LeadsTabs({
       {label}
       {count != null && <span className="ml-1.5 text-xs text-muted-foreground">{count}</span>}
     </button>
+  );
+
+  // A labeled cluster of tabs. The small caption turns the flat chip run into
+  // named families (Pipeline / Work / Pricing / Exceptions).
+  const tabGroup = (label: string, children: React.ReactNode) => (
+    <div className="flex flex-col gap-1">
+      <span className="px-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">{label}</span>
+      <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1">{children}</div>
+    </div>
   );
 
   // These filter every tab, but they render inside the active tab's own filter
@@ -210,17 +228,40 @@ export function LeadsTabs({
       {/* The live sourcing funnel now lives on the org Overview; the stage-filtered
           lists here are reached by deep-linking from those cards (?stage=). */}
 
-      {/* Lenses over the same client. Export lives with the filters below. */}
-      <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1">
-        {tabBtn("suppliers", "Supplier Validation", supplierCount)}
-        {tabBtn("all", "All leads", visibleRows.length)}
-        {tabBtn("marketplace", "Marketplace pricing", marketCount)}
-        {tabBtn("aggregator", "Aggregator pricing", aggregatorCount)}
-        {tabBtn("outreach", "Outreach", trackerCount)}
-        {tabBtn("duplicates", "Possible duplicates", duplicateRows.length)}
-        {tabBtn("removed", "Supplier Escalations", enrichmentCaseCount)}
-        {tabBtn("stuck", "Stuck leads", enrichmentDisplay.length)}
-        {tabBtn("dropped", "Dropped", droppedRows.length)}
+      {/* Lenses over the same client, grouped by family so the bar reads as
+          Pipeline / Work / Pricing / Exceptions instead of one flat run of chips.
+          Pipeline stages are also reached by deep-link from the Overview funnel
+          cards (?stage=). Export lives with the filters below. */}
+      <div className="flex flex-wrap items-stretch gap-2">
+        {tabGroup("Pipeline", (
+          <>
+            {tabBtn("raw", "Raw", stageCount("raw"))}
+            {tabBtn("enriched", "Enriched", stageCount("enriched"))}
+            {tabBtn("ready", "Ready", stageCount("ready"))}
+            {tabBtn("held", "Held", stageCount("held"))}
+          </>
+        ))}
+        {tabGroup("Work", (
+          <>
+            {tabBtn("suppliers", "Supplier Validation", supplierCount)}
+            {tabBtn("all", "All leads", visibleRows.length)}
+          </>
+        ))}
+        {tabGroup("Pricing", (
+          <>
+            {tabBtn("marketplace", "Marketplace", marketCount)}
+            {tabBtn("aggregator", "Aggregator", aggregatorCount)}
+          </>
+        ))}
+        {tabGroup("Exceptions", (
+          <>
+            {tabBtn("outreach", "Outreach", trackerCount)}
+            {tabBtn("duplicates", "Duplicates", duplicateRows.length)}
+            {tabBtn("removed", "Escalations", enrichmentCaseCount)}
+            {tabBtn("stuck", "Stuck", enrichmentDisplay.length)}
+            {tabBtn("dropped", "Dropped", droppedRows.length)}
+          </>
+        ))}
       </div>
 
       {tab === "suppliers" && orgId && (
