@@ -7,7 +7,6 @@ export interface ClientSupplier {
   name: string | null;
   approval: SupplierApproval;
   is_marketplace: boolean;
-  website: string | null;
   qualified: boolean;
   poc_name: string | null;
   poc_email: string | null;
@@ -36,7 +35,6 @@ export async function getClientSuppliers(orgTenkaraId: string | null): Promise<C
               name,
               approval::text as approval,
               coalesce(is_marketplace, false) as is_marketplace,
-              website,
               coalesce((is_qualified ->> $1::text)::boolean, false) as qualified,
               poc_name,
               poc_email,

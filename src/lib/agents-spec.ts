@@ -196,6 +196,18 @@ export const AGENT_SPECS: AgentSpec[] = [
     humanInput: "None. On the price views, a move attributed to currency is not a supplier move; treat only supplier-driven changes as negotiating signal.",
   },
   {
+    number: 20,
+    slug: "agent-20-duplicate-guard",
+    name: "Duplicate Guard",
+    status: "shipped",
+    cadence: "Every 20 minutes · America/New_York",
+    purpose: "Stop the same supplier being created twice in Tenkara.",
+    automatic:
+      "Tenkara turns our enriched leads into supplier records every hour, and skips a lead whose name or website it already has. That website check switches itself off as soon as one domain carries two different names, which is exactly what a duplicate looks like: already holding \"Tronox\" lets \"Tronox France\" through. This agent reads the client's existing suppliers, finds the leads that would slip through, and parks them where Tenkara does not look, so the second record is never created. A marketplace listing and a direct relationship for one company are a deliberate pair and are left alone, and a shared directory address (Alibaba, LinkedIn) is not treated as a match because the companies listed there are unrelated.",
+    humanInput:
+      "Each parked lead raises an escalation on the client's Supplier Leads tab naming the supplier we already have. Drop the lead if it is the same company, or send it back to Enriched if it is genuinely different. A parked lead sends no outreach until you decide.",
+  },
+  {
     number: null,
     slug: "agent-fleet-summary",
     name: "Fleet Summary",

@@ -4,9 +4,6 @@ import { ListPageHeader } from "@/components/list-page-header";
 import { ClientSuppliersSection } from "@/components/client-suppliers-section";
 import { TdbOverviewSubnav } from "@/components/tdb-overview-subnav";
 import { getClientSuppliers } from "@/lib/client-suppliers";
-import { findDuplicateGroups } from "@/lib/supplier-dupes";
-import { getOrgDupeDecisions } from "@/lib/supplier-dupe-decisions";
-import { SupplierDuplicatesSection } from "@/components/supplier-duplicates-section";
 import { getOrgAssignmentContext, autoOperatorBySupplier, overridesAuto } from "@/lib/operator-assignment";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { orgDisplayName } from "@/lib/org-display";
@@ -36,15 +33,6 @@ export default async function OrgSuppliersPage({ params }: { params: { slug: str
   for (const op of ctx.pool) operatorNames[op.id] = op.name;
 
   const canAct = hasAnyRole(session, ["admin", "ops_lead", "ops_operator"]);
-
-  // Suspected duplicates are recomputed on every load rather than stored, so a
-  // suggestion can never outlive the Tenkara rows it points at. Only the
-  // operator's decisions are persisted.
-  const decisions = await getOrgDupeDecisions(admin, org.id);
-  const dupeGroups = findDuplicateGroups(
-    all.filter((s) => !decisions.confirmedIds.has(s.id)),
-    decisions.dismissedPairs
-  );
   const operatorOptions = ctx.pool.map((op) => ({ id: op.id, name: op.name }));
 
   return (
@@ -54,14 +42,6 @@ export default async function OrgSuppliersPage({ params }: { params: { slug: str
         level={2}
         title="Suppliers"
         description={`Suppliers linked to ${orgDisplayName(org)}, by approval status. Assign a supplier's operator to route its outreach; "Auto" uses the default.`}
-      />
-      <SupplierDuplicatesSection
-        groups={dupeGroups}
-        toMerge={decisions.toMerge}
-        merged={decisions.merged}
-        orgId={org.id}
-        slug={org.slug}
-        canAct={canAct}
       />
       <ClientSuppliersSection
         suppliers={suppliers}
