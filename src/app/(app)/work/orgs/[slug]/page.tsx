@@ -14,6 +14,9 @@ import { OrgBounceAlert } from "@/components/org-bounce-alert";
 import { getOrgNudgeCounts } from "@/lib/org-nudges";
 import { caseCategory } from "@/lib/org-cases";
 import { orgDisplayName } from "@/lib/org-display";
+import { SourcingPipelineStrip, type StageKey } from "@/components/sourcing-pipeline-strip";
+import type { RunStat } from "@/components/agent-runs-strip";
+import { resolveMaterialNames } from "@/lib/tenkara-names";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +48,51 @@ export default async function OrgOverview({ params }: { params: { slug: string }
   const staged = drafts.filter((d: any) => d.status === "staged").length;
   const reviewed = drafts.filter((d: any) => d.status === "reviewed").length;
   const nudges = await getOrgNudgeCounts(admin, org.id);
+
+  // Live sourcing funnel — same four stages as the Agent Supplier Leads tab.
+  // Held mirrors that page's rule exactly: an active lead whose material has no
+  // resolvable name (stored or Tenkara). Everything else counts by stage.
+  const pipelineCounts: Record<StageKey, number> = { raw: 0, enriched: 0, ready: 0, held: 0 };
+  let pipelineRuns: RunStat[] = [];
+  {
+    const { data: pipelineLeads } = await admin
+      .from("leads_in_flight")
+      .select("stage, material_id, material_name")
+      .eq("org_id", org.id)
+      .eq("status", "active");
+    let leadNames = new Map<string, string>();
+    try {
+      leadNames = await resolveMaterialNames((pipelineLeads ?? []).map((r: any) => r.material_id).filter(Boolean));
+    } catch {
+      // Tenkara unreachable — fall back to the stored name only.
+    }
+    for (const r of (pipelineLeads ?? []) as any[]) {
+      const resolvedName = (r.material_id ? leadNames.get(r.material_id) : null) || (r.material_name && r.material_name.trim()) || null;
+      if (!resolvedName) pipelineCounts.held++;
+      else if (r.stage === "raw") pipelineCounts.raw++;
+      else if (r.stage === "enriched") pipelineCounts.enriched++;
+      else if (r.stage === "ready_for_outreach") pipelineCounts.ready++;
+    }
+    const RUN_LABELS: Record<string, string> = {
+      "agent-03-lead-creator": "Discovery",
+      "agent-06-enrichment": "Enrichment",
+      "agent-04-outreach": "Outreach",
+    };
+    const { data: runRows } = await admin
+      .from("agent_runs")
+      .select("summary, status, run_started_at, agents!inner(slug)")
+      .in("agents.slug", Object.keys(RUN_LABELS))
+      .order("run_started_at", { ascending: false })
+      .limit(40);
+    const latestBySlug = new Map<string, RunStat>();
+    for (const r of (runRows ?? []) as any[]) {
+      const slug = r.agents?.slug;
+      if (slug && !latestBySlug.has(slug)) {
+        latestBySlug.set(slug, { label: RUN_LABELS[slug], summary: r.summary, status: r.status, at: r.run_started_at });
+      }
+    }
+    pipelineRuns = Object.keys(RUN_LABELS).map((s) => latestBySlug.get(s)).filter(Boolean) as RunStat[];
+  }
   // Call rows live on the Call Tracker, not the Cases page, so the two metrics
   // split the same table the way the two pages do.
   const allCases = (casesRes.data ?? []) as any[];
@@ -87,6 +135,8 @@ export default async function OrgOverview({ params }: { params: { slug: string }
         <Metric label="Calls owed" value={openCalls} note="to make" href={`${base}/calls`} tone="red" />
         <Metric label="Pending approvals" value={approvalsRes.data?.length ?? 0} href={`${base}/materials`} tone="emerald" />
       </div>
+
+      <SourcingPipelineStrip counts={pipelineCounts} runs={pipelineRuns} leadsHref={`${base}/leads`} />
 
       <Card className="tb-surface shadow-none">
         <CardHeader>
