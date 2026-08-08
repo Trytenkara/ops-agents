@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ListPageHeader } from "@/components/list-page-header";
 import { CasesSection } from "@/components/cases-section";
-import { loadOrgCases, caseCategory } from "@/lib/org-cases";
+import { loadOrgCases } from "@/lib/org-cases";
 
 export const dynamic = "force-dynamic";
 
@@ -15,11 +15,13 @@ export default async function CasesPage({ params }: { params: { slug: string } }
   const { data: org } = await admin.from("orgs").select("id, name").eq("slug", params.slug).maybeSingle();
   if (!org) notFound();
 
-  const { openRows, resolvedRows } = await loadOrgCases(admin, org.id);
   // Calls are excluded: they carry a full phone brief that does not fit a table
   // row, and they have their own tab.
-  const open = openRows.filter((c: any) => caseCategory(c.type) !== "call");
-  const resolved = resolvedRows.filter((c: any) => caseCategory(c.type) !== "call");
+  const { openRows: open, resolvedRows: resolved, resolvedTotal } = await loadOrgCases(admin, org.id, undefined, [
+    "email",
+    "supplier",
+    "quote",
+  ]);
 
   return (
     <div className="space-y-6">
@@ -29,7 +31,7 @@ export default async function CasesPage({ params }: { params: { slug: string } }
         description="Every open escalation for this client in one place. These also appear in their home tab: email escalations in Email Thread Tracker, supplier escalations under Agent Supplier Leads, and quote escalations under Agent Quotes. Calls live on their own Call Tracker tab."
         collectedBy="Agents 05 + 07 + 15"
       />
-      <CasesSection openRows={open} resolvedRows={resolved} slug={params.slug} emptyLabel="No open escalations." />
+      <CasesSection openRows={open} resolvedRows={resolved} resolvedTotal={resolvedTotal} slug={params.slug} emptyLabel="No open escalations." />
     </div>
   );
 }

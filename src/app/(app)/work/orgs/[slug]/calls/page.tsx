@@ -4,7 +4,7 @@ import { ListPageHeader } from "@/components/list-page-header";
 import { CallsList } from "@/components/calls-list";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { relativeTime } from "@/lib/utils";
-import { loadOrgCases, caseCategory, toCallCaseRow, loadInboxContext } from "@/lib/org-cases";
+import { loadOrgCases, toCallCaseRow, loadInboxContext } from "@/lib/org-cases";
 
 export const dynamic = "force-dynamic";
 
@@ -16,9 +16,12 @@ export default async function CallsPage({ params }: { params: { slug: string } }
   const { data: org } = await admin.from("orgs").select("id, name").eq("slug", params.slug).maybeSingle();
   if (!org) notFound();
 
-  const [{ openRows, resolvedRows }, inbox] = await Promise.all([loadOrgCases(admin, org.id), loadInboxContext(admin, org.id)]);
-  const open = openRows.filter((c: any) => caseCategory(c.type) === "call").map((c: any) => toCallCaseRow(c, inbox));
-  const done = resolvedRows.filter((c: any) => caseCategory(c.type) === "call");
+  const [{ openRows, resolvedRows, resolvedTotal }, inbox] = await Promise.all([
+    loadOrgCases(admin, org.id, undefined, ["call"]),
+    loadInboxContext(admin, org.id),
+  ]);
+  const open = openRows.map((c: any) => toCallCaseRow(c, inbox));
+  const done = resolvedRows;
 
   return (
     <div className="space-y-6">
@@ -34,7 +37,14 @@ export default async function CallsPage({ params }: { params: { slug: string } }
 
       {done.length > 0 && (
         <div className="space-y-2">
-          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Recently closed</div>
+          <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Recently closed
+            {resolvedTotal > done.length && (
+              <span className="ml-2 font-normal normal-case tracking-normal">
+                newest {done.length} of {resolvedTotal}
+              </span>
+            )}
+          </div>
           <Table>
             <TableHeader>
               <TableRow>

@@ -9,11 +9,13 @@ import { toCaseRow } from "@/lib/org-cases";
 export function CasesSection({
   openRows,
   resolvedRows,
+  resolvedTotal,
   slug,
   emptyLabel = "No open cases.",
 }: {
   openRows: any[];
   resolvedRows: any[];
+  resolvedTotal?: number;
   slug: string;
   emptyLabel?: string;
 }) {
@@ -29,7 +31,14 @@ export function CasesSection({
 
       {resolvedRows.length > 0 && (
         <div className="space-y-2">
-          <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">Recently resolved</div>
+          <div className="text-xs uppercase tracking-wider text-muted-foreground font-semibold">
+            Recently resolved
+            {typeof resolvedTotal === "number" && resolvedTotal > resolvedRows.length && (
+              <span className="ml-2 normal-case tracking-normal font-normal">
+                newest {resolvedRows.length} of {resolvedTotal}
+              </span>
+            )}
+          </div>
           <Table>
             <TableHeader>
               <TableRow>

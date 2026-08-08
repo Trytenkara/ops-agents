@@ -9,7 +9,7 @@ import { ListPageHeader } from "@/components/list-page-header";
 import { ThreadsList, type ThreadRow, type ThreadKind } from "@/components/threads-list";
 import { PanelTabs } from "@/components/panel-tabs";
 import { CasesSection } from "@/components/cases-section";
-import { loadOrgCases, caseCategory } from "@/lib/org-cases";
+import { loadOrgCases } from "@/lib/org-cases";
 import { getOutreachTracker } from "@/lib/outreach-tracker";
 import { selectAllPaged } from "@/lib/supabase-paging";
 import { OutreachSummaryView } from "@/components/outreach-summary-view";
@@ -64,9 +64,12 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
       .range(from, to)
   );
 
-  const { openRows: caseOpen, resolvedRows: caseResolved } = await loadOrgCases(admin, org.id);
-  const emailCasesOpen = caseOpen.filter((c) => caseCategory(c.type) === "email");
-  const emailCasesResolved = caseResolved.filter((c) => caseCategory(c.type) === "email");
+  const { openRows: emailCasesOpen, resolvedRows: emailCasesResolved, resolvedTotal: emailCasesResolvedTotal } = await loadOrgCases(
+    admin,
+    org.id,
+    undefined,
+    ["email"]
+  );
 
   const rows = drafts ?? [];
   const { data: aliasRows } = await admin
@@ -177,6 +180,7 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
               <CasesSection
                 openRows={emailCasesOpen}
                 resolvedRows={emailCasesResolved}
+                resolvedTotal={emailCasesResolvedTotal}
                 slug={params.slug}
                 emptyLabel="No email escalations right now. Supplier forms to sign and no-reply calling escalations show up here."
               />

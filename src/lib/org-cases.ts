@@ -9,6 +9,7 @@ import type { CaseRow } from "@/components/cases-list";
 import type { CallCaseRow } from "@/components/calls-list";
 import type { CallBrief, CallAttempt } from "@/lib/call-brief";
 import { tenkaraInboxUrl } from "@/lib/tenkara";
+import { selectAllPaged } from "@/lib/supabase-paging";
 
 // Escalations (the `cases` table) are split across four surfaces by what kind of
 // problem they represent, so operators land on them where they already work:
@@ -36,6 +37,36 @@ export function caseCategory(type: string | null | undefined): CaseCategory {
   if (type && EMAIL_CASE_TYPES.has(type)) return "email";
   if (type && QUOTE_CASE_TYPES.has(type)) return "quote";
   return "supplier";
+}
+
+const CATEGORY_TYPES: Record<Exclude<CaseCategory, "supplier">, string[]> = {
+  call: ["calling_escalation"],
+  email: [...EMAIL_CASE_TYPES],
+  quote: [...QUOTE_CASE_TYPES],
+};
+
+// Push the tab's own categories into the query. Without this every surface
+// fetched every category and threw away what it doesn't display, so the tabs
+// competed for one 1000-row response and starved each other: Tenkara's Call
+// Tracker read "no calls due" with 12 open, because the newest 1000 cases were
+// all quote and supplier rows.
+//
+// "supplier" is the catch-all — an unrecognized type deliberately lands there so
+// a new case type surfaces somewhere a human will see it — so it can only be
+// expressed as NOT the other categories' types, never as a positive list.
+function applyCategories(q: any, categories?: CaseCategory[]) {
+  if (!categories || categories.length === 0) return q;
+  const wanted = new Set(categories);
+  if (wanted.has("supplier")) {
+    const excluded = (Object.keys(CATEGORY_TYPES) as Exclude<CaseCategory, "supplier">[])
+      .filter((c) => !wanted.has(c))
+      .flatMap((c) => CATEGORY_TYPES[c]);
+    return excluded.length ? q.not("type", "in", `(${excluded.join(",")})`) : q;
+  }
+  return q.in(
+    "type",
+    categories.flatMap((c) => CATEGORY_TYPES[c as Exclude<CaseCategory, "supplier">] ?? [])
+  );
 }
 
 const OPEN_SELECT =
@@ -82,24 +113,53 @@ async function deriveCaseOwners(admin: any, orgId: string, rows: any[], ctx?: As
   }
 }
 
-// Load an org's open/in-progress cases and its recently-resolved ones once, so
-// a page can split them by caseCategory() without three separate round-trips.
+// Load an org's open/in-progress cases and its recently-resolved ones. Pass the
+// categories the surface actually renders, so it neither fetches rows it will
+// throw away nor competes with the other tabs for one response.
+//
+// The open list is paged to completion and never truncated: an escalation list
+// that quietly stops at a row count is worse than a slow one, because a missing
+// escalation is indistinguishable from a handled one. Tenkara was showing 1000
+// of 2259, so 978 of its 1132 supplier escalations and all 12 of its calls were
+// invisible with nothing on the page saying so.
+//
 // Pass `ctx` on a page that already built one: the context pages every active
 // lead for the org, and building it twice per render is the expensive half.
+export const RESOLVED_CASE_LIMIT = 50;
+
 export async function loadOrgCases(
   admin: any,
   orgId: string,
-  ctx?: AssignmentContext
-): Promise<{ openRows: any[]; resolvedRows: any[] }> {
-  const [openRes, resolvedRes] = await Promise.all([
-    admin.from("cases").select(OPEN_SELECT).eq("org_id", orgId).in("status", ["open", "in_progress"]).order("created_at", { ascending: false }),
-    admin.from("cases").select(RESOLVED_SELECT).eq("org_id", orgId).eq("status", "resolved").order("resolved_at", { ascending: false }).limit(50),
+  ctx?: AssignmentContext,
+  categories?: CaseCategory[]
+): Promise<{ openRows: any[]; resolvedRows: any[]; resolvedTotal: number }> {
+  const [openRows, resolvedRes] = await Promise.all([
+    selectAllPaged<any>((from, to) =>
+      applyCategories(
+        admin.from("cases").select(OPEN_SELECT).eq("org_id", orgId).in("status", ["open", "in_progress"]),
+        categories
+      )
+        // created_at alone is not a total order (agents raise cases in bursts on
+        // the same timestamp), and rows that tie shift between pages.
+        .order("created_at", { ascending: false })
+        .order("id")
+        .range(from, to)
+    ),
+    // The resolved table is history, not a worklist, so it stays windowed — but
+    // the exact count rides along on the same request so the page can name the
+    // window instead of implying "recently resolved" is all of it.
+    applyCategories(
+      admin.from("cases").select(RESOLVED_SELECT, { count: "exact" }).eq("org_id", orgId).eq("status", "resolved"),
+      categories
+    )
+      .order("resolved_at", { ascending: false })
+      .limit(RESOLVED_CASE_LIMIT),
   ]);
-  const openRows = openRes.data ?? [];
   // Only the open worklist: a resolved case's operator is the record of who
   // actually handled it, which must not be re-pointed at today's owner.
   await deriveCaseOwners(admin, orgId, openRows, ctx).catch(() => {});
-  return { openRows, resolvedRows: resolvedRes.data ?? [] };
+  const resolvedRows = resolvedRes.data ?? [];
+  return { openRows, resolvedRows, resolvedTotal: resolvedRes.count ?? resolvedRows.length };
 }
 
 // Calling escalations are a phone worklist, not a row in a table: they render as

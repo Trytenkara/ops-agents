@@ -19,7 +19,7 @@ import { orgDisplayName } from "@/lib/org-display";
 import { getSupplierProfiles } from "@/lib/supplier-profiles";
 import { getMarketplaceAccounts } from "@/lib/marketplace-accounts";
 import { CasesSection } from "@/components/cases-section";
-import { loadOrgCases, caseCategory } from "@/lib/org-cases";
+import { loadOrgCases } from "@/lib/org-cases";
 import { AgentRunsStrip, type RunStat } from "@/components/agent-runs-strip";
 import { RunNowButton } from "@/components/run-now-button";
 import { MaterialFlagsPrompt, type MaterialFlag } from "@/components/material-flags-prompt";
@@ -314,9 +314,12 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
 
   // Supplier-side escalations (bounced/no-contact leads, stale leads) surfaced in
   // the "Supplier Escalations" tab alongside the leads the fleet stalled on.
-  const { openRows: caseOpen, resolvedRows: caseResolved } = await loadOrgCases(admin, org.id, assignmentCtx);
-  const supplierCasesOpen = caseOpen.filter((c) => caseCategory(c.type) === "supplier");
-  const supplierCasesResolved = caseResolved.filter((c) => caseCategory(c.type) === "supplier");
+  const { openRows: supplierCasesOpen, resolvedRows: supplierCasesResolved, resolvedTotal: supplierCasesResolvedTotal } = await loadOrgCases(
+    admin,
+    org.id,
+    assignmentCtx,
+    ["supplier"]
+  );
   const enrichmentCases =
     supplierCasesOpen.length > 0 || supplierCasesResolved.length > 0 ? (
       <section className="space-y-3">
@@ -327,7 +330,7 @@ export default async function OrgLeadsPage({ params }: { params: { slug: string 
             movement. Take the recommended action and resolve.
           </p>
         </div>
-        <CasesSection openRows={supplierCasesOpen} resolvedRows={supplierCasesResolved} slug={org.slug} emptyLabel="No supplier escalations right now." />
+        <CasesSection openRows={supplierCasesOpen} resolvedRows={supplierCasesResolved} resolvedTotal={supplierCasesResolvedTotal} slug={org.slug} emptyLabel="No supplier escalations right now." />
       </section>
     ) : null;
 

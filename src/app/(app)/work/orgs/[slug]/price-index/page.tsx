@@ -20,7 +20,7 @@ import { getClientRequirements, clientDocRules } from "@/lib/tenkara-requirement
 import { getOrgAssignmentContext, orgAutoKey, resolveOperatorId } from "@/lib/operator-assignment";
 import { getSupplierProfiles } from "@/lib/supplier-profiles";
 import { CasesSection } from "@/components/cases-section";
-import { loadOrgCases, caseCategory } from "@/lib/org-cases";
+import { loadOrgCases } from "@/lib/org-cases";
 import { loadMarketplaceCaseDims, fmtCaseDims } from "@/lib/marketplace-case-dims";
 import { loadMaterialDensities } from "@/lib/material-density";
 import { cn } from "@/lib/utils";
@@ -400,9 +400,12 @@ export default async function OrgPriceIndexPage({
   // so a value sourced for one client is valid for every client's same material.
   const densities = await loadMaterialDensities(admin);
 
-  const { openRows: caseOpen, resolvedRows: caseResolved } = await loadOrgCases(admin, org.id, assignmentCtx);
-  const quoteCasesOpen = caseOpen.filter((c) => caseCategory(c.type) === "quote");
-  const quoteCasesResolved = caseResolved.filter((c) => caseCategory(c.type) === "quote");
+  const { openRows: quoteCasesOpen, resolvedRows: quoteCasesResolved, resolvedTotal: quoteCasesResolvedTotal } = await loadOrgCases(
+    admin,
+    org.id,
+    assignmentCtx,
+    ["quote"]
+  );
 
   const base = `/work/orgs/${org.slug}/price-index`;
 
@@ -459,6 +462,7 @@ export default async function OrgPriceIndexPage({
             <CasesSection
               openRows={quoteCasesOpen}
               resolvedRows={quoteCasesResolved}
+              resolvedTotal={quoteCasesResolvedTotal}
               slug={org.slug}
               emptyLabel="No quote escalations right now."
             />
