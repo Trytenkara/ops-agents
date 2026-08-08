@@ -160,6 +160,9 @@ registerAgent({
                 pending: true,
                 domain: v.domain,
                 existing_supplier_names: v.existingNames,
+                kind: v.kind,
+                reason: v.reason,
+                canonical_name: v.canonicalName,
                 parked_from_stage: lead.stage,
                 parked_at: new Date().toISOString(),
                 parked_by_run_id: ctx.runId,
@@ -200,13 +203,14 @@ registerAgent({
           material_id: lead.material_id,
           // One line. The decision itself is two buttons on the leads page's
           // "Possible duplicates" tab, which resolves this case when used.
-          recommended_action: `Possible duplicate of ${existing}${more} on ${v.domain}. Held. Decide on the Possible duplicates tab.`,
+          recommended_action: `Possible duplicate of ${existing}${more}. ${v.reason}. Held. Decide on the Possible duplicates tab.`,
           assigned_operator: assignedOperator,
           metadata: {
             source_agent: "agent-20-duplicate-guard",
             source_run_id: ctx.runId,
             lead_id: lead.id,
             domain: v.domain,
+            kind: v.kind,
             existing_supplier_names: v.existingNames,
             supplier_name: lead.supplier_name,
             material_name: lead.material_name,

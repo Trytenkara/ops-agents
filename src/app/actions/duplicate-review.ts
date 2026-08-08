@@ -8,13 +8,17 @@ import { PROMOTABLE_STAGES } from "@/lib/lead-dupe-guard";
 // An operator's verdict on a lead Agent 20 parked as a likely duplicate.
 //
 //   same      → it is the company we already have. Drop the lead.
+//   merge     → same company, and this lead is worth keeping (it usually carries
+//               a material the existing supplier row does not). Rename it to the
+//               existing supplier's name and release it: Tenkara's own name gate
+//               then links it to that supplier instead of creating a second one.
 //   different → a genuinely separate company. Put it back where it was, so
 //               Tenkara promotes it on the next run.
 //
-// Both verdicts also resolve the case, because the case exists only to ask this
-// question. Neither touches Tenkara: dropping prevents a supplier row from ever
-// being created, which is the whole point of parking rather than reviewing after.
-export type DuplicateVerdict = "same" | "different";
+// All three resolve the case, because the case exists only to ask this question.
+// None touches Tenkara: this decides what we feed it, which is the whole point of
+// parking rather than reviewing after.
+export type DuplicateVerdict = "same" | "merge" | "different";
 
 export async function resolveDuplicateLead(
   leadId: string,
@@ -73,9 +77,19 @@ export async function resolveDuplicateLead(
   } else {
     // Back to the stage it was parked from, so it re-enters the promote queue.
     const back = PROMOTABLE_STAGES.includes(review.parked_from_stage) ? review.parked_from_stage : "enriched";
+    const canonical = typeof review.canonical_name === "string" ? review.canonical_name.trim() : "";
+    if (verdict === "merge" && !canonical) return { ok: false, error: "no_canonical_name" };
     const { error } = await admin
       .from("leads_in_flight")
-      .update({ stage: back, payload: { ...payload, duplicate_review: decided } })
+      .update({
+        stage: back,
+        ...(verdict === "merge" ? { supplier_name: canonical } : {}),
+        payload: {
+          ...payload,
+          duplicate_review: decided,
+          ...(verdict === "merge" ? { renamed_from: lead.supplier_name } : {}),
+        },
+      })
       .eq("id", leadId)
       .eq("status", "active");
     if (error) return { ok: false, error: error.message };
@@ -88,7 +102,9 @@ export async function resolveDuplicateLead(
       resolution_note:
         verdict === "same"
           ? `Same company as the existing supplier on ${review.domain}. Lead dropped.`
-          : `Confirmed a different company. Lead sent back to the pipeline.`,
+          : verdict === "merge"
+            ? `Same company. Lead renamed to "${review.canonical_name}" so it links to the existing supplier, and released.`
+            : `Confirmed a different company. Lead sent back to the pipeline.`,
       resolved_at: new Date().toISOString(),
     })
     .eq("type", "duplicate_supplier")

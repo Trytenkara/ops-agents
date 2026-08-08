@@ -15,6 +15,8 @@ export interface DuplicateReviewRow {
   existingNames: string[];
   website: string | null;
   parkedAt: string | null;
+  reason: string | null;
+  canonicalName: string | null;
 }
 
 export function DuplicateReviewSection({ rows, canAct }: { rows: DuplicateReviewRow[]; canAct: boolean }) {
@@ -39,9 +41,12 @@ export function DuplicateReviewSection({ rows, canAct }: { rows: DuplicateReview
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        These leads are held back because the company looks like a supplier this client already has. Nothing is sent
-        and no supplier record is created while a lead sits here. Say whether it is the same company (the lead is
-        dropped) or a different one (it goes straight back into the pipeline).
+        These leads are held back because the company looks like a supplier this client already has, or like another
+        lead waiting next to it. Nothing is sent and no supplier record is created while a lead sits here. Three ways
+        out: <strong>Same, keep both</strong> renames this lead to the existing supplier so it attaches to that record
+        instead of making a second one (use this when the lead has a material the supplier does not),{" "}
+        <strong>Same, drop it</strong> throws the lead away, and <strong>Different</strong> puts it straight back into
+        the pipeline.
       </p>
       {error && <p className="text-sm text-destructive">Could not save that: {error}</p>}
       <Table>
@@ -76,6 +81,7 @@ export function DuplicateReviewSection({ rows, canAct }: { rows: DuplicateReview
                 {r.existingNames.map((n) => (
                   <div key={n}>{n}</div>
                 ))}
+                {r.reason && <div className="text-xs text-muted-foreground">{r.reason}</div>}
               </TableCell>
               <TableCell className="align-top text-sm text-muted-foreground">{r.materialName ?? "—"}</TableCell>
               <TableCell className="align-top text-xs text-muted-foreground">
@@ -84,6 +90,17 @@ export function DuplicateReviewSection({ rows, canAct }: { rows: DuplicateReview
               <TableCell className="text-right align-top">
                 {canAct ? (
                   <div className="inline-flex gap-2">
+                    {r.canonicalName && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        title={`Rename this lead to "${r.canonicalName}" and release it`}
+                        disabled={pending && busy === r.leadId}
+                        onClick={() => decide(r.leadId, "merge")}
+                      >
+                        Same, keep both
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="outline"
@@ -98,7 +115,7 @@ export function DuplicateReviewSection({ rows, canAct }: { rows: DuplicateReview
                       disabled={pending && busy === r.leadId}
                       onClick={() => decide(r.leadId, "different")}
                     >
-                      Different, keep it
+                      Different
                     </Button>
                   </div>
                 ) : (

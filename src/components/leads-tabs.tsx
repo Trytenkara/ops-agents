@@ -141,6 +141,8 @@ export function LeadsTabs({
       existingNames: r.payload.duplicate_review.existing_supplier_names ?? [],
       website: r.payload.supplier_website ?? null,
       parkedAt: r.payload.duplicate_review.parked_at ?? null,
+      reason: r.payload.duplicate_review.reason ?? null,
+      canonicalName: r.payload.duplicate_review.canonical_name ?? null,
     }));
 
   const marketCount = visibleRows.filter((r) => kindOf(r) === "marketplace").length;
