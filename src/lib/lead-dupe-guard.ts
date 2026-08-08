@@ -105,9 +105,13 @@ export interface DupeVerdict {
 }
 
 /**
- * A marketplace listing and a direct relationship for one company are kept as
- * two suppliers on purpose, so a lead only collides with a supplier of its own
- * type. Mirrors `isMarketplaceLead` in tenkara-platform.
+ * Marketplace listings are out of scope for this guard.
+ *
+ * A marketplace host deliberately carries one supplier row per principal whose
+ * goods are sold there ("Knowde", "Knowde Roquette store", "Knowde Thai Wah
+ * listing"), so a name collision on that host is the intended shape, not a
+ * duplicate. Only direct suppliers, where one company means one row, are
+ * checked. Mirrors `isMarketplaceLead` in tenkara-platform.
  */
 export function leadIsMarketplace(payload: Record<string, any> | null): boolean {
   const p = payload ?? {};
@@ -131,33 +135,32 @@ export function findDuplicateBoundLeads(
   leads: GuardLead[],
   suppliers: GuardSupplier[]
 ): DupeVerdict[] {
-  const typeKey = (host: string, marketplace: boolean) => `${marketplace ? "m" : "d"}::${host}`;
-
   const supplierNames = new Set<string>();
   const namesOnHost = new Map<string, Set<string>>();
   for (const s of suppliers) {
     const name = normalizeName(s.name);
     if (name) supplierNames.add(name);
+    if (s.is_marketplace) continue;
     const host = registrableDomain(s.website);
     if (!host || !name) continue;
-    const k = typeKey(host, s.is_marketplace);
-    if (!namesOnHost.has(k)) namesOnHost.set(k, new Set());
-    namesOnHost.get(k)!.add(name);
+    if (!namesOnHost.has(host)) namesOnHost.set(host, new Set());
+    namesOnHost.get(host)!.add(name);
   }
 
   // Tenkara measures ambiguity on the lead side too, so we have to as well.
   const leadNamesOnHost = new Map<string, Set<string>>();
   for (const l of leads) {
+    if (leadIsMarketplace(l.payload)) continue;
     const name = normalizeName(l.supplier_name);
     const host = registrableDomain(leadWebsite(l.payload));
     if (!host || !name) continue;
-    const k = typeKey(host, leadIsMarketplace(l.payload));
-    if (!leadNamesOnHost.has(k)) leadNamesOnHost.set(k, new Set());
-    leadNamesOnHost.get(k)!.add(name);
+    if (!leadNamesOnHost.has(host)) leadNamesOnHost.set(host, new Set());
+    leadNamesOnHost.get(host)!.add(name);
   }
 
   const out: DupeVerdict[] = [];
   for (const lead of leads) {
+    if (leadIsMarketplace(lead.payload)) continue;
     const name = normalizeName(lead.supplier_name);
     const host = registrableDomain(leadWebsite(lead.payload));
     if (!name || !host) continue;
@@ -165,12 +168,11 @@ export function findDuplicateBoundLeads(
     // Tenkara's name gate already catches this one; it is not going to duplicate.
     if (supplierNames.has(name)) continue;
 
-    const k = typeKey(host, leadIsMarketplace(lead.payload));
-    const existing = namesOnHost.get(k);
+    const existing = namesOnHost.get(host);
     if (!existing?.size) continue;
 
     // Tenkara's host gate is live here and will do the right thing.
-    const gateHolds = existing.size === 1 && (leadNamesOnHost.get(k)?.size ?? 0) === 1;
+    const gateHolds = existing.size === 1 && (leadNamesOnHost.get(host)?.size ?? 0) === 1;
     if (gateHolds) continue;
 
     // A directory host carries unrelated sellers; those are not duplicates.

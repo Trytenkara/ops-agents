@@ -28,6 +28,7 @@ import {
 // false positive), both of which already exist as row actions on the leads tab.
 
 const MAX_PARKS_PER_RUN = 60;
+const LEAD_PAGE = 1000;
 // Tenkara supplier counts per org are in the thousands, not the millions.
 const SUPPLIER_SCAN_LIMIT = 20_000;
 
@@ -65,28 +66,45 @@ registerAgent({
     let cased = 0;
     let errored = 0;
     let scanned = 0;
+    let deferred = 0;
+    const orgsNotReached: string[] = [];
     const perOrg: Record<string, number> = {};
 
     for (const org of orgs) {
-      if (parked >= MAX_PARKS_PER_RUN) break;
-
-      const { data: leadRows, error: leadErr } = await admin
-        .from("leads_in_flight")
-        .select("id, org_id, supplier_name, material_id, material_name, stage, payload")
-        .eq("org_id", org.id)
-        .eq("status", "active")
-        .in("stage", PROMOTABLE_STAGES as unknown as string[]);
-      if (leadErr) {
-        errored++;
-        await ctx.log(`Lead pull failed for ${org.slug}: ${leadErr.message}`, {
-          level: "error",
-          step: "pull",
-          data: { org: org.slug },
-        });
+      if (parked >= MAX_PARKS_PER_RUN) {
+        orgsNotReached.push(org.slug);
         continue;
       }
-      const leads = (leadRows ?? []) as GuardLead[];
-      if (!leads.length) continue;
+
+      // Every promotable lead, paged. PostgREST caps a select at 1000 rows and
+      // the gate we are predicting counts distinct names per host across the
+      // whole set, so a truncated read gives the wrong answer, not just fewer.
+      const leads: GuardLead[] = [];
+      let failed = false;
+      for (let from = 0; ; from += LEAD_PAGE) {
+        const { data: leadRows, error: leadErr } = await admin
+          .from("leads_in_flight")
+          .select("id, org_id, supplier_name, material_id, material_name, stage, payload")
+          .eq("org_id", org.id)
+          .eq("status", "active")
+          .in("stage", PROMOTABLE_STAGES as unknown as string[])
+          .order("id", { ascending: true })
+          .range(from, from + LEAD_PAGE - 1);
+        if (leadErr) {
+          errored++;
+          failed = true;
+          await ctx.log(`Lead pull failed for ${org.slug}: ${leadErr.message}`, {
+            level: "error",
+            step: "pull",
+            data: { org: org.slug },
+          });
+          break;
+        }
+        const page = (leadRows ?? []) as GuardLead[];
+        leads.push(...page);
+        if (page.length < LEAD_PAGE) break;
+      }
+      if (failed || !leads.length) continue;
       scanned += leads.length;
 
       let suppliers: GuardSupplier[];
@@ -126,7 +144,10 @@ registerAgent({
       }
 
       for (const v of verdicts) {
-        if (parked >= MAX_PARKS_PER_RUN) break;
+        if (parked >= MAX_PARKS_PER_RUN) {
+          deferred++;
+          continue;
+        }
         const lead = v.lead;
 
         const { error: parkErr } = await admin
@@ -210,13 +231,29 @@ registerAgent({
     const breakdown = Object.entries(perOrg)
       .map(([slug, n]) => `${slug} ${n}`)
       .join(", ");
+    // The per-run cap is a rate limit, not a worklist limit: say out loud what
+    // it left behind so a growing backlog is visible rather than looking done.
+    const leftover =
+      deferred || orgsNotReached.length
+        ? ` Hit the ${MAX_PARKS_PER_RUN}-per-run cap: ${deferred} more flagged this pass` +
+          (orgsNotReached.length ? `, and ${orgsNotReached.join(", ")} not scanned` : "") +
+          `. The next run picks them up.`
+        : "";
     ctx.setItemsProcessed(parked);
     ctx.setStatus(errored > 0 && parked === 0 ? "partial" : "success");
     ctx.setSummary(
       parked === 0
-        ? `No duplicate-bound leads in ${scanned} promotable leads.`
-        : `Parked ${parked} duplicate-bound leads (${breakdown}), opened ${cased} cases.`
+        ? `No duplicate-bound leads in ${scanned} promotable leads.${leftover}`
+        : `Parked ${parked} duplicate-bound leads (${breakdown}), opened ${cased} cases.${leftover}`
     );
-    ctx.setMetadata({ scanned, parked, cased, errored, per_org: perOrg });
+    ctx.setMetadata({
+      scanned,
+      parked,
+      cased,
+      errored,
+      deferred,
+      orgs_not_reached: orgsNotReached,
+      per_org: perOrg,
+    });
   },
 });
