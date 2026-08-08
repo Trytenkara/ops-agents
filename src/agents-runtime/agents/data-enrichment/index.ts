@@ -39,7 +39,14 @@ const REQUEUE_PARKED_PER_RUN = 8;
 // single lane averaged 460s and reached only ~10 of its 25 leads, because seeding
 // and filling had already eaten the wall clock ahead of it.
 const LEAD_DEADLINE_MS = 230_000; // primary: what is left after seed + fill
-const LANE_LEAD_DEADLINE_MS = 650_000; // secondary: headroom under maxDuration 800s
+// 650s + a batch that can now take LEAD_TIMEOUT_MS left too little of the 800s
+// cap for the summary write. Lanes were finishing well inside this anyway.
+const LANE_LEAD_DEADLINE_MS = 600_000; // secondary: headroom under maxDuration 800s
+// Ceiling on one lead. The deadline above only guards the START of a batch, and a
+// batch waits for its slowest lead, so without this any unbounded call inside
+// enrichAndStageLead can run the whole invocation past the cap. Sized so a batch
+// begun at the deadline still finishes with room to write the summary.
+const LEAD_TIMEOUT_MS = 120_000;
 // Web profile completion: suppliers per run, and the wall-clock slice it may
 // take before the rest of the agent's work starts.
 const WEB_FILL_CAP = 12;
@@ -326,6 +333,7 @@ registerAgent({
     // Lead changed state mid-probe (operator action in the Control Room), so this
     // run's write was declined rather than clobbering it.
     let superseded = 0;
+    let leadTimeouts = 0;
     const blockedReasons: Record<string, number> = {};
     const startedAt = Date.now();
 
@@ -418,6 +426,33 @@ registerAgent({
       }
     }
 
+    // Stop waiting on a lead past LEAD_TIMEOUT_MS. The claim stamp deliberately
+    // stays put: the abandoned promise may still be in flight and may still write,
+    // so releasing it here could hand the same lead to a parallel lane. Stamped,
+    // it simply sorts to the back of the queue and is retried on a later pass,
+    // which is the never-give-up contract for a raw lead.
+    async function processLeadCapped(row: LeadRow): Promise<void> {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timedOutMarker = Symbol("timeout");
+      try {
+        const r = await Promise.race([
+          processLead(row).then(() => null),
+          new Promise<symbol>((resolve) => {
+            timer = setTimeout(() => resolve(timedOutMarker), LEAD_TIMEOUT_MS);
+          }),
+        ]);
+        if (r === timedOutMarker) {
+          leadTimeouts++;
+          await ctx.log(
+            `Enrichment of ${row.supplier_name ?? "unknown supplier"} exceeded ${Math.round(LEAD_TIMEOUT_MS / 1000)}s and was abandoned (stays raw, retried on a later pass)`,
+            { level: "warn", step: "lead-timeout", data: { lead_id: row.id, timeout_ms: LEAD_TIMEOUT_MS } }
+          );
+        }
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+
     const CONCURRENCY = 5;
     const DEADLINE_MS = isPrimary ? LEAD_DEADLINE_MS : LANE_LEAD_DEADLINE_MS;
     const rows = leads as LeadRow[];
@@ -438,7 +473,7 @@ registerAgent({
         await ctx.log(`Deadline reached, released ${skipped} unattempted claims back to raw`, { step: "deadline" });
         break;
       }
-      await Promise.all(rows.slice(i, i + CONCURRENCY).map(processLead));
+      await Promise.all(rows.slice(i, i + CONCURRENCY).map(processLeadCapped));
     }
 
     // Only the primary lane advances the per-org tier clock. If every lane
@@ -451,7 +486,7 @@ registerAgent({
       .map(([k, v]) => `${k}=${v}`)
       .join(", ");
     ctx.setSummary(
-      `Lane ${lane}: enriched ${promoted}/${leads.length} → stage=enriched · ${blocked} left at raw${reasonStr ? ` (${reasonStr})` : ""}${skipped ? ` · ${skipped} deferred (deadline)` : ""}${superseded ? ` · ${superseded} superseded` : ""}${errored ? ` · ${errored} errors` : ""}${seedNote}${fillNote}`
+      `Lane ${lane}: enriched ${promoted}/${leads.length} → stage=enriched · ${blocked} left at raw${reasonStr ? ` (${reasonStr})` : ""}${skipped ? ` · ${skipped} deferred (deadline)` : ""}${leadTimeouts ? ` · ${leadTimeouts} timed out (retried later)` : ""}${superseded ? ` · ${superseded} superseded` : ""}${errored ? ` · ${errored} errors` : ""}${seedNote}${fillNote}`
     );
   },
 });

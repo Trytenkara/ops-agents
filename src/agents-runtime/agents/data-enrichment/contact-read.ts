@@ -18,6 +18,15 @@ import Anthropic from "@anthropic-ai/sdk";
 
 const MODEL = "claude-haiku-4-5";
 const MAX_OUTPUT_TOKENS = 400;
+// The SDK defaults to a 10-minute timeout and 2 retries, so one stalled call can
+// hold a lead for half an hour. That is what killed 14 Agent 06 runs on
+// 2026-08-07: each went silent right after "Enriching 25 raw leads" and was hard
+// -killed at the route's 800s cap, ~16 min of compute for zero items. This is a
+// haiku read of at most 4 pages already in memory, normally a few seconds, so a
+// call still running at 45s is stuck rather than slow. Falls back to the pattern
+// result on timeout, which is the same as the model finding nothing.
+const REQUEST_TIMEOUT_MS = 45_000;
+const MAX_RETRIES = 1;
 const MAX_CHARS_PER_PAGE = 6000;
 const MAX_PAGES = 4;
 
@@ -126,7 +135,11 @@ export async function readContactsFromPages(
   if (!blocks.length) return null;
 
   try {
-    const res = await new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }).messages.create({
+    const res = await new Anthropic({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      timeout: REQUEST_TIMEOUT_MS,
+      maxRetries: MAX_RETRIES,
+    }).messages.create({
       model: MODEL,
       max_tokens: MAX_OUTPUT_TOKENS,
       system: SYSTEM_PROMPT,
