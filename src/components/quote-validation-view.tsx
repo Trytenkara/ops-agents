@@ -345,10 +345,13 @@ export function QuoteValidationView({
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">Status</span>
           <Select size="sm" className="min-w-[10rem]" ariaLabel="Status" value={statusFilter} onValueChange={setStatusFilter} options={STATUS_FILTER} />
-          {ownerNames.length > 0 && (
-            <Select size="sm" className="min-w-[11rem]" ariaLabel="Operator" value={ownerFilter} onValueChange={setOwnerFilter} options={ownerOptions} />
-          )}
         </label>
+        {ownerNames.length > 0 && (
+          <label className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">Operator</span>
+            <Select size="sm" className="min-w-[11rem]" ariaLabel="Operator" value={ownerFilter} onValueChange={setOwnerFilter} options={ownerOptions} />
+          </label>
+        )}
         <label className="flex flex-col gap-1">
           <span className="text-xs text-muted-foreground">Sort</span>
           <Select size="sm" className="min-w-[10rem]" ariaLabel="Sort" value={sort} onValueChange={setSort} options={SORT_OPTIONS} />
