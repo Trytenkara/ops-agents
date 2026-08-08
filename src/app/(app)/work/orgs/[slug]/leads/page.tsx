@@ -331,14 +331,10 @@ export default async function OrgLeadsPage({ params, searchParams }: { params: {
   const enrichmentCases =
     supplierCasesOpen.length > 0 || supplierCasesResolved.length > 0 ? (
       <section className="space-y-3">
-        <div>
-          <h3 className="text-sm font-semibold text-foreground">Escalations</h3>
-          <p className="text-sm text-muted-foreground">
-            Supplier leads that need a human: a bounced or missing contact to re-enter, a lead that stalled with no
-            movement, or a possible duplicate (decide those on the Possible duplicates tab). Take the recommended
-            action and resolve.
-          </p>
-        </div>
+        <p className="text-sm text-muted-foreground">
+          Supplier leads that need a human: a bounced or missing contact to re-enter, or a lead that stalled with no
+          movement. Take the recommended action and resolve. Possible duplicates are decided on their own tab above.
+        </p>
         <CasesSection openRows={supplierCasesOpen} resolvedRows={supplierCasesResolved} resolvedTotal={supplierCasesResolvedTotal} slug={org.slug} emptyLabel="No supplier escalations right now." />
       </section>
     ) : null;

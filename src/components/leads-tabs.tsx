@@ -15,7 +15,12 @@ import type { CaseDims } from "@/lib/marketplace-case-dims";
 import type { SupplierProfile } from "@/lib/supplier-profiles";
 import { DuplicateReviewSection, type DuplicateReviewRow } from "@/components/duplicate-review-section";
 
-type Tab = "all" | "raw" | "enriched" | "ready" | "held" | "marketplace" | "aggregator" | "outreach" | "removed" | "stuck" | "duplicates" | "dropped" | "suppliers";
+type Tab = "all" | "raw" | "enriched" | "ready" | "held" | "marketplace" | "aggregator" | "outreach" | "escalations" | "dropped" | "suppliers";
+
+// The three things that need a human on a lead. They used to sit as three
+// sibling chips, which read as three unrelated places and made the counts look
+// contradictory; they are one queue with three reasons, so they are one tab.
+type EscTab = "duplicates" | "cases" | "stuck";
 
 // The sourcing pipeline as a live funnel: each stage is the output of one agent,
 // so surfacing raw -> enriched -> ready-to-send -> held (with counts + the
@@ -154,6 +159,8 @@ export function LeadsTabs({
   };
 
   const [tab, setTab] = useState<Tab>(initialTab);
+  const [escTab, setEscTab] = useState<EscTab>("duplicates");
+  const escalationCount = duplicateRows.length + enrichmentCaseCount + enrichmentDisplay.length;
 
   const tabBtn = (key: Tab, label: string, count?: number) => (
     <button
@@ -176,6 +183,22 @@ export function LeadsTabs({
       <span className="px-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">{label}</span>
       <div className="inline-flex rounded-lg border border-border bg-secondary/60 p-1">{children}</div>
     </div>
+  );
+
+  const escBtn = (key: EscTab, label: string, count: number) => (
+    <button
+      type="button"
+      onClick={() => setEscTab(key)}
+      className={cn(
+        "border-b-2 px-1 pb-2 text-sm font-medium transition-colors",
+        escTab === key
+          ? "border-primary text-foreground"
+          : "border-transparent text-muted-foreground hover:text-foreground"
+      )}
+    >
+      {label}
+      <span className="ml-1.5 text-xs text-muted-foreground">{count}</span>
+    </button>
   );
 
   // These filter every tab, but they render inside the active tab's own filter
@@ -256,9 +279,7 @@ export function LeadsTabs({
         {tabGroup("Exceptions", (
           <>
             {tabBtn("outreach", "Outreach", trackerCount)}
-            {tabBtn("duplicates", "Duplicates", duplicateRows.length)}
-            {tabBtn("removed", "Escalations", enrichmentCaseCount)}
-            {tabBtn("stuck", "Stuck", enrichmentDisplay.length)}
+            {tabBtn("escalations", "Escalations", escalationCount)}
             {tabBtn("dropped", "Dropped", droppedRows.length)}
           </>
         ))}
@@ -296,22 +317,31 @@ export function LeadsTabs({
           filters={pageFilters}
         />
       )}
-      {tab === "duplicates" && <DuplicateReviewSection rows={duplicateRows} canAct={canAct} />}
-      {tab === "removed" &&
-        (enrichmentCases ?? (
-          <p className="text-sm text-muted-foreground py-4">No supplier escalations for this client yet.</p>
-        ))}
-      {tab === "stuck" &&
-        (enrichmentDisplay.length > 0 ? (
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground -mb-1">
-              Leads the fleet could not complete on its own: no contact recovered, deduped, freight/logistics filtered, suppressed before outreach (do-not-contact, excluded country, prior relationship), or a marketplace price the auto-scrape couldn&apos;t get (needs a manual price). Each row shows the reason.
-            </p>
-            <LeadsList rows={enrichmentDisplay} canAct={false} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
+      {tab === "escalations" && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-5 border-b border-border">
+            {escBtn("duplicates", "Possible duplicates", duplicateRows.length)}
+            {escBtn("cases", "Supplier escalations", enrichmentCaseCount)}
+            {escBtn("stuck", "Stuck leads", enrichmentDisplay.length)}
           </div>
-        ) : (
-          <p className="text-sm text-muted-foreground py-4">No stuck leads for this client.</p>
-        ))}
+          {escTab === "duplicates" && <DuplicateReviewSection rows={duplicateRows} canAct={canAct} />}
+          {escTab === "cases" &&
+            (enrichmentCases ?? (
+              <p className="text-sm text-muted-foreground py-4">No supplier escalations for this client yet.</p>
+            ))}
+          {escTab === "stuck" &&
+            (enrichmentDisplay.length > 0 ? (
+              <div className="space-y-4">
+                <p className="text-sm text-muted-foreground -mb-1">
+                  Leads the fleet could not complete on its own: no contact recovered, deduped, freight/logistics filtered, suppressed before outreach (do-not-contact, excluded country, prior relationship), or a marketplace price the auto-scrape couldn&apos;t get (needs a manual price). Each row shows the reason.
+                </p>
+                <LeadsList rows={enrichmentDisplay} canAct={false} slug={slug} orgId={orgId} operatorOptions={operatorOptions} />
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground py-4">No stuck leads for this client.</p>
+            ))}
+        </div>
+      )}
       {tab === "dropped" &&
         (droppedRows.length > 0 ? (
           <>

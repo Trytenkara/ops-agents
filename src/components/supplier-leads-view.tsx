@@ -543,10 +543,15 @@ export function SupplierLeadsView({
                       <button
                         type="button"
                         onClick={() => setShowLeadsFor(isShowingLeads ? null : key)}
-                        className="mb-2 inline-flex items-center gap-1.5 rounded-md border border-border bg-secondary/60 px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-secondary"
+                        className="mb-2 flex w-full items-center justify-between gap-2 rounded-lg border border-border bg-secondary/60 px-3 py-2.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary"
                       >
-                        <span aria-hidden className={cn("transition-transform", isShowingLeads && "rotate-90")}>›</span>
-                        {isShowingLeads ? "Hide" : "Show"} {g.leads.length} lead{g.leads.length !== 1 ? "s" : ""}
+                        <span className="inline-flex items-center gap-2">
+                          <span aria-hidden className={cn("text-base transition-transform", isShowingLeads && "rotate-90")}>›</span>
+                          {isShowingLeads ? "Hide" : "Show"} {g.leads.length} lead{g.leads.length !== 1 ? "s" : ""} for this supplier
+                        </span>
+                        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
+                          {g.leads.length}
+                        </span>
                       </button>
                       {isShowingLeads && (
                         <Table>
