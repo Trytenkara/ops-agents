@@ -18,6 +18,42 @@ type Admin = ReturnType<typeof createAdminClient>;
 // else is advisory and surfaces as a pill in the Control Room.
 const BLOCKING_CODES = new Set(["fabricated_contact_info", "grade_ask_widened"]);
 
+const CONTACT_GUARD_CHANNEL = () => process.env.SLACK_CONTACT_GUARD_CHANNEL_ID ?? "C0B5M1QCE9E";
+// How many blocked drafts to name individually before the digest summarises the
+// rest. A bulk outreach run can block dozens; a wall of them is what made ops
+// stop reading the channel.
+const BLOCKED_DIGEST_LIMIT = 20;
+
+// Collector for blocked-draft alerts across one agent run. A bulk caller creates
+// one, passes it to every stageDraft call, and flushes once at the end, turning
+// a burst of near-identical Slack posts into a single digest.
+export interface BlockedDraftBatch {
+  entries: string[];
+}
+
+export function newBlockedDraftBatch(): BlockedDraftBatch {
+  return { entries: [] };
+}
+
+export async function flushBlockedDraftBatch(batch: BlockedDraftBatch | undefined): Promise<void> {
+  const n = batch?.entries.length ?? 0;
+  if (!batch || n === 0) return;
+  const shown = batch.entries.slice(0, BLOCKED_DIGEST_LIMIT);
+  const more = n - shown.length;
+  batch.entries = [];
+  await postAgentAlert(
+    [
+      `:no_entry: Held ${n} supplier draft${n === 1 ? "" : "s"} with unverified contact info (possible fabrication) — staged as blocked, not sent.`,
+      ...shown.map((e) => `• ${e}`),
+      more ? `…and ${more} more.` : null,
+      "Research the real values and add the legitimate ones to BRAND_CONTACTS.",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    { channel: CONTACT_GUARD_CHANNEL() },
+  );
+}
+
 // Auto-assign a Tenkara conversation to the operator the draft is assigned to in
 // the Control Room, mirroring the assignment onto the email app at creation time
 // (previously only a manual Control Room assign pushed the assignee). Best-effort:
@@ -109,6 +145,10 @@ export interface StageDraftInput {
   // Caller-supplied metadata (outreach_mode, ghost_brand, lead_id, etc.).
   // qa_findings + the draft link are merged in here.
   metadata?: Record<string, any>;
+  // Pass a collector (see newBlockedDraftBatch) to accumulate blocked-draft
+  // alerts instead of posting one Slack message each. Callers staging a single
+  // draft omit it and keep the immediate post.
+  blockedBatch?: BlockedDraftBatch;
 }
 
 export interface StageDraftResult {
@@ -190,10 +230,16 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
       .maybeSingle();
 
     const brand = (callerMeta.ghost_brand as string | undefined) ?? (callerMeta.supplier_name as string | undefined) ?? "a supplier draft";
-    await postAgentAlert(
-      `:no_entry: Blocked a supplier draft (${fabrication.code}). ${fabrication.message} Brand: ${brand}, supplier: ${callerMeta.supplier_name ?? "?"}, draft_ref: ${data?.id ?? "?"}. Held (status=blocked), not sent.`,
-      { channel: process.env.SLACK_CONTACT_GUARD_CHANNEL_ID ?? "C0B5M1QCE9E" },
-    );
+    if (input.blockedBatch) {
+      input.blockedBatch.entries.push(
+        `${brand} (supplier: ${callerMeta.supplier_name ?? "?"}, ${fabrication.code}, draft_ref: ${data?.id ?? "?"}) — ${fabrication.message}`,
+      );
+    } else {
+      await postAgentAlert(
+        `:no_entry: Blocked a supplier draft (${fabrication.code}). ${fabrication.message} Brand: ${brand}, supplier: ${callerMeta.supplier_name ?? "?"}, draft_ref: ${data?.id ?? "?"}. Held (status=blocked), not sent.`,
+        { channel: CONTACT_GUARD_CHANNEL() },
+      );
+    }
 
     if (error) return { ok: false, error: `draft_references(blocked): ${error.message}`, qaFindings, blocked: true };
     return { ok: true, draftRefId: data?.id, qaFindings, blocked: true };

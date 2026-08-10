@@ -83,7 +83,7 @@ registerAgent({
   slug: "agent-17-california-watch",
   displayName: "Agent 17 - California Chemicals Watch",
   description:
-    "Tracks California Chemicals supplier breadth against the 100-supplier target: announces discovery kickoff, reports per-material progress when the lead count moves, and flags cleared, stalled, and saturated materials. Read-only; deduped so it only speaks on change.",
+    "Tracks California Chemicals supplier breadth against the 100-supplier target: announces discovery kickoff, reports per-material progress while any material is still short of the target, and flags cleared, stalled, and saturated materials. Read-only; deduped so it only speaks when there is something to act on.",
   async run(ctx) {
     const admin = createAdminClient();
 
@@ -184,8 +184,16 @@ registerAgent({
     // whenever a material is added or removed. last_total_leads is only advanced
     // when the report actually posts, so a long run of small changes accumulates
     // and still reports rather than drifting silently.
+    //
+    // Once every material is at or above the target there is no longer anything
+    // to act on, and the count still drifts by tens as leads are re-staged — which
+    // posted a full report every 4h for weeks after discovery was already declared
+    // complete. Past the finish line the report is suppressed; a material falling
+    // back under the target, or a new material appearing, resumes it.
     const materialCountChanged = nMaterials !== state.last_material_count;
-    if (Math.abs(totalLeads - state.last_total_leads) >= MIN_BREADTH_DELTA || materialCountChanged) {
+    const anyBelowTarget = [...perMaterial.values()].some((d) => d.total < TARGET_LEADS);
+    const breadthMoved = Math.abs(totalLeads - state.last_total_leads) >= MIN_BREADTH_DELTA;
+    if (materialCountChanged || (anyBelowTarget && breadthMoved)) {
       const lines = [`*California Chemicals — supplier breadth* (${nMaterials} materials)`];
       for (const [name, d] of [...perMaterial.entries()].sort((a, b) => b[1].total - a[1].total)) {
         const pct = Math.min(100, Math.round((100 * d.total) / TARGET_LEADS));
