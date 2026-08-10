@@ -462,7 +462,7 @@ export async function createManualCallTask(input: { orgId: string; leadId: strin
   if (caseErr) return { ok: false, error: caseErr.message } as const;
 
   const [orgSlug, orgName] = await Promise.all([resolver.orgSlug(input.orgId), resolver.orgName(input.orgId)]);
-  await notifyCallEscalation({ brief, routing, orgName, orgSlug, reason });
+  await notifyCallEscalation({ brief, routing, orgName, orgSlug, reason, origin: "operator" });
 
   await admin.from("audit_log").insert({
     actor_user_id: session.userId,

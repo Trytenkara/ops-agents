@@ -1,6 +1,7 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { postSlackMessage, deepLink } from "@/lib/slack";
+import { shouldPostDigest, recordDigestPosted } from "@/lib/alert-policy";
 import {
   getOrgAssignmentContext,
   orgAutoKey,
@@ -283,11 +284,23 @@ registerAgent({
           lines.push(`• <${deepLink(`/work/orgs/${org.slug}`)}|${org.name}>: ${bits.join(", ")}`);
           nudgedOrgs++;
         }
+        // This pass writes nothing else, so without the ledger the identical
+        // nudge re-posted every run until an operator happened to act.
         if (lines.length && process.env.SLACK_BOT_TOKEN) {
-          await postSlackMessage({
-            text: `*Action pending* — items waiting on ops for >${NUDGE_STALE_DAYS}d:\n${lines.join("\n")}`,
-          });
-          await ctx.log(`Posted nudge for ${nudgedOrgs} org(s)`, { step: "nudge" });
+          const fingerprint = lines.join("|");
+          const fresh = await shouldPostDigest("escalation_nudge", fingerprint);
+          if (fresh) {
+            const res = await postSlackMessage({
+              text: `*Action pending* — items waiting on ops for >${NUDGE_STALE_DAYS}d:\n${lines.join("\n")}`,
+            });
+            if (res.ok) await recordDigestPosted("escalation_nudge", fingerprint);
+            await ctx.log(
+              res.ok ? `Posted nudge for ${nudgedOrgs} org(s)` : `Nudge post failed: ${res.error}`,
+              { level: res.ok ? "info" : "warn", step: "nudge" },
+            );
+          } else {
+            await ctx.log(`Nudge unchanged for ${nudgedOrgs} org(s); not reposted`, { step: "nudge" });
+          }
         }
       }
     } catch (e: any) {

@@ -1,4 +1,5 @@
 import { postSlackMessage } from "@/lib/slack";
+import { shouldPostDigest, recordDigestPosted } from "@/lib/alert-policy";
 import { OPERATOR_SLACK_IDS } from "./config";
 import type { GroupResult } from "./csv-builder";
 
@@ -71,7 +72,25 @@ function buildText({ results, dropped, csvSignedUrl, csvFilename }: BuildOpts): 
   return lines.join("\n");
 }
 
+// Fingerprint the underlying work, not the rendered text: the text carries
+// today's date and a freshly signed CSV URL, so hashing it can never match twice
+// and the dedupe would be dead code.
+function qrFingerprint({ results, dropped }: BuildOpts): string {
+  const ids = results
+    .map((r) => `${r.group.supplier_id}:${r.group.client_org_id}:${r.stage}`)
+    .sort()
+    .join(",");
+  return `${ids}|skipped=${dropped.skipped_rows}/${dropped.skipped_orgs}`;
+}
+
 export async function postQrSummary(opts: BuildOpts) {
   const text = buildText(opts);
-  return postSlackMessage({ text });
+  // Weekly, so a repeat means a week of no movement. Worth saying once, not twice.
+  const fingerprint = qrFingerprint(opts);
+  if (!(await shouldPostDigest("quote_revalidation", fingerprint))) {
+    return { ok: true, skipped: "unchanged" as const };
+  }
+  const res = await postSlackMessage({ text });
+  if (res.ok) await recordDigestPosted("quote_revalidation", fingerprint);
+  return res;
 }

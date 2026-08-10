@@ -152,6 +152,10 @@ export async function notifyCallEscalation(args: {
   orgName: string | null;
   orgSlug: string | null;
   reason: string;
+  // "agent" raises up to MAX_PER_RUN of these per sweep, so they roll into the
+  // daily digest as one line each with no @-mention. "operator" is a button a
+  // human just pressed and posts live, mentions included.
+  origin?: "agent" | "operator";
 }): Promise<boolean> {
   const { brief, routing, orgSlug } = args;
   const { caller } = routing;
@@ -188,5 +192,18 @@ export async function notifyCallEscalation(args: {
   const mentionUserIds = [caller?.slackUserId, routing.emailOperator?.userId !== caller?.userId ? routing.emailOperator?.slackUserId : null].filter(
     Boolean
   ) as string[];
+  if (args.origin === "agent") {
+    const target = named(caller) ?? "unassigned";
+    return postAgentAlert(text, {
+      severity: "p2",
+      // The call task, not the notification: the same lead re-raises as the
+      // cadence advances, and that is one line per lead per day.
+      key: `call_task:${brief.leadId ?? brief.threadId ?? brief.supplierName ?? "unknown"}:${brief.callStage}`,
+      digestGroup: "Call tasks waiting",
+      title: `Call ${brief.callStage}: ${brief.supplierName ?? "a supplier"} → ${target}${
+        brief.phoneStatus === "missing" ? " (no phone on file)" : ""
+      }`,
+    }).catch(() => false);
+  }
   return postAgentAlert(text, { mentionUserIds }).catch(() => false);
 }

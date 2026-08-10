@@ -19,40 +19,7 @@ type Admin = ReturnType<typeof createAdminClient>;
 const BLOCKING_CODES = new Set(["fabricated_contact_info", "grade_ask_widened"]);
 
 const CONTACT_GUARD_CHANNEL = () => process.env.SLACK_CONTACT_GUARD_CHANNEL_ID ?? "C0B5M1QCE9E";
-// How many blocked drafts to name individually before the digest summarises the
-// rest. A bulk outreach run can block dozens; a wall of them is what made ops
-// stop reading the channel.
-const BLOCKED_DIGEST_LIMIT = 20;
-
-// Collector for blocked-draft alerts across one agent run. A bulk caller creates
-// one, passes it to every stageDraft call, and flushes once at the end, turning
-// a burst of near-identical Slack posts into a single digest.
-export interface BlockedDraftBatch {
-  entries: string[];
-}
-
-export function newBlockedDraftBatch(): BlockedDraftBatch {
-  return { entries: [] };
-}
-
-export async function flushBlockedDraftBatch(batch: BlockedDraftBatch | undefined): Promise<void> {
-  const n = batch?.entries.length ?? 0;
-  if (!batch || n === 0) return;
-  const shown = batch.entries.slice(0, BLOCKED_DIGEST_LIMIT);
-  const more = n - shown.length;
-  batch.entries = [];
-  await postAgentAlert(
-    [
-      `:no_entry: Held ${n} supplier draft${n === 1 ? "" : "s"} with unverified contact info (possible fabrication) — staged as blocked, not sent.`,
-      ...shown.map((e) => `• ${e}`),
-      more ? `…and ${more} more.` : null,
-      "Research the real values and add the legitimate ones to BRAND_CONTACTS.",
-    ]
-      .filter(Boolean)
-      .join("\n"),
-    { channel: CONTACT_GUARD_CHANNEL() },
-  );
-}
+const BLOCKED_DIGEST_GROUP = "Drafts held for unverified contacts";
 
 // Auto-assign a Tenkara conversation to the operator the draft is assigned to in
 // the Control Room, mirroring the assignment onto the email app at creation time
@@ -145,10 +112,6 @@ export interface StageDraftInput {
   // Caller-supplied metadata (outreach_mode, ghost_brand, lead_id, etc.).
   // qa_findings + the draft link are merged in here.
   metadata?: Record<string, any>;
-  // Pass a collector (see newBlockedDraftBatch) to accumulate blocked-draft
-  // alerts instead of posting one Slack message each. Callers staging a single
-  // draft omit it and keep the immediate post.
-  blockedBatch?: BlockedDraftBatch;
 }
 
 export interface StageDraftResult {
@@ -208,41 +171,88 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
   // ask past the client's dealbreaker grade.
   const fabrication = qaFindings.find((f) => BLOCKING_CODES.has(f.code));
   if (fabrication) {
-    const { data, error } = await admin
+    // Agent 04's "already contacted" filter counts staged/reviewed/sent/linked
+    // and deliberately not blocked, so it re-picks a held supplier on its next
+    // run. At */5 that inserted a fresh blocked row every 5 minutes for as long
+    // as the contact stayed unverified. Reuse the existing row instead: the
+    // verdict only changes when a human adds the real contact, and that changes
+    // the lint result, not this row.
+    const blockedThreadId = input.conversationId ?? `blocked:${input.externalId ?? "reply"}`;
+    // Match on org + material too, not the thread alone: one conversation carries
+    // many drafts for many materials, and a `blocked:<externalId>` placeholder has
+    // no org component at all, so two clients would collide on one row.
+    let priorQuery = admin
       .from("draft_references")
-      .insert({
-        email_client: "rod_app",
-        thread_id: input.conversationId ?? `blocked:${input.externalId ?? "reply"}`,
-        draft_id: `blocked:${runId ?? agentId ?? "agent"}`,
-        agent_id: agentId,
-        agent_run_id: runId,
-        org_id: orgId,
-        supplier_id: supplierId ?? null,
-        material_id: materialId ?? null,
-        quote_id: quoteId ?? null,
-        subject,
-        body_preview: body.slice(0, 1500),
-        assigned_operator: assignedOperator ?? null,
-        status: "blocked",
-        metadata: { ...callerMeta, approved_contacts: approvedContacts, qa_findings: qaFindings, qa_linted_at: new Date().toISOString() },
-      })
-      .select("id")
-      .maybeSingle();
+      .select("id, metadata")
+      .eq("email_client", "rod_app")
+      .eq("status", "blocked")
+      .eq("thread_id", blockedThreadId);
+    priorQuery = orgId ? priorQuery.eq("org_id", orgId) : priorQuery.is("org_id", null);
+    priorQuery = materialId ? priorQuery.eq("material_id", materialId) : priorQuery.is("material_id", null);
+    const { data: priorBlocked } = await priorQuery.order("created_at", { ascending: false }).limit(1);
+    const prior = (priorBlocked ?? [])[0] as any;
+    const priorSameCode = ((prior?.metadata?.qa_findings ?? []) as Finding[]).some((f) => f.code === fabrication.code);
 
     const brand = (callerMeta.ghost_brand as string | undefined) ?? (callerMeta.supplier_name as string | undefined) ?? "a supplier draft";
-    if (input.blockedBatch) {
-      input.blockedBatch.entries.push(
-        `${brand} (supplier: ${callerMeta.supplier_name ?? "?"}, ${fabrication.code}, draft_ref: ${data?.id ?? "?"}) — ${fabrication.message}`,
-      );
-    } else {
-      await postAgentAlert(
-        `:no_entry: Blocked a supplier draft (${fabrication.code}). ${fabrication.message} Brand: ${brand}, supplier: ${callerMeta.supplier_name ?? "?"}, draft_ref: ${data?.id ?? "?"}. Held (status=blocked), not sent.`,
-        { channel: CONTACT_GUARD_CHANNEL() },
-      );
+    const supplierLabel = (callerMeta.supplier_name as string | undefined) ?? supplierId ?? to.address;
+
+    let inserted: { id: string } | null = null;
+    let insertError: string | null = null;
+    if (!(prior && priorSameCode)) {
+      const { data, error } = await admin
+        .from("draft_references")
+        .insert({
+          email_client: "rod_app",
+          thread_id: blockedThreadId,
+          draft_id: `blocked:${runId ?? agentId ?? "agent"}`,
+          agent_id: agentId,
+          agent_run_id: runId,
+          org_id: orgId,
+          supplier_id: supplierId ?? null,
+          material_id: materialId ?? null,
+          quote_id: quoteId ?? null,
+          subject,
+          body_preview: body.slice(0, 1500),
+          assigned_operator: assignedOperator ?? null,
+          status: "blocked",
+          metadata: { ...callerMeta, approved_contacts: approvedContacts, qa_findings: qaFindings, qa_linted_at: new Date().toISOString() },
+        })
+        .select("id")
+        .maybeSingle();
+      inserted = (data as { id: string } | null) ?? null;
+      insertError = error?.message ?? null;
     }
 
-    if (error) return { ok: false, error: `draft_references(blocked): ${error.message}`, qaFindings, blocked: true };
-    return { ok: true, draftRefId: data?.id, qaFindings, blocked: true };
+    const draftRefId = inserted?.id ?? prior?.id ?? null;
+    // Dispatched on the reuse path as well as the insert path. Held drafts are
+    // reused for as long as the contact stays unverified, so alerting only on
+    // insert would name a supplier once and then never again, which is how one
+    // gets quietly forgotten. The ledger TTL, not this branch, decides how often
+    // it is repeated (daily).
+    //
+    // Keyed on org + supplier + block reason, not the draft: outreach re-attempts
+    // the same supplier every run, and one line per supplier per day in the digest
+    // is the whole point. Never a live post; a held draft is not urgent, it just
+    // needs someone to research the real contact eventually.
+    const orgLabel = orgId
+      ? (await admin.from("orgs").select("name").eq("id", orgId).maybeSingle()).data?.name ?? orgId.slice(0, 8)
+      : "no org";
+    await postAgentAlert(
+      `:no_entry: Blocked a supplier draft (${fabrication.code}). ${fabrication.message} Brand: ${brand}, supplier: ${supplierLabel}, draft_ref: ${draftRefId ?? "?"}. Held (status=blocked), not sent.`,
+      {
+        channel: CONTACT_GUARD_CHANNEL(),
+        severity: "p2",
+        key: `blocked_draft:${orgId ?? "none"}:${fabrication.code}:${supplierLabel}`,
+        digestGroup: BLOCKED_DIGEST_GROUP,
+        // The body never reaches Slack for a p2, so the title has to stand alone:
+        // whose client, which supplier, why, and the row to look up.
+        title: `*${orgLabel}* · ${supplierLabel} · ${fabrication.code} · draft_ref \`${(draftRefId ?? "?").slice(0, 8)}\``,
+      },
+    );
+
+    if (prior && priorSameCode) return { ok: true, draftRefId: prior.id, qaFindings, blocked: true };
+    if (insertError) return { ok: false, error: `draft_references(blocked): ${insertError}`, qaFindings, blocked: true };
+    return { ok: true, draftRefId: draftRefId ?? undefined, qaFindings, blocked: true };
   }
 
   // Create the draft in Tenkara. Only ever stages — never sends.

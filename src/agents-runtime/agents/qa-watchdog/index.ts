@@ -1,6 +1,7 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { postSlackMessage, deepLink } from "@/lib/slack";
+import { shouldPostDigest, recordDigestPosted } from "@/lib/alert-policy";
 
 // Agent 14 — QA Watchdog.
 //
@@ -194,6 +195,12 @@ registerAgent({
       if (i.link) text += `\n<${i.link}|Review>`;
       blocks.push({ type: "section", text: { type: "mrkdwn", text } });
     }
+    // Same counts as yesterday means nothing moved; saying so again is noise.
+    const fingerprint = issues.map((i) => `${i.label}=${i.count}`).join("|");
+    if (!(await shouldPostDigest("qa_watchdog", fingerprint))) {
+      await ctx.log("QA digest unchanged since the last post; staying quiet", { step: "slack" });
+      return;
+    }
     const res = await postSlackMessage({
       text: `QA Watchdog: ${totalIssues} data-integrity issue(s) need attention`,
       blocks,
@@ -201,6 +208,7 @@ registerAgent({
     if (!res.ok) {
       await ctx.log(`Slack digest not sent: ${res.error}`, { level: "warn", step: "slack" });
     } else {
+      await recordDigestPosted("qa_watchdog", fingerprint);
       await ctx.log("Posted QA digest to Slack", { step: "slack" });
     }
   },

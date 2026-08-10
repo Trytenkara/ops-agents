@@ -6,7 +6,6 @@ import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import { compileWaitMs } from "@/lib/agent-timing";
 import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 import { runOutreachForSupplier, type OutreachLead } from "./run-outreach";
-import { newBlockedDraftBatch, flushBlockedDraftBatch } from "@/lib/draft-staging";
 import { isAggregatorEmail, isAggregatorDomain } from "../data-enrichment/enrich";
 import { suppliersWithPriorRelationship } from "@/lib/tenkara-relationships";
 import { getSourcingExclusions, exclusionReason } from "@/lib/tenkara-sourcing-exclusions";
@@ -687,9 +686,6 @@ registerAgent({
     //       mail per material.
     let staged = 0; // first-contact email drafts staged (one per supplier)
     let draftErrors = 0;
-    // One digest for every draft the contact guard holds this run, instead of a
-    // Slack post per supplier.
-    const blockedBatch = newBlockedDraftBatch();
     let promoted = 0; // leads promoted to ready_for_outreach (the first pool)
     let heldSuppliers = 0; // suppliers held because a sibling material is blocked
     let heldCompiling = 0; // suppliers held: full material list not yet enriched
@@ -957,7 +953,6 @@ registerAgent({
         isMarketplace,
         leads: pool.map((c) => c.lead as OutreachLead),
         log: (m, meta) => ctx.log(m, meta),
-        blockedBatch,
       });
       if (res.staged) {
         await admin.from("supplier_email_aliases").update({
@@ -980,7 +975,6 @@ registerAgent({
       }
     }
 
-    await flushBlockedDraftBatch(blockedBatch);
     await recordOrgRuns(admin, "agent-04-outreach", [...dueOrgIds04]);
     ctx.setItemsProcessed(staged);
     ctx.setStatus(draftErrors > 0 && staged === 0 ? "failure" : draftErrors > 0 ? "partial" : "success");

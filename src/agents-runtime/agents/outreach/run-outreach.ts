@@ -1,6 +1,6 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { composeOutreachDraft, type DraftMaterial } from "./drafter";
-import { stageDraft, type BlockedDraftBatch } from "@/lib/draft-staging";
+import { stageDraft } from "@/lib/draft-staging";
 import { tenkaraEmailAccountIdFor } from "@/lib/tenkara";
 import { resolveMaterialGradeSpecs, type MaterialGradeSpec } from "@/lib/tenkara-names";
 import { findSupplierProfile, missingProfileAsks } from "@/lib/supplier-profiles";
@@ -66,8 +66,6 @@ export interface RunOutreachSupplierInput {
   // Every material we're sourcing from this supplier, one line item each.
   leads: OutreachLead[];
   log?: (msg: string, meta?: any) => Promise<void> | void;
-  // Run-scoped collector so a bulk run reports blocked drafts as one digest.
-  blockedBatch?: BlockedDraftBatch;
 }
 
 export interface RunOutreachResult {
@@ -173,7 +171,6 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
     emailAccountId,
     supplierCompany: supplierName,
     externalId,
-    blockedBatch: input.blockedBatch,
     metadata: {
       outreach_mode: mode,
       ghost_brand: ghostBrand ?? null,

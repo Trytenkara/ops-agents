@@ -1,4 +1,4 @@
-import { postSlackMessage } from "@/lib/slack";
+import { dispatchAlert } from "@/lib/alert-policy";
 import { hostOf, normalizeCompanyName } from "@/lib/tenkara-sourcing-exclusions";
 
 // Detect duplicate material records within one org — two rows for the same
@@ -208,13 +208,21 @@ export async function flagDuplicateMaterials(
         ? ` Both ask for *${keepGrades}*.`
         : ` *${c.drop.name}* names no grade, so the merged record keeps *${keepGrades}*.`
       : "";
-    await postSlackMessage({
-      channel: FEEDBACK_CHANNEL,
-      text:
-        `:link: *Duplicate material* — *${orgLabel}*: "${c.drop.name}" looks like the same material as "${c.keep.name}" (${why}).${gradeNote}` +
+    // Bookkeeping, not an alert: the material_merge_flags row above IS the queue,
+    // and it surfaces on the client's Leads page. Recorded in the alert ledger so
+    // the volume is still countable, but it no longer posts to Slack.
+    await dispatchAlert(
+      `:link: *Duplicate material* — *${orgLabel}*: "${c.drop.name}" looks like the same material as "${c.keep.name}" (${why}).${gradeNote}` +
         ` Sourcing both means paying twice to find one chemical: *${dropLeadCount}* lead(s) sit under the duplicate and *${shared}* of its suppliers are already sourced under "${c.keep.name}".` +
         ` Review on the client's Leads page to fold it in (or dismiss if they really are different).`,
-    }).catch(() => {});
+      {
+        severity: "p3",
+        key: `duplicate_material:${orgId}:${(c.drop.name ?? c.drop.id).toLowerCase()}`,
+        channel: FEEDBACK_CHANNEL,
+        digestGroup: "Duplicate materials flagged",
+        title: `${orgLabel}: "${c.drop.name}" duplicates "${c.keep.name}"`,
+      },
+    ).catch(() => {});
   }
   return flagged;
 }

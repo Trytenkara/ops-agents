@@ -1,6 +1,7 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { postSlackMessage } from "@/lib/slack";
+import { shouldPostDigest, recordDigestPosted } from "@/lib/alert-policy";
 
 // Agent 16 — Sourcing Health Watchdog.
 //
@@ -94,6 +95,23 @@ function render(r: Report): { lines: string[]; alerts: number; warns: number } {
   };
 }
 
+// Fingerprint the CONDITIONS, not the rendered lines. `age_s` and
+// `raw_oldest_hours` climb every run, so hashing the text meant the dedupe never
+// fired in exactly the case it exists for: a problem that is still there.
+function healthFingerprint(r: Report): string {
+  const lagging = Boolean(r.raw_pending && r.raw_oldest_hours && r.raw_oldest_hours > ENRICHMENT_LAG_HOURS);
+  return [
+    r.org,
+    `dup=${r.dup_pairs}`,
+    `stuck=${r.stuck.map((s) => s.slug).sort().join(",")}`,
+    `thin=${r.thin.map((t) => t.name).sort().join(",")}`,
+    `low=${r.low_contact.map((l) => l.name).sort().join(",")}`,
+    `lag=${lagging ? "yes" : "no"}`,
+    // Bucketed: a backlog drifting by a lead or two is the same situation.
+    `undrafted=${r.undrafted ? Math.floor(r.undrafted / 10) : 0}`,
+  ].join(" ");
+}
+
 registerAgent({
   slug: "agent-16-sourcing-health",
   displayName: "Agent 16 - Sourcing Health Watchdog",
@@ -104,6 +122,7 @@ registerAgent({
     const orgs = orgList();
 
     const sections: string[] = [];
+    const fingerprints: string[] = [];
     let totalAlerts = 0;
     let totalWarns = 0;
     let checked = 0;
@@ -130,6 +149,7 @@ registerAgent({
       totalAlerts += alerts;
       totalWarns += warns;
       sections.push(lines.join("\n"));
+      fingerprints.push(healthFingerprint(report));
 
       await ctx.log(`${org}: ${alerts} alert(s), ${warns} warning(s)`, {
         level: alerts ? "error" : warns ? "warn" : "info",
@@ -169,6 +189,11 @@ registerAgent({
       return;
     }
 
+    const fingerprint = fingerprints.join("|");
+    if (!(await shouldPostDigest("sourcing_health", fingerprint))) {
+      await ctx.log("Health report identical to the last one posted; staying quiet", { step: "slack" });
+      return;
+    }
     const res = await postSlackMessage({
       channel: process.env.SOURCING_HEALTH_SLACK_CHANNEL,
       text: `*Sourcing health watchdog* — ${status}\n\`\`\`${sections.join("\n\n")}\`\`\``,
@@ -176,6 +201,7 @@ registerAgent({
     if (!res.ok) {
       await ctx.log(`Slack digest not sent: ${res.error}`, { level: "warn", step: "slack" });
     } else {
+      await recordDigestPosted("sourcing_health", fingerprint);
       await ctx.log("Posted sourcing health digest to Slack", { step: "slack" });
     }
   },

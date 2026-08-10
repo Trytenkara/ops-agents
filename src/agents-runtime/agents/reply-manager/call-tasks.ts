@@ -135,7 +135,7 @@ async function raiseCallTask(
     opts.resolver.orgSlug(r.org_id),
     opts.resolver.orgName(r.org_id),
   ]);
-  await notifyCallEscalation({ brief, routing, orgName, orgSlug, reason });
+  await notifyCallEscalation({ brief, routing, orgName, orgSlug, reason, origin: "agent" });
 
   await ctx.log(
     `Call task #${opts.stage} opened for ${supplierName} (${reason})${routing.caller ? `, assigned to ${routing.caller.name ?? routing.caller.email}` : ", unassigned: no call operator for this client"}${brief.contact.phone ? "" : ", no phone on file"}`,

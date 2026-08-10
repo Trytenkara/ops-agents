@@ -320,8 +320,17 @@ export async function handleInboundReply(
         metadata: { ...refMeta, flow_status: "bounced", bounced: { at: new Date().toISOString(), from: from.address, needs_new_email: true } },
       })
       .eq("id", ref.id);
+    // One line per supplier in the daily digest. A bounce needs a working email
+    // entered eventually, not a live interrupt, and the same supplier can bounce
+    // on every re-attempt.
     await postAgentAlert(
-      `:warning: *Bounce* on outreach to *${supplierLabel}*. The email didn't deliver — add a working email on the case to restart outreach.`
+      `:warning: *Bounce* on outreach to *${supplierLabel}*. The email didn't deliver — add a working email on the case to restart outreach.`,
+      {
+        severity: "p2",
+        key: `bounce:${ref.supplier_id ?? supplierLabel}`,
+        digestGroup: "Bounced outreach, needs a working email",
+        title: `${supplierLabel} (${from.address})`,
+      }
     );
     if (bounceLeadId) {
       const { data: existingCase } = await admin
@@ -503,7 +512,13 @@ export async function handleInboundReply(
           },
         });
         await postAgentAlert(
-          `:mailbox: *${sellerLabel}* replied through ${leadPayload.aggregator} instead of from its own address, so we still have no direct contact. Open the case and add their email to continue.`
+          `:mailbox: *${sellerLabel}* replied through ${leadPayload.aggregator} instead of from its own address, so we still have no direct contact. Open the case and add their email to continue.`,
+          {
+            severity: "p2",
+            key: `relay_no_direct_contact:${leadId}`,
+            digestGroup: "Replied via marketplace relay, no direct email",
+            title: `${sellerLabel} via ${leadPayload.aggregator}`,
+          }
         );
       }
     }
@@ -952,12 +967,20 @@ export async function handleInboundReply(
           .eq("id", leadId);
       }
       if (result.staged.length) {
+        // Good news, not an interrupt: the leads are already staged and contact
+        // finding picks them up on its own.
         await postAgentAlert(
           `:seedling: *${leadRow?.supplier_name ?? "A supplier"}* referred us to ${result.staged
             .map((s) => `*${s.name}*`)
             .join(", ")} for ${leadRow?.material_name ?? "this material"}. Staged as new lead${
             result.staged.length > 1 ? "s" : ""
-          }, contact finding will pick ${result.staged.length > 1 ? "them" : "it"} up.`
+          }, contact finding will pick ${result.staged.length > 1 ? "them" : "it"} up.`,
+          {
+            severity: "p2",
+            key: `referrals:${leadId}`,
+            digestGroup: "Suppliers referred us onward",
+            title: `${leadRow?.supplier_name ?? "A supplier"} → ${result.staged.map((s) => s.name).join(", ")}`,
+          }
         );
       }
     } catch {
@@ -1202,13 +1225,22 @@ async function recordUnmatchedInbound(
       return { status: 503, body: { error: "unmatched_dead_letter_failed", detail: insertEventError.message } };
     }
     const slackSafe = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/@/g, "＠");
+    // Keyed on the receiving inbox, not the message: an unmapped inbox produces
+    // one of these per email that lands in it, and the fix is the same each time.
+    // This site used to swallow the duplicate-row error and alert anyway, so a
+    // webhook redelivery re-posted the identical message.
     await postAgentAlert([
       ":warning: *Unmatched inbound needs client assignment*",
       `from: ${slackSafe(from.address)}`,
       `subject: ${slackSafe(msg.subject ?? "(none)")}`,
       `conversation: ${slackSafe(msg.conversation_id)}`,
       "The event was recorded, but its receiving inbox is not mapped to a Control Room client.",
-    ].join("\n"));
+    ].join("\n"), {
+      severity: "p2",
+      key: `unmatched_inbox:${msg.email_account_id ?? msg.to_email ?? "unknown"}`,
+      digestGroup: "Inbound mail arriving at an unmapped inbox",
+      title: `${slackSafe(msg.to_email ?? msg.email_account_id ?? "unknown inbox")} is not mapped to a client`,
+    });
     return { status: 200, body: { recorded_unmatched: true, needs_org_assignment: true } };
   }
 
@@ -1348,7 +1380,12 @@ async function recordUnmatchedInbound(
     `subject: ${slackSafe(msg.subject ?? "(none)")}`,
     `conversation: ${slackSafe(msg.conversation_id)}`,
     "A triage case and review-only clarification draft were created.",
-  ].join("\n"));
+  ].join("\n"), {
+    severity: "p2",
+    key: `unmatched_triage:${msg.conversation_id}`,
+    digestGroup: "Inbound mail triaged, sender unknown",
+    title: `${slackSafe(senderLabel)}: ${slackSafe(msg.subject ?? "(no subject)")}`,
+  });
 
   return { status: 200, body: { recorded_unmatched: true, org_id: inboundOrg.orgId, case_id: caseId, draft_ref_id: draftRefId } };
 }

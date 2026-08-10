@@ -12,6 +12,7 @@
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { postSlackMessage, deepLink } from "@/lib/slack";
+import { shouldPostDigest, recordDigestPosted } from "@/lib/alert-policy";
 
 const SAM_DM = () => process.env.SAM_SLACK_DM_ID ?? process.env.SLACK_ESCALATION_CHANNEL_ID;
 const ERROR_DEBOUNCE_MS = 60 * 60 * 1000; // 1h per agent per error type
@@ -64,11 +65,17 @@ export async function alertRunFinished(opts: {
 }): Promise<void> {
   if (opts.status === "success") return;
   const reason: AlertReason = opts.status === "failure" ? "run_failed" : "run_partial";
+  // A chronically failing agent used to DM on every single run: agent-01 runs
+  // every minute. The debounce below was only ever wired into error events.
+  const digestKey = `run_${opts.status}:${opts.agentSlug}`;
+  const fingerprint = opts.summary ?? "no summary";
+  if (!(await shouldPostDigest(digestKey, fingerprint, 240))) return;
   await send(reason, [
     `*${opts.agentName}* (${opts.agentSlug}) — ${opts.status.toUpperCase()}`,
     opts.summary ? `> ${opts.summary}` : "(no summary)",
     `Run: ${deepLink(`/agents/runs/${opts.runId}`)}`,
   ]);
+  await recordDigestPosted(digestKey, fingerprint);
 }
 
 export async function alertErrorEvent(opts: {

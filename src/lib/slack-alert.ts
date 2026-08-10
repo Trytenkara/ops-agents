@@ -3,14 +3,45 @@
 // notifies, unlike posting via a user's connected account.
 // Pass opts.channel to target a specific channel; otherwise falls back to the
 // SLACK_ESCALATION_CHANNEL_ID default.
+//
+// Pass opts.severity + opts.key to route through the alert policy (dedupe by
+// condition, p2 rolled into the daily digest). See src/lib/alert-policy.ts. A
+// call without them posts live and unconditionally, which is correct only for
+// one-off, operator-triggered alerts.
+
+import { dispatchAlert, type AlertSeverity } from "@/lib/alert-policy";
+
 export async function postAgentAlert(
   text: string,
-  opts?: { mentionUserId?: string; mentionUserIds?: string[]; channel?: string }
+  opts?: {
+    mentionUserId?: string;
+    mentionUserIds?: string[];
+    channel?: string;
+    severity?: AlertSeverity;
+    key?: string;
+    ttlMinutes?: number;
+    digestGroup?: string;
+    title?: string;
+  }
 ): Promise<boolean> {
+  const ids = [...new Set([opts?.mentionUserId, ...(opts?.mentionUserIds ?? [])].filter(Boolean))] as string[];
+
+  if (opts?.severity && opts.key) {
+    const outcome = await dispatchAlert(text, {
+      key: opts.key,
+      severity: opts.severity,
+      ttlMinutes: opts.ttlMinutes,
+      channel: opts.channel,
+      mentionUserIds: ids,
+      digestGroup: opts.digestGroup,
+      title: opts.title,
+    });
+    return outcome !== "suppressed";
+  }
+
   const token = process.env.SLACK_BOT_TOKEN;
   const channel = opts?.channel ?? process.env.SLACK_ESCALATION_CHANNEL_ID;
   if (!token || !channel) return false;
-  const ids = [...new Set([opts?.mentionUserId, ...(opts?.mentionUserIds ?? [])].filter(Boolean))] as string[];
   const body = ids.length ? `${ids.map((id) => `<@${id}>`).join(" ")} ${text}` : text;
   try {
     const r = await fetch("https://slack.com/api/chat.postMessage", {

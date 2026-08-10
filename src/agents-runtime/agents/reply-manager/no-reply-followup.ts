@@ -1,4 +1,4 @@
-import { stageDraft, newBlockedDraftBatch, flushBlockedDraftBatch } from "@/lib/draft-staging";
+import { stageDraft } from "@/lib/draft-staging";
 import { followupDelaysMs } from "@/lib/agent-timing";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import type { createAdminClient } from "@/lib/supabase/admin";
@@ -136,8 +136,6 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
   let drafted = 0;
   let skipped = 0;
   let handedOff = 0;
-  // One digest for every draft the contact guard holds this sweep.
-  const blockedBatch = newBlockedDraftBatch();
 
   // Only follow up on Agent 04's initial cold outreach — not re-quotes (Agent 02)
   // or reply responses (Agent 15 itself).
@@ -251,7 +249,6 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
       body,
       assignedOperator: r.assigned_operator ?? null,
       conversationId: r.thread_id ?? null, // reply into the original thread
-      blockedBatch,
       metadata: {
         outreach_mode: meta.outreach_mode ?? "ghost",
         ghost_brand: meta.ghost_brand ?? null,
@@ -293,6 +290,5 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
     }
   }
 
-  await flushBlockedDraftBatch(blockedBatch);
   return { drafted, skipped, handedOff };
 }

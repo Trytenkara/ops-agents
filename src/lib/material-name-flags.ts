@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { postSlackMessage } from "@/lib/slack";
+import { dispatchAlert } from "@/lib/alert-policy";
 import { correctMaterialSpelling } from "@/lib/material-spelling";
 
 // Material names come from Tenkara (read-only). When a name is clearly typo'd
@@ -164,7 +164,15 @@ export async function flagMaterialNames(admin: Admin, orgId: string, names: stri
         (f.duplicate ? ` :warning: A separate *"${f.suggested}"* material also exists — these are duplicates; consolidate them.` : "") +
         ` The name comes from Tenkara (read-only here) — rename it in the Tenkara app. The Control Room shows it corrected meanwhile.`;
     }
-    await postSlackMessage({ channel: FEEDBACK_CHANNEL, text }).catch(() => {});
+    // Bookkeeping: the material_name_flags row is the queue and the Control Room
+    // renders the correction. Recorded, not posted.
+    await dispatchAlert(text, {
+      severity: "p3",
+      key: `material_name_flag:${orgId}:${f.wrong.toLowerCase()}`,
+      channel: FEEDBACK_CHANNEL,
+      digestGroup: "Material names flagged",
+      title: `${orgLabel}: "${preview}" → "${f.suggested}"`,
+    }).catch(() => {});
   }
   return flagged;
 }

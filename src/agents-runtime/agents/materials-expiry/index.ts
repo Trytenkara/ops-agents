@@ -2,6 +2,7 @@ import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
 import { postSlackMessage } from "@/lib/slack";
+import { shouldPostDigest, recordDigestPosted } from "@/lib/alert-policy";
 
 // Agent 18 — Materials expiry sweep.
 //
@@ -303,8 +304,20 @@ registerAgent({
     const fallback = rows.length
       ? `${rows.length} material(s) expiring in ${DAYS} days`
       : `Nothing to review in the next ${DAYS} days`;
+    // Fingerprint the rows themselves: the same count can be a different set of
+    // materials, and "nothing to review" repeated daily is pure noise.
+    const fingerprint = rows.length
+      ? rows.map((r) => `${r.quote_id}:${r.expiry.toISOString().slice(0, 10)}`).sort().join("|")
+      : "none";
+    if (!(await shouldPostDigest("materials_expiry", fingerprint))) {
+      await ctx.log("Expiry set unchanged since the last digest; staying quiet", { step: "slack" });
+      ctx.setStatus("success");
+      ctx.setSummary(`${rows.length} material(s) expiring within ${DAYS} days — unchanged, not reposted`);
+      return;
+    }
     const res = await postSlackMessage({ channel: CHANNEL, text: fallback, blocks });
     if (!res.ok) throw new Error(`Slack post failed: ${res.error}`);
+    await recordDigestPosted("materials_expiry", fingerprint);
 
     ctx.setStatus("success");
     ctx.setSummary(`${rows.length} material(s) expiring within ${DAYS} days — digest posted`);
