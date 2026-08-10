@@ -4,6 +4,7 @@ import { authenticateAgent, unauthorized } from "@/lib/agent-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { normalizeCompanyName } from "@/lib/tenkara-sourcing-exclusions";
 import { isSameCompanyName } from "@/lib/fuzzy";
+import { loadSelfSuppliedMaterialIds } from "@/lib/self-supplied-materials";
 
 function hostOf(url: string | null | undefined): string | null {
   if (!url) return null;
@@ -83,11 +84,28 @@ export async function POST(request: NextRequest) {
     return ix.names.some((e) => isSameCompanyName(nm, e));
   };
 
+  // Materials the client supplies themselves are never sourced, so refuse them at
+  // the door — this route is how the discovery skills and webhook ingesters stage
+  // leads, and they don't see the Tenkara flag. Fail-open on a Tenkara error.
+  let selfSupplied = new Set<string>();
+  if (materialIds.length) {
+    try {
+      selfSupplied = await loadSelfSuppliedMaterialIds();
+    } catch (e: any) {
+      console.warn("[api/agent/leads] self-supplied lookup failed (non-fatal):", e?.message ?? e);
+    }
+  }
+
   let skippedDuplicate = 0;
+  let skippedSelfSupplied = 0;
   const rows: any[] = [];
   for (const l of parsed.data.leads) {
     const matId = l.material_id ?? null;
     const host = hostOf((l.payload as any)?.supplier_website ?? (l.payload as any)?.source_url);
+    if (matId && selfSupplied.has(matId)) {
+      skippedSelfSupplied++;
+      continue;
+    }
     if (matId && l.supplier_name && isDuplicate(matId, l.supplier_name, host)) {
       skippedDuplicate++;
       continue;
@@ -116,9 +134,9 @@ export async function POST(request: NextRequest) {
   }
 
   if (rows.length === 0) {
-    return NextResponse.json({ inserted: 0, skipped_duplicate: skippedDuplicate });
+    return NextResponse.json({ inserted: 0, skipped_duplicate: skippedDuplicate, skipped_self_supplied: skippedSelfSupplied });
   }
   const { data, error } = await admin.from("leads_in_flight").insert(rows).select("id");
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ inserted: data?.length ?? 0, skipped_duplicate: skippedDuplicate });
+  return NextResponse.json({ inserted: data?.length ?? 0, skipped_duplicate: skippedDuplicate, skipped_self_supplied: skippedSelfSupplied });
 }

@@ -9,6 +9,7 @@ import { aggregatorNameOf, isAggregatorIndexUrl, isAggregatorPlatformName, shoul
 import { getOrgAssignmentContext, orgAutoKey, resolveOperatorId, type AssignmentContext } from "@/lib/operator-assignment";
 import { leadMarketKind } from "@/lib/lead-market";
 import { splitPriceDelta } from "@/lib/price-delta";
+import { loadSelfSuppliedMaterialIds } from "@/lib/self-supplied-materials";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -357,9 +358,19 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   const realOrgIds = activeOrgRows.filter((o: any) => !o.is_internal).map((o: any) => o.id);
   const internalOrgIds = activeOrgRows.filter((o: any) => o.is_internal).map((o: any) => o.id);
 
+  // Materials the client supplies themselves aren't being sourced, so there is no
+  // price index to keep warm for them. Fail-open: an empty set on error.
+  let selfSupplied = new Set<string>();
+  try {
+    selfSupplied = await loadSelfSuppliedMaterialIds();
+  } catch (e: any) {
+    await log(`Self-supplied lookup failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "mp_leads" });
+  }
+
   const cols = "id, org_id, supplier_id, supplier_name, material_id, material_name, source, payload";
   const marketplaceFilter = "payload->>site_type.in.(M,MS,A),payload->>supplier_role.eq.Marketplace";
-  const eligible = (l: LeadRow) => Boolean(l.material_name && listingUrl(l.payload));
+  const eligible = (l: LeadRow) =>
+    Boolean(l.material_name && listingUrl(l.payload)) && !(l.material_id && selfSupplied.has(l.material_id));
   const nowIso = new Date().toISOString();
 
   // Cohort A — first pull: active marketplace leads with no pull attempt yet

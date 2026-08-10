@@ -12,6 +12,7 @@ import { normalizeStatus, sourcingAllowed } from "@/lib/org-status";
 import { flagMaterialNames, correctName } from "@/lib/material-name-flags";
 import { flagDuplicateMaterials, type MergeMaterial } from "@/lib/material-merge-flags";
 import { materialLabel } from "@/lib/material-label";
+import { loadSelfSuppliedMaterialIds } from "@/lib/self-supplied-materials";
 import {
   sourceReadyEnabled,
   sourceReadyUnlockEnabled,
@@ -584,6 +585,23 @@ registerAgent({
       }
     } catch (e: any) {
       await ctx.log(`Merged-material skip lookup failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "duplicates" });
+    }
+
+    // 3b-ii-d. Drop materials the client supplies themselves. They flip
+    // self_supplied on the Tenkara material form to say "we already have this";
+    // sourcing it wastes discovery budget on a material they will never buy from
+    // us. Sits after the recency + backlog merge so it covers every entry path
+    // (window, backlog, targeted). Fail-open: a Tenkara error changes nothing.
+    try {
+      const selfSupplied = await loadSelfSuppliedMaterialIds();
+      if (selfSupplied.size) {
+        const before = materials.length;
+        materials = materials.filter((m) => !selfSupplied.has(m.id));
+        const skipped = before - materials.length;
+        if (skipped) await ctx.log(`Skipped ${skipped} self-supplied material(s)`, { step: "query" });
+      }
+    } catch (e: any) {
+      await ctx.log(`Self-supplied lookup failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "query" });
     }
 
     // 3b-iii. Applied spelling overrides (org → lower(wrong)→correct), used to

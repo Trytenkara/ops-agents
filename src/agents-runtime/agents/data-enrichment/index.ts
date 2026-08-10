@@ -11,6 +11,7 @@ import { loadMarketplaceCaseDims } from "@/lib/marketplace-case-dims";
 import { fillProfilesFromKnownSources } from "@/lib/supplier-profile-fill";
 import { runSupplierWebFill } from "./web-fill-run";
 import { resolveMaterialGradeSpecs } from "@/lib/tenkara-names";
+import { loadSelfSuppliedMaterialIds } from "@/lib/self-supplied-materials";
 import { getClientRequirements, dealbreakerCertNames } from "@/lib/tenkara-requirements";
 import type { DealbreakerSpec } from "@/lib/dealbreaker-fit";
 
@@ -297,7 +298,7 @@ registerAgent({
     //    two lanes can be handed the same lead and pay for the same contact lookup
     //    twice. It returns prev_attempt_at so leads we drop at the deadline can have
     //    their stamp put back, having never actually been attempted.
-    const { data: leads, error: pullErr } = await admin.rpc("claim_enrichment_leads", {
+    let { data: leads, error: pullErr } = await admin.rpc("claim_enrichment_leads", {
       p_org_ids: sourcingOrgIds,
       p_cap: MAX_LEADS_PER_RUN,
     });
@@ -307,6 +308,22 @@ registerAgent({
       ctx.setStatus("failure");
       ctx.setSummary(`Pull failed: ${pullErr.message}`);
       return;
+    }
+
+    // Don't spend contact-provider credits on a material the client supplies
+    // themselves. Claimed-then-skipped leads keep their fresh attempt stamp, which
+    // is what we want: they go to the back of the queue instead of being re-claimed
+    // every run. Fail-open on a Tenkara error.
+    try {
+      const selfSupplied = await loadSelfSuppliedMaterialIds();
+      if (selfSupplied.size) {
+        const before = (leads ?? []).length;
+        leads = ((leads ?? []) as any[]).filter((l) => !(l.material_id && selfSupplied.has(l.material_id)));
+        const skipped = before - leads.length;
+        if (skipped) await ctx.log(`Skipped ${skipped} lead(s) on self-supplied materials`, { step: "pull" });
+      }
+    } catch (e: any) {
+      await ctx.log(`Self-supplied lookup failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "pull" });
     }
 
     if (!leads || leads.length === 0) {

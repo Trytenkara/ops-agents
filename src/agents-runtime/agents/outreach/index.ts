@@ -11,6 +11,7 @@ import { suppliersWithPriorRelationship } from "@/lib/tenkara-relationships";
 import { getSourcingExclusions, exclusionReason } from "@/lib/tenkara-sourcing-exclusions";
 import { getNoteDerivedCountryExclusions } from "@/lib/client-sourcing-rules";
 import { resolveMaterialNames } from "@/lib/tenkara-names";
+import { loadSelfSuppliedMaterialIds } from "@/lib/self-supplied-materials";
 import { randomUUID } from "crypto";
 
 // v1 trim (vs. full spec):
@@ -158,6 +159,21 @@ registerAgent({
       } else {
         leads = leads.concat(fillRes.data ?? []);
       }
+    }
+    // Never draft for a material the client supplies themselves. Agent 03 stops
+    // staging these, but a lead created before the client flipped the switch is
+    // still sitting at stage='enriched' and would otherwise get emailed.
+    // Fail-open: a Tenkara error leaves the pull untouched.
+    try {
+      const selfSupplied = await loadSelfSuppliedMaterialIds();
+      if (selfSupplied.size) {
+        const before = leads.length;
+        leads = leads.filter((l) => !(l.material_id && selfSupplied.has(l.material_id)));
+        const skipped = before - leads.length;
+        if (skipped) await ctx.log(`Skipped ${skipped} lead(s) on self-supplied materials`, { step: "pull" });
+      }
+    } catch (e: any) {
+      await ctx.log(`Self-supplied lookup failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "pull" });
     }
     if (!leads.length) {
       ctx.setItemsProcessed(0);
