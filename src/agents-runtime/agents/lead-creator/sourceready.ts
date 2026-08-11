@@ -19,6 +19,13 @@ import {
 // Disabled (no-op) unless SOURCEREADY_MCP_URL + SOURCEREADY_MCP_TOKEN are set.
 
 export function sourceReadyEnabled(): boolean {
+  // TEMPORARY (2026-08-11): Disable SourceReady discovery entirely until credits
+  // are topped up. One-pass model deployed above, but with only 7k credits left,
+  // even 100 suppliers × 25 materials = 2.5k credits burned in one run.
+  // Set SOURCEREADY_DISCOVERY_DISABLED=false to re-enable.
+  if (/^(1|true|yes|on)$/i.test((process.env.SOURCEREADY_DISCOVERY_DISABLED ?? "true").trim())) {
+    return false;
+  }
   return sourceReadyConfigured();
 }
 
