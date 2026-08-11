@@ -18,17 +18,11 @@ import {
 //
 // Disabled (no-op) unless SOURCEREADY_MCP_URL + SOURCEREADY_MCP_TOKEN are set.
 
+// Paused while the per-fire cost is brought down (2026-08-11): the balance is
+// spent, so a fire would fail anyway. This is a knob, not a verdict — clear
+// SOURCEREADY_DISCOVERY_PAUSED once credits are topped up.
 export function sourceReadyEnabled(): boolean {
-  // HARDCODED KILL-SWITCH (2026-08-11): SourceReady discovery is DISABLED.
-  // 7,080 credits burned in 14 days due to pagination loop. All credits (~$10.60
-  // budget) now exhausted. Disable entirely until budget is restored (Pro plan or
-  // top-up). Scout (free) + ImportYeti ($0.25/search) continue.
-  //
-  // To re-enable after budget restored, change "SOURCEREADY_DISABLED = true" to false below.
-  // Do NOT rely on env vars alone (Vercel deploy lag = risk).
-  const SOURCEREADY_DISABLED = true;
-
-  if (SOURCEREADY_DISABLED) {
+  if (/^(1|true|yes|on)$/i.test((process.env.SOURCEREADY_DISCOVERY_PAUSED ?? "true").trim())) {
     return false;
   }
   return sourceReadyConfigured();
