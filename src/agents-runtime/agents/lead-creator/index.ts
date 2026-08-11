@@ -911,6 +911,23 @@ registerAgent({
         matOaOrgId ? overridesByOrg.get(matOaOrgId) ?? EMPTY_OVERRIDES : EMPTY_OVERRIDES,
         materialLabel(material, material.id) as string
       ) as string;
+
+      // Every source matches on the string we hand it, so our intake-form name
+      // being one word off the catalogue name reads as "no suppliers exist"
+      // rather than "wrong name". Resolved lazily, once per material, cached.
+      let aliasesResolved: string[] | null = null;
+      const materialAliases = async (): Promise<string[]> => {
+        if (aliasesResolved === null) {
+          aliasesResolved = await getMaterialAliases(
+            admin,
+            ctx.agentId,
+            { id: material.id, name: matLabel, inci: material.inci ?? null },
+            (msg, meta) => ctx.log(msg, { step: "aliases", data: { ...meta, material_id: material.id } })
+          );
+        }
+        return aliasesResolved;
+      };
+
       let candidates: CandidateSupplier[];
       try {
         candidates = await findCandidatesForMaterial(material);
@@ -1095,6 +1112,7 @@ registerAgent({
         try {
           scoutResults = await scoutSuppliersForMaterial(material, {
             excludeHosts,
+            aliases: await materialAliases(),
             log: (msg, meta) => {
               // `level` arrives inside meta; without hoisting it out, a failed
               // pass was filed as an ordinary info event and read as routine.
@@ -1233,23 +1251,6 @@ registerAgent({
       }
 
       // What the trade calls this material, for the index-backed sources. Both
-      // SourceReady and ImportYeti match on the string we hand them, so our
-      // intake-form name being one word off the catalogue name reads as "no
-      // suppliers exist" rather than "wrong name". Resolved lazily (only when a
-      // source is actually about to fire), once per material, then cached.
-      let aliasesResolved: string[] | null = null;
-      const materialAliases = async (): Promise<string[]> => {
-        if (aliasesResolved === null) {
-          aliasesResolved = await getMaterialAliases(
-            admin,
-            ctx.agentId,
-            { id: material.id, name: matLabel, inci: material.inci ?? null },
-            (msg, meta) => ctx.log(msg, { step: "aliases", data: { ...meta, material_id: material.id } })
-          );
-        }
-        return aliasesResolved;
-      };
-
       // 5c. SourceReady discovery — run in-process: calls supplier_search_v3 over
       //     the upstream MCP endpoint, parses the markdown profiles, and stages
       //     source='sourceready' leads inline. Gated like scout (new or backlog

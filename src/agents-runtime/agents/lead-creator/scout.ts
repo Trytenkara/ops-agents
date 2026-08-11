@@ -227,17 +227,18 @@ function anthropic(): Anthropic {
   return client;
 }
 
-function buildUserMessage(material: MaterialRow, focus: string): string {
+function buildUserMessage(material: MaterialRow, focus: string, aliases?: string[]): string {
   const parts: string[] = [];
   parts.push(`Material to source:`);
   if (material.name) parts.push(`  name: ${material.name}`);
   if (material.trade_name) parts.push(`  trade name: ${material.trade_name}`);
   if (material.inci) parts.push(`  INCI: ${material.inci}`);
+  if (aliases?.length) parts.push(`  also traded as: ${aliases.join(", ")}`);
   parts.push("");
   parts.push(`THIS RUN'S SCOPE — search for these suppliers only: ${focus}`);
   parts.push("");
   parts.push(
-    "Other buckets are covered by parallel runs, so do not spend searches on them. Your search budget is small, so make each search wide and harvest every supplier named on the result pages you get (aim for 20+), applying all classification and field rules from the system prompt. Spend at most one or two searches on the literal name above: if it comes back thin, switch to the trade's own name for this material rather than reporting the bucket as empty."
+    "Other buckets are covered by parallel runs, so do not spend searches on them. Your search budget is small, so make each search wide and harvest every supplier named on the result pages you get (aim for 20+), applying all classification and field rules from the system prompt. Spend at most one or two searches on the literal name above, then spend the rest on the 'also traded as' names: catalogues list the trade's name, not ours, so a thin result on the literal name means switch vocabulary rather than report the bucket as empty."
   );
   return parts.join("\n");
 }
@@ -331,6 +332,11 @@ async function probeUrl(url: string): Promise<boolean> {
 export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
   excludeHosts?: Set<string>;
   log?: (msg: string, meta?: any) => Promise<void> | void;
+  // Resolved trade names for this material (lib/material-aliases). Handed to the
+  // model rather than left for it to guess: telling it to "switch to the trade's
+  // name if the literal name comes back thin" produced six straight empty passes
+  // on Sunflower Seed Oil, whose corpus is all under "Sunflower Oil".
+  aliases?: string[];
   // Pass keys that failed on this material's last scout, taken ahead of the
   // hourly rotation so a lost bucket is re-run instead of waiting out the full
   // 6-pass cycle. Reported back through onPassOutcome for the caller to persist.
@@ -370,7 +376,7 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
               ? PLATFORM_PASS_WEB_USES
               : MAX_WEB_USES_PER_PASS,
       } as any],
-      messages: [{ role: "user", content: buildUserMessage(material, pass.focus) }],
+      messages: [{ role: "user", content: buildUserMessage(material, pass.focus, opts?.aliases) }],
     } as any);
     // Accumulate text as it streams. abort() rejects finalMessage(), so without
     // this every supplier the model had already written is lost — the pass reports

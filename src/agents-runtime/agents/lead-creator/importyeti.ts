@@ -29,7 +29,7 @@ export interface ImportYetiRequest {
   inci: string | null;
   tenkaraOrgId: string | null;
   product?: string; // ImportYeti search term; defaults to materialName
-  aliases?: string[]; // trade names for the same material, tried when the primary term is dry
+  aliases?: string[]; // trade names for the same material; searched alongside materialName, not as a fallback
   log?: (msg: string, meta?: Record<string, unknown>) => Promise<void> | void;
   excludedCountries: string[]; // client-configured country names (best-effort)
   size?: number; // page stride
@@ -163,29 +163,41 @@ export async function runImportYetiDiscovery(
   const minSpec = req.minSpecialization ?? DEFAULT_MIN_SPEC;
   const maxLeads = req.maxLeads ?? DEFAULT_MAX_LEADS;
 
-  // Our name for the material, then the trade's names for it. A customs manifest
-  // describes goods the exporter's way, so a zero on the intake-form name is
-  // routinely a naming miss rather than an absent trade lane.
+  // Our name for the material AND the trade's names for it, unioned. A customs
+  // manifest describes goods the exporter's way, so the two vocabularies address
+  // near-disjoint corners of the corpus: "Sunflower Seed Oil" returned 17
+  // Argentine grain traders and "Sunflower Oil" returned 25 sunflower refiners
+  // with ZERO names in common. Searching aliases only as a zero-fallback (which
+  // this did) means any thin-but-nonzero hit on our name hides the rest of the
+  // market, so every term is queried and the results merged.
   const terms = [req.product || req.materialName, ...(req.aliases ?? [])];
-  let suppliers: any[] = [];
-  let usedTerm = terms[0];
+  const suppliers: any[] = [];
+  const seenFromApi = new Set<string>();
+  const perTerm: Record<string, number> = {};
   for (const term of terms) {
-    ({ suppliers } = await fetchProductSuppliers(term, {
+    const { suppliers: batch } = await fetchProductSuppliers(term, {
       pageSize: size,
       offset: (page - 1) * size,
-    }));
-    if (suppliers.length) {
-      usedTerm = term;
-      break;
+    });
+    let fresh = 0;
+    for (const s of batch) {
+      const nm = normName(s?.supplier_name);
+      if (!nm || seenFromApi.has(nm)) continue;
+      seenFromApi.add(nm);
+      suppliers.push(s);
+      fresh++;
     }
+    perTerm[term] = fresh;
   }
   if (!suppliers.length) {
     return { ok: true, reason: "no_results", received: 0, inserted: 0, skipped: {} };
   }
-  if (usedTerm !== terms[0]) {
+  if (terms.length > 1) {
     await req.log?.(
-      `ImportYeti: "${terms[0]}" returned nothing, "${usedTerm}" returned ${suppliers.length}`,
-      { material_id: req.materialId, alias_used: usedTerm }
+      `ImportYeti: ${suppliers.length} suppliers across ${terms.length} terms (${terms
+        .map((t) => `${t}: ${perTerm[t] ?? 0}`)
+        .join(", ")})`,
+      { material_id: req.materialId, per_term: perTerm }
     );
   }
 
