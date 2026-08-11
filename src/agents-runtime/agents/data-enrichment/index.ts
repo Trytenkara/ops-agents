@@ -63,9 +63,12 @@ registerAgent({
   // attempt (1,689), so the raw queue grew without bound and the leads at the
   // confidence floor, which is every aggregator seller we split out, were never
   // reached at all. Lanes claim disjoint batches through claim_enrichment_leads.
-  // Deliberately starting at 2: contact lookups are paid per lead, so this is the
-  // smallest step that still clears the daily inflow and drains the backlog.
-  lanes: 2,
+  // Set to 4: contact lookups are paid per lead, but discovery outpaces enrichment
+  // (3,017 leads/day staged, ~400–500/day enriched at 2 lanes). 4 lanes targets
+  // ~1000/day, reducing raw-lead age from 465–474h down toward 100h. Diminishing
+  // returns above 4 due to seeding/filling (primary lane only, 150–270s of 600s)
+  // and contact-provider daily quotas (Hunter, ZoomInfo, etc.).
+  lanes: 4,
   async run(ctx) {
     const admin = createAdminClient();
     // Warm lambdas keep module state across invocations, so clear any provider

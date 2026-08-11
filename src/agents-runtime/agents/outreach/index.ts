@@ -426,7 +426,24 @@ registerAgent({
           // Stays active at stage='enriched' for Agent 05 price-pull — but park it
           // out of the outreach fetch window so it stops starving the actionable
           // leads behind it. Un-parked automatically if it ever gains an email.
+          // Also mark for contact resolution so a scheduled sweep can attempt to
+          // find/guess the marketplace seller's contact info.
           marketplaceParkIds.push(lead.id);
+          const { error: escalateError } = await admin
+            .from("leads_in_flight")
+            .update({
+              payload: {
+                ...payload,
+                needs_contact_resolution: true,
+                contact_resolution_attempted_at: payload.contact_resolution_attempted_at ?? null
+              }
+            })
+            .eq("id", lead.id)
+            .eq("status", "active")
+            .is("outreach_parked_at", null);
+          if (escalateError) {
+            await ctx.log(`Failed to mark lead ${lead.id} for contact resolution: ${escalateError.message}`, { level: "warn", step: "escalate" });
+          }
           continue;
         }
         await admin
