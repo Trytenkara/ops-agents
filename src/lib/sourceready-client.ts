@@ -94,6 +94,7 @@ export async function searchSuppliers(opts: SupplierSearchOpts): Promise<string>
     size: opts.size,
     page: opts.page,
     filter: { productQuery: opts.productQuery },
+    version: "1", // SourceReady API schema requirement (2026-08-11 vendor outage workaround)
   };
   if (opts.unlockContacts) args.unlock_contacts = true;
 

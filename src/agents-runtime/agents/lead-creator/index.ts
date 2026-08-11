@@ -493,20 +493,34 @@ registerAgent({
           .filter((m) => {
             const la = lastAttempt.get(m.id);
             if (la === undefined) return true;
-            // Saturated materials (no meaningful growth for DRY_STREAK_LIMIT
-            // cycles) drop to a weekly re-check instead of every backoff window.
-            const saturated = (dryStreak.get(m.id) ?? 0) >= DISCOVERY_DRY_STREAK_LIMIT;
-            const backoff = saturated ? SATURATED_BACKOFF_MS : RESCOUT_BACKOFF_MS;
+            const count = leadCount.get(m.id) ?? 0;
+            // Dynamic backoff: fewer leads = scout more often
+            // 0-50: 1 hour, 50-120: 3 hours, 120-300: 12 hours, 300+: weekly
+            let backoff = RESCOUT_BACKOFF_MS; // default 6h
+            if (count < 50) backoff = 1 * 3600 * 1000;
+            else if (count < 120) backoff = 3 * 3600 * 1000;
+            else if (count < 300) backoff = 12 * 3600 * 1000;
+            else {
+              // Saturated: weekly re-check for growth
+              const saturated = (dryStreak.get(m.id) ?? 0) >= DISCOVERY_DRY_STREAK_LIMIT;
+              backoff = saturated ? SATURATED_BACKOFF_MS : 24 * 3600 * 1000;
+            }
             const ready = nowMs - la > backoff;
-            if (!ready && saturated) saturatedSkipped++;
+            if (!ready && count >= 300) saturatedSkipped++;
             return ready;
           })
-          .sort((a, b) =>
-            (leadCount.get(a.id) ?? 0) - (leadCount.get(b.id) ?? 0) ||
-            // created_at is a Date at runtime (pg driver), not the declared
-            // string — compare by epoch so this works for either.
-            (new Date(b.created_at as any).getTime() || 0) - (new Date(a.created_at as any).getTime() || 0)
-          );
+          .sort((a, b) => {
+            const aCount = leadCount.get(a.id) ?? 0;
+            const bCount = leadCount.get(b.id) ?? 0;
+            // Tier 1: below 120 (highest sourcing priority)
+            // Tier 2: 120-300 (reduced priority, wean off duplicate-heavy materials)
+            const aTier = aCount < 120 ? 0 : 1;
+            const bTier = bCount < 120 ? 0 : 1;
+            if (aTier !== bTier) return aTier - bTier;
+            // Within each tier, fewest leads first
+            return aCount - bCount ||
+              (new Date(b.created_at as any).getTime() || 0) - (new Date(a.created_at as any).getTime() || 0);
+          });
         const picked = underserved.slice(0, Math.max(0, 200 - materials.length));
         for (const m of picked) underservedIds.add(m.id);
         materials = [...materials, ...picked];
