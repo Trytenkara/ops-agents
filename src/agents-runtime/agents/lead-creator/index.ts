@@ -1069,6 +1069,12 @@ registerAgent({
       // Scout when there are no scout leads yet, OR when this material is a
       // backlog re-scout (below the richness floor and past its backoff window).
       const isBacklogRescout = underservedIds.has(material.id);
+      // Did discovery actually get to look at this material this run? A pass that
+      // timed out, or an index source that was down, means "we did not look" —
+      // which must never be recorded as "we looked and the market is empty".
+      let scoutRan = false;
+      let scoutHardFailed = false;
+      let discoveryDegraded = false;
       if (scoutEnabled && leadsCreated < MAX_NEW_LEADS_PER_RUN && (!alreadyScouted.has(material.id) || isBacklogRescout)) {
         // Exclude hosts we already have for this material (graph hits this run +
         // existing leads from prior runs) so a re-scout only adds NEW suppliers —
@@ -1076,7 +1082,7 @@ registerAgent({
         const excludeHosts = new Set<string>(graphHosts);
         for (const h of existingHostsByMaterial.get(material.id) ?? []) excludeHosts.add(h);
         let scoutResults: ScoutSupplier[] = [];
-        let scoutHardFailed = false;
+        scoutRan = true;
         // The marketplace and retail buckets are where aggregator sellers and
         // published price ladders come from, and the rotation reaches them only
         // 2 runs in 6 — on rapeseed it drew `marketplace` once, where the pass
@@ -1101,8 +1107,9 @@ registerAgent({
             },
             retryPasses: scoutRetryPasses.get(material.id) ?? [],
             requirePasses: hasMarketplaceLead ? [] : ["marketplace", "chem_platforms"],
-            onPassOutcome: async (barrenKeys) => {
+            onPassOutcome: async (barrenKeys, failedKeys) => {
               scoutPassFailures += barrenKeys.length;
+              if (failedKeys.length) discoveryDegraded = true;
               if (barrenKeys.length) {
                 await admin.from("agent_state").upsert(
                   {
@@ -1129,35 +1136,6 @@ registerAgent({
             data: { material_id: material.id },
           });
         }
-        // Record the attempt so a scout that surfaces nothing new still backs off —
-        // it won't be re-run until RESCOUT_BACKOFF elapses. Also track diminishing
-        // returns: compare the current lead count to the count at the last attempt;
-        // if the material grew by fewer than MIN_NEW_PER_CYCLE leads (across all
-        // sources, incl. out-of-band SR/IY that landed since), bump the dry streak.
-        // Once it hits the limit the selector above backs the material off to a
-        // weekly re-check instead of every window. A hard scout failure is NOT an
-        // attempt: banking one silently parked every material for 6-12h during the
-        // 2026-07-27 scout outage, which is how it went a week without being seen.
-        if (isBacklogRescout && !scoutHardFailed) {
-          const curCount = leadCount.get(material.id) ?? 0;
-          const prevCount = lastAttemptCount.get(material.id);
-          const grew = prevCount === undefined || curCount - prevCount >= DISCOVERY_MIN_NEW_PER_CYCLE;
-          const nextDry = grew ? 0 : (dryStreak.get(material.id) ?? 0) + 1;
-          if (nextDry >= DISCOVERY_DRY_STREAK_LIMIT && nextDry !== (dryStreak.get(material.id) ?? -1)) {
-            await ctx.log(`${matLabel} saturated (${nextDry} dry cycles) — backing off to weekly re-check`, {
-              step: "backlog", data: { material_id: material.id, dry: nextDry, lead_count: curCount },
-            });
-          }
-          await admin.from("agent_state").upsert(
-            {
-              agent_id: ctx.agentId,
-              key: BACKLOG_ATTEMPT_KEY(material.id),
-              value: { at: new Date().toISOString(), count: curCount, dry: nextDry },
-            },
-            { onConflict: "agent_id,key" }
-          );
-        }
-
         const scoutAllowed = keepIfAllowed(scoutResults, (s) => ({
           name: s.supplier_name,
           website: s.url,
@@ -1424,6 +1402,49 @@ registerAgent({
             level: ok ? "info" : "warn",
             data: { material_id: material.id, page: iyPage, dry_pages: iyCursor.dry, ...iyDetail, error: iyError },
           }
+        );
+      }
+
+      // Record the attempt so a scout that surfaces nothing new still backs off —
+      // it won't be re-run until RESCOUT_BACKOFF elapses. Also track diminishing
+      // returns: compare the current lead count to the count at the last attempt;
+      // if the material grew by fewer than MIN_NEW_PER_CYCLE leads (across all
+      // sources, incl. out-of-band SR/IY that landed since), bump the dry streak.
+      // Once it hits the limit the selector above backs the material off to a
+      // weekly re-check instead of every window. A hard scout failure is NOT an
+      // attempt: banking one silently parked every material for 6-12h during the
+      // 2026-07-27 scout outage, which is how it went a week without being seen.
+      //
+      // A cycle where a scout PASS died is not a dry cycle. Rapeseed Fatty Acid
+      // was demoted to a weekly re-check on 2026-08-11 having never once completed
+      // a marketplace pass: three consecutive timeouts were counted as three
+      // cycles of proof that the market was exhausted. The backoff still applies
+      // (we do not hot-loop a broken scout), only the saturation verdict is
+      // withheld. A failed INDEX source deliberately does not hold the streak:
+      // SourceReady outages run for days, and holding on them would disable
+      // saturation fleet-wide for the duration.
+      if (isBacklogRescout && scoutRan && !scoutHardFailed) {
+        const curCount = leadCount.get(material.id) ?? 0;
+        const prevCount = lastAttemptCount.get(material.id);
+        const prevDry = dryStreak.get(material.id) ?? 0;
+        const grew = prevCount === undefined || curCount - prevCount >= DISCOVERY_MIN_NEW_PER_CYCLE;
+        const nextDry = discoveryDegraded ? prevDry : grew ? 0 : prevDry + 1;
+        if (discoveryDegraded) {
+          await ctx.log(`${matLabel}: discovery degraded this cycle — holding dry streak at ${prevDry}`, {
+            step: "backlog", data: { material_id: material.id, dry: prevDry, lead_count: curCount },
+          });
+        } else if (nextDry >= DISCOVERY_DRY_STREAK_LIMIT && nextDry !== prevDry) {
+          await ctx.log(`${matLabel} saturated (${nextDry} dry cycles) — backing off to weekly re-check`, {
+            step: "backlog", data: { material_id: material.id, dry: nextDry, lead_count: curCount },
+          });
+        }
+        await admin.from("agent_state").upsert(
+          {
+            agent_id: ctx.agentId,
+            key: BACKLOG_ATTEMPT_KEY(material.id),
+            value: { at: new Date().toISOString(), count: curCount, dry: nextDry },
+          },
+          { onConflict: "agent_id,key" }
         );
       }
 

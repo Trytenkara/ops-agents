@@ -49,8 +49,15 @@ const URL_PROBE_TIMEOUT_MS = 5_000;
 // aborts banks ZERO rows, so a smaller budget that lands beats a larger one that
 // coin-flips. The platform passes get less still: they drill into result pages,
 // so each search costs more wall-clock than a single-vendor lookup.
+// 8/6 still was not enough for `marketplace`, which has now aborted on every
+// single attempt it has ever been given (latest 2026-08-11: 601s, nothing
+// salvageable, while chem_platforms landed in 203s and retail in 433s on the
+// same material). Marketplace queries return listing pages the model then reads,
+// so its per-search cost is the highest of any bucket. Four searches that bank
+// rows beat six that bank zero; rotation makes up the breadth.
 const MAX_WEB_USES_PER_PASS = 8;
 const PLATFORM_PASS_WEB_USES = 6;
+const MARKETPLACE_PASS_WEB_USES = 4;
 const PLATFORM_PASS_KEYS = new Set(["marketplace", "chem_platforms"]);
 const SCOUT_CALL_TIMEOUT_MS = 600_000;
 const PASSES_PER_RUN = 3;
@@ -334,7 +341,11 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
   // no marketplace supplier at all has to run the marketplace pass, and waiting
   // for the rotation to come back around means days of nothing.
   requirePasses?: string[];
-  onPassOutcome?: (barrenKeys: string[]) => Promise<void> | void;
+  // barrenKeys = every pass that banked nothing (crashed or clean zero);
+  // failedKeys = the subset that crashed or timed out. The caller needs them
+  // apart: a crashed pass means we did not actually look, so it must not count
+  // as evidence the material is exhausted.
+  onPassOutcome?: (barrenKeys: string[], failedKeys: string[]) => Promise<void> | void;
 }): Promise<ScoutSupplier[]> {
   const log = opts?.log ?? (async () => {});
   const matLabel = materialLabel(material, material.id) as string;
@@ -352,7 +363,12 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
       tools: [{
         type: "web_search_20260209",
         name: "web_search",
-        max_uses: PLATFORM_PASS_KEYS.has(pass.key) ? PLATFORM_PASS_WEB_USES : MAX_WEB_USES_PER_PASS,
+        max_uses:
+          pass.key === "marketplace"
+            ? MARKETPLACE_PASS_WEB_USES
+            : PLATFORM_PASS_KEYS.has(pass.key)
+              ? PLATFORM_PASS_WEB_USES
+              : MAX_WEB_USES_PER_PASS,
       } as any],
       messages: [{ role: "user", content: buildUserMessage(material, pass.focus) }],
     } as any);
@@ -444,6 +460,7 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
   // clean 0 (we searched our name for it, the trade lists it as "Rapeseed Oil
   // Fatty Acid") and a clean 0 read as "market is empty, move on".
   const barrenKeys: string[] = [];
+  const failedKeys: string[] = [];
   settled.forEach((r, i) => {
     if (r.status === "fulfilled") {
       suppliers.push(...r.value);
@@ -451,17 +468,18 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
     } else {
       failures.push(`${slice[i].key}: ${r.reason?.message ?? r.reason}`);
       barrenKeys.push(slice[i].key);
+      failedKeys.push(slice[i].key);
     }
   });
   // Always reported, empty list included, so a pass that succeeds on retry clears
   // the marker instead of being preferred forever.
-  if (opts?.onPassOutcome) await opts.onPassOutcome(barrenKeys);
+  if (opts?.onPassOutcome) await opts.onPassOutcome(barrenKeys, failedKeys);
   if (failures.length) {
     await log(`scout: ${failures.length}/${slice.length} passes failed for ${matLabel} — ${failures.join("; ")}`, {
       material_id: material.id, level: "warn",
     });
   }
-  const emptyKeys = barrenKeys.filter((k) => !failures.some((f) => f.startsWith(`${k}:`)));
+  const emptyKeys = barrenKeys.filter((k) => !failedKeys.includes(k));
   if (emptyKeys.length) {
     await log(
       `scout: ${emptyKeys.length}/${slice.length} passes returned nothing for ${matLabel} (${emptyKeys.join(", ")}) — requeued`,
