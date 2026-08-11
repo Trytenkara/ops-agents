@@ -21,6 +21,7 @@ import {
   SourceReadyUnavailableError,
 } from "./sourceready";
 import { importYetiEnabled, runImportYetiDiscovery, ImportYetiUnavailableError } from "./importyeti";
+import { getMaterialAliases } from "@/lib/material-aliases";
 import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 
 const EMPTY_OVERRIDES = new Map<string, string>();
@@ -1254,6 +1255,24 @@ registerAgent({
         }
       }
 
+      // What the trade calls this material, for the index-backed sources. Both
+      // SourceReady and ImportYeti match on the string we hand them, so our
+      // intake-form name being one word off the catalogue name reads as "no
+      // suppliers exist" rather than "wrong name". Resolved lazily (only when a
+      // source is actually about to fire), once per material, then cached.
+      let aliasesResolved: string[] | null = null;
+      const materialAliases = async (): Promise<string[]> => {
+        if (aliasesResolved === null) {
+          aliasesResolved = await getMaterialAliases(
+            admin,
+            ctx.agentId,
+            { id: material.id, name: matLabel, inci: material.inci ?? null },
+            (msg, meta) => ctx.log(msg, { step: "aliases", data: { ...meta, material_id: material.id } })
+          );
+        }
+        return aliasesResolved;
+      };
+
       // 5c. SourceReady discovery — run in-process: calls supplier_search_v3 over
       //     the upstream MCP endpoint, parses the markdown profiles, and stages
       //     source='sourceready' leads inline. Gated like scout (new or backlog
@@ -1294,6 +1313,8 @@ registerAgent({
               page: srPage,
               unlockContacts:
                 sourceReadyUnlockEnabled() && !!oaOrgId && !isInternalByOaId.get(oaOrgId),
+              aliases: await materialAliases(),
+              log: (msg, meta) => ctx.log(msg, { step: "sourceready", data: meta }),
             },
             ctx.runId
           );
@@ -1369,6 +1390,8 @@ registerAgent({
               excludedCountries: ex ? Array.from(ex.excludedCountries) : [],
               size: IMPORTYETI_PAGE_SIZE,
               page: iyPage,
+              aliases: await materialAliases(),
+              log: (msg, meta) => ctx.log(msg, { step: "importyeti", data: meta }),
             },
             ctx.runId
           );

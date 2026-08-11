@@ -29,6 +29,8 @@ export interface ImportYetiRequest {
   inci: string | null;
   tenkaraOrgId: string | null;
   product?: string; // ImportYeti search term; defaults to materialName
+  aliases?: string[]; // trade names for the same material, tried when the primary term is dry
+  log?: (msg: string, meta?: Record<string, unknown>) => Promise<void> | void;
   excludedCountries: string[]; // client-configured country names (best-effort)
   size?: number; // page stride
   page?: number; // 1-based; maps to offset = (page-1)*size to walk deeper
@@ -161,12 +163,30 @@ export async function runImportYetiDiscovery(
   const minSpec = req.minSpecialization ?? DEFAULT_MIN_SPEC;
   const maxLeads = req.maxLeads ?? DEFAULT_MAX_LEADS;
 
-  const { suppliers } = await fetchProductSuppliers(req.product || req.materialName, {
-    pageSize: size,
-    offset: (page - 1) * size,
-  });
+  // Our name for the material, then the trade's names for it. A customs manifest
+  // describes goods the exporter's way, so a zero on the intake-form name is
+  // routinely a naming miss rather than an absent trade lane.
+  const terms = [req.product || req.materialName, ...(req.aliases ?? [])];
+  let suppliers: any[] = [];
+  let usedTerm = terms[0];
+  for (const term of terms) {
+    ({ suppliers } = await fetchProductSuppliers(term, {
+      pageSize: size,
+      offset: (page - 1) * size,
+    }));
+    if (suppliers.length) {
+      usedTerm = term;
+      break;
+    }
+  }
   if (!suppliers.length) {
     return { ok: true, reason: "no_results", received: 0, inserted: 0, skipped: {} };
+  }
+  if (usedTerm !== terms[0]) {
+    await req.log?.(
+      `ImportYeti: "${terms[0]}" returned nothing, "${usedTerm}" returned ${suppliers.length}`,
+      { material_id: req.materialId, alias_used: usedTerm }
+    );
   }
 
   const excludedCountries = new Set(
@@ -177,7 +197,10 @@ export async function runImportYetiDiscovery(
   // Material keywords for product_description matching: significant (3+ char)
   // words from the material name and INCI.
   const materialWords = new Set<string>();
-  for (const raw of [req.materialName, req.inci].filter(Boolean) as string[]) {
+  // Aliases count as material words: a supplier surfaced by the alias search
+  // describes its goods in the alias's vocabulary, so filtering on our name
+  // alone would discard exactly the rows the alias just won us.
+  for (const raw of [req.materialName, req.inci, ...(req.aliases ?? [])].filter(Boolean) as string[]) {
     for (const w of raw.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/)) {
       if (w.length >= 3) materialWords.add(w);
     }

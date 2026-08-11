@@ -47,6 +47,8 @@ export interface SourceReadyRequest {
   // short-circuits the Agent 06 contact waterfall (crawl + Hunter/ZoomInfo/etc)
   // at its stage-0 seed. Internal test orgs keep crawling for free.
   unlockContacts?: boolean;
+  aliases?: string[]; // trade names for the same material, tried when the primary term is dry
+  log?: (msg: string, meta?: Record<string, unknown>) => Promise<void> | void;
 }
 
 export interface SourceReadyResult {
@@ -329,31 +331,44 @@ export async function runSourceReadyDiscovery(
   const page = req.page && req.page > 0 ? req.page : 1;
 
   let unlocked = !!req.unlockContacts;
-  let md: string;
-  try {
-    md = await searchSuppliers({
-      title: `${req.materialName} suppliers`,
-      productQuery: req.materialName,
-      size,
-      page,
-      unlockContacts: unlocked,
-    });
-  } catch (e) {
-    // A spent contact-credit balance fails the whole search and returns no
-    // suppliers at all, so fall back to the unpaid search rather than lose the page.
-    if (!(e instanceof SourceReadyCreditsExceededError)) throw e;
-    unlocked = false;
-    md = await searchSuppliers({
-      title: `${req.materialName} suppliers`,
-      productQuery: req.materialName,
-      size,
-      page,
-    });
-  }
+  const runQuery = async (productQuery: string): Promise<string> => {
+    try {
+      return await searchSuppliers({
+        title: `${productQuery} suppliers`,
+        productQuery,
+        size,
+        page,
+        unlockContacts: unlocked,
+      });
+    } catch (e) {
+      // A spent contact-credit balance fails the whole search and returns no
+      // suppliers at all, so fall back to the unpaid search rather than lose the page.
+      if (!(e instanceof SourceReadyCreditsExceededError)) throw e;
+      unlocked = false;
+      return await searchSuppliers({ title: `${productQuery} suppliers`, productQuery, size, page });
+    }
+  };
 
-  const suppliers = parseSupplierMarkdown(md);
+  // Our name first, then the trade's names for the same material. A supplier
+  // index only knows the vocabulary its sellers used.
+  const terms = [req.materialName, ...(req.aliases ?? [])];
+  let suppliers: ReturnType<typeof parseSupplierMarkdown> = [];
+  let usedTerm = terms[0];
+  for (const term of terms) {
+    suppliers = parseSupplierMarkdown(await runQuery(term));
+    if (suppliers.length) {
+      usedTerm = term;
+      break;
+    }
+  }
   if (!suppliers.length) {
     return { ok: true, reason: "no_results", received: 0, inserted: 0, unlocked, skipped: {} };
+  }
+  if (usedTerm !== terms[0]) {
+    await req.log?.(
+      `SourceReady: "${terms[0]}" returned nothing, "${usedTerm}" returned ${suppliers.length}`,
+      { material_id: req.materialId, alias_used: usedTerm }
+    );
   }
 
   const excludedCountries = new Set(
@@ -376,7 +391,9 @@ export async function runSourceReadyDiscovery(
   // Material keywords for product/tag matching: significant (3+ char) words
   // from the material name and INCI.
   const materialWords = new Set<string>();
-  for (const raw of [req.materialName, req.inci].filter(Boolean) as string[]) {
+  // Aliases count as material words, otherwise the relevance filter discards
+  // exactly the suppliers the alias search just found.
+  for (const raw of [req.materialName, req.inci, ...(req.aliases ?? [])].filter(Boolean) as string[]) {
     for (const w of raw.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/)) {
       if (w.length >= 3) materialWords.add(w);
     }
