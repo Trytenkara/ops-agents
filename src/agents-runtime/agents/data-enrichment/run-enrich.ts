@@ -1,6 +1,18 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { drainContactApiCalls } from "@/lib/contact-provider-usage";
 import { enrichLead, isAggregatorEmail, type RawLead } from "./enrich";
+import { aggregatorNameOfHost } from "@/lib/aggregator-hosts";
+
+function hostOfUrl(u: string | null | undefined): string | null {
+  if (!u) return null;
+  try {
+    const s = String(u).trim();
+    const withProto = /^https?:\/\//i.test(s) ? s : `http://${s}`;
+    return new URL(withProto).hostname.replace(/^www\./, "").toLowerCase() || null;
+  } catch {
+    return null;
+  }
+}
 
 // Per-lead enrichment: run enrichLead(), merge the result into the lead payload,
 // and either promote to stage=enriched or leave at raw with a blocked_reason.
@@ -137,6 +149,27 @@ export async function enrichAndStageLead(
     ? `Low confidence result from ${result.marketplace_trust.marketplace_host ?? "marketplace"}`
     : null;
 
+  // Source-agnostic site_type backstop. A lead that arrived unclassified
+  // (site_type null, e.g. SourceReady/ImportYeti ingest) but sits on a known
+  // aggregator host (Alibaba, IndiaMART, Made-in-China, ...) is an aggregator-
+  // kind lead. Without a site_type it never badges as one, stays out of the
+  // price index, and cold-emails as a direct supplier. Classify from the CURRENT
+  // website so a storefront resolved to its own company domain above stays
+  // direct, and an existing M/MS/A/N decision (scout, Agent 05) is never
+  // overridden. True marketplace ("M") needs the per-page checkout test Agent 05
+  // owns, so the host alone only ever yields "A".
+  const priorSiteType = priorPayload.site_type;
+  const backstopHost = hostOfUrl(
+    result.storefront_resolution?.own_website ?? priorPayload.supplier_website ?? priorPayload.source_url,
+  );
+  const backstopAggregator =
+    priorSiteType === "M" || priorSiteType === "MS" || priorSiteType === "A" || priorSiteType === "N"
+      ? null
+      : aggregatorNameOfHost(backstopHost);
+  const siteTypePatch = backstopAggregator
+    ? { site_type: "A" as const, aggregator: priorPayload.aggregator ?? backstopAggregator }
+    : {};
+
   // Advisory material-relevance flag for importyeti/sourceready leads whose product
   // text shows zero overlap with the target material. Set exactly the same way as
   // marketplace_source_note: annotate only, never block or drop. Re-derived every
@@ -152,6 +185,7 @@ export async function enrichAndStageLead(
   const mergedPayload = {
     ...priorPayload,
     ...(marketplaceSourceNote ? { marketplace_source_note: marketplaceSourceNote } : {}),
+    ...siteTypePatch,
     ...relevancePatch,
     enrichment: {
       website_probe: result.website_probe,

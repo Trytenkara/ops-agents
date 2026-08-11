@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resolveSupplierIdByName } from "@/lib/tenkara-supplier-linker";
+import { aggregatorNameOfHost } from "@/lib/aggregator-hosts";
 import {
   searchSuppliers,
   sourceReadyConfigured,
@@ -419,6 +420,13 @@ export async function runSourceReadyDiscovery(
     if (!productMatchesMaterial(s)) { skipProductMismatch++; continue; }
 
     const host = hostOf(s.website);
+    // SourceReady returns sellers hosted ON aggregator platforms (Alibaba,
+    // IndiaMART, Made-in-China, ...) as ordinary supplier profiles. Left
+    // unclassified they land in the direct lane, never badged, never routed to
+    // the aggregator-inquiry / price-index path. Classify from the host so the
+    // lead is an "A" (aggregator) kind from the moment it's staged. True
+    // marketplace ("M") requires the per-page checkout test, which Agent 05 owns.
+    const aggregatorName = aggregatorNameOfHost(host);
     const email = EMAIL_RE.test((s.email ?? "").trim()) ? s.email!.trim() : null;
     const nm = normName(name);
     if (
@@ -465,7 +473,8 @@ export async function runSourceReadyDiscovery(
         grades_offered: null,
         certifications: s.certifications.length ? s.certifications.join(", ") : null,
         moq: null,
-        site_type: null,
+        site_type: aggregatorName ? "A" : null,
+        ...(aggregatorName ? { aggregator: aggregatorName } : {}),
         confidence_hint: confidenceHint(sc),
         completeness_score: completeness(s, email),
         needs_contact_resolution: !email,
