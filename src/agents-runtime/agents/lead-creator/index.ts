@@ -250,7 +250,10 @@ registerAgent({
     // scout call (SCOUT_CALL_TIMEOUT_MS ≈ 120s) plus overhead before the 300s
     // maxDuration: 150s + 120s + margin < 300s. A higher budget let a material
     // start late and overrun, getting the whole function hard-killed.
-    const DRIVE_BUDGET_MS = 150_000;
+    // Scout calls run 200-600s each (marketplace is slowest). With a 800s route
+    // timeout, a 650s budget safely lands one material per run. Two materials
+    // risks the timeout and banks nothing if either call overruns.
+    const DRIVE_BUDGET_MS = 650_000;
     const driveStart = Date.now();
     const elapsedMs = () => Date.now() - driveStart;
 
