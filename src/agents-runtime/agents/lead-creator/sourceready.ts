@@ -19,11 +19,16 @@ import {
 // Disabled (no-op) unless SOURCEREADY_MCP_URL + SOURCEREADY_MCP_TOKEN are set.
 
 export function sourceReadyEnabled(): boolean {
-  // TEMPORARY (2026-08-11): Disable SourceReady discovery entirely until credits
-  // are topped up. One-pass model deployed above, but with only 7k credits left,
-  // even 100 suppliers × 25 materials = 2.5k credits burned in one run.
-  // Set SOURCEREADY_DISCOVERY_DISABLED=false to re-enable.
-  if (/^(1|true|yes|on)$/i.test((process.env.SOURCEREADY_DISCOVERY_DISABLED ?? "true").trim())) {
+  // HARDCODED KILL-SWITCH (2026-08-11): SourceReady discovery is DISABLED.
+  // 7,080 credits burned in 14 days due to pagination loop. All credits (~$10.60
+  // budget) now exhausted. Disable entirely until budget is restored (Pro plan or
+  // top-up). Scout (free) + ImportYeti ($0.25/search) continue.
+  //
+  // To re-enable after budget restored, change "SOURCEREADY_DISABLED = true" to false below.
+  // Do NOT rely on env vars alone (Vercel deploy lag = risk).
+  const SOURCEREADY_DISABLED = true;
+
+  if (SOURCEREADY_DISABLED) {
     return false;
   }
   return sourceReadyConfigured();
