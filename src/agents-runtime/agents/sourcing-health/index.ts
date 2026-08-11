@@ -3,6 +3,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { postSlackMessage } from "@/lib/slack";
 import { shouldPostDigest, recordDigestPosted } from "@/lib/alert-policy";
 
+type Admin = ReturnType<typeof createAdminClient>;
+
 // Agent 16 — Sourcing Health Watchdog.
 //
 // Ported from the container-side `sourcing-health-watchdog` skill so it runs on
@@ -23,6 +25,46 @@ const MIN_CONTACT_FRAC = Number(process.env.SOURCING_HEALTH_MIN_CONTACT_FRAC ?? 
 const STALE_HOURS = Number(process.env.SOURCING_HEALTH_STALE_HOURS ?? 48);
 // Enrichment is only "behind" once the oldest raw lead has aged past this.
 const ENRICHMENT_LAG_HOURS = 2;
+
+// A discovery source that has gone dark. Nothing else in the fleet catches this:
+// SourceReady is ~51% of every lead ever staged and produced zero for two days
+// (2026-08-08 to 08-10) while every run reported success, because the upstream
+// returned its failure as an ordinary empty-looking result and the adapter read
+// it as "no results". Per-material checks can't see it either — a thin material
+// looks the same whether one source died or the market really is small. Compared
+// against the source's OWN trailing baseline so no source list needs maintaining.
+const SOURCE_DARK_HOURS = Number(process.env.SOURCING_HEALTH_SOURCE_DARK_HOURS ?? 24);
+const SOURCE_BASELINE_DAYS = Number(process.env.SOURCING_HEALTH_SOURCE_BASELINE_DAYS ?? 7);
+const DISCOVERY_SOURCES = ["sourceready", "importyeti", "ai_discovery"];
+
+async function countLeads(admin: Admin, source: string, sinceIso: string, untilIso?: string) {
+  let q = admin
+    .from("leads_in_flight")
+    .select("id", { count: "exact", head: true })
+    .eq("source", source)
+    .gte("created_at", sinceIso);
+  if (untilIso) q = q.lt("created_at", untilIso);
+  const { count, error } = await q;
+  if (error) throw new Error(`${source}: ${error.message}`);
+  return count ?? 0;
+}
+
+// A source is dark when it staged nothing in the recent window but was
+// demonstrably producing in the window before it. A source that is legitimately
+// switched off goes quiet in both windows and is therefore never flagged.
+async function darkSources(admin: Admin): Promise<{ source: string; baseline: number }[]> {
+  const now = Date.now();
+  const recentFrom = new Date(now - SOURCE_DARK_HOURS * 3600_000).toISOString();
+  const baseFrom = new Date(now - (SOURCE_BASELINE_DAYS * 24 + SOURCE_DARK_HOURS) * 3600_000).toISOString();
+  const out: { source: string; baseline: number }[] = [];
+  for (const source of DISCOVERY_SOURCES) {
+    const recent = await countLeads(admin, source, recentFrom);
+    if (recent > 0) continue;
+    const baseline = await countLeads(admin, source, baseFrom, recentFrom);
+    if (baseline > 0) out.push({ source, baseline });
+  }
+  return out;
+}
 
 interface Report {
   org: string;
@@ -172,6 +214,34 @@ registerAgent({
       ctx.setStatus("failure");
       ctx.setSummary("No orgs could be checked — every health query errored.");
       return;
+    }
+
+    // Fleet-wide, so it is checked once rather than per org.
+    let dark: { source: string; baseline: number }[] = [];
+    try {
+      dark = await darkSources(admin);
+      for (const d of dark) {
+        await ctx.log(
+          `Discovery source '${d.source}' has staged 0 leads in ${SOURCE_DARK_HOURS}h (${d.baseline} in the prior ${SOURCE_BASELINE_DAYS}d)`,
+          { level: "error", step: "sources", data: { source: d.source, baseline: d.baseline } }
+        );
+      }
+      if (!dark.length) await ctx.log("All discovery sources producing", { step: "sources" });
+    } catch (e: any) {
+      await ctx.log(`Dark-source check failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "sources" });
+    }
+    if (dark.length) {
+      totalAlerts += dark.length;
+      sections.push(
+        [
+          "Discovery sources",
+          ...dark.map(
+            (d) =>
+              `🔴 source '${d.source}' DARK: 0 leads in ${SOURCE_DARK_HOURS}h, was staging ${d.baseline} over the prior ${SOURCE_BASELINE_DAYS}d`
+          ),
+        ].join("\n")
+      );
+      fingerprints.push(`dark=${dark.map((d) => d.source).sort().join(",")}`);
     }
 
     ctx.setItemsProcessed(totalAlerts + totalWarns);
