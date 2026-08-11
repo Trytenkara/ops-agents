@@ -49,6 +49,8 @@ export async function runSupplierWebFill(
 
   const profiles = await getSupplierProfiles(admin, orgId);
   const candidates = profiles
+    // Freeze: once a supplier leaves draft an operator owns it; agents stop writing.
+    .filter((p) => p.approval_status === "draft")
     .filter((p) => !p.field_sources?.web_checked_at)
     .filter((p) => retryable(p))
     .filter((p) => WEB_FILLABLE.some((f) => isEmpty((p as any)[f])))

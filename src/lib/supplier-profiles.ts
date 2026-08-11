@@ -298,6 +298,9 @@ export async function seedProfilesFromLeads(
       const pocName = p.poc_name ?? contact.poc_name ?? null;
       const shippingAddress = p.hq_address ?? null;
       if (current) {
+        // Freeze: once a supplier leaves draft, a human owns it. Agents stop
+        // writing so an operator's review is never overwritten by a later pass.
+        if (current.approval_status !== "draft") continue;
         // supplier_type is otherwise frozen at first seed, so a seller that gave us
         // its own email and left the marketplace track kept showing as Aggregator on
         // the validation card while the leads tab called it Direct. Correct it, but

@@ -199,6 +199,9 @@ export async function fillProfilesFromKnownSources(
     // A first pass over a large backlog is thousands of writes; stop at the
     // budget and let the next cycle continue, since the sweep is idempotent.
     if (deadline && Date.now() > deadline) break;
+    // Freeze: once a supplier leaves draft an operator owns it, so agents stop
+    // writing and never overwrite a human's review.
+    if (p.approval_status !== "draft") continue;
     const nameKey = norm(p.supplier_name);
     const updates: Record<string, any> = {};
     const sources: Record<string, FieldSource> = {};
@@ -259,6 +262,17 @@ export async function fillProfilesFromKnownSources(
       const parsed = parsePaymentTermsText(terms);
       put("payment_net_days", parsed.net_days ?? null, "staged_quote");
       put("payment_upfront_pct", parsed.upfront ?? null, "staged_quote");
+    }
+
+    // Auto-promote: nothing left to fill this pass. Gate on the web sweep having
+    // run its course (it sets web_checked_at and runs after this one, so a set
+    // value means the supplier's own site was already read or its retries were
+    // exhausted) and on a usable contact, so a supplier is only handed to review
+    // once agents genuinely have nothing more to add.
+    const noNewFills = !Object.keys(updates).length;
+    const webDone = Boolean((p as any).field_sources?.web_checked_at);
+    if (noNewFills && webDone && !isEmpty(p.poc_email)) {
+      updates.approval_status = "pending_review";
     }
 
     if (!Object.keys(updates).length) continue;

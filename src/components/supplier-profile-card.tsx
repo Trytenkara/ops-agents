@@ -287,6 +287,20 @@ export function SupplierProfileCard({
                     ]}
                   />
                 </div>
+                <div className="space-y-0.5 pt-1">
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Status</span>
+                  <Select
+                    size="sm"
+                    ariaLabel="Approval status"
+                    value={profile.approval_status}
+                    onValueChange={(v) => handleFieldChange("approval_status", v)}
+                    options={[
+                      { value: "draft", label: "Draft" },
+                      { value: "pending_review", label: "Pending Review" },
+                      { value: "final_review", label: "Final Review" },
+                    ]}
+                  />
+                </div>
               </div>
             )}
             <Checkbox label="Contact information complete" checked={profile.contact_info_complete} field="contact_info_complete" editing={editing} onChange={handleCheckChange} />
