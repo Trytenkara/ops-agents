@@ -490,16 +490,16 @@ registerAgent({
         const underserved = universe
           .filter((m) => (leadCount.get(m.id) ?? 0) < MIN_LEADS_PER_MATERIAL)
           .filter((m) => !already.has(m.id))
+          .filter((m) => (leadCount.get(m.id) ?? 0) < 200) // Gate out saturation hogs from backlog
           .filter((m) => {
             const la = lastAttempt.get(m.id);
             if (la === undefined) return true;
             const count = leadCount.get(m.id) ?? 0;
-            // Dynamic backoff: fewer leads = scout more often
-            // 0-50: 1 hour, 50-120: 3 hours, 120-300: 12 hours, 300+: weekly
+            // Dynamic backoff: fewer leads = scout more often (fast sourcing mode)
+            // Below 100: every hour (ramp up fast), 100-300: every 8 hours (wean off), 300+: weekly
             let backoff = RESCOUT_BACKOFF_MS; // default 6h
-            if (count < 50) backoff = 1 * 3600 * 1000;
-            else if (count < 120) backoff = 3 * 3600 * 1000;
-            else if (count < 300) backoff = 12 * 3600 * 1000;
+            if (count < 100) backoff = 1 * 3600 * 1000;
+            else if (count < 300) backoff = 8 * 3600 * 1000;
             else {
               // Saturated: weekly re-check for growth
               const saturated = (dryStreak.get(m.id) ?? 0) >= DISCOVERY_DRY_STREAK_LIMIT;
