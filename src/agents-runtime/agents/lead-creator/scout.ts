@@ -312,6 +312,12 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
   // hourly rotation so a lost bucket is re-run instead of waiting out the full
   // 6-pass cycle. Reported back through onPassOutcome for the caller to persist.
   retryPasses?: string[];
+  // Pass keys this material still needs regardless of where the rotation
+  // happens to be, taken after retries but ahead of the rotation. Used for
+  // buckets whose absence is structural rather than incidental: a material with
+  // no marketplace supplier at all has to run the marketplace pass, and waiting
+  // for the rotation to come back around means days of nothing.
+  requirePasses?: string[];
   onPassOutcome?: (failedKeys: string[]) => Promise<void> | void;
 }): Promise<ScoutSupplier[]> {
   const log = opts?.log ?? (async () => {});
@@ -385,11 +391,12 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
   // lost: the rotation moved on and the material banked whatever the survivors
   // returned, which is how a new material ended up with 6 leads when the volume
   // pass was the one that aborted. Failed keys jump the queue on the next scout.
-  const retry = (opts?.retryPasses ?? [])
-    .map((k) => SCOUT_PASSES.find((p) => p.key === k))
-    .filter((p): p is (typeof SCOUT_PASSES)[number] => !!p);
+  const byKey = (keys: string[]) =>
+    keys
+      .map((k) => SCOUT_PASSES.find((p) => p.key === k))
+      .filter((p): p is (typeof SCOUT_PASSES)[number] => !!p);
   const slice: typeof SCOUT_PASSES = [];
-  for (const p of retry) {
+  for (const p of [...byKey(opts?.retryPasses ?? []), ...byKey(opts?.requirePasses ?? [])]) {
     if (slice.length >= PASSES_PER_RUN) break;
     if (!slice.includes(p)) slice.push(p);
   }

@@ -37,6 +37,18 @@ const SOURCE_DARK_HOURS = Number(process.env.SOURCING_HEALTH_SOURCE_DARK_HOURS ?
 const SOURCE_BASELINE_DAYS = Number(process.env.SOURCING_HEALTH_SOURCE_BASELINE_DAYS ?? 7);
 const DISCOVERY_SOURCES = ["sourceready", "importyeti", "ai_discovery"];
 
+// Breadth: how many suppliers a material is supposed to end up with, and how
+// long it may sit below that before the shortfall is a defect rather than a
+// material still ramping. The `thin` check above cannot serve this purpose — it
+// exempts any material holding raw leads, which every new material does, and it
+// triggers at 8 rather than the real target. See migration 0113.
+const BREADTH_TARGET = Number(process.env.SOURCING_HEALTH_BREADTH_TARGET ?? 100);
+const BREADTH_MIN_AGE_HOURS = Number(process.env.SOURCING_HEALTH_BREADTH_MIN_AGE_HOURS ?? 12);
+// Below this fraction of the target the shortfall is an alert, not a warning: a
+// material at 7 of 100 is not "a bit thin", it is a material nobody can source
+// from. Above it, the material is workable and just wants more breadth.
+const BREADTH_ALERT_FRAC = Number(process.env.SOURCING_HEALTH_BREADTH_ALERT_FRAC ?? 0.25);
+
 async function countLeads(admin: Admin, source: string, sinceIso: string, untilIso?: string) {
   let q = admin
     .from("leads_in_flight")
@@ -73,6 +85,9 @@ interface Report {
   thin: { name: string; leads: number }[];
   low_contact: { name: string; settled: number; valid_email: number; with_site: number }[];
   in_progress: number;
+  breadth_stalled: { name: string; leads: number; age_h: number }[];
+  breadth_stalled_count: number;
+  breadth_worst_leads: number | null;
   raw_pending: number;
   raw_oldest_hours: number | null;
   undrafted: number;
@@ -105,6 +120,23 @@ function render(r: Report): { lines: string[]; alerts: number; warns: number } {
 
   for (const t of r.thin) {
     warns.push(`THIN material: '${t.name}' has only ${t.leads} suppliers (< ${MIN_LEADS})`);
+  }
+
+  // Named window, never a silent truncation: the count is the whole set, the
+  // list is the worst 10 of it.
+  const stalled = r.breadth_stalled ?? [];
+  if (stalled.length) {
+    const worst = stalled
+      .map((m) => `'${m.name}' ${m.leads} (${Math.round(m.age_h)}h)`)
+      .join(", ");
+    const shown = stalled.length < r.breadth_stalled_count
+      ? `worst ${stalled.length} of ${r.breadth_stalled_count}`
+      : `all ${r.breadth_stalled_count}`;
+    const line =
+      `BREADTH: ${r.breadth_stalled_count} material(s) below the ${BREADTH_TARGET}-supplier target ` +
+      `after ${BREADTH_MIN_AGE_HOURS}h — ${shown}: ${worst}`;
+    const critical = (r.breadth_worst_leads ?? BREADTH_TARGET) < BREADTH_TARGET * BREADTH_ALERT_FRAC;
+    (critical ? alerts : warns).push(line);
   }
   for (const l of r.low_contact) {
     warns.push(
@@ -149,6 +181,9 @@ function healthFingerprint(r: Report): string {
     `thin=${r.thin.map((t) => t.name).sort().join(",")}`,
     `low=${r.low_contact.map((l) => l.name).sort().join(",")}`,
     `lag=${lagging ? "yes" : "no"}`,
+    // Names, not the count: a different material stalling is a new situation
+    // worth re-posting even when the total happens to be unchanged.
+    `breadth=${(r.breadth_stalled ?? []).map((m) => m.name).sort().join(",")}`,
     // Bucketed: a backlog drifting by a lead or two is the same situation.
     `undrafted=${r.undrafted ? Math.floor(r.undrafted / 10) : 0}`,
   ].join(" ");
@@ -175,6 +210,8 @@ registerAgent({
         p_min_leads: MIN_LEADS,
         p_min_contact_frac: MIN_CONTACT_FRAC,
         p_stale_hours: STALE_HOURS,
+        p_breadth_target: BREADTH_TARGET,
+        p_breadth_min_age_hours: BREADTH_MIN_AGE_HOURS,
       });
       if (error) {
         await ctx.log(`Health check failed for ${org}: ${error.message}`, {
@@ -204,6 +241,8 @@ registerAgent({
           stuck: report.stuck.length,
           thin: report.thin.length,
           low_contact: report.low_contact.length,
+          breadth_stalled: report.breadth_stalled_count,
+          breadth_worst_leads: report.breadth_worst_leads,
           raw_pending: report.raw_pending,
           undrafted: report.undrafted,
         },

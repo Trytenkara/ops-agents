@@ -5,6 +5,7 @@ import { scoutSuppliersForMaterial, scoreScoutConfidence, describeScoutConfidenc
 import { toCsv } from "@/lib/csv";
 import { getSourcingExclusions, exclusionReason, normalizeCompanyName, type SourcingExclusions } from "@/lib/tenkara-sourcing-exclusions";
 import { isAggregatorDomain } from "../data-enrichment/enrich";
+import { isAggregatorHost } from "@/lib/aggregator-hosts";
 import { getNoteDerivedCountryExclusions } from "@/lib/client-sourcing-rules";
 import { uploadCsvAndSign } from "@/lib/storage";
 import { onlyOrgNames } from "@/lib/org-scope";
@@ -831,6 +832,27 @@ registerAgent({
     let importYetiFired = 0;
     const noLeadMaterials: string[] = [];
 
+    // A discovery source that hard-fails must not leave the run reporting
+    // "success". SourceReady died on 2026-08-08 and every subsequent run stayed
+    // green with the outage recorded only as a per-material warn event, so the
+    // /agents dashboard, the fleet summary and anyone glancing at the run list
+    // all read a dead source as a healthy one for two days. A source erroring is
+    // anomalous by definition, so it degrades the run to `partial` and is named
+    // in the summary where it cannot be missed.
+    //
+    // Scout PASS aborts are counted but deliberately do NOT degrade the status:
+    // one of three passes timing out is currently the steady state, so alerting
+    // on it would make agent-03 permanently partial and teach everyone to ignore
+    // the signal. The consequence of those aborts is caught where it actually
+    // matters, by agent-16's breadth check on the material's supplier count.
+    const sourceFailures = new Map<string, { count: number; sample: string }>();
+    const noteSourceFailure = (source: string, message: string) => {
+      const cur = sourceFailures.get(source);
+      if (cur) cur.count++;
+      else sourceFailures.set(source, { count: 1, sample: message });
+    };
+    let scoutPassFailures = 0;
+
     // Per-client sourcing exclusions (do-not-contact companies + excluded
     // countries), fetched once per Tenkara org and cached for the run. Fail-open
     // here: a transient Tenkara read shouldn't block lead creation — Agent 04
@@ -1055,12 +1077,32 @@ registerAgent({
         for (const h of existingHostsByMaterial.get(material.id) ?? []) excludeHosts.add(h);
         let scoutResults: ScoutSupplier[] = [];
         let scoutHardFailed = false;
+        // The marketplace and retail buckets are where aggregator sellers and
+        // published price ladders come from, and the rotation reaches them only
+        // 2 runs in 6 — on rapeseed it drew `marketplace` once, where the pass
+        // aborted, so the material had no marketplace supplier at all a day
+        // later. If we hold no marketplace host for this material yet, that
+        // bucket is not a rotation slot we can afford to leave to chance.
+        const hasMarketplaceLead = Array.from(existingHostsByMaterial.get(material.id) ?? []).some((h) =>
+          isAggregatorHost(h)
+        );
         try {
           scoutResults = await scoutSuppliersForMaterial(material, {
             excludeHosts,
-            log: (msg, meta) => ctx.log(msg, { step: "scout", data: { ...meta, material_id: material.id } }),
+            log: (msg, meta) => {
+              // `level` arrives inside meta; without hoisting it out, a failed
+              // pass was filed as an ordinary info event and read as routine.
+              const { level, ...rest } = (meta ?? {}) as { level?: "info" | "warn" | "error" };
+              return ctx.log(msg, {
+                step: "scout",
+                ...(level ? { level } : {}),
+                data: { ...rest, material_id: material.id },
+              });
+            },
             retryPasses: scoutRetryPasses.get(material.id) ?? [],
+            requirePasses: hasMarketplaceLead ? [] : ["marketplace"],
             onPassOutcome: async (failedKeys) => {
+              scoutPassFailures += failedKeys.length;
               if (failedKeys.length) {
                 await admin.from("agent_state").upsert(
                   {
@@ -1269,6 +1311,7 @@ registerAgent({
             e instanceof SourceReadyUnavailableError
               ? "mcp_unavailable"
               : (e?.message ?? String(e));
+          noteSourceFailure("sourceready", srError ?? "unknown");
         }
         if (ok) {
           sourceReadyFired++;
@@ -1337,6 +1380,7 @@ registerAgent({
           // ImportYeti 500s flap in bursts. Leave the cursor unadvanced so the
           // same page is retried next run rather than being skipped.
           iyError = e instanceof ImportYetiUnavailableError ? "api_unavailable" : (e?.message ?? String(e));
+          noteSourceFailure("importyeti", iyError ?? "unknown");
         }
         if (ok) {
           importYetiFired++;
@@ -1420,7 +1464,17 @@ registerAgent({
 
     await recordOrgRuns(admin, "agent-03-lead-creator", [...dueOaIds03]);
     ctx.setItemsProcessed(leadsCreated);
-    ctx.setStatus("success");
+    const failedSources = [...sourceFailures.entries()];
+    if (failedSources.length) {
+      for (const [source, f] of failedSources) {
+        await ctx.log(`Discovery source '${source}' failed on ${f.count} material(s): ${f.sample.slice(0, 200)}`, {
+          level: "error",
+          step: "sources",
+          data: { source, materials: f.count },
+        });
+      }
+    }
+    ctx.setStatus(failedSources.length ? "partial" : "success");
     const graphLeads = leadsCreated - scoutLeadsCreated;
     ctx.setSummary(
       `Staged ${leadsCreated} raw leads (${graphLeads} graph, ${scoutLeadsCreated} scout) across ${materialsWithLeads} material${materialsWithLeads === 1 ? "" : "s"} · ` +
@@ -1429,6 +1483,10 @@ registerAgent({
         (skippedByName ? ` · ${skippedByName} skipped (same supplier already staged)` : "") +
         (skippedByExclusion ? ` · ${skippedByExclusion} skipped (do-not-contact / excluded country)` : "") +
         (scoutEnabled ? "" : " · scout off (no ANTHROPIC_API_KEY)") +
+        (failedSources.length
+          ? ` · ⚠ SOURCE FAILED: ${failedSources.map(([s, f]) => `${s} (${f.count} material${f.count === 1 ? "" : "s"})`).join(", ")}`
+          : "") +
+        (scoutPassFailures ? ` · ${scoutPassFailures} scout pass(es) aborted` : "") +
         (csvUrl ? ` · CSV ready` : "") +
         (noLeadMaterials.length
           ? ` · empty: ${noLeadMaterials.slice(0, 3).join(", ")}${noLeadMaterials.length > 3 ? "…" : ""}`
