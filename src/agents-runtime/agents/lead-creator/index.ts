@@ -511,11 +511,12 @@ registerAgent({
           .sort((a, b) => {
             const aCount = leadCount.get(a.id) ?? 0;
             const bCount = leadCount.get(b.id) ?? 0;
-            // Tier 1: below 120 (highest sourcing priority, ramp up starved)
-            // Tier 2: 120-300 (reduced priority, wean off diminishing returns)
-            // Tier 3: 300+ (lowest priority, only pick if all lower tiers are exhausted)
-            const aTier = aCount < 120 ? 0 : aCount < 300 ? 1 : 2;
-            const bTier = bCount < 120 ? 0 : bCount < 300 ? 1 : 2;
+            // Tier 0: <99 (highest priority, ramp up starved materials fast)
+            // Tier 1: 99-120 (high priority, continue ramping)
+            // Tier 2: 120-300 (medium priority, wean off diminishing returns)
+            // Tier 3: 300+ (lowest priority, pick only if lower tiers exhausted)
+            const aTier = aCount < 99 ? 0 : aCount < 120 ? 1 : aCount < 300 ? 2 : 3;
+            const bTier = bCount < 99 ? 0 : bCount < 120 ? 1 : bCount < 300 ? 2 : 3;
             if (aTier !== bTier) return aTier - bTier;
             // Within each tier, fewest leads first
             return aCount - bCount ||
