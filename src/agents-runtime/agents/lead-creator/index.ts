@@ -67,6 +67,25 @@ const DISCOVERY_MIN_NEW_PER_PAGE = envInt("DISCOVERY_MIN_NEW_PER_PAGE", 2);
 const DISCOVERY_MAX_DRY_PAGES = envInt("DISCOVERY_MAX_DRY_PAGES", 3);
 const PAGE_CURSOR_KEY = (source: string, materialId: string) => `discovery_page:${source}:${materialId}`;
 const SCOUT_RETRY_KEY = (materialId: string) => `scout_retry_passes:${materialId}`;
+
+// Starvation bypass. A material under this many leads is not "sourced" yet, and
+// the per-org tier interval (15 min motherlode, 2h normal) must not be what keeps
+// it waiting — the org's tier is about steady-state cadence, not about a material
+// still climbing to a usable supplier count. So an org holding a starved material
+// whose own per-material backoff has already elapsed skips the tier interval.
+//
+// Deliberately NOT MIN_LEADS_PER_MATERIAL: that is set to 100000 in prod, i.e.
+// "never consider anything finished", so reusing it would mean no org is ever
+// throttled and every 1-min tick would run a full Tenkara sweep.
+//
+// The verdict is published by the backlog sweep rather than recomputed here,
+// because the throttle decision happens before any lead count is known and the
+// sweep costs a Tenkara round-trip. next_at is the earliest moment a starved
+// material actually becomes workable, so a permanently-thin material cannot hold
+// the bypass open and spin the sweep every minute for no work.
+const STARVATION_FLOOR = envInt("LEAD_CREATOR_STARVATION_FLOOR", 100);
+const STARVED_ORGS_KEY = "starved_orgs";
+type StarvedOrgs = Record<string, { starved: number; next_at: string | null }>;
 type PageCursor = { page: number; count: number; dry: number };
 
 function advancePageCursor(
@@ -321,6 +340,29 @@ registerAgent({
     const eligibleOaIds03 = [...sourcingTenkaraOrgIds].map((tid) => tenkaraOrgToOaOrg.get(tid)!).filter(Boolean);
     const timingMap03 = await loadOrgTimingMap(admin, "agent-03-lead-creator", eligibleOaIds03);
     const dueOaIds03 = new Set(filterDueOrgIds(eligibleOaIds03, timingMap03, "agent-03-lead-creator"));
+    // Starvation bypass: an org with a below-floor material that is already past
+    // its per-material backoff is due regardless of its tier interval.
+    let bypassed03 = 0;
+    try {
+      const { data: starvedRow } = await admin
+        .from("agent_state")
+        .select("value")
+        .eq("agent_id", ctx.agentId)
+        .eq("key", STARVED_ORGS_KEY)
+        .maybeSingle();
+      const starved = ((starvedRow?.value as any)?.orgs ?? {}) as StarvedOrgs;
+      for (const oaId of eligibleOaIds03) {
+        if (dueOaIds03.has(oaId)) continue;
+        const s = starved[oaId];
+        if (!s?.starved) continue;
+        const nextAt = s.next_at ? Date.parse(s.next_at) : 0;
+        if (Number.isFinite(nextAt) && nextAt > Date.now()) continue;
+        dueOaIds03.add(oaId);
+        bypassed03++;
+      }
+    } catch (e: any) {
+      await ctx.log(`Starvation bypass lookup failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "org_map" });
+    }
     for (const tenkaraId of [...sourcingTenkaraOrgIds]) {
       const oaId = tenkaraOrgToOaOrg.get(tenkaraId);
       if (oaId && !dueOaIds03.has(oaId)) sourcingTenkaraOrgIds.delete(tenkaraId);
@@ -328,7 +370,8 @@ registerAgent({
     const throttled03 = eligibleOaIds03.length - dueOaIds03.size;
     await ctx.log(
       `Loaded ${tenkaraOrgToOaOrg.size} tenkara→OA org mappings · sourcing ${sourcingTenkaraOrgIds.size} org(s): ${sourcingNames.join(", ") || "none"}` +
-        (throttled03 ? ` · ${throttled03} throttled (tier interval not elapsed)` : ""),
+        (throttled03 ? ` · ${throttled03} throttled (tier interval not elapsed)` : "") +
+        (bypassed03 ? ` · ${bypassed03} un-throttled (starved material below ${STARVATION_FLOOR} leads)` : ""),
       { step: "org_map" }
     );
 
@@ -481,6 +524,38 @@ registerAgent({
             }
             if (batch.length < 1000) break;
           }
+        }
+        // Publish the starvation verdict for the next run's throttle decision:
+        // per org, how many materials sit below STARVATION_FLOOR and the earliest
+        // time one of them becomes workable again (now, when a backoff has already
+        // elapsed). Only covers the orgs sourced this run, which is enough: every
+        // org still reaches a due run on its own interval, writes its verdict, and
+        // is then un-throttled from the following tick until it clears the floor.
+        try {
+          const starvedOrgs: StarvedOrgs = {};
+          for (const m of universe) {
+            if ((leadCount.get(m.id) ?? 0) >= STARVATION_FLOOR) continue;
+            const oaId = m.tenkara_org_id ? tenkaraOrgToOaOrg.get(m.tenkara_org_id) : null;
+            if (!oaId) continue;
+            const la = lastAttempt.get(m.id);
+            const saturated = (dryStreak.get(m.id) ?? 0) >= DISCOVERY_DRY_STREAK_LIMIT;
+            const readyAt = la === undefined ? nowMs : la + (saturated ? SATURATED_BACKOFF_MS : RESCOUT_BACKOFF_MS);
+            const cur = starvedOrgs[oaId] ?? { starved: 0, next_at: null };
+            cur.starved += 1;
+            const prev = cur.next_at ? Date.parse(cur.next_at) : Infinity;
+            if (readyAt < prev) cur.next_at = new Date(readyAt).toISOString();
+            starvedOrgs[oaId] = cur;
+          }
+          await admin.from("agent_state").upsert(
+            {
+              agent_id: ctx.agentId,
+              key: STARVED_ORGS_KEY,
+              value: { orgs: starvedOrgs, floor: STARVATION_FLOOR, at: new Date().toISOString() },
+            },
+            { onConflict: "agent_id,key" }
+          );
+        } catch (e: any) {
+          await ctx.log(`Starvation marker write failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "backlog" });
         }
         await ctx.log(
           `Backlog queue: ${underserved.length} materials below ${MIN_LEADS_PER_MATERIAL}-lead floor · sourcing ${picked.length} this run` +
