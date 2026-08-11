@@ -41,8 +41,8 @@ function cleanSupplierWebsite(url: string | null | undefined): string | null {
 // supplier_search_v3 over the MCP endpoint and stages source='sourceready'
 // leads inline. Inert unless SOURCEREADY_MCP_URL + SOURCEREADY_MCP_TOKEN are set.
 const SOURCEREADY_MAX_MATERIALS_PER_RUN = envInt("SOURCEREADY_MAX_MATERIALS_PER_RUN", 25);
-// Suppliers requested per discovery fire; also the page stride.
-const SOURCEREADY_PAGE_SIZE = envInt("SOURCEREADY_PAGE_SIZE", 25);
+// One-pass model (2026-08-11): no pagination. Increased from 25 to 100.
+const SOURCEREADY_PAGE_SIZE = envInt("SOURCEREADY_PAGE_SIZE", 100);
 const IMPORTYETI_PAGE_SIZE = envInt("IMPORTYETI_PAGE_SIZE", 10);
 // Seed only, for materials with no cursor yet: where the old count-derived
 // paging would have been, so they resume mid-corpus instead of restarting.
@@ -69,6 +69,7 @@ const DISCOVERY_MIN_NEW_PER_PAGE = envInt("DISCOVERY_MIN_NEW_PER_PAGE", 2);
 const DISCOVERY_MAX_DRY_PAGES = envInt("DISCOVERY_MAX_DRY_PAGES", 3);
 const PAGE_CURSOR_KEY = (source: string, materialId: string) => `discovery_page:${source}:${materialId}`;
 const SCOUT_RETRY_KEY = (materialId: string) => `scout_retry_passes:${materialId}`;
+const SOURCEREADY_SEARCHED_KEY = (materialId: string) => `sourceready_searched:${materialId}`;
 
 // Starvation bypass. A material under this many leads is not "sourced" yet, and
 // the per-org tier interval (15 min high_frequency, 2h normal) must not be what keeps
@@ -1275,22 +1276,24 @@ registerAgent({
       //     materials only) and capped per run to bound cost. Exclusions here are
       //     best-effort; Agent 04 re-checks do-not-contact / excluded countries
       //     before any email is sent.
+      //
+      // CREDIT-SAVING CHANGE (2026-08-11): SourceReady is now ONE-PASS-ONLY per material.
+      // Once searched, a material is marked sourceready_searched and never re-queried
+      // (except via explicit manual override). This prevents pagination loops from
+      // burning credits on repeat pages. Scout and ImportYeti handle breadth; SourceReady
+      // is a initial deep index, not a recurring crawler.
       const srBacklog = underservedIds.has(material.id);
+      const srAlreadySearched = pageCursors.has(SOURCEREADY_SEARCHED_KEY(material.id));
       if (
         sourceReadyEnabled() &&
         sourceReadyFired < SOURCEREADY_MAX_MATERIALS_PER_RUN &&
+        !srAlreadySearched &&
         (!alreadyScouted.has(material.id) || srBacklog)
       ) {
         const excludeHosts = new Set<string>(graphHosts);
         for (const h of existingHostsByMaterial.get(material.id) ?? []) excludeHosts.add(h);
-        const srCursor = advancePageCursor(
-          pageCursors.get(`sourceready:${material.id}`),
-          srLeadCount.get(material.id) ?? 0,
-          !onlyMaterialId,
-          SOURCEREADY_PAGE_SIZE
-        );
-        const srPage = srCursor.page;
-        let srPersist = srCursor;
+        // One-pass model: page 1, size 100. If it exists, fetch it. No pagination.
+        const srPage = 1;
         let ok = false;
         let srDetail: Record<string, any> = {};
         let srError: string | null = null;
@@ -1315,40 +1318,41 @@ registerAgent({
             ctx.runId
           );
           ok = r.ok;
-          if ((r.received ?? 0) === 0) srPersist = cursorAfterEmptyPage(srCursor, srCursor.count);
           srDetail = {
             received: r.received, inserted: r.inserted, skipped: r.skipped,
             reason: r.reason, unlocked: r.unlocked,
           };
           stagedThisMaterial += r.inserted;
         } catch (e: any) {
-          // Leave the cursor unadvanced on a transport failure so the same page
-          // is retried next run rather than being skipped.
+          // On transport failure, mark it searched anyway so we don't retry.
+          // If a material truly needs re-search, the operator can manually reset the marker.
           srError =
             e instanceof SourceReadyUnavailableError
               ? "mcp_unavailable"
               : (e?.message ?? String(e));
           noteSourceFailure("sourceready", srError ?? "unknown");
         }
-        if (ok) {
+        if (ok || srError) {
           sourceReadyFired++;
+          // Mark this material as searched, regardless of success.
+          // One-pass model: once fire, never re-query unless manually reset.
           await admin.from("agent_state").upsert(
             {
               agent_id: ctx.agentId,
-              key: PAGE_CURSOR_KEY("sourceready", material.id),
-              value: { ...srPersist, at: new Date().toISOString() },
+              key: SOURCEREADY_SEARCHED_KEY(material.id),
+              value: { searched_at: new Date().toISOString(), run_id: ctx.runId },
             },
             { onConflict: "agent_id,key" }
           );
         }
         await ctx.log(
           ok
-            ? `SourceReady discovery for ${matLabel} (page ${srPage}): staged ${srDetail.inserted ?? 0} of ${srDetail.received ?? 0}`
+            ? `SourceReady discovery (one-pass) for ${matLabel}: staged ${srDetail.inserted ?? 0} of ${srDetail.received ?? 0}`
             : `SourceReady discovery failed for ${matLabel}: ${srError ?? "unknown"}`,
           {
             step: "sourceready",
             level: ok ? "info" : "warn",
-            data: { material_id: material.id, page: srPage, dry_pages: srCursor.dry, ...srDetail, error: srError },
+            data: { material_id: material.id, ...srDetail, error: srError },
           }
         );
       }
