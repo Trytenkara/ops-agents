@@ -1,4 +1,5 @@
-// Per-org agent timing ("fast-track" / motherlode mode). The compressed cadence
+// Per-org reply/follow-up timing ("fast-track" mode). Separate from run cadence,
+// which lives in orgs.pipeline_tier (lib/org-tier.ts). The compressed cadence
 // (fast no-reply nudges, call tasks, and outreach compile-wait) applies only to
 // orgs on the fast-track list; every other org uses the production defaults so
 // real suppliers aren't hit with rapid-fire follow-ups. The compressed values

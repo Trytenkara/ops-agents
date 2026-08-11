@@ -1,7 +1,7 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { loadOrgStatuses, sourcingAllowed } from "@/lib/org-status";
-import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
+import { loadDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 import { assessMaterialRelevance, collectProductText, type RawLead } from "./enrich";
 import { enrichAndStageLead } from "./run-enrich";
 import { resetContactProviderBreaker } from "@/lib/contact-provider-usage";
@@ -204,8 +204,7 @@ registerAgent({
     }
     const fillNote = filledFields || webFilled ? ` · filled ${filledFields + webFilled} profile fields` : "";
 
-    const timingMap06 = await loadOrgTimingMap(admin, "agent-06-enrichment", allSourcingOrgIds);
-    const sourcingOrgIds = filterDueOrgIds(allSourcingOrgIds, timingMap06, "agent-06-enrichment");
+    const sourcingOrgIds = await loadDueOrgIds(admin, "agent-06-enrichment", allSourcingOrgIds);
     if (sourcingOrgIds.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");

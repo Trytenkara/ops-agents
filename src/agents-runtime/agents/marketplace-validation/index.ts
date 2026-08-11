@@ -3,7 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
 import { recheckMarketplaceQuote, type RecheckResult } from "./price-recheck";
 import { convertToUsd } from "@/lib/fx";
-import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
+import { loadDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 import { pullPricesForNewMarketplaceLeads } from "./lead-price-pull";
 import { aggregatorNameOf } from "@/lib/aggregator-hosts";
 
@@ -183,8 +183,7 @@ registerAgent({
 
     // Apply per-org tier throttle — skip quotes for orgs whose interval hasn't elapsed.
     const allOaIds05 = [...new Set([...tenkaraOrgToOaOrg.values()])];
-    const timingMap05 = await loadOrgTimingMap(admin, "agent-05-marketplace-validation", allOaIds05);
-    const dueOaIds05 = new Set(filterDueOrgIds(allOaIds05, timingMap05, "agent-05-marketplace-validation"));
+    const dueOaIds05 = new Set(await loadDueOrgIds(admin, "agent-05-marketplace-validation", allOaIds05));
 
     const toProcess = quotes.filter((q) => {
       if (pendingFor.has(q.id)) return false;

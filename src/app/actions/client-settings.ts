@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { generateClientProfile } from "@/lib/client-profile";
 import { extractDocumentText } from "@/lib/po-parse";
 import { recheckOrgLeads } from "@/lib/requirements-recheck";
+import { PIPELINE_TIERS, type PipelineTier } from "@/lib/org-tier";
 import { revalidatePath } from "next/cache";
 
 interface Result { ok: boolean; error?: string }
@@ -77,6 +78,26 @@ export async function setOrgOnboardingStage(orgId: string, stage: OnboardingStag
     await recheckOrgLeads(admin, org as any, { reason: `onboarding stage set to ${stage}` }).catch(() => null);
   }
 
+  revalidatePath(`/work/orgs`);
+  revalidatePath(`/work/orgs/${orgId}`);
+  return { ok: true };
+}
+
+// How often the fleet works this org (lib/org-tier.ts). Distinct from
+// onboarding_stage above despite that one's 'motherlode' value: this is run
+// frequency, that is the lead-quality bar. Restricted to admin/ops_lead since
+// raising cadence spends API budget.
+export async function setOrgPipelineTier(orgId: string, tier: PipelineTier): Promise<Result> {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" };
+  if (!hasAnyRole(session, ["admin", "ops_lead"])) return { ok: false, error: "forbidden" };
+  if (!PIPELINE_TIERS.includes(tier)) return { ok: false, error: "invalid tier" };
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("orgs")
+    .update({ pipeline_tier: tier, updated_at: new Date().toISOString() })
+    .eq("id", orgId);
+  if (error) return { ok: false, error: error.message };
   revalidatePath(`/work/orgs`);
   revalidatePath(`/work/orgs/${orgId}`);
   return { ok: true };

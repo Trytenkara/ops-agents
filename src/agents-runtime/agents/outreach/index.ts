@@ -4,7 +4,7 @@ import { getOrgAssignmentContext, spreadOwnerId, overridesAuto, orgAutoKey, type
 import { classifyClient } from "../quote-revalidation/config";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import { compileWaitMs } from "@/lib/agent-timing";
-import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
+import { loadDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 import { runOutreachForSupplier, type OutreachLead } from "./run-outreach";
 import { isAggregatorEmail, isAggregatorDomain } from "../data-enrichment/enrich";
 import { suppliersWithPriorRelationship } from "@/lib/tenkara-relationships";
@@ -568,8 +568,7 @@ registerAgent({
     }
     // Pre-load tier timing for all orgs in this batch.
     const outreachOrgIds04 = [...byOrg.keys()];
-    const timingMap04 = await loadOrgTimingMap(admin, "agent-04-outreach", outreachOrgIds04);
-    const dueOrgIds04 = new Set(filterDueOrgIds(outreachOrgIds04, timingMap04, "agent-04-outreach"));
+    const dueOrgIds04 = new Set(await loadDueOrgIds(admin, "agent-04-outreach", outreachOrgIds04));
 
     const candidatesNoPrior: Candidate[] = [];
     // Post-enrichment removals to persist on the lead so the "Removed / filtered

@@ -22,7 +22,7 @@ import {
 } from "./sourceready";
 import { importYetiEnabled, runImportYetiDiscovery, ImportYetiUnavailableError } from "./importyeti";
 import { getMaterialAliases } from "@/lib/material-aliases";
-import { loadOrgTimingMap, filterDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
+import { loadDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 
 const EMPTY_OVERRIDES = new Map<string, string>();
 
@@ -71,7 +71,7 @@ const PAGE_CURSOR_KEY = (source: string, materialId: string) => `discovery_page:
 const SCOUT_RETRY_KEY = (materialId: string) => `scout_retry_passes:${materialId}`;
 
 // Starvation bypass. A material under this many leads is not "sourced" yet, and
-// the per-org tier interval (15 min motherlode, 2h normal) must not be what keeps
+// the per-org tier interval (15 min high_frequency, 2h normal) must not be what keeps
 // it waiting — the org's tier is about steady-state cadence, not about a material
 // still climbing to a usable supplier count. So an org holding a starved material
 // whose own per-material backoff has already elapsed skips the tier interval.
@@ -340,8 +340,7 @@ registerAgent({
     }
     // Apply per-org tier throttle — only process orgs whose interval has elapsed.
     const eligibleOaIds03 = [...sourcingTenkaraOrgIds].map((tid) => tenkaraOrgToOaOrg.get(tid)!).filter(Boolean);
-    const timingMap03 = await loadOrgTimingMap(admin, "agent-03-lead-creator", eligibleOaIds03);
-    const dueOaIds03 = new Set(filterDueOrgIds(eligibleOaIds03, timingMap03, "agent-03-lead-creator"));
+    const dueOaIds03 = new Set(await loadDueOrgIds(admin, "agent-03-lead-creator", eligibleOaIds03));
     // Starvation bypass: an org with a below-floor material that is already past
     // its per-material backoff is due regardless of its tier interval.
     let bypassed03 = 0;
