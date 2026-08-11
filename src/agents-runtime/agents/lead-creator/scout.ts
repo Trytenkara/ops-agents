@@ -42,7 +42,16 @@ const URL_PROBE_TIMEOUT_MS = 5_000;
 // fix is a smaller unit of work rather than a higher ceiling: the route's 800s
 // maxDuration caps how long we can ever wait. 12 searches keeps a pass well
 // under the ceiling; rotation covers the whole landscape across runs instead.
-const MAX_WEB_USES_PER_PASS = 12;
+//
+// 12 turned out not to be "well under" it. Measured 2026-08-11 on one material:
+// majors 451s, chem_platforms 545s, retail 596s, distributors aborted, and the
+// marketplace pass aborted on every attempt it was ever given. A pass that
+// aborts banks ZERO rows, so a smaller budget that lands beats a larger one that
+// coin-flips. The platform passes get less still: they drill into result pages,
+// so each search costs more wall-clock than a single-vendor lookup.
+const MAX_WEB_USES_PER_PASS = 8;
+const PLATFORM_PASS_WEB_USES = 6;
+const PLATFORM_PASS_KEYS = new Set(["marketplace", "chem_platforms"]);
 const SCOUT_CALL_TIMEOUT_MS = 600_000;
 const PASSES_PER_RUN = 3;
 
@@ -341,7 +350,7 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
       tools: [{
         type: "web_search_20260209",
         name: "web_search",
-        max_uses: MAX_WEB_USES_PER_PASS,
+        max_uses: PLATFORM_PASS_KEYS.has(pass.key) ? PLATFORM_PASS_WEB_USES : MAX_WEB_USES_PER_PASS,
       } as any],
       messages: [{ role: "user", content: buildUserMessage(material, pass.focus) }],
     } as any);
