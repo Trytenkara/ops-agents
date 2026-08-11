@@ -10,6 +10,7 @@ import { ThreadsList, type ThreadRow, type ThreadKind } from "@/components/threa
 import { PanelTabs } from "@/components/panel-tabs";
 import { CasesSection } from "@/components/cases-section";
 import { loadOrgCases } from "@/lib/org-cases";
+import { getOrgAssignmentContext, orgAutoKey, spreadOwnerId, type AssignmentContext } from "@/lib/operator-assignment";
 import { getOutreachTracker } from "@/lib/outreach-tracker";
 import { selectAllPaged } from "@/lib/supabase-paging";
 import { OutreachSummaryView } from "@/components/outreach-summary-view";
@@ -33,6 +34,46 @@ function kindOf(d: any): ThreadKind {
   // so labelling it like emailed outreach misrepresents both the channel and the id.
   if (draftKind === "aggregator_form_inquiry") return "inquiry";
   return INBOUND_REPLY_KINDS.has(draftKind) ? "inbound" : "outbound";
+}
+
+// A draft stamps `assigned_operator` when the agent composes it and nothing ever
+// revisits that stamp, so this tab was the last surface still naming whoever
+// owned the supplier on the day the draft was written. Leads, Suppliers, Quotes
+// and (since 58ce1ae) Escalations all derive at read time, which is why the
+// Thread Tracker disagreed with them and read as "the agents reassigned my leads".
+//
+// Only work still in front of an operator is re-derived. A sent email keeps its
+// stamp: that is the record of who actually sent it, and a supplier replying to
+// Shellezie's email must still reach Shellezie.
+const DERIVABLE_DRAFT_STATUSES = new Set(["staged", "blocked", "reviewed"]);
+
+function deriveThreadOwners(ctx: AssignmentContext, rows: any[]): void {
+  const byId = new Map(ctx.pool.map((op) => [op.id, op]));
+  for (const d of rows) {
+    if (!DERIVABLE_DRAFT_STATUSES.has(d.status)) continue;
+    const supplierName = (d.metadata as any)?.supplier_name ?? null;
+    const ownerId = spreadOwnerId(
+      ctx,
+      orgAutoKey(ctx, {
+        supplierId: d.supplier_id,
+        supplierName,
+        email: (d.metadata as any)?.supplier_contact_email ?? null,
+        leadId: (d.metadata as any)?.lead_id ?? d.id,
+      }),
+      { nameHint: supplierName, workType: "email" }
+    );
+    const owner = ownerId ? byId.get(ownerId) : null;
+    // Derivation declining to own the draft (manual mode with no claim, empty
+    // pool) is an answer, not a gap: clear the stale stamp rather than keep
+    // showing an operator this client never assigned.
+    if (!owner) {
+      d.assigned_operator = null;
+      d.users = null;
+      continue;
+    }
+    d.assigned_operator = owner.id;
+    d.users = { display_name: owner.name, email: owner.email, user_roles: owner.roles.map((role: string) => ({ role })) };
+  }
 }
 
 // Unified email-thread workspace: outbound RFQs + inbound supplier replies for
@@ -64,14 +105,17 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
       .range(from, to)
   );
 
+  const assignment = await getOrgAssignmentContext(admin, org.id);
+
   const { openRows: emailCasesOpen, resolvedRows: emailCasesResolved, resolvedTotal: emailCasesResolvedTotal } = await loadOrgCases(
     admin,
     org.id,
-    undefined,
+    assignment,
     ["email"]
   );
 
   const rows = drafts ?? [];
+  deriveThreadOwners(assignment, rows);
   const { data: aliasRows } = await admin
     .from("supplier_email_aliases")
     .select("id, email, draft_ref_id")

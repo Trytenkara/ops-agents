@@ -527,6 +527,14 @@ export function resolveOperatorId(
 // person was out). This spreads them over the people who do this kind of work
 // instead, keyed on the supplier so the same supplier keeps reaching the same
 // operator.
+//
+// The fallback covers ONE case: a supplier outside the org's auto scope, where
+// the work still has to reach a person. It must not be a way around the two
+// switches that say who may be handed work. It used to spread over ctx.pool in
+// every mode, which meant a manual client and an operator explicitly pulled out
+// of the auto loop were both quietly overruled: SaponIQ ran manual with all ten
+// operators auto_assignable=false, and still had 270 of 274 drafts stamped with
+// an owner, while the Leads tab correctly showed them unassigned.
 export function spreadOwnerId(
   ctx: AssignmentContext,
   key: string | null | undefined,
@@ -535,8 +543,15 @@ export function spreadOwnerId(
   const workType = opts.workType ?? "email";
   const resolved = resolveOperatorId(ctx, key, opts.lane ?? null, opts.nameHint ?? null, workType);
   if (resolved) return resolved;
+  // Manual means this client's operators claim their own work. Nothing is handed
+  // out, and unowned is the correct answer rather than a gap to paper over.
+  if (ctx.config.mode === "manual") return null;
   const lane = opts.lane ?? supplierKind(ctx.supplierTypes, key, opts.nameHint) ?? null;
-  return pickSupplierOperator(poolForWork(ctx.pool, { type: workType, lane }), key ?? opts.nameHint ?? null)?.id ?? null;
+  // autoPool, not pool: someone excluded from the auto loop is still manually
+  // assignable, but must never be handed work by the spread.
+  return (
+    pickSupplierOperator(poolForWork(ctx.autoPool, { type: workType, lane }), key ?? opts.nameHint ?? null)?.id ?? null
+  );
 }
 
 // Sticky-random owner per supplier id, for tables that show the auto default

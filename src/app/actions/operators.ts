@@ -171,27 +171,37 @@ export async function setOrgAssignments(userId: string, orgIds: string[]): Promi
   // Lead operators can only assign within orgs they themselves cover. We don't enforce that yet —
   // assume Lead Operators are global within orgs they manage. Tighten in Phase G if needed.
 
-  // This is a delete-and-reinsert, so carry auto_assignable across for orgs the
-  // user keeps. Otherwise editing someone's org list silently drops them back
-  // into an auto loop an ops lead had excluded them from.
+  // Diff, never delete-and-reinsert. This row is not only membership: it also
+  // holds the per-org work settings (auto_assignable, operator_type, lanes). A
+  // reinserted row gets column DEFAULTS for anything the insert doesn't name, so
+  // rewriting every row to change the org LIST silently reset settings an ops
+  // lead had configured. That is not hypothetical: adding a team to a new client
+  // wiped California Chemicals' lane split and both its call operators, and
+  // re-owned 1,380 leads. Copying the columns forward one by one was the old
+  // patch and it only covered auto_assignable, so the next two columns added to
+  // this table reintroduced the bug. Touch only the orgs that actually changed
+  // and the settings survive by construction, including ones added later.
   const { data: priorRows } = await admin
     .from("user_org_assignments")
-    .select("org_id, auto_assignable")
+    .select("org_id")
     .eq("user_id", userId);
   const priorOrgIds = (priorRows ?? []).map((r: any) => r.org_id as string);
-  const priorAuto = new Map((priorRows ?? []).map((r: any) => [r.org_id as string, r.auto_assignable !== false]));
+  const added = orgIds.filter((id) => !priorOrgIds.includes(id));
+  const kept = orgIds.filter((id) => priorOrgIds.includes(id));
+  const removed = priorOrgIds.filter((id) => !orgIds.includes(id));
 
-  await admin.from("user_org_assignments").delete().eq("user_id", userId);
-  if (orgIds.length > 0) {
+  if (removed.length > 0) {
+    await admin.from("user_org_assignments").delete().eq("user_id", userId).in("org_id", removed);
+  }
+  if (added.length > 0) {
     await admin.from("user_org_assignments").insert(
-      orgIds.map((org_id) => ({
-        user_id: userId,
-        org_id,
-        role,
-        assigned_by: session.userId,
-        auto_assignable: priorAuto.get(org_id) ?? true,
-      }))
+      added.map((org_id) => ({ user_id: userId, org_id, role, assigned_by: session.userId }))
     );
+  }
+  // Kept rows still need the role synced (this runs alongside a role change),
+  // but nothing else about them may be touched.
+  if (kept.length > 0) {
+    await admin.from("user_org_assignments").update({ role }).eq("user_id", userId).in("org_id", kept);
   }
   await admin.from("audit_log").insert({
     actor_user_id: session.userId, action: "operator.org_assignments_changed",
