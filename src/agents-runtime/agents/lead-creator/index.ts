@@ -490,7 +490,6 @@ registerAgent({
         const underserved = universe
           .filter((m) => (leadCount.get(m.id) ?? 0) < MIN_LEADS_PER_MATERIAL)
           .filter((m) => !already.has(m.id))
-          .filter((m) => (leadCount.get(m.id) ?? 0) < 200) // Gate out saturation hogs from backlog
           .filter((m) => {
             const la = lastAttempt.get(m.id);
             if (la === undefined) return true;
@@ -512,10 +511,11 @@ registerAgent({
           .sort((a, b) => {
             const aCount = leadCount.get(a.id) ?? 0;
             const bCount = leadCount.get(b.id) ?? 0;
-            // Tier 1: below 120 (highest sourcing priority)
-            // Tier 2: 120-300 (reduced priority, wean off duplicate-heavy materials)
-            const aTier = aCount < 120 ? 0 : 1;
-            const bTier = bCount < 120 ? 0 : 1;
+            // Tier 1: below 120 (highest sourcing priority, ramp up starved)
+            // Tier 2: 120-300 (reduced priority, wean off diminishing returns)
+            // Tier 3: 300+ (lowest priority, only pick if all lower tiers are exhausted)
+            const aTier = aCount < 120 ? 0 : aCount < 300 ? 1 : 2;
+            const bTier = bCount < 120 ? 0 : bCount < 300 ? 1 : 2;
             if (aTier !== bTier) return aTier - bTier;
             // Within each tier, fewest leads first
             return aCount - bCount ||
