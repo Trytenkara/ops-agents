@@ -57,7 +57,7 @@ const SCOUT_PASSES: { key: string; focus: string }[] = [
   {
     key: "distributors",
     focus:
-      "Distributors and traders only (Univar, Brenntag, Azelis, IMCD, DeWolf, Parchem, Silver Fern, Shay & Company, and regional equivalents), plus the chemical/pharma B2B directories that publish direct sales emails: Chemondis, Knowde, Pharmaoffer, Echemi, ChemicalBook, Molbase, ChemBid, UL Prospector, Chemical Register.",
+      "Distributors and traders only: Univar, Brenntag, Azelis, IMCD, DeWolf, Parchem, Silver Fern, Shay & Company, Barentz, Caldic, and regional equivalents. Check each one's own product catalogue for this material. The chemical/pharma ingredient PLATFORMS are covered by a parallel pass, so do not spend searches on them.",
   },
   {
     key: "asia",
@@ -72,7 +72,12 @@ const SCOUT_PASSES: { key: string; focus: string }[] = [
   {
     key: "marketplace",
     focus:
-      "B2B marketplace seller listings only. Drill INTO the platform result pages on IndiaMART, Alibaba, Made-in-China and TradeIndia and return AT LEAST 6-8 individual seller companies per platform, each as its own row with its own company name, price/MOQ and contact path. Do not return the platform itself as a row.",
+      "General-trade B2B marketplace seller listings only: IndiaMART, Alibaba, Made-in-China, TradeIndia, 1688, DHgate, Global Sources, ExportersIndia, EC21, TradeKey, Go4WorldBusiness. Pick the 4-5 of those that actually carry this material and drill INTO their result pages, returning AT LEAST 6-8 individual seller companies per platform you cover, each as its own row with its own company name, price/MOQ and contact path. Do not return the platform itself as a row. Do not cover the chemical/ingredient platforms, a parallel pass owns those.",
+  },
+  {
+    key: "chem_platforms",
+    focus:
+      "Chemical, pharma and ingredient PLATFORMS only, the multi-seller ones that list named third-party sellers and usually publish a direct sales email: Chemondis, Knowde, Pharmaoffer, PharmaCompass, Echemi, ChemicalBook, Molbase, ChemBid, UL Prospector, Chemical Register, Ingredients Network, NXT Ingredients, Nutrada, TraceGains Gather. Search this material on the ones that carry it and return the individual SELLER companies each lists, one row each, never the platform itself. Prefer these over general-trade marketplaces: they usually expose a reachable company email rather than an inquiry relay.",
   },
   {
     key: "retail",
@@ -395,8 +400,14 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
     keys
       .map((k) => SCOUT_PASSES.find((p) => p.key === k))
       .filter((p): p is (typeof SCOUT_PASSES)[number] => !!p);
+  // At most ONE required pass per run, rotating through the list. A material that
+  // genuinely has no marketplace presence keeps requiring both platform passes
+  // forever, and forcing both would permanently spend 2 of 3 slots and starve the
+  // producer/distributor/retail buckets of their rotation.
+  const required = byKey(opts?.requirePasses ?? []);
+  const forced = required.length ? [required[offset % required.length]] : [];
   const slice: typeof SCOUT_PASSES = [];
-  for (const p of [...byKey(opts?.retryPasses ?? []), ...byKey(opts?.requirePasses ?? [])]) {
+  for (const p of [...byKey(opts?.retryPasses ?? []), ...forced]) {
     if (slice.length >= PASSES_PER_RUN) break;
     if (!slice.includes(p)) slice.push(p);
   }

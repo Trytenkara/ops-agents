@@ -1100,7 +1100,7 @@ registerAgent({
               });
             },
             retryPasses: scoutRetryPasses.get(material.id) ?? [],
-            requirePasses: hasMarketplaceLead ? [] : ["marketplace"],
+            requirePasses: hasMarketplaceLead ? [] : ["marketplace", "chem_platforms"],
             onPassOutcome: async (failedKeys) => {
               scoutPassFailures += failedKeys.length;
               if (failedKeys.length) {
