@@ -102,7 +102,16 @@ export async function searchSuppliers(opts: SupplierSearchOpts): Promise<string>
     .map((c: any) => (typeof c?.text === "string" ? c.text : ""))
     .join("\n");
 
-  if (result.isError) {
+  // Upstream reports some failures as an ORDINARY result whose markdown body is
+  // an error block ("# <title> Failed\n\n**Error:** ...") with isError unset. That
+  // parses to zero supplier profiles, so the caller read a hard outage as
+  // "no_results" — 21k-lead-a-week SourceReady went dark on 2026-08-08 and every
+  // run logged a cheerful "staged 0 of 0". Treat the error block as the error it is.
+  // Matched only against the head of the body: a real profile listing could
+  // legitimately quote "Error:" somewhere deep, the failure block is always first.
+  const head = text.trimStart().slice(0, 400);
+  const upstreamError = result.isError || /^#[^\n]*\bFailed\b/i.test(head) || /\*\*Error:\*\*/.test(head);
+  if (upstreamError) {
     if (/CREDITS_EXCEED_LIMIT/i.test(text)) throw new SourceReadyCreditsExceededError();
     throw new Error(`SourceReady search failed: ${text.slice(0, 300)}`);
   }

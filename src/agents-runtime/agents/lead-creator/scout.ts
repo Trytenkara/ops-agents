@@ -308,6 +308,11 @@ async function probeUrl(url: string): Promise<boolean> {
 export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
   excludeHosts?: Set<string>;
   log?: (msg: string, meta?: any) => Promise<void> | void;
+  // Pass keys that failed on this material's last scout, taken ahead of the
+  // hourly rotation so a lost bucket is re-run instead of waiting out the full
+  // 6-pass cycle. Reported back through onPassOutcome for the caller to persist.
+  retryPasses?: string[];
+  onPassOutcome?: (failedKeys: string[]) => Promise<void> | void;
 }): Promise<ScoutSupplier[]> {
   const log = opts?.log ?? (async () => {});
   const matLabel = materialLabel(material, material.id) as string;
@@ -376,20 +381,39 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
     (Array.from(material.id).reduce((a, ch) => a + ch.charCodeAt(0), 0) +
       Math.floor(Date.now() / 3_600_000)) %
     SCOUT_PASSES.length;
-  const slice = Array.from(
-    { length: PASSES_PER_RUN },
-    (_, i) => SCOUT_PASSES[(offset + i) % SCOUT_PASSES.length]
-  );
+  // A pass that died (the 600s abort with no salvageable JSON) used to be simply
+  // lost: the rotation moved on and the material banked whatever the survivors
+  // returned, which is how a new material ended up with 6 leads when the volume
+  // pass was the one that aborted. Failed keys jump the queue on the next scout.
+  const retry = (opts?.retryPasses ?? [])
+    .map((k) => SCOUT_PASSES.find((p) => p.key === k))
+    .filter((p): p is (typeof SCOUT_PASSES)[number] => !!p);
+  const slice: typeof SCOUT_PASSES = [];
+  for (const p of retry) {
+    if (slice.length >= PASSES_PER_RUN) break;
+    if (!slice.includes(p)) slice.push(p);
+  }
+  for (let i = 0; i < SCOUT_PASSES.length && slice.length < PASSES_PER_RUN; i++) {
+    const p = SCOUT_PASSES[(offset + i) % SCOUT_PASSES.length];
+    if (!slice.includes(p)) slice.push(p);
+  }
   await log(`scout: running passes ${slice.map((p) => p.key).join(", ")} for ${matLabel}`, {
     material_id: material.id,
   });
   const settled = await Promise.allSettled(slice.map(runPass));
   const suppliers: ScoutSupplier[] = [];
   const failures: string[] = [];
+  const failedKeys: string[] = [];
   settled.forEach((r, i) => {
     if (r.status === "fulfilled") suppliers.push(...r.value);
-    else failures.push(`${slice[i].key}: ${r.reason?.message ?? r.reason}`);
+    else {
+      failures.push(`${slice[i].key}: ${r.reason?.message ?? r.reason}`);
+      failedKeys.push(slice[i].key);
+    }
   });
+  // Always reported, empty list included, so a pass that succeeds on retry clears
+  // the marker instead of being preferred forever.
+  if (opts?.onPassOutcome) await opts.onPassOutcome(failedKeys);
   if (failures.length) {
     await log(`scout: ${failures.length}/${slice.length} passes failed for ${matLabel} — ${failures.join("; ")}`, {
       material_id: material.id, level: "warn",

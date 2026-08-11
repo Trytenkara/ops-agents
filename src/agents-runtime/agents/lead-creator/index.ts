@@ -66,6 +66,7 @@ const pageFor = (count: number, size: number) => Math.floor(Math.max(0, count) /
 const DISCOVERY_MIN_NEW_PER_PAGE = envInt("DISCOVERY_MIN_NEW_PER_PAGE", 2);
 const DISCOVERY_MAX_DRY_PAGES = envInt("DISCOVERY_MAX_DRY_PAGES", 3);
 const PAGE_CURSOR_KEY = (source: string, materialId: string) => `discovery_page:${source}:${materialId}`;
+const SCOUT_RETRY_KEY = (materialId: string) => `scout_retry_passes:${materialId}`;
 type PageCursor = { page: number; count: number; dry: number };
 
 function advancePageCursor(
@@ -74,15 +75,28 @@ function advancePageCursor(
   countKnown: boolean,
   size: number
 ): PageCursor {
-  const prevPage = cursor?.page ?? pageFor(curCount, size);
-  let dry = cursor?.dry ?? 0;
+  // First fire for this material: request the seed page ITSELF, don't advance
+  // past it. Advancing here skipped page 1 on every brand-new material (seed is
+  // 1 at count 0), so its first two fires asked for pages 2 and 3 of a corpus
+  // whose only page was 1 — the commonest reason a new material plateaus at
+  // whatever the scout alone returned.
+  if (!cursor) return { page: pageFor(curCount, size), count: curCount, dry: 0 };
   // Growth is only meaningful when this run actually counted leads (a targeted
-  // single-material run skips the bulk count), and only against a real cursor.
-  if (countKnown && cursor) {
+  // single-material run skips the bulk count).
+  let dry = cursor.dry ?? 0;
+  if (countKnown) {
     dry = curCount - cursor.count >= DISCOVERY_MIN_NEW_PER_PAGE ? 0 : dry + 1;
   }
   if (dry >= DISCOVERY_MAX_DRY_PAGES) return { page: 1, count: curCount, dry: 0 };
-  return { page: prevPage + 1, count: curCount, dry };
+  return { page: cursor.page + 1, count: curCount, dry };
+}
+
+// A page the source answered with ZERO rows means the corpus ends at or before
+// it, so the next page cannot hold anything either — advancing walks further
+// into guaranteed-empty space (ImportYeti's stride of 10 exhausts a niche
+// material in one page). Restart at page 1 and count the fire as dry.
+function cursorAfterEmptyPage(requested: PageCursor, curCount: number): PageCursor {
+  return { page: 1, count: curCount, dry: requested.dry + 1 };
 }
 // ImportYeti discovery runs in-process (bounded per material per run): pulls
 // US-customs suppliers and stages source='importyeti' leads inline. Inert
@@ -361,6 +375,25 @@ registerAgent({
           count: Number(r.value?.count) || 0,
           dry: Number(r.value?.dry) || 0,
         });
+      }
+      if (batch.length < 1000) break;
+    }
+    // Scout passes that failed on each material's last attempt, re-run ahead of
+    // the rotation on this one.
+    const scoutRetryPasses = new Map<string, string[]>();
+    for (let from = 0; ; from += 1000) {
+      const { data: rows } = await admin
+        .from("agent_state")
+        .select("key, value")
+        .eq("agent_id", ctx.agentId)
+        .like("key", "scout_retry_passes:%")
+        .range(from, from + 999);
+      const batch = (rows ?? []) as { key: string; value: any }[];
+      for (const r of batch) {
+        const keys = Array.isArray(r.value?.passes)
+          ? r.value.passes.filter((k: any) => typeof k === "string")
+          : [];
+        if (keys.length) scoutRetryPasses.set(r.key.slice("scout_retry_passes:".length), keys);
       }
       if (batch.length < 1000) break;
     }
@@ -951,6 +984,25 @@ registerAgent({
           scoutResults = await scoutSuppliersForMaterial(material, {
             excludeHosts,
             log: (msg, meta) => ctx.log(msg, { step: "scout", data: { ...meta, material_id: material.id } }),
+            retryPasses: scoutRetryPasses.get(material.id) ?? [],
+            onPassOutcome: async (failedKeys) => {
+              if (failedKeys.length) {
+                await admin.from("agent_state").upsert(
+                  {
+                    agent_id: ctx.agentId,
+                    key: SCOUT_RETRY_KEY(material.id),
+                    value: { passes: failedKeys, at: new Date().toISOString() },
+                  },
+                  { onConflict: "agent_id,key" }
+                );
+              } else if (scoutRetryPasses.has(material.id)) {
+                await admin
+                  .from("agent_state")
+                  .delete()
+                  .eq("agent_id", ctx.agentId)
+                  .eq("key", SCOUT_RETRY_KEY(material.id));
+              }
+            },
           });
         } catch (e: any) {
           scoutHardFailed = true;
@@ -1106,6 +1158,7 @@ registerAgent({
           SOURCEREADY_PAGE_SIZE
         );
         const srPage = srCursor.page;
+        let srPersist = srCursor;
         let ok = false;
         let srDetail: Record<string, any> = {};
         let srError: string | null = null;
@@ -1128,6 +1181,7 @@ registerAgent({
             ctx.runId
           );
           ok = r.ok;
+          if ((r.received ?? 0) === 0) srPersist = cursorAfterEmptyPage(srCursor, srCursor.count);
           srDetail = {
             received: r.received, inserted: r.inserted, skipped: r.skipped,
             reason: r.reason, unlocked: r.unlocked,
@@ -1147,7 +1201,7 @@ registerAgent({
             {
               agent_id: ctx.agentId,
               key: PAGE_CURSOR_KEY("sourceready", material.id),
-              value: { ...srCursor, at: new Date().toISOString() },
+              value: { ...srPersist, at: new Date().toISOString() },
             },
             { onConflict: "agent_id,key" }
           );
@@ -1181,6 +1235,7 @@ registerAgent({
           IMPORTYETI_PAGE_SIZE
         );
         const iyPage = iyCursor.page;
+        let iyPersist = iyCursor;
         let ok = false;
         let iyDetail: Record<string, any> = {};
         let iyError: string | null = null;
@@ -1200,6 +1255,7 @@ registerAgent({
             ctx.runId
           );
           ok = r.ok;
+          if ((r.received ?? 0) === 0) iyPersist = cursorAfterEmptyPage(iyCursor, iyCursor.count);
           iyDetail = { received: r.received, inserted: r.inserted, skipped: r.skipped, reason: r.reason };
           stagedThisMaterial += r.inserted;
         } catch (e: any) {
@@ -1213,7 +1269,7 @@ registerAgent({
             {
               agent_id: ctx.agentId,
               key: PAGE_CURSOR_KEY("importyeti", material.id),
-              value: { ...iyCursor, at: new Date().toISOString() },
+              value: { ...iyPersist, at: new Date().toISOString() },
             },
             { onConflict: "agent_id,key" }
           );
