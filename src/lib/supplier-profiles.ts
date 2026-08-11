@@ -37,7 +37,7 @@ export interface SupplierProfile {
   notes: string | null;
   generated_notes: string | null;
   field_sources: Record<string, string>;
-  approval_status: "draft" | "pending_review" | "ready_for_submission" | "submitted";
+  approval_status: "draft" | "pending_review" | "final_review";
   created_at: string;
   updated_at: string;
 }

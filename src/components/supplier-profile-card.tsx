@@ -16,8 +16,7 @@ import { MARKET_KIND_LABEL, MARKET_KIND_TITLE, MARKET_KIND_VARIANT } from "@/lib
 const STATUS_META: Record<string, { label: string; variant: "success" | "warn" | "secondary" }> = {
   draft: { label: "Draft", variant: "secondary" },
   pending_review: { label: "Pending Review", variant: "warn" },
-  ready_for_submission: { label: "Ready", variant: "success" },
-  submitted: { label: "Submitted", variant: "success" },
+  final_review: { label: "Final Review", variant: "success" },
 };
 
 // Terms a supplier only ever states in a reply. Blank here means the ask is

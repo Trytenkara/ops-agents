@@ -89,8 +89,7 @@ const STATUS_FILTER = [
   { value: "all", label: "All statuses" },
   { value: "draft", label: "Draft" },
   { value: "pending_review", label: "Pending Review" },
-  { value: "ready_for_submission", label: "Ready" },
-  { value: "submitted", label: "Submitted" },
+  { value: "final_review", label: "Final Review" },
   { value: "no_profile", label: "No profile yet" },
 ];
 
@@ -486,7 +485,7 @@ export function SupplierLeadsView({
                   )}
                   {g.profile ? (
                     <Badge variant={
-                      g.profile.approval_status === "ready_for_submission" || g.profile.approval_status === "submitted" ? "success" :
+                      g.profile.approval_status === "final_review" ? "success" :
                       g.profile.approval_status === "pending_review" ? "warn" : "secondary"
                     }>
                       {g.profile.approval_status.replace(/_/g, " ")}

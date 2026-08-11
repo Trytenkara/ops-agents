@@ -18,8 +18,7 @@ import type { ClientDocRule, ClientDocRules } from "@/lib/tenkara-requirements";
 const STATUS_META: Record<string, { label: string; variant: "success" | "warn" | "secondary" }> = {
   draft: { label: "Draft", variant: "secondary" },
   pending_review: { label: "Pending Review", variant: "warn" },
-  ready_for_submission: { label: "Ready", variant: "success" },
-  submitted: { label: "Submitted", variant: "success" },
+  final_review: { label: "Final Review", variant: "success" },
 };
 
 function Field({
@@ -418,8 +417,7 @@ export function QuoteProfileCard({
                   options={[
                     { value: "draft", label: "Draft" },
                     { value: "pending_review", label: "Pending Review" },
-                    { value: "ready_for_submission", label: "Ready for Submission" },
-                    { value: "submitted", label: "Submitted" },
+                    { value: "final_review", label: "Final Review" },
                   ]}
                 />
               ) : (

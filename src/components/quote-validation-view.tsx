@@ -78,8 +78,7 @@ const STATUS_FILTER = [
   { value: "all", label: "All statuses" },
   { value: "draft", label: "Draft" },
   { value: "pending_review", label: "Pending Review" },
-  { value: "ready_for_submission", label: "Ready" },
-  { value: "submitted", label: "Submitted" },
+  { value: "final_review", label: "Final Review" },
 ];
 
 export function QuoteValidationView({
@@ -372,7 +371,7 @@ export function QuoteValidationView({
           const materials = g.quotes.map((q) => q.material_name);
           const kinds = Array.from(new Set(g.quotes.map(kindOf))).filter((k): k is MarketKind => k !== "unclassified");
           const aggregators = Array.from(new Set(g.quotes.map((q) => aggregatorNameOf(q.source_url)).filter(Boolean)));
-          const statuses = { draft: 0, pending_review: 0, ready_for_submission: 0, submitted: 0 };
+          const statuses = { draft: 0, pending_review: 0, final_review: 0 };
           for (const q of g.quotes) {
             if (q.approval_status in statuses) (statuses as any)[q.approval_status]++;
           }
@@ -397,10 +396,9 @@ export function QuoteValidationView({
                     </Badge>
                   ))}
                   {/* Status summary badges */}
-                  {statuses.ready_for_submission > 0 && <Badge variant="success">{statuses.ready_for_submission} ready</Badge>}
+                  {statuses.final_review > 0 && <Badge variant="success">{statuses.final_review} final review</Badge>}
                   {statuses.pending_review > 0 && <Badge variant="warn">{statuses.pending_review} pending</Badge>}
                   {statuses.draft > 0 && <Badge variant="secondary">{statuses.draft} draft</Badge>}
-                  {statuses.submitted > 0 && <Badge variant="success">{statuses.submitted} submitted</Badge>}
                 </div>
                 <div className="flex items-center gap-4 shrink-0">
                   <span

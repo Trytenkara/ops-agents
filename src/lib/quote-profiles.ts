@@ -68,7 +68,7 @@ export interface QuoteProfile {
   postorder_tds_dealbreaker: boolean;
   notes: string | null;
   generated_notes: string | null;
-  approval_status: "draft" | "pending_review" | "ready_for_submission" | "submitted";
+  approval_status: "draft" | "pending_review" | "final_review";
   created_at: string;
   updated_at: string;
 }
@@ -228,6 +228,8 @@ export async function seedQuoteProfilesFromStaged(
         s.grade ? `Grade: ${s.grade}.` : null,
       ].filter(Boolean).join(" ");
       if (current) {
+        // Freeze: a human owns any quote advanced out of draft; agents leave it be.
+        if (!agentMayWrite(current)) continue;
         const patch: QuoteProfileUpdate & { generated_notes?: string | null } = {};
         if ((generatedNotes || null) !== (current.generated_notes ?? null)) {
           patch.generated_notes = generatedNotes || null;
@@ -235,6 +237,9 @@ export async function seedQuoteProfilesFromStaged(
         // A rung adopted from a pre-tier row still has no label, so stamp it —
         // otherwise the ladder stays unreadable on the card.
         if (pack && !current.pack_size) patch.pack_size = pack;
+        // A reply quote that already carries its core fields is done — hand it to a
+        // human for review.
+        if (coreComplete(current)) patch.approval_status = "pending_review";
         if (!Object.keys(patch).length) continue;
         await admin.from("quote_profiles").update(patch).eq("id", current.id);
         Object.assign(current, patch);
@@ -242,14 +247,17 @@ export async function seedQuoteProfilesFromStaged(
         if (touched >= limit) break;
         continue;
       }
+      const seedCore = {
+        price: s.price != null ? Number(s.price) : null,
+        case_size: s.case_size != null ? Number(s.case_size) : null,
+        unit_of_measurement: s.unit_of_measurement ?? null,
+      };
       const inserted = await insertQuoteProfile(admin, orgId, {
         supplier_id: s.supplier_id ?? null,
         supplier_name: s.supplier_name ?? "",
         material_id: s.material_id ?? null,
         material_name: s.material_name ?? "",
-        price: s.price != null ? Number(s.price) : null,
-        case_size: s.case_size != null ? Number(s.case_size) : null,
-        unit_of_measurement: s.unit_of_measurement ?? null,
+        ...seedCore,
         pack_size: pack,
         currency: s.currency ?? "USD",
         case_type: s.case_type ?? null,
@@ -263,6 +271,9 @@ export async function seedQuoteProfilesFromStaged(
         additional_grades: s.grade ?? null,
         source_url: typeof s.source_attachment_url === "string" ? s.source_attachment_url : null,
         generated_notes: generatedNotes || null,
+        // A reply that arrives with its core fields is ready for review the moment
+        // it lands; a partial one stays draft for agents to keep filling.
+        approval_status: coreComplete(seedCore) ? "pending_review" : "draft",
       });
       // Nameless quotes stay out of the index for the reason above: indexing one
       // would make the next nameless quote for the same material adopt it.
@@ -372,6 +383,27 @@ function marketplaceTiers(payload: any): MarketplaceTier[] {
 
 const packKeyOf = (pack: string | null | undefined) => (pack ?? "").trim().toLowerCase();
 
+const isBlank = (v: unknown) => v == null || v === "";
+
+// The fields an agent can actually source for a quote. Once all three are present
+// there is nothing more a listing/reply can meaningfully add, so the profile is
+// "as filled as an agent can make it" and is handed to a human. Lead time, MOQ and
+// dims are excluded on purpose: many listings never carry them, and gating on them
+// would leave otherwise-complete quotes stuck in draft forever, defeating the
+// "agents are done" signal.
+const AGENT_CORE_FIELDS: (keyof QuoteProfile)[] = ["price", "case_size", "unit_of_measurement"];
+
+function coreComplete(p: Pick<QuoteProfile, "price" | "case_size" | "unit_of_measurement">): boolean {
+  return AGENT_CORE_FIELDS.every((f) => !isBlank((p as any)[f]));
+}
+
+// Agents own a quote only while it is a draft. The moment an operator advances it
+// (pending_review / final_review), a human owns the record and no agent write may
+// touch it again — this is the hard half of "don't overwrite what operators changed."
+function agentMayWrite(p: Pick<QuoteProfile, "approval_status">): boolean {
+  return p.approval_status === "draft";
+}
+
 export async function syncQuoteProfilesFromMarketplace(
   admin: SupabaseClient,
   orgId: string,
@@ -476,20 +508,35 @@ export async function syncQuoteProfilesFromMarketplace(
       }
 
       claimed.add(target.id);
+      // Freeze: once an operator has advanced this quote out of draft, no agent
+      // write touches it again.
+      if (!agentMayWrite(target)) continue;
+
       const patch: QuoteProfileUpdate = {};
-      // The listing owns the price outright — refreshing it is the point of the
-      // re-sync.
-      if (target.price == null || Number(target.price) !== tier.price) patch.price = tier.price;
+      // Fill-blanks-only: the agent may write a field it can source ONLY while that
+      // field is empty, so an operator's hand-correction (or a richer earlier value)
+      // is never clobbered — even the price, which used to be refreshed outright. The
+      // live price index reads leads_in_flight.payload, not this record, so freezing
+      // the quote's price here does not stale the index.
+      if (isBlank(target.price)) patch.price = tier.price;
       if (String(target.currency ?? "").toUpperCase() !== "USD") patch.currency = "USD";
       for (const [field, next] of Object.entries(listed) as [keyof typeof listed, any][]) {
-        const current = (target as any)[field];
-        // Fill a blank or move one non-null to another, but never blank a value the
-        // listing has simply gone quiet about.
         if (next == null) continue;
-        const same = typeof next === "number" ? current != null && Number(current) === next : current === next;
-        if (same) continue;
+        if (!isBlank((target as any)[field])) continue;
         (patch as any)[field] = next;
       }
+
+      // Auto-promote: when the agent has everything it can source (core complete) and
+      // this pass had no fresh blank to fill, the quote has converged — flip it to
+      // pending_review so operators get the "agents are done, ready for review" signal.
+      const noNewFills = !Object.keys(patch).some((k) => k !== "currency");
+      const willBeCore = coreComplete({
+        price: patch.price ?? target.price,
+        case_size: patch.case_size ?? target.case_size,
+        unit_of_measurement: patch.unit_of_measurement ?? target.unit_of_measurement,
+      });
+      if (noNewFills && willBeCore) patch.approval_status = "pending_review";
+
       if (!Object.keys(patch).length) continue;
       try {
         const fresh = await updateQuoteProfile(admin, target.id, patch);
