@@ -131,6 +131,8 @@ For marketplace category pages (IndiaMART, Alibaba, Made-in-China, TradeIndia): 
 
 THE PLATFORM IS NEVER THE SUPPLIER. Never return a row whose supplier_name is an aggregator's own name ("Alibaba", "Alibaba Marketplace (Multiple Sellers)", "IndiaMART suppliers", "Made-in-China (Platform)", "TradeIndia", "Global Sources", "EC21", "TradeKey", "Go4WorldBusiness"), and never point a row's url at a category, search-results or showroom page listing many sellers (e.g. alibaba.com/showroom/..., indiamart.com/impcat/..., a /search result). Those rows are discarded. Each aggregator row must name ONE selling company and link to THAT company's own listing or storefront on the platform.
 
+NAME VARIANTS FIRST. Trade catalogues rarely use the exact name we give you, and searching only the literal string is how a well-supplied material comes back empty. Before anything else, work out what sellers actually call this material and search those forms too: word-order variants ("Rapeseed Fatty Acid" is listed as "Rapeseed Oil Fatty Acid" and "Rapeseed Acid Oil"), the distillate/by-product name, the industry abbreviation, the INCI vs common vs botanical vs CAS name, and the dominant single component where the trade treats them interchangeably. Returning zero suppliers because the literal name had no hits is a FAILED run: if the first query is thin, change the name, not the channel.
+
 DISCOVERY — use the web_search tool aggressively across regions and channels:
 - Generic: "<material> bulk supplier wholesale B2B manufacturer"
 - India: "<material> manufacturer India bulk wholesale 25kg" + "<material> IndiaMART" + "<material> TradeIndia"
@@ -228,7 +230,7 @@ function buildUserMessage(material: MaterialRow, focus: string): string {
   parts.push(`THIS RUN'S SCOPE — search for these suppliers only: ${focus}`);
   parts.push("");
   parts.push(
-    "Other buckets are covered by parallel runs, so do not spend searches on them. Your search budget is small, so make each search wide and harvest every supplier named on the result pages you get (aim for 20+), applying all classification and field rules from the system prompt."
+    "Other buckets are covered by parallel runs, so do not spend searches on them. Your search budget is small, so make each search wide and harvest every supplier named on the result pages you get (aim for 20+), applying all classification and field rules from the system prompt. Spend at most one or two searches on the literal name above: if it comes back thin, switch to the trade's own name for this material rather than reporting the bucket as empty."
   );
   return parts.join("\n");
 }
