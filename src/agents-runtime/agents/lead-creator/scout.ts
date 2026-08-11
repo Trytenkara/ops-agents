@@ -334,7 +334,7 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
   // no marketplace supplier at all has to run the marketplace pass, and waiting
   // for the rotation to come back around means days of nothing.
   requirePasses?: string[];
-  onPassOutcome?: (failedKeys: string[]) => Promise<void> | void;
+  onPassOutcome?: (barrenKeys: string[]) => Promise<void> | void;
 }): Promise<ScoutSupplier[]> {
   const log = opts?.log ?? (async () => {});
   const matLabel = materialLabel(material, material.id) as string;
@@ -417,8 +417,14 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
   // producer/distributor/retail buckets of their rotation.
   const required = byKey(opts?.requirePasses ?? []);
   const forced = required.length ? [required[offset % required.length]] : [];
+  // Retries never take the whole run. An empty pass is retryable too (see
+  // onPassOutcome), so a material whose every bucket comes back thin would
+  // otherwise queue all 7 keys and pin the slice forever, replaying the same
+  // barren passes and never rotating onto a bucket that might actually hold
+  // something.
+  const retries = byKey(opts?.retryPasses ?? []).slice(0, PASSES_PER_RUN - 1);
   const slice: typeof SCOUT_PASSES = [];
-  for (const p of [...byKey(opts?.retryPasses ?? []), ...forced]) {
+  for (const p of [...retries, ...forced]) {
     if (slice.length >= PASSES_PER_RUN) break;
     if (!slice.includes(p)) slice.push(p);
   }
@@ -432,21 +438,35 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
   const settled = await Promise.allSettled(slice.map(runPass));
   const suppliers: ScoutSupplier[] = [];
   const failures: string[] = [];
-  const failedKeys: string[] = [];
+  // A pass that completes and returns nothing banked exactly as much as one that
+  // crashed, so it earns a retry on the same terms. Rapeseed Fatty Acid sat at 8
+  // leads with no marketplace supplier because its marketplace pass returned a
+  // clean 0 (we searched our name for it, the trade lists it as "Rapeseed Oil
+  // Fatty Acid") and a clean 0 read as "market is empty, move on".
+  const barrenKeys: string[] = [];
   settled.forEach((r, i) => {
-    if (r.status === "fulfilled") suppliers.push(...r.value);
-    else {
+    if (r.status === "fulfilled") {
+      suppliers.push(...r.value);
+      if (!r.value.length) barrenKeys.push(slice[i].key);
+    } else {
       failures.push(`${slice[i].key}: ${r.reason?.message ?? r.reason}`);
-      failedKeys.push(slice[i].key);
+      barrenKeys.push(slice[i].key);
     }
   });
   // Always reported, empty list included, so a pass that succeeds on retry clears
   // the marker instead of being preferred forever.
-  if (opts?.onPassOutcome) await opts.onPassOutcome(failedKeys);
+  if (opts?.onPassOutcome) await opts.onPassOutcome(barrenKeys);
   if (failures.length) {
     await log(`scout: ${failures.length}/${slice.length} passes failed for ${matLabel} — ${failures.join("; ")}`, {
       material_id: material.id, level: "warn",
     });
+  }
+  const emptyKeys = barrenKeys.filter((k) => !failures.some((f) => f.startsWith(`${k}:`)));
+  if (emptyKeys.length) {
+    await log(
+      `scout: ${emptyKeys.length}/${slice.length} passes returned nothing for ${matLabel} (${emptyKeys.join(", ")}) — requeued`,
+      { material_id: material.id, level: "warn", empty_passes: emptyKeys }
+    );
   }
   // All passes down means the scout is broken (model/timeout/key), not that the
   // market is empty. Throw so the caller records a hard failure and retries next

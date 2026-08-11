@@ -1101,14 +1101,14 @@ registerAgent({
             },
             retryPasses: scoutRetryPasses.get(material.id) ?? [],
             requirePasses: hasMarketplaceLead ? [] : ["marketplace", "chem_platforms"],
-            onPassOutcome: async (failedKeys) => {
-              scoutPassFailures += failedKeys.length;
-              if (failedKeys.length) {
+            onPassOutcome: async (barrenKeys) => {
+              scoutPassFailures += barrenKeys.length;
+              if (barrenKeys.length) {
                 await admin.from("agent_state").upsert(
                   {
                     agent_id: ctx.agentId,
                     key: SCOUT_RETRY_KEY(material.id),
-                    value: { passes: failedKeys, at: new Date().toISOString() },
+                    value: { passes: barrenKeys, at: new Date().toISOString() },
                   },
                   { onConflict: "agent_id,key" }
                 );
@@ -1486,7 +1486,7 @@ registerAgent({
         (failedSources.length
           ? ` · ⚠ SOURCE FAILED: ${failedSources.map(([s, f]) => `${s} (${f.count} material${f.count === 1 ? "" : "s"})`).join(", ")}`
           : "") +
-        (scoutPassFailures ? ` · ${scoutPassFailures} scout pass(es) aborted` : "") +
+        (scoutPassFailures ? ` · ${scoutPassFailures} scout pass(es) banked nothing` : "") +
         (csvUrl ? ` · CSV ready` : "") +
         (noLeadMaterials.length
           ? ` · empty: ${noLeadMaterials.slice(0, 3).join(", ")}${noLeadMaterials.length > 3 ? "…" : ""}`
