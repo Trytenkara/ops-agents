@@ -93,14 +93,28 @@ const SCOUT_PASSES: { key: string; focus: string }[] = [
   {
     key: "chem_platforms",
     focus:
-      "Chemical, pharma and ingredient PLATFORMS only, the multi-seller ones that list named third-party sellers and usually publish a direct sales email: Chemondis, Knowde, Pharmaoffer, PharmaCompass, Echemi, ChemicalBook, Molbase, ChemBid, UL Prospector, Chemical Register, Ingredients Network, NXT Ingredients, Nutrada, TraceGains Gather. Search this material on the ones that carry it and return the individual SELLER companies each lists, one row each, never the platform itself. Prefer these over general-trade marketplaces: they usually expose a reachable company email rather than an inquiry relay.",
+      "Chemical, pharma and ingredient PLATFORMS only, the multi-seller ones that list named third-party sellers and usually publish a direct sales email. Candidates: Chemondis, Knowde, Pharmaoffer, PharmaCompass, Echemi, ChemicalBook, Molbase, ChemBid, UL Prospector, Chemical Register, Ingredients Network, NXT Ingredients, Nutrada, TraceGains Gather. Pick only the 2-3 most likely to carry THIS material and cover those properly; do not attempt the whole list. Return the individual SELLER companies each lists, one row each, never the platform itself.",
   },
   {
     key: "retail",
     focus:
-      "Bulk and retail shops with published price ladders only: US shops (Bulk Apothecary, MakingCosmetics, Lotioncrafter, Wholesale Supplies Plus, Lab Alley, PureBulk, Ingredi) and EU specialty cosmetic-ingredient shops (Lerochem, Alexmo, Handymade, Gracefruit), plus anything surfaced by price-per-kg and buy-bulk queries. Capture the full pack-size price ladder for each.",
+      "Bulk and retail shops with published price ladders only. Candidates: US shops (Bulk Apothecary, MakingCosmetics, Lotioncrafter, Wholesale Supplies Plus, Lab Alley, PureBulk, Ingredi) and EU specialty cosmetic-ingredient shops (Lerochem, Alexmo, Handymade, Gracefruit). Pick only the 3-4 most likely to carry THIS material and cover those properly; do not attempt the whole list. Spend any remaining searches on price-per-kg / buy-bulk queries. Capture the full pack-size price ladder for each.",
   },
 ];
+
+// Passes can be retired without a deploy. `chem_platforms` is off by default:
+// over 2026-08-01..08-12 it fired 36 times, wasted 92% of them (abort or
+// unparseable), and banked 12 supplier rows in total, against `asia`'s 11,305
+// off fewer fires. Its prompt named 14 platforms against a 6-search budget, an
+// arithmetically unsatisfiable scope; the prompt above is now bounded, so this
+// is reversible by clearing the env var if the narrower scope is worth retrying.
+const DISABLED_PASS_KEYS = new Set(
+  (process.env.SCOUT_DISABLED_PASSES ?? "chem_platforms")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
+const ACTIVE_PASSES = SCOUT_PASSES.filter((p) => !DISABLED_PASS_KEYS.has(p.key));
 
 // Field set mirrors Ben's "Vita Organica – Supplier Sourcing" sheet so a scout
 // lead carries the same actionable columns a human researcher would capture:
@@ -424,14 +438,14 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
   const offset =
     (Array.from(material.id).reduce((a, ch) => a + ch.charCodeAt(0), 0) +
       Math.floor(Date.now() / 3_600_000)) %
-    SCOUT_PASSES.length;
+    ACTIVE_PASSES.length;
   // A pass that died (the 600s abort with no salvageable JSON) used to be simply
   // lost: the rotation moved on and the material banked whatever the survivors
   // returned, which is how a new material ended up with 6 leads when the volume
   // pass was the one that aborted. Failed keys jump the queue on the next scout.
   const byKey = (keys: string[]) =>
     keys
-      .map((k) => SCOUT_PASSES.find((p) => p.key === k))
+      .map((k) => ACTIVE_PASSES.find((p) => p.key === k))
       .filter((p): p is (typeof SCOUT_PASSES)[number] => !!p);
   // At most ONE required pass per run, rotating through the list. A material that
   // genuinely has no marketplace presence keeps requiring both platform passes
@@ -450,8 +464,8 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
     if (slice.length >= PASSES_PER_RUN) break;
     if (!slice.includes(p)) slice.push(p);
   }
-  for (let i = 0; i < SCOUT_PASSES.length && slice.length < PASSES_PER_RUN; i++) {
-    const p = SCOUT_PASSES[(offset + i) % SCOUT_PASSES.length];
+  for (let i = 0; i < ACTIVE_PASSES.length && slice.length < PASSES_PER_RUN; i++) {
+    const p = ACTIVE_PASSES[(offset + i) % ACTIVE_PASSES.length];
     if (!slice.includes(p)) slice.push(p);
   }
   await log(`scout: running passes ${slice.map((p) => p.key).join(", ")} for ${matLabel}`, {

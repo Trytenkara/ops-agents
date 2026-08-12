@@ -70,6 +70,7 @@ const DISCOVERY_MAX_DRY_PAGES = envInt("DISCOVERY_MAX_DRY_PAGES", 3);
 const PAGE_CURSOR_KEY = (source: string, materialId: string) => `discovery_page:${source}:${materialId}`;
 const SCOUT_RETRY_KEY = (materialId: string) => `scout_retry_passes:${materialId}`;
 const SOURCEREADY_SEARCHED_KEY = (materialId: string) => `sourceready_searched:${materialId}`;
+const SOURCEREADY_TERM_KEY = (materialId: string) => `sourceready_term:${materialId}`;
 
 // Starvation bypass. A material under this many leads is not "sourced" yet, and
 // the per-org tier interval (15 min high_frequency, 2h normal) must not be what keeps
@@ -128,7 +129,6 @@ const IMPORTYETI_MAX_MATERIALS_PER_RUN = envInt("IMPORTYETI_MAX_MATERIALS_PER_RU
 // v1 trims (vs. full spec):
 //   - existing-DB only mode. BrowserBase external discovery is gated on
 //     BROWSERBASE_API_KEY; absent → we log and skip step 1b cleanly.
-//   - dedup against lead_scanner_mirror over 90 days (per spec).
 //   - cap 50 new leads per run.
 //   - lookback window defaults to 4h but reads `last successful run` from
 //     agent_runs so a missed cron doesn't drop materials.
@@ -136,7 +136,6 @@ const IMPORTYETI_MAX_MATERIALS_PER_RUN = envInt("IMPORTYETI_MAX_MATERIALS_PER_RU
 // testing — when set, takes precedence over the "since last successful run"
 // logic. Production cron stays at the 4h cadence the spec asks for.
 const DEFAULT_LOOKBACK_HOURS = 4;
-const RECENT_MIRROR_DAYS = 90;
 const MAX_NEW_LEADS_PER_RUN = 300;  // expansive runs: up to ~100 scout leads/material across marketplace + non-marketplace, plus graph leads. Real work-per-run is bounded by DRIVE_BUDGET_MS (scout call count), so this is a flood-guard, not the throttle.
 
 // Richness floor / breadth target: a material is considered "needs sourcing"
@@ -308,18 +307,10 @@ registerAgent({
     // An empty recency window is NOT terminal — the backlog queue (3b-iii) may
     // still surface under-sourced materials. Final empty-check is after the merge.
 
-    // 3. Pull recent mirror entries for dedup.
-    const mirrorSince = new Date(Date.now() - RECENT_MIRROR_DAYS * 24 * 3600 * 1000).toISOString();
-    const { data: mirrorRows } = await admin
-      .from("lead_scanner_mirror")
-      .select("supplier_name, material_name, uploaded_at")
-      .gte("uploaded_at", mirrorSince);
-    const mirrorPairs = new Set(
-      (mirrorRows ?? []).map((r: any) =>
-        `${(r.supplier_name ?? "").trim().toLowerCase()}|${(r.material_name ?? "").trim().toLowerCase()}`
-      )
-    );
-    await ctx.log(`Loaded ${mirrorPairs.size} (supplier,material) mirror pairs for dedup`, { step: "dedup" });
+    // 3. (removed) lead_scanner_mirror dedup. The table was to be written by
+    //    Agent 11's human-acknowledgement step, which was never built, so it has
+    //    always held 0 rows and the guard never once fired. Its real work is done
+    //    by 3d (material×supplier id) and 3e (material×supplier name) below.
 
     // 3b. Build Tenkara→OA org map (orgs.tenkara_org_id is the join key).
     //     Cached for the run so we make one round-trip total.
@@ -423,6 +414,24 @@ registerAgent({
           count: Number(r.value?.count) || 0,
           dry: Number(r.value?.dry) || 0,
         });
+      }
+      if (batch.length < 1000) break;
+    }
+    // The SourceReady search term that last returned suppliers, per material.
+    // Each term tried is a billed search, so this turns the alias fan-out into
+    // a single call for any material we have already resolved once.
+    const sourceReadyTerms = new Map<string, string>();
+    for (let from = 0; ; from += 1000) {
+      const { data: rows } = await admin
+        .from("agent_state")
+        .select("key, value")
+        .eq("agent_id", ctx.agentId)
+        .like("key", "sourceready_term:%")
+        .range(from, from + 999);
+      const batch = (rows ?? []) as { key: string; value: any }[];
+      for (const r of batch) {
+        const term = typeof r.value?.term === "string" ? r.value.term : null;
+        if (term) sourceReadyTerms.set(r.key.slice("sourceready_term:".length), term);
       }
       if (batch.length < 1000) break;
     }
@@ -773,10 +782,7 @@ registerAgent({
     // 3d. Per-(material, supplier) idempotency for the GRAPH phase. Without this
     //     a material sitting in the lookback window gets its graph candidates
     //     re-inserted on every cron tick, since findCandidatesForMaterial is
-    //     deterministic. The mirror check below is NOT sufficient: it only sees
-    //     (supplier_name, material_name) pairs exported into lead_scanner_mirror
-    //     by Agent 11, which is frequently empty (Agent 11 is off) — so it silently
-    //     lets duplicates through. Guard directly against leads already in
+    //     deterministic. Guard directly against leads already in
     //     leads_in_flight for these materials. Applies to targeted runs too:
     //     re-inserting an identical (material, supplier) row is never useful.
     const { data: existingGraphLeads } = await admin
@@ -843,7 +849,6 @@ registerAgent({
     let materialsWithLeads = 0;
     let materialsWithoutLeads = 0;
     let materialsWithScoutLeads = 0;
-    let skippedByMirror = 0;
     let skippedByExisting = 0;
     let skippedByExclusion = 0;
     let skippedByName = 0;
@@ -975,11 +980,6 @@ registerAgent({
           skippedByExisting++;
           continue;
         }
-        const key = `${c.supplier_name.trim().toLowerCase()}|${matLabel.trim().toLowerCase()}`;
-        if (mirrorPairs.has(key)) {
-          skippedByMirror++;
-          continue;
-        }
         if (nameSeen(material.id, c.supplier_name)) {
           skippedByName++;
           continue;
@@ -987,7 +987,7 @@ registerAgent({
         fresh.push(c);
       }
       if (unique.length > 0 && fresh.length === 0) {
-        await ctx.log(`All ${unique.length} graph candidates for ${matLabel} skipped by 90d mirror dedup`, {
+        await ctx.log(`All ${unique.length} graph candidates for ${matLabel} already staged`, {
           step: "dedup",
           data: { material_id: material.id },
         });
@@ -1313,6 +1313,7 @@ registerAgent({
               unlockContacts:
                 sourceReadyUnlockEnabled() && !!oaOrgId && !isInternalByOaId.get(oaOrgId),
               aliases: await materialAliases(),
+              preferredTerm: sourceReadyTerms.get(material.id),
               log: (msg, meta) => ctx.log(msg, { step: "sourceready", data: meta }),
             },
             ctx.runId
@@ -1321,8 +1322,22 @@ registerAgent({
           srDetail = {
             received: r.received, inserted: r.inserted, skipped: r.skipped,
             reason: r.reason, unlocked: r.unlocked,
+            used_term: r.usedTerm, terms_tried: r.termsTried,
           };
           stagedThisMaterial += r.inserted;
+          // Cache the winning term so the next fire opens with it instead of
+          // paying its way down the alias list again.
+          if (r.usedTerm && r.received > 0 && sourceReadyTerms.get(material.id) !== r.usedTerm) {
+            sourceReadyTerms.set(material.id, r.usedTerm);
+            await admin.from("agent_state").upsert(
+              {
+                agent_id: ctx.agentId,
+                key: SOURCEREADY_TERM_KEY(material.id),
+                value: { term: r.usedTerm, at: new Date().toISOString() },
+              },
+              { onConflict: "agent_id,key" }
+            );
+          }
         } catch (e: any) {
           // On transport failure, mark it searched anyway so we don't retry.
           // If a material truly needs re-search, the operator can manually reset the marker.
@@ -1544,7 +1559,7 @@ registerAgent({
     const graphLeads = leadsCreated - scoutLeadsCreated;
     ctx.setSummary(
       `Staged ${leadsCreated} raw leads (${graphLeads} graph, ${scoutLeadsCreated} scout) across ${materialsWithLeads} material${materialsWithLeads === 1 ? "" : "s"} · ` +
-        `${materialsWithScoutLeads} got scout leads · ${materialsWithoutLeads} empty · ${skippedByMirror} graph candidates skipped by 90d mirror` +
+        `${materialsWithScoutLeads} got scout leads · ${materialsWithoutLeads} empty` +
         (skippedByExisting ? ` · ${skippedByExisting} skipped (already staged)` : "") +
         (skippedByName ? ` · ${skippedByName} skipped (same supplier already staged)` : "") +
         (skippedByExclusion ? ` · ${skippedByExclusion} skipped (do-not-contact / excluded country)` : "") +

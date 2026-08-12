@@ -34,6 +34,12 @@ export function sourceReadyEnabled(): boolean {
 // where the same search without it returns all of them. Leaving this on with an empty
 // balance would silently starve discovery for exactly the real clients it is meant to
 // help. Turn it on (SOURCEREADY_UNLOCK_CONTACTS=1) only when credits are topped up.
+// Billed searches per fire, counting the material's own name plus trade aliases.
+const MAX_TERMS_PER_FIRE = Math.max(
+  1,
+  Number(process.env.SOURCEREADY_MAX_TERMS_PER_FIRE ?? "") || 2
+);
+
 export function sourceReadyUnlockEnabled(): boolean {
   return /^(1|true|yes|on)$/i.test((process.env.SOURCEREADY_UNLOCK_CONTACTS ?? "").trim());
 }
@@ -55,6 +61,9 @@ export interface SourceReadyRequest {
   // at its stage-0 seed. Internal test orgs keep crawling for free.
   unlockContacts?: boolean;
   aliases?: string[]; // trade names for the same material, tried when the primary term is dry
+  // The term that won last time for this material. Every term tried is a billed
+  // search, so starting from the known-good one turns a 5-call fan-out into 1.
+  preferredTerm?: string;
   log?: (msg: string, meta?: Record<string, unknown>) => Promise<void> | void;
 }
 
@@ -65,6 +74,8 @@ export interface SourceReadyResult {
   reason?: string;
   unlocked: boolean;
   skipped: Record<string, number>;
+  usedTerm?: string; // caller caches this so the next fire starts with it
+  termsTried?: number;
 }
 
 interface ParsedProduct {
@@ -358,10 +369,24 @@ export async function runSourceReadyDiscovery(
 
   // Our name first, then the trade's names for the same material. A supplier
   // index only knows the vocabulary its sellers used.
-  const terms = [req.materialName, ...(req.aliases ?? [])];
+  //
+  // Every term in this list is a SEPARATELY BILLED search, and getMaterialAliases
+  // returns up to 4, so an unguarded loop costs 5 credits per fire and did: the
+  // 2026-08-11 burn measured ~5.2 billed calls per logged fire. Two guards:
+  // start from the term that won last time (usually a 1-call fire), and cap the
+  // fan-out so a genuinely dry material costs a bounded amount to confirm.
+  const ordered = [req.materialName, ...(req.aliases ?? [])];
+  if (req.preferredTerm) {
+    const i = ordered.findIndex((t) => t.toLowerCase() === req.preferredTerm!.toLowerCase());
+    if (i > 0) ordered.unshift(ordered.splice(i, 1)[0]);
+    else if (i < 0) ordered.unshift(req.preferredTerm);
+  }
+  const terms = ordered.slice(0, MAX_TERMS_PER_FIRE);
   let suppliers: ReturnType<typeof parseSupplierMarkdown> = [];
   let usedTerm = terms[0];
+  let termsTried = 0;
   for (const term of terms) {
+    termsTried++;
     suppliers = parseSupplierMarkdown(await runQuery(term));
     if (suppliers.length) {
       usedTerm = term;
@@ -369,7 +394,11 @@ export async function runSourceReadyDiscovery(
     }
   }
   if (!suppliers.length) {
-    return { ok: true, reason: "no_results", received: 0, inserted: 0, unlocked, skipped: {} };
+    // Zero is not "this market is empty". It is requeued and retried like any
+    // other dry pass. It only means these terms were dry on this page today.
+    return {
+      ok: true, reason: "no_results", received: 0, inserted: 0, unlocked, skipped: {}, termsTried,
+    };
   }
   if (usedTerm !== terms[0]) {
     await req.log?.(
@@ -505,7 +534,10 @@ export async function runSourceReadyDiscovery(
   };
 
   if (!rows.length) {
-    return { ok: true, reason: "all_filtered", received: suppliers.length, inserted: 0, unlocked, skipped };
+    return {
+      ok: true, reason: "all_filtered", received: suppliers.length, inserted: 0,
+      unlocked, skipped, usedTerm, termsTried,
+    };
   }
 
   const { data: inserted, error } = await admin
@@ -520,6 +552,8 @@ export async function runSourceReadyDiscovery(
     inserted: inserted?.length ?? 0,
     unlocked,
     skipped,
+    usedTerm,
+    termsTried,
   };
 }
 
