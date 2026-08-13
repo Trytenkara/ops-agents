@@ -164,13 +164,14 @@ export async function rebalanceOrgAssignments(
   const moveClaims = new Map<string, string[]>();
   for (const r of claimRows) {
     const name = nameOf(r.supplier_id);
-    const derived = ruleOwner(r.supplier_id, name);
+    const key = orgAutoKey(ctx, { supplierId: r.supplier_id, supplierName: name, leadId: r.supplier_id });
+    const derived = ruleOwner(key, name);
     if (derived) {
       decided.set(r.supplier_id, derived);
       clearClaims.push(r.supplier_id);
       continue;
     }
-    const next = spreadOwner(r.supplier_id);
+    const next = spreadOwner(key);
     if (!next) continue;
     decided.set(r.supplier_id, next);
     if (next === r.operator_id) continue;

@@ -57,11 +57,15 @@ export async function POST(request: NextRequest) {
     // Without a supplier the draft still gets an owner, spread on its thread id.
     const assignCtx = await getOrgAssignmentContext(admin, org_id!).catch(() => null);
     if (assignCtx) {
+      const sname = (parsed.data.metadata as any)?.supplier_name ?? null;
       assigned_operator = spreadOwnerId(
         assignCtx,
-        parsed.data.supplier_id
-          ? orgAutoKey(assignCtx, { supplierId: parsed.data.supplier_id, leadId: parsed.data.thread_id })
-          : parsed.data.thread_id
+        orgAutoKey(assignCtx, {
+          supplierId: parsed.data.supplier_id,
+          supplierName: sname,
+          leadId: parsed.data.thread_id,
+        }),
+        { nameHint: sname }
       );
     }
   }

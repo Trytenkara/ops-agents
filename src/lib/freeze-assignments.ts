@@ -86,7 +86,10 @@ export async function freezeDerivedOwners(
 
   const claims = [...index.names]
     .filter(([sid, name]) => !ctx.manual.has(sid) && wanted(sid, name))
-    .map(([sid, name]) => ({ supplier_id: sid, operator_id: resolveOperatorId(ctx, sid, kindOf(sid, name)) }))
+    .map(([sid, name]) => {
+      const key = orgAutoKey(ctx, { supplierId: sid, supplierName: name, leadId: sid });
+      return { supplier_id: sid, operator_id: resolveOperatorId(ctx, key, kindOf(sid, name), name) };
+    })
     .filter((r): r is { supplier_id: string; operator_id: string } => !!r.operator_id);
 
   let frozen = 0;
