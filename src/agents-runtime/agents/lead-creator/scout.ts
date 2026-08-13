@@ -64,6 +64,13 @@ const PASSES_PER_RUN = 3;
 
 // Each pass owns one slice of the landscape the system prompt defines. Together
 // they cover all four buckets; overlap is harmless (merge dedups by host).
+// 1688, DHgate and ChemBid are deliberately absent from the pass candidate
+// lists: across all leads_in_flight, all materials, all sources, all-time, the
+// three have produced ZERO leads between them. That is not proof they fail (a
+// pass gets 4-6 searches against 11-14 named sites, so they may simply never
+// have been picked) but they are the weakest candidates and they crowd out
+// sites that do land. They stay in the SITE_TYPE classification examples below,
+// which is a different job: recognising an aggregator when one turns up.
 const SCOUT_PASSES: { key: string; focus: string }[] = [
   {
     key: "majors",
@@ -88,12 +95,12 @@ const SCOUT_PASSES: { key: string; focus: string }[] = [
   {
     key: "marketplace",
     focus:
-      "General-trade B2B marketplace seller listings only: IndiaMART, Alibaba, Made-in-China, TradeIndia, 1688, DHgate, Global Sources, ExportersIndia, EC21, TradeKey, Go4WorldBusiness. Pick the 4-5 of those that actually carry this material and drill INTO their result pages, returning AT LEAST 6-8 individual seller companies per platform you cover, each as its own row with its own company name, price/MOQ and contact path. Do not return the platform itself as a row. Do not cover the chemical/ingredient platforms, a parallel pass owns those.",
+      "General-trade B2B marketplace seller listings only: IndiaMART, Alibaba, Made-in-China, TradeIndia, Global Sources, ExportersIndia, EC21, TradeKey, Go4WorldBusiness. Pick the 4-5 of those that actually carry this material and drill INTO their result pages, returning AT LEAST 6-8 individual seller companies per platform you cover, each as its own row with its own company name, price/MOQ and contact path. Do not return the platform itself as a row. Do not cover the chemical/ingredient platforms, a parallel pass owns those.",
   },
   {
     key: "chem_platforms",
     focus:
-      "Chemical, pharma and ingredient PLATFORMS only, the multi-seller ones that list named third-party sellers and usually publish a direct sales email. Candidates: Chemondis, Knowde, Pharmaoffer, PharmaCompass, Echemi, ChemicalBook, Molbase, ChemBid, UL Prospector, Chemical Register, Ingredients Network, NXT Ingredients, Nutrada, TraceGains Gather. Pick only the 2-3 most likely to carry THIS material and cover those properly; do not attempt the whole list. Return the individual SELLER companies each lists, one row each, never the platform itself.",
+      "Chemical, pharma and ingredient PLATFORMS only, the multi-seller ones that list named third-party sellers and usually publish a direct sales email. Candidates: Chemondis, Knowde, Pharmaoffer, PharmaCompass, Echemi, ChemicalBook, Molbase, UL Prospector, Chemical Register, Ingredients Network, NXT Ingredients, Nutrada, TraceGains Gather. Pick only the 2-3 most likely to carry THIS material and cover those properly; do not attempt the whole list. Return the individual SELLER companies each lists, one row each, never the platform itself.",
   },
   {
     key: "retail",
@@ -168,7 +175,7 @@ DISCOVERY — use the web_search tool aggressively across regions and channels:
 - US specialty distributors: also check Shay & Company, Silver Fern Chemical, Making Cosmetics, Lotioncrafter, Bulk Apothecary for this material.
 - EU specialty cosmetic-ingredient shops: "<material> kaufen" + "<material> acheter" — and check Lerochem, Alexmo Cosmetics, Handymade, Gracefruit.
 - If a trade name / brand is provided, also: "<trade> authorized distributor" and "<trade> Knowde"
-- CHEMICAL & PHARMA B2B DIRECTORIES (high value — these list manufacturers/distributors that publish DIRECT sales emails, not inquiry relays): search "<material>" on Chemondis, Knowde, Pharmaoffer, Echemi, ChemicalBook, Molbase, ChemBid, GoodScents / UL Prospector, Tradewheel, and Chemical Register. For a pharma/USP grade also: "<material> USP EP manufacturer DMF". Prefer these over generic marketplaces when both list the same supplier — they surface a reachable email.
+- CHEMICAL & PHARMA B2B DIRECTORIES (high value — these list manufacturers/distributors that publish DIRECT sales emails, not inquiry relays): search "<material>" on Chemondis, Knowde, Pharmaoffer, Echemi, ChemicalBook, Molbase, GoodScents / UL Prospector, Tradewheel, and Chemical Register. For a pharma/USP grade also: "<material> USP EP manufacturer DMF". Prefer these over generic marketplaces when both list the same supplier — they surface a reachable email.
 
 CONTACTABILITY: a supplier we can email is worth far more than one reachable only through a marketplace inquiry form. When a source publishes a direct sales/purchasing email (sales@, info@, export@ at the supplier's own domain), CAPTURE IT — do not settle for "via IndiaMART inquiry" when the same company has a real website with an address. Still include inquiry-only listings, but make sure the run also covers directly-emailable manufacturers and distributors, not just marketplace relays.
 
