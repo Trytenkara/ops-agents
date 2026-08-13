@@ -102,14 +102,16 @@ const SCOUT_PASSES: { key: string; focus: string }[] = [
   },
 ];
 
-// Passes can be retired without a deploy. `chem_platforms` is off by default:
-// over 2026-08-01..08-12 it fired 36 times, wasted 92% of them (abort or
-// unparseable), and banked 12 supplier rows in total, against `asia`'s 11,305
-// off fewer fires. Its prompt named 14 platforms against a 6-search budget, an
-// arithmetically unsatisfiable scope; the prompt above is now bounded, so this
-// is reversible by clearing the env var if the narrower scope is worth retrying.
+// Passes can be retired without a deploy, but nothing is retired by default.
+// `chem_platforms` looks dead on 2026-08-01..08-12 numbers (36 fires, 92% of
+// them aborted or unparseable, 12 supplier rows banked against `asia`'s 11,305)
+// and it was very nearly switched off on that basis. It was measured broken:
+// its prompt named 14 platforms against a 6-search budget, so it skimmed all of
+// them and landed none. A near-zero pass is never evidence the market is empty.
+// The prompt above is now bounded the same way `retail`'s is; re-measure after
+// it has run bounded before drawing any conclusion about the channel.
 const DISABLED_PASS_KEYS = new Set(
-  (process.env.SCOUT_DISABLED_PASSES ?? "chem_platforms")
+  (process.env.SCOUT_DISABLED_PASSES ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
