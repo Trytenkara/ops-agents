@@ -164,7 +164,9 @@ function gradeNote(m: DraftMaterial): string {
 
 function pickSubject(input: DraftInput): string {
   const mats = materialList(input);
-  const seed = `${input.supplierCompanyName ?? input.supplierContactName ?? ""}|${mats.map((m) => m.name).join(",")}`;
+  // Include org context in seed so identical suppliers contacted by different orgs get different subject templates.
+  // This prevents CalChem and Sierra from both sending "Sourcing inquiry: Propylene Glycol" to the same supplier.
+  const seed = `${input.clientOrgName}|${input.mode}|${input.supplierCompanyName ?? input.supplierContactName ?? ""}|${mats.map((m) => m.name).join(",")}`;
   if (mats.length > 1) {
     return MULTI_SUBJECT_TEMPLATES[stableHash(seed) % MULTI_SUBJECT_TEMPLATES.length];
   }
@@ -274,7 +276,7 @@ function anthropic(): Anthropic {
 
 const SYSTEM = `You write the FIRST cold outreach email (a sourcing inquiry) from a procurement team to a raw-material supplier. An operator reviews it before it sends.
 
-Write it like a human sourcing coordinator wrote it from scratch. Warm, businesslike, concise. Every email must read uniquely — vary the wording, sentence shapes, and structure between emails. Never reuse a fixed template.
+Write it like a human sourcing coordinator wrote it from scratch. Warm, businesslike, concise. Every email must read uniquely — vary the wording, sentence shapes, and structure between emails. Never reuse a fixed template. When multiple orgs reach the same supplier, each email must differ in voice and phrasing so they read as coming from distinct organizations, not a template.
 
 STYLE RULES (non-negotiable):
 - Greeting: first name if we know the contact's name ("Hi Dana,"), else "Hi {Company} Team,", else "Hi there,".
