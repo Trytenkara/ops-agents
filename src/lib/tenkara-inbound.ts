@@ -188,9 +188,19 @@ export async function handleInboundReply(
       .eq("thread_id", msg.conversation_id)
       .eq("email_client", "rod_app");
     if (inboundOrg) lookup = lookup.eq("org_id", inboundOrg.orgId);
-    const { data, error } = await lookup.order("created_at", { ascending: false }).limit(1).maybeSingle();
+    const { data: threadRefs, error } = await lookup.order("created_at", { ascending: false });
     if (error) return { status: 503, body: { error: "thread_match_failed", detail: error.message } };
-    ref = data;
+
+    // A thread can have multiple drafts for different suppliers/materials (e.g. merged threads,
+    // or an operator consolidating conversations). Only accept a thread_id match if it uniquely
+    // identifies exactly ONE supplier+material pair. Otherwise, fall through to stricter matching
+    // (domain, address, or triage).
+    if (threadRefs && threadRefs.length > 0) {
+      const uniqueTargets = new Set(threadRefs.map((r: any) => `${r.supplier_id ?? ""}:${r.material_id ?? ""}`));
+      if (uniqueTargets.size === 1 && threadRefs[0]?.supplier_id && threadRefs[0]?.material_id) {
+        ref = threadRefs[0];
+      }
+    }
   }
 
   // Operator-attached alternate email: resolve directly to the existing supplier
