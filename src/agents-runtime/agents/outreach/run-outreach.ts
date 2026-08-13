@@ -63,6 +63,8 @@ export interface RunOutreachSupplierInput {
   emailAccountId?: string | null;
   assignedOperator: string | null;
   isMarketplace: boolean;
+  // Org-specific subject prefix (e.g. "[WC]" for Whitecat).
+  orgSubjectPrefix?: string | null;
   // Every material we're sourcing from this supplier, one line item each.
   leads: OutreachLead[];
   log?: (msg: string, meta?: any) => Promise<void> | void;
@@ -77,7 +79,7 @@ export interface RunOutreachResult {
 }
 
 export async function runOutreachForSupplier(input: RunOutreachSupplierInput): Promise<RunOutreachResult> {
-  const { admin, agentId, runId, orgId, supplierId, supplierName, email, contactName, ccContacts, mode, ghostBrand, clientOrgName, emailAccountId: configuredEmailAccountId, assignedOperator, isMarketplace, leads } = input;
+  const { admin, agentId, runId, orgId, supplierId, supplierName, email, contactName, ccContacts, mode, ghostBrand, clientOrgName, emailAccountId: configuredEmailAccountId, assignedOperator, isMarketplace, orgSubjectPrefix, leads } = input;
   const cc = (ccContacts ?? []).filter((c) => c.email && c.email.toLowerCase() !== email.toLowerCase());
   const log = input.log ?? (async () => {});
 
@@ -140,6 +142,7 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
     missingInfoAsks,
     supplierCountry: (primary.payload ?? {})?.supplier_country ?? null,
     reference,
+    orgSubjectPrefix,
   });
 
   const emailAccountId = tenkaraEmailAccountIdFor({ mode, clientOrgName, ghostBrand, explicit: configuredEmailAccountId });

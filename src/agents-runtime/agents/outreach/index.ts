@@ -189,11 +189,11 @@ registerAgent({
     // 2. Resolve org info + classify in one pass. We only contact suppliers on
     //    behalf of orgs that map cleanly to a known active/ghost label.
     const orgIds = Array.from(new Set(leads.map((l) => l.org_id).filter(Boolean) as string[]));
-    let orgsById = new Map<string, { id: string; name: string; tenkara_org_id: string | null; tenkara_email_account_id: string | null }>();
+    let orgsById = new Map<string, { id: string; name: string; tenkara_org_id: string | null; tenkara_email_account_id: string | null; subject_prefix: string | null }>();
     if (orgIds.length) {
       const { data: orgRows } = await admin
         .from("orgs")
-        .select("id, name, tenkara_org_id, tenkara_email_account_id")
+        .select("id, name, tenkara_org_id, tenkara_email_account_id, subject_prefix")
         .in("id", orgIds);
       for (const r of (orgRows ?? []) as any[]) {
         orgsById.set(r.id, {
@@ -201,6 +201,7 @@ registerAgent({
           name: r.name,
           tenkara_org_id: r.tenkara_org_id ?? null,
           tenkara_email_account_id: r.tenkara_email_account_id ?? null,
+          subject_prefix: r.subject_prefix ?? null,
         });
       }
     }
@@ -956,6 +957,7 @@ registerAgent({
         continue;
       }
 
+      const org = orgsById.get(primary.lead.org_id ?? "");
       const res = await runOutreachForSupplier({
         admin,
         agentId: tackleAgentId,
@@ -972,6 +974,7 @@ registerAgent({
         emailAccountId: primary.emailAccountId,
         assignedOperator: primary.assignedOperator,
         isMarketplace,
+        orgSubjectPrefix: org?.subject_prefix ?? null,
         leads: pool.map((c) => c.lead as OutreachLead),
         log: (m, meta) => ctx.log(m, meta),
       });

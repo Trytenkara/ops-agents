@@ -56,6 +56,8 @@ export interface DraftInput {
   // identical subjects across suppliers) and rides through on replies (Re: …),
   // so suppliers quote it back. Omitted → subject unchanged.
   reference?: string | null;
+  // Org-specific subject prefix (e.g. "[WC]" for Whitecat). Appended after reference.
+  orgSubjectPrefix?: string | null;
 }
 
 export interface ComposedDraft {
@@ -340,12 +342,20 @@ function extractJsonObject(text: string): { subject?: string; body?: string } {
 // Generate the RFQ with the model for varied language. Any failure (missing
 // key, API error, malformed/short output) falls back to the deterministic
 // template so a draft still gets staged.
-// Prepend the unique reference to the subject. Applied after sanitize (the ref
-// has no banned characters), and never doubled if the model already echoed it.
-function withReference(d: ComposedDraft, reference?: string | null): ComposedDraft {
+// Prepend the unique reference to the subject, optionally add org prefix. Applied
+// after sanitize (the ref has no banned characters), and never doubled if the
+// model already echoed it. Subject format: "SR-20260731-0042 [WC]: Subject"
+function withReference(d: ComposedDraft, reference?: string | null, orgPrefix?: string | null): ComposedDraft {
   const ref = (reference ?? "").trim();
-  if (!ref || d.subject.startsWith(ref)) return d;
-  return { ...d, subject: `${ref}: ${d.subject}` };
+  const prefix = (orgPrefix ?? "").trim();
+  let subject = d.subject;
+  if (ref && !subject.startsWith(ref)) {
+    subject = `${ref}: ${subject}`;
+  }
+  if (prefix && !subject.includes(prefix)) {
+    subject = `${subject.replace(/^(\S+:?\s*)/, `$1${prefix} `)}`;
+  }
+  return { ...d, subject };
 }
 
 export async function composeOutreachDraft(input: DraftInput): Promise<ComposedDraft> {
@@ -361,8 +371,8 @@ export async function composeOutreachDraft(input: DraftInput): Promise<ComposedD
     const subject = String(parsed.subject ?? "").trim();
     const body = String(parsed.body ?? "").trim();
     if (!subject || body.length < 50) throw new Error("model returned empty/short subject or body");
-    return withReference(sanitizeDraft({ subject, body }), input.reference);
+    return withReference(sanitizeDraft({ subject, body }), input.reference, input.orgSubjectPrefix);
   } catch {
-    return withReference(composeTemplateDraft(input), input.reference);
+    return withReference(composeTemplateDraft(input), input.reference, input.orgSubjectPrefix);
   }
 }
