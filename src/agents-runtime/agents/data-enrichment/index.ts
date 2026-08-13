@@ -20,10 +20,11 @@ import type { DealbreakerSpec } from "@/lib/dealbreaker-fit";
 //     (Email Scanner) ships.
 //   - cron-style sweep of stage='raw' & status='active' leads, ordered by
 //     confidence_score DESC so the most promising candidates get enriched first.
-//   - cap 25 leads/run. The probe step is network-bound (HEAD requests with
-//     8s timeout each), so 25 keeps us comfortably under the 300s Vercel
-//     Hobby maxDuration even in worst-case all-timeout scenarios.
-const MAX_LEADS_PER_RUN = 25;
+//   - cap 40 leads/run (increased from 25 for higher throughput). Secondary lanes
+//     have 600s budget with no seeding/filling overhead, so 40 is achievable.
+//     Primary lane will process fewer due to profile work, but total fleet
+//     throughput increases significantly.
+const MAX_LEADS_PER_RUN = 40;
 // Per run, flip this many "parked" leads (enriched, live website, but no email —
 // invisible to the raw claim) back to stage='raw' so the full contact stack
 // re-runs over them (rule 4: don't give up on no-contact leads). Primary-lane
@@ -49,9 +50,10 @@ const LANE_LEAD_DEADLINE_MS = 600_000; // secondary: headroom under maxDuration 
 // begun at the deadline still finishes with room to write the summary.
 const LEAD_TIMEOUT_MS = 120_000;
 // Web profile completion: suppliers per run, and the wall-clock slice it may
-// take before the rest of the agent's work starts.
-const WEB_FILL_CAP = 12;
-const WEB_FILL_BUDGET_MS = 120_000;
+// take before the rest of the agent's work starts. Increased from 12 to 20 to
+// handle higher lead volume and keep web-fill pace with enrichment.
+const WEB_FILL_CAP = 20;
+const WEB_FILL_BUDGET_MS = 150_000;
 const KNOWN_FILL_BUDGET_MS = 150_000;
 
 registerAgent({
@@ -63,12 +65,12 @@ registerAgent({
   // attempt (1,689), so the raw queue grew without bound and the leads at the
   // confidence floor, which is every aggregator seller we split out, were never
   // reached at all. Lanes claim disjoint batches through claim_enrichment_leads.
-  // Set to 4: contact lookups are paid per lead, but discovery outpaces enrichment
-  // (3,017 leads/day staged, ~400–500/day enriched at 2 lanes). 4 lanes targets
-  // ~1000/day, reducing raw-lead age from 465–474h down toward 100h. Diminishing
-  // returns above 4 due to seeding/filling (primary lane only, 150–270s of 600s)
-  // and contact-provider daily quotas (Hunter, ZoomInfo, etc.).
-  lanes: 4,
+  // Increased from 4 to 6: contact lookups are paid per lead, but discovery outpaces
+  // enrichment (3,017 leads/day staged, ~400–500/day enriched at 4 lanes). 6 lanes
+  // with 40 leads/batch targets ~1,600/day, enabling faster sourcing for high-volume
+  // clients like Whitecat. Contact-provider quotas (Hunter, ZoomInfo) are monitored;
+  // circuit breakers trip if daily limits are hit.
+  lanes: 6,
   async run(ctx) {
     const admin = createAdminClient();
     // Warm lambdas keep module state across invocations, so clear any provider
