@@ -565,7 +565,13 @@ export function autoOperatorBySupplier(
     const sid = typeof s === "string" || s == null ? s : s.id;
     const name = typeof s === "string" || s == null ? null : s.name ?? null;
     if (!sid || out[sid]) continue;
-    const op = autoOperator(ctx, sid, null, name);
+    // Route through orgAutoKey so the Suppliers tab hashes on the same
+    // canonical key as the Leads and Quote Validation tabs. Without this,
+    // the Suppliers tab hashes on the raw Tenkara supplier_id while the
+    // other tabs resolve to an email or name key, and the same supplier
+    // can show different operators on different pages.
+    const key = orgAutoKey(ctx, { supplierId: sid, supplierName: name, leadId: sid });
+    const op = autoOperator(ctx, key, null, name);
     if (op) out[sid] = op;
   }
   return out;
