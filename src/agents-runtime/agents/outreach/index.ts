@@ -463,7 +463,12 @@ registerAgent({
       const currentFingerprint = approvalFingerprint(email ?? "", payload);
       const approvedFingerprint = payload.marketplace_outreach_review?.approval_fingerprint;
       const approvalCurrent = !!(lead as any).outreach_approved_at && approvedFingerprint === currentFingerprint;
-      if (isMarketplace && (lowTrust || !ownedContact) && !approvalCurrent) {
+      // If an operator manually provided the contact (contact_source = "manual_operator"),
+      // trust their judgment and skip the marketplace review gate. They looked it up and
+      // made an explicit decision to use it, so it should behave as a direct supplier
+      // email for outreach, not a suspicious marketplace contact.
+      const manuallyProvidedContact = payload.contact_source === "manual_operator";
+      if (isMarketplace && (lowTrust || !ownedContact) && !approvalCurrent && !manuallyProvidedContact) {
         const { error: holdError } = await admin
           .from("leads_in_flight")
           .update({ stage: "ready_for_approval", outreach_approved_at: null, outreach_approved_by: null, payload: { ...payload, marketplace_outreach_review: { ...(payload.marketplace_outreach_review ?? {}), pending: true, held_at: new Date().toISOString(), reason: lowTrust ? "low_trust_marketplace" : "contact_ownership_unverified" } } })

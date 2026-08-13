@@ -195,6 +195,7 @@ export async function uploadSuppliersCsv(orgId: string, form: FormData): Promise
         enrichment: { email_check: { format_valid: true } },
         tenkara_org_id: org.tenkara_org_id,
         source_notes: "ops_manual_csv_upload",
+        contact_source: "manual_operator",
         uploaded_by: session.userId,
         uploaded_at: new Date().toISOString(),
       },
@@ -615,7 +616,7 @@ export async function updateLeadEmail(leadId: string, email: string): Promise<Ac
 
   const { error } = await admin
     .from("leads_in_flight")
-    .update({ payload: { ...payload, supplier_contact_email: trimmed || null, enrichment } })
+    .update({ payload: { ...payload, supplier_contact_email: trimmed || null, enrichment, contact_source: trimmed ? "manual_operator" : payload.contact_source } })
     .eq("id", leadId);
 
   if (error) return { ok: false, error: error.message };
@@ -722,7 +723,7 @@ export async function importEmailsFromCsv(orgId: string, form: FormData): Promis
       if (enrichment.contact) enrichment.contact = { ...enrichment.contact, email };
       await admin
         .from("leads_in_flight")
-        .update({ payload: { ...payload, supplier_contact_email: email, enrichment } })
+        .update({ payload: { ...payload, supplier_contact_email: email, enrichment, contact_source: "manual_operator" } })
         .eq("id", hit.id);
       matched++;
     }

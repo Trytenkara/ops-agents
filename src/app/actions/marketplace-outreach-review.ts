@@ -61,6 +61,7 @@ export async function approveMarketplaceOutreach(leadId: string, correctedEmail?
         ...payload,
         supplier_contact_email: approvedEmail,
         contact_owned_verified: true,
+        contact_source: "manual_operator",
         marketplace_outreach_review: { pending: false, approved_at: now, approved_by: session.userId, corrected_email: existingVerified ? null : approvedEmail, approval_fingerprint: fingerprint },
       },
     })
