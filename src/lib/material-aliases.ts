@@ -51,14 +51,14 @@ export interface AliasMaterial {
 // "mostly" is not good enough for a spec, so an alias may not introduce a
 // grade/state qualifier the input did not already carry. This only ever removes
 // candidates, so a word missing from the list costs breadth, never correctness.
-const GRADE_WORDS = [
+export const GRADE_WORDS = [
   "crude", "refined", "rbd", "virgin", "extra", "pomace", "unrefined", "bleached",
   "deodorized", "technical", "food", "feed", "pharma", "pharmaceutical", "cosmetic",
   "usp", "ep", "bp", "acs", "reagent", "anhydrous", "hydrous", "pure", "purified",
   "organic", "conventional", "distilled", "fractionated", "hydrogenated", "raw",
 ];
 
-function gradeWords(s: string): Set<string> {
+export function gradeWords(s: string): Set<string> {
   const words = new Set(s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/));
   return new Set(GRADE_WORDS.filter((g) => words.has(g)));
 }

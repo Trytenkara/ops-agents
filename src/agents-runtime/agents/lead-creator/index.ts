@@ -21,6 +21,7 @@ import {
   SourceReadyUnavailableError,
 } from "./sourceready";
 import { importYetiEnabled, runImportYetiDiscovery, ImportYetiUnavailableError } from "./importyeti";
+import { runDbReuse } from "./reuse";
 import { getMaterialAliases } from "@/lib/material-aliases";
 import { loadDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 
@@ -171,6 +172,27 @@ function envInt(name: string, dflt: number): number {
   const n = Number(process.env[name]);
   return Number.isFinite(n) && n > 0 ? n : dflt;
 }
+
+function envBool(name: string, dflt: boolean): boolean {
+  const v = (process.env[name] ?? "").trim().toLowerCase();
+  if (!v) return dflt;
+  return !["0", "false", "no", "off"].includes(v);
+}
+
+// DB reuse: restage suppliers already discovered for a same-named sibling material (zero paid calls).
+const DB_REUSE_ENABLED = envBool("LEAD_CREATOR_DB_REUSE_ENABLED", true);
+// DB reuse: at most this many reused leads staged per material per run.
+const DB_REUSE_MAX_PER_MATERIAL = envInt("LEAD_CREATOR_DB_REUSE_MAX_PER_MATERIAL", 50);
+// Demand gate: always keep discovering while a material holds fewer active leads than this.
+const DEMAND_GATE_FLOOR = envInt("LEAD_CREATOR_DEMAND_GATE_FLOOR", 100);
+// Demand gate: lookback window for counting recently-consumed (promoted) leads.
+const DEMAND_WINDOW_DAYS = envInt("LEAD_CREATOR_DEMAND_WINDOW_DAYS", 7);
+// Demand gate: promotions inside the window that prove outreach is still consuming this material.
+const DEMAND_MIN_CONSUMED = envInt("LEAD_CREATOR_DEMAND_MIN_CONSUMED", 5);
+// Saturated internal-org materials are fully parked (real clients keep the weekly re-check).
+const INTERNAL_PARK_ON_SATURATION = envBool("LEAD_CREATOR_INTERNAL_PARK_ON_SATURATION", true);
+// Cap on internal-org materials picked from the backlog per run; real clients fill first.
+const INTERNAL_MAX_PER_RUN = envInt("LEAD_CREATOR_INTERNAL_MAX_PER_RUN", 50);
 
 function envOverrideLookbackHours(): number | null {
   const v = process.env.LEAD_CREATOR_LOOKBACK_HOURS;
@@ -333,6 +355,11 @@ registerAgent({
         sourcingNames.push(r.name);
       }
     }
+    // Unmapped orgs count as real: fail open toward serving, never toward parking.
+    const isInternalMat = (m: MaterialRow): boolean => {
+      const oaId = m.tenkara_org_id ? tenkaraOrgToOaOrg.get(m.tenkara_org_id) : null;
+      return oaId ? !!isInternalByOaId.get(oaId) : false;
+    };
     // Apply per-org tier throttle — only process orgs whose interval has elapsed.
     const eligibleOaIds03 = [...sourcingTenkaraOrgIds].map((tid) => tenkaraOrgToOaOrg.get(tid)!).filter(Boolean);
     const dueOaIds03 = new Set(await loadDueOrgIds(admin, "agent-03-lead-creator", eligibleOaIds03));
@@ -390,6 +417,11 @@ registerAgent({
     // Total active leads per material (function-scoped so the saturation marker
     // write, deep in the per-material loop, can compare current vs last-attempt count).
     const leadCount = new Map<string, number>();
+    // Leads promoted to ready_for_outreach/ready_for_approval inside the demand
+    // window, per material: recent consumption keeps discovery open past the floor.
+    const consumedRecent = new Map<string, number>();
+    // Saturated internal-org materials parked this run (Feature: real clients first).
+    let internalParked = 0;
     // Saturation state loaded from the attempt markers: consecutive dry cycles and
     // the lead count recorded at the last attempt, per material.
     const dryStreak = new Map<string, number>();
@@ -461,18 +493,27 @@ registerAgent({
         // Paginate: Supabase caps a select at 1000 rows, and there are more than
         // 1000 active leads — an un-paginated fetch would undercount and falsely
         // mark materials as under-floor. (leadCount is function-scoped above.)
+        const consumedCutoff = Date.now() - DEMAND_WINDOW_DAYS * 24 * 3600 * 1000;
         for (let from = 0; ; from += 1000) {
           const { data: rows } = await admin
             .from("leads_in_flight")
-            .select("material_id, source")
+            .select("material_id, source, stage, updated_at")
             .eq("status", "active")
             .range(from, from + 999);
-          const batch = (rows ?? []) as { material_id: string | null; source: string | null }[];
+          const batch = (rows ?? []) as { material_id: string | null; source: string | null; stage: string | null; updated_at: string | null }[];
           for (const r of batch) {
             if (!r.material_id) continue;
             leadCount.set(r.material_id, (leadCount.get(r.material_id) ?? 0) + 1);
             if (r.source === "sourceready") srLeadCount.set(r.material_id, (srLeadCount.get(r.material_id) ?? 0) + 1);
             else if (r.source === "importyeti") iyLeadCount.set(r.material_id, (iyLeadCount.get(r.material_id) ?? 0) + 1);
+            // A lead promoted to an outreach stage inside the window is proof the
+            // material is being consumed, so discovery should keep feeding it.
+            if (
+              (r.stage === "ready_for_outreach" || r.stage === "ready_for_approval") &&
+              Date.parse(r.updated_at ?? "") >= consumedCutoff
+            ) {
+              consumedRecent.set(r.material_id, (consumedRecent.get(r.material_id) ?? 0) + 1);
+            }
           }
           if (batch.length < 1000) break;
         }
@@ -498,9 +539,22 @@ registerAgent({
         const already = new Set(materials.map((m) => m.id));
         let saturatedSkipped = 0;
         const underserved = universe
-          .filter((m) => (leadCount.get(m.id) ?? 0) < MIN_LEADS_PER_MATERIAL)
+          // Demand gate: discover while under the floor, OR while outreach is
+          // actively consuming this material's leads (breadth follows demand).
+          .filter(
+            (m) =>
+              (leadCount.get(m.id) ?? 0) < DEMAND_GATE_FLOOR ||
+              (consumedRecent.get(m.id) ?? 0) >= DEMAND_MIN_CONSUMED
+          )
           .filter((m) => !already.has(m.id))
           .filter((m) => {
+            const saturated = (dryStreak.get(m.id) ?? 0) >= DISCOVERY_DRY_STREAK_LIMIT;
+            // Saturated internal-org materials are parked outright: scarce
+            // discovery throughput goes to real clients, who keep the weekly re-check.
+            if (saturated && INTERNAL_PARK_ON_SATURATION && isInternalMat(m)) {
+              internalParked++;
+              return false;
+            }
             const la = lastAttempt.get(m.id);
             if (la === undefined) return true;
             const count = leadCount.get(m.id) ?? 0;
@@ -511,7 +565,6 @@ registerAgent({
             else if (count < 300) backoff = 8 * 3600 * 1000;
             else {
               // Saturated: weekly re-check for growth
-              const saturated = (dryStreak.get(m.id) ?? 0) >= DISCOVERY_DRY_STREAK_LIMIT;
               backoff = saturated ? SATURATED_BACKOFF_MS : 24 * 3600 * 1000;
             }
             const ready = nowMs - la > backoff;
@@ -519,6 +572,10 @@ registerAgent({
             return ready;
           })
           .sort((a, b) => {
+            // Primary key: real clients drain first, internal test orgs after.
+            const aInternal = isInternalMat(a) ? 1 : 0;
+            const bInternal = isInternalMat(b) ? 1 : 0;
+            if (aInternal !== bInternal) return aInternal - bInternal;
             const aCount = leadCount.get(a.id) ?? 0;
             const bCount = leadCount.get(b.id) ?? 0;
             // Tier 0: <99 (highest priority, ramp up starved materials fast)
@@ -532,7 +589,18 @@ registerAgent({
             return aCount - bCount ||
               (new Date(b.created_at as any).getTime() || 0) - (new Date(a.created_at as any).getTime() || 0);
           });
-        const picked = underserved.slice(0, Math.max(0, 200 - materials.length));
+        // Real clients fill the pick budget first; internal test orgs get the
+        // leftover, and never more than INTERNAL_MAX_PER_RUN (mirrors the
+        // marketplace price-pull's real-first drain).
+        const pickBudget = Math.max(0, 200 - materials.length);
+        const realUnderserved = underserved.filter((m) => !isInternalMat(m));
+        const internalUnderserved = underserved.filter((m) => isInternalMat(m));
+        const realPicked = realUnderserved.slice(0, pickBudget);
+        const internalPicked = internalUnderserved.slice(
+          0,
+          Math.min(INTERNAL_MAX_PER_RUN, Math.max(0, pickBudget - realPicked.length))
+        );
+        const picked = [...realPicked, ...internalPicked];
         for (const m of picked) underservedIds.add(m.id);
         materials = [...materials, ...picked];
         if (picked.length) {
@@ -568,6 +636,9 @@ registerAgent({
             if (!oaId) continue;
             const la = lastAttempt.get(m.id);
             const saturated = (dryStreak.get(m.id) ?? 0) >= DISCOVERY_DRY_STREAK_LIMIT;
+            // A parked internal material never becomes workable, so it must not
+            // hold the starvation bypass open for its org.
+            if (saturated && INTERNAL_PARK_ON_SATURATION && isInternalByOaId.get(oaId)) continue;
             const readyAt = la === undefined ? nowMs : la + (saturated ? SATURATED_BACKOFF_MS : RESCOUT_BACKOFF_MS);
             const cur = starvedOrgs[oaId] ?? { starved: 0, next_at: null };
             cur.starved += 1;
@@ -587,13 +658,20 @@ registerAgent({
           await ctx.log(`Starvation marker write failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "backlog" });
         }
         await ctx.log(
-          `Backlog queue: ${underserved.length} materials below ${MIN_LEADS_PER_MATERIAL}-lead floor · sourcing ${picked.length} this run` +
-            (saturatedSkipped ? ` · ${saturatedSkipped} saturated (weekly re-check)` : ""),
-          { step: "backlog", data: { below_floor: underserved.length, picked: picked.length, saturated_skipped: saturatedSkipped } }
+          `Backlog queue: ${underserved.length} materials in demand (below ${DEMAND_GATE_FLOOR}-lead floor or >=${DEMAND_MIN_CONSUMED} consumed in ${DEMAND_WINDOW_DAYS}d) · sourcing ${picked.length} this run (${realPicked.length} real, ${internalPicked.length} internal)` +
+            (saturatedSkipped ? ` · ${saturatedSkipped} saturated (weekly re-check)` : "") +
+            (internalParked ? ` · ${internalParked} internal parked (saturated)` : ""),
+          { step: "backlog", data: { in_demand: underserved.length, picked: picked.length, real_picked: realPicked.length, internal_picked: internalPicked.length, saturated_skipped: saturatedSkipped, internal_parked: internalParked } }
         );
       } catch (e: any) {
         await ctx.log(`Backlog queue query failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "backlog" });
       }
+    }
+
+    // Real clients drain first: stable-partition the processing order so
+    // internal-org materials only get whatever budget/time is left each run.
+    if (!onlyMaterialId && materials.length > 1) {
+      materials = [...materials.filter((m) => !isInternalMat(m)), ...materials.filter((m) => isInternalMat(m))];
     }
 
     // Priority bump: materials tagged is_priority=true in material_client_tags come
@@ -846,6 +924,7 @@ registerAgent({
     // 5. For each material, find candidates and stage leads.
     let leadsCreated = 0;
     let scoutLeadsCreated = 0;
+    let reuseLeadsCreated = 0;
     let materialsWithLeads = 0;
     let materialsWithoutLeads = 0;
     let materialsWithScoutLeads = 0;
@@ -1098,13 +1177,55 @@ registerAgent({
         }
       }
 
+      const isBacklogRescout = underservedIds.has(material.id);
+
+      // 5a-bis. DB reuse: leads already discovered for a sibling material with
+      // the same trade name are free breadth, so stage them before any paid
+      // source fires. Gated like scout (new or backlog materials only).
+      if (
+        DB_REUSE_ENABLED &&
+        (isBacklogRescout || !alreadyScouted.has(material.id)) &&
+        leadsCreated < MAX_NEW_LEADS_PER_RUN
+      ) {
+        try {
+          const r = await runDbReuse(admin, {
+            material,
+            matLabel,
+            aliases: await materialAliases(),
+            oaOrgId,
+            nameSeen,
+            existingMaterialSupplier,
+            keepIfAllowed,
+            runId: ctx.runId,
+            cap: Math.min(DB_REUSE_MAX_PER_MATERIAL, MAX_NEW_LEADS_PER_RUN - leadsCreated),
+            log: (msg, meta) => {
+              const { level, ...rest } = (meta ?? {}) as { level?: "info" | "warn" | "error" };
+              return ctx.log(msg, {
+                step: "db_reuse",
+                ...(level ? { level } : {}),
+                data: { ...rest, material_id: material.id },
+              });
+            },
+          });
+          stagedThisMaterial += r.inserted;
+          leadsCreated += r.inserted;
+          reuseLeadsCreated += r.inserted;
+          for (const h of r.hosts) graphHosts.add(h);
+        } catch (e: any) {
+          await ctx.log(`DB reuse failed for ${matLabel} (non-fatal): ${e?.message ?? e}`, {
+            level: "warn",
+            step: "db_reuse",
+            data: { material_id: material.id },
+          });
+        }
+      }
+
       // 5b. AI scout — runs whenever ANTHROPIC_API_KEY is set AND we haven't
       //     already produced scout leads for this material in a prior run
       //     (Ben's processed_material_ids equivalent). Dedups by host vs graph
       //     hits so we don't double-stage the same supplier.
       // Scout when there are no scout leads yet, OR when this material is a
       // backlog re-scout (below the richness floor and past its backoff window).
-      const isBacklogRescout = underservedIds.has(material.id);
       // Did discovery actually get to look at this material this run? A pass that
       // timed out, or an index source that was down, means "we did not look" —
       // which must never be recorded as "we looked and the market is empty".
@@ -1556,13 +1677,14 @@ registerAgent({
       }
     }
     ctx.setStatus(failedSources.length ? "partial" : "success");
-    const graphLeads = leadsCreated - scoutLeadsCreated;
+    const graphLeads = leadsCreated - scoutLeadsCreated - reuseLeadsCreated;
     ctx.setSummary(
-      `Staged ${leadsCreated} raw leads (${graphLeads} graph, ${scoutLeadsCreated} scout) across ${materialsWithLeads} material${materialsWithLeads === 1 ? "" : "s"} · ` +
+      `Staged ${leadsCreated} raw leads (${graphLeads} graph, ${scoutLeadsCreated} scout, ${reuseLeadsCreated} db-reuse) across ${materialsWithLeads} material${materialsWithLeads === 1 ? "" : "s"} · ` +
         `${materialsWithScoutLeads} got scout leads · ${materialsWithoutLeads} empty` +
         (skippedByExisting ? ` · ${skippedByExisting} skipped (already staged)` : "") +
         (skippedByName ? ` · ${skippedByName} skipped (same supplier already staged)` : "") +
         (skippedByExclusion ? ` · ${skippedByExclusion} skipped (do-not-contact / excluded country)` : "") +
+        (internalParked ? ` · ${internalParked} internal material(s) parked (saturated)` : "") +
         (scoutEnabled ? "" : " · scout off (no ANTHROPIC_API_KEY)") +
         (failedSources.length
           ? ` · ⚠ SOURCE FAILED: ${failedSources.map(([s, f]) => `${s} (${f.count} material${f.count === 1 ? "" : "s"})`).join(", ")}`
