@@ -19,7 +19,14 @@ import { isAggregatorHost, isAggregatorIndexUrl, isAggregatorPlatformName } from
 
 const MODEL = "claude-sonnet-5";
 const EFFORT = "medium";          // measured: same 100-supplier breadth as high, fewer tokens
-const MAX_OUTPUT_TOKENS = 40000;  // room for up to ~100 supplier rows with the full detail schema
+// max_tokens caps thinking PLUS response text on claude-sonnet-5 (adaptive
+// thinking runs by default when the thinking param is omitted, as here). At
+// 40000, 100 detail-schema rows (~340 tokens each on this tokenizer) plus
+// thinking could exceed the cap, truncating the JSON mid-array with
+// stop_reason "max_tokens" - measured as ~1 in 7 passes completing normally
+// yet yielding nothing parseable. Streaming is already used, so a larger cap
+// costs nothing unless actually consumed.
+const MAX_OUTPUT_TOKENS = 64000;
 const MAX_SUPPLIERS = 100;
 const URL_PROBE_TIMEOUT_MS = 5_000;
 // Breadth is split across PASSES that run concurrently, because a single
@@ -268,11 +275,17 @@ function buildUserMessage(material: MaterialRow, focus: string, aliases?: string
 
 function extractJson(text: string): any {
   const trimmed = text.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const candidate = fenced ? fenced[1] : trimmed;
+  // Match ALL fenced blocks and use the last one that contains a brace. The
+  // model narrates while searching, and an interstitial fence early in that
+  // narration used to win the non-greedy first-match and mask the real JSON
+  // emitted at the end.
+  const fences = [...trimmed.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)]
+    .map((m) => m[1])
+    .filter((b) => b.includes("{"));
+  const candidate = fences.length ? fences[fences.length - 1] : trimmed;
   const start = candidate.indexOf("{");
   const end = candidate.lastIndexOf("}");
-  if (start < 0) throw new Error("no JSON object found in model output");
+  if (start < 0) throw new Error("scout-parse:no-brace: no JSON object found in model output");
   if (end > start) {
     try {
       return JSON.parse(candidate.slice(start, end + 1));
@@ -284,7 +297,7 @@ function extractJson(text: string): any {
   // used to discard every supplier it had already written. Salvage the complete
   // objects instead: scan for balanced top-level braces inside "suppliers".
   const arrStart = candidate.indexOf("[", candidate.indexOf("suppliers"));
-  if (arrStart < 0) throw new Error("no JSON object found in model output");
+  if (arrStart < 0) throw new Error("scout-parse:no-array: no suppliers array found in model output");
   const salvaged: any[] = [];
   let depth = 0;
   let objStart = -1;
@@ -314,7 +327,7 @@ function extractJson(text: string): any {
       }
     }
   }
-  if (!salvaged.length) throw new Error("no JSON object found in model output");
+  if (!salvaged.length) throw new Error("scout-parse:salvage-empty: suppliers array held no complete object");
   return { suppliers: salvaged };
 }
 
@@ -414,13 +427,17 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
       stream.abort();
     }, SCOUT_CALL_TIMEOUT_MS);
     let raw: string;
+    let stopReason: string | null = null;
+    let usage: Record<string, unknown> | null = null;
     try {
       const res = await stream.finalMessage();
       raw = res.content.map((b: any) => (b.type === "text" ? b.text : "")).join("");
+      stopReason = (res as any).stop_reason ?? null;
+      usage = (res as any).usage ?? null;
     } catch (err) {
       // Only our own timeout is recoverable, and only once the model had begun
-      // writing JSON. Real API errors — and timeouts that landed while it was
-      // still searching — keep their original error, which is the true cause.
+      // writing JSON. Real API errors - and timeouts that landed while it was
+      // still searching - keep their original error, which is the true cause.
       // extractJson salvages the complete objects out of the unterminated array.
       if (!timedOut || !streamed.includes("{")) throw err;
       raw = streamed;
@@ -428,11 +445,29 @@ export async function scoutSuppliersForMaterial(material: MaterialRow, opts?: {
       clearTimeout(timer);
     }
     const secs = Math.round((Date.now() - startedAt) / 1000);
-    const found = extractJson(raw).suppliers;
+    let found: any;
+    try {
+      found = extractJson(raw).suppliers;
+    } catch (parseErr: any) {
+      // The three parse throws used to share one message with no context, which
+      // made "no JSON" undiagnosable: max_tokens truncation, a fence trap and a
+      // genuine prose answer all looked identical in the run log. Log enough to
+      // tell them apart, then rethrow so the pass still counts as failed.
+      await log(
+        `scout: pass ${pass.key} unparseable for ${matLabel} in ${secs}s: ${parseErr?.message}`,
+        {
+          material_id: material.id, pass: pass.key, secs,
+          stop_reason: stopReason, usage, raw_length: raw.length,
+          raw_head: raw.slice(0, 300), raw_tail: raw.slice(-300),
+          timed_out: timedOut,
+        }
+      );
+      throw parseErr;
+    }
     const list = Array.isArray(found) ? found : [];
     await log(
       `scout: pass ${pass.key} returned ${list.length} for ${matLabel} in ${secs}s${timedOut ? " (salvaged from timeout)" : ""}`,
-      { material_id: material.id, pass: pass.key, secs, count: list.length, salvaged: timedOut }
+      { material_id: material.id, pass: pass.key, secs, count: list.length, salvaged: timedOut, stop_reason: stopReason, output_tokens: (usage as any)?.output_tokens ?? null }
     );
     return list;
   }
