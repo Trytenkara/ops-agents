@@ -68,6 +68,8 @@ export interface ExtractedQuote {
   unit_price_gap_reason: string | null; // why case_size (and so unit_price) is null
   unit_of_measurement: string | null;
   currency: string | null;
+  incoterm: string | null; // supplier-stated delivery term (EXW, FOB, CIF, ...), never inferred
+  incoterm_location: string | null; // the named place on that term ("Shanghai"), null when bare
   grade: string | null; // supplier-stated material grade, never guessed
   lead_time_days: number | null; // normalized to days when stated; else null
   lead_time_text: string | null; // raw stated lead time ("2-3 weeks", "ARO")
@@ -121,6 +123,8 @@ Return ONLY a JSON object (no prose):
       "unit_price_gap_reason": null,  // why case_size is null, in one sentence; null when case_size is set
       "unit_of_measurement": "kg",    // the unit case_size is in (kg, lb, L, each, ...)
       "currency": "USD",
+      "incoterm": "FOB",              // the delivery term IF the supplier states one, else null
+      "incoterm_location": "Shanghai",// the named place on that term, else null
       "grade": "USP",                 // the material grade IF the supplier states one, else null
       "lead_time_days": 21,           // supplier's stated lead time normalized to DAYS, else null
       "lead_time_text": "2-3 weeks ARO", // the raw lead-time phrasing as written, else null
@@ -147,6 +151,7 @@ Rules:
 - price must be numeric or null. Strip currency symbols and codes, commas.
 - currency: the ISO 4217 code the price is stated in ("USD", "EUR", "GBP", "INR", "CNY", ...). Infer from the symbol/locale (€→EUR, £→GBP, ₹ or "Rs"/"Rs."→INR, ¥→CNY or JPY by supplier, $→USD unless clearly CAD/AUD/etc.). We convert to USD ourselves — report the currency AS STATED, do NOT convert. CURRENCY IS HIGH-STAKES: a price reported in the wrong currency gets published as a wildly wrong USD number (₹149 shown as $149 is ~85x too high). Do NOT default to USD just because there is no symbol — many suppliers (Indian, Chinese, Pakistani, etc.) quote in domestic currency. If you cannot positively confirm the currency, return null (better a blank than a wrong currency) and note the ambiguity.
 - grade: only populate if the supplier EXPLICITLY names a grade/spec for the material (e.g. "USP", "EP", "Food grade", "Industrial", "SCI 80"). NEVER infer or guess a "typical" grade — if they don't state one, return null.
+- incoterm: the delivery term the supplier attaches to THIS price, as a bare Incoterms code in caps (EXW, FOB, FCA, CFR, CIF, CIP, DAP, DDP, ...). Put the named place in incoterm_location ("FOB Shanghai" is incoterm "FOB", incoterm_location "Shanghai"; "ex factory"/"ex works" is EXW; "CIF by sea" is CIF with a null location). Both null when the supplier states no term. NEVER infer a term from the supplier's country, the price level, or a shipping sentence that names no term: two prices on different terms are not the same price, and an assumed EXW on a CIF quote understates landed cost.
 - case_size is the quantity THE PRICE APPLIES TO, and only the supplier can tell you that. If the price is already per-unit, set case_size = 1 and unit_of_measurement to that unit. If the supplier ties the price to a quantity ("$250 per 25kg drum"), that quantity is case_size.
 - A PACKAGING line is NOT a price basis. Suppliers routinely state price, incoterm, and packing as three independent facts ("USD 2900 / 20ft FOB MUNDRA / PACKING - 25KG PP BAG" quotes a container, not a $2,900 bag). Never divide a price by a pack/packing/drum/bag spec to manufacture a per-unit figure. Do not treat MOQ, a container size, or a tier threshold as the basis either.
 - When you cannot tell from the supplier's own words what quantity the price covers: set case_size = null, keep price exactly as stated, and write unit_price_gap_reason explaining the ambiguity in one operator-readable sentence (e.g. "Supplier stated USD 2900 with a 20ft container and a 25kg bag packing line; which one the price covers is not stated."). A blank per-unit price is correct here. A guessed one gets published as a real number, so guessing is the more expensive error.
@@ -157,6 +162,7 @@ Rules:
 - payment_terms: the stated payment/credit terms verbatim-ish ("Net 30", "Net 60", "50% deposit, balance on delivery", "prepaid"). Null if not stated. NEVER assume terms.
 - These per-supplier fields (lead_time_*, moq_*, payment_terms) are the SAME for every line in one reply unless the supplier differentiates. Repeat them on each quote line and in details when stated.
 - details: populate only values explicitly stated by the supplier. Case dimensions require length, width, height, unit, and case weight as separate fields. Never infer missing components.
+- details.case_size follows the SAME rule as a quote's case_size: it is the quantity a price applies to, not the packaging quantity. A supplier answering "we pack in 215 kg drums" has told you a pack size, not a price basis — that belongs in case_weight/case_type, and details.case_size stays null.
 - contact/shipping/billing details: capture only the supplier's own business information they explicitly provide. Do not copy our buyer address/signature into these fields.
 - declined: true ONLY for a clear hard decline or explicit statement that they cannot supply the requested material. Out-of-office, automated, ambiguous, or substitute-only messages are not hard declines unless they clearly reject the requested material.
 - ships_to_us: "no" when the supplier says they cannot or do not ship, export, or deliver to the United States (including "domestic sales only", "we only supply within India", "no export"), "yes" when they say they can ship to the US or already export there, null when they do not raise it. Put the sentence you read it from in ships_to_us_evidence, verbatim and trimmed to one sentence, else null.
@@ -216,6 +222,8 @@ function extractJson(text: string): ReplyQuoteExtraction {
               ...q,
               unit_price_gap_reason:
                 typeof q.unit_price_gap_reason === "string" ? q.unit_price_gap_reason.trim() || null : null,
+              incoterm: typeof q.incoterm === "string" ? q.incoterm.trim().toUpperCase() || null : null,
+              incoterm_location: typeof q.incoterm_location === "string" ? q.incoterm_location.trim() || null : null,
             }))
         : [],
       details: { ...EMPTY_DETAILS, ...(parsed?.details && typeof parsed.details === "object" ? parsed.details : {}) },

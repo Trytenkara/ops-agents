@@ -28,6 +28,8 @@ export interface StagedQuoteInput {
   unitPriceGapReason?: string | null;
   unitOfMeasurement: string | null;
   currency?: string | null;
+  incoterm?: string | null;
+  incotermLocation?: string | null;
   grade?: string | null;
   leadTimeDays?: number | null;
   leadTimeText?: string | null;
@@ -304,6 +306,8 @@ export async function insertStagedQuotes(
       unit_price_gap_reason: gapReason,
       unit_of_measurement: r.unitOfMeasurement,
       currency,
+      incoterm: r.incoterm ?? null,
+      incoterm_location: r.incotermLocation ?? null,
       grade: r.grade ?? null,
       lead_time_days: r.leadTimeDays ?? null,
       lead_time_text: r.leadTimeText ?? null,

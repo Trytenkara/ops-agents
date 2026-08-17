@@ -31,6 +31,8 @@ interface StagedRow {
   unit_price: number | null;
   unit_price_gap_reason: string | null;
   currency: string | null;
+  incoterm: string | null;
+  incoterm_location: string | null;
   confidence: string;
   extraction_notes: string | null;
   status: Status;
@@ -55,7 +57,7 @@ export default async function StagedQuotesPage({
   let q = admin
     .from("staged_quotes")
     .select(
-      "id, org_id, source, source_attachment_name, source_conversation_id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, unit_price_gap_reason, currency, confidence, extraction_notes, case_type, case_dimensions, dim_source, status, created_at, orgs(slug, name)"
+      "id, org_id, source, source_attachment_name, source_conversation_id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, unit_price_gap_reason, currency, incoterm, incoterm_location, confidence, extraction_notes, case_type, case_dimensions, dim_source, status, created_at, orgs(slug, name)"
     )
     .eq("status", status)
     .order("created_at", { ascending: false })

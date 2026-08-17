@@ -44,6 +44,7 @@ export function StagedQuoteHeaders({ showOrg = true }: { showOrg?: boolean }) {
       <TableHead className="text-right">Case</TableHead>
       <TableHead>Unit</TableHead>
       <TableHead className="text-right">Per-unit</TableHead>
+      <TableHead>Incoterm</TableHead>
       <TableHead>Case dims</TableHead>
       <TableHead>Source</TableHead>
       <TableHead>Conf.</TableHead>
@@ -55,7 +56,7 @@ export function StagedQuoteHeaders({ showOrg = true }: { showOrg?: boolean }) {
 
 // Column count for empty-state colSpan. Matches StagedQuoteHeaders.
 export function stagedQuoteColSpan(showOrg = true): number {
-  return showOrg ? 12 : 11;
+  return showOrg ? 13 : 12;
 }
 
 export function StagedQuoteRow({
@@ -107,6 +108,18 @@ export function StagedQuoteRow({
           </span>
         ) : (
           fmtMoney(r.unit_price, r.currency)
+        )}
+      </TableCell>
+      {/* A price without its delivery term is not comparable to another
+          supplier's, so a blank here is a real gap, not a cosmetic one. */}
+      <TableCell className="align-top text-xs">
+        {r.incoterm ? (
+          <span className="inline-flex items-center rounded border border-border px-1.5 py-0.5 text-[11px]">
+            {r.incoterm}
+            {r.incoterm_location ? <span className="ml-1 text-muted-foreground">{r.incoterm_location}</span> : null}
+          </span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
         )}
       </TableCell>
       <TableCell className="align-top text-xs">

@@ -725,6 +725,8 @@ export async function handleInboundReply(
         unitPriceGapReason: q.unit_price_gap_reason ?? null,
         unitOfMeasurement: q.unit_of_measurement,
         currency: q.currency,
+        incoterm: q.incoterm ?? null,
+        incotermLocation: q.incoterm_location ?? null,
         grade: q.grade,
         leadTimeDays: q.lead_time_days ?? null,
         leadTimeText: q.lead_time_text ?? null,
@@ -816,7 +818,7 @@ export async function handleInboundReply(
     if (hasQuoteDetails && ref.org_id && ref.material_id && (ref.supplier_id || wantSupplierKey)) {
       const { data: quoteRows, error: quoteReadError } = await admin
         .from("staged_quotes")
-        .select("id, raw_extract, case_dimensions, dim_source, supplier_id, supplier_name")
+        .select("id, raw_extract, case_dimensions, dim_source, supplier_id, supplier_name, price, case_size, unit_of_measurement")
         .eq("org_id", ref.org_id)
         .eq("material_id", ref.material_id)
         .not("status", "eq", "dismissed")
@@ -846,7 +848,7 @@ export async function handleInboundReply(
             raw_extract: { detail_intake: true },
             status: "pending_review",
           })
-          .select("id, raw_extract, case_dimensions, dim_source, supplier_id, supplier_name")
+          .select("id, raw_extract, case_dimensions, dim_source, supplier_id, supplier_name, price, case_size, unit_of_measurement")
           .single();
         if (insertError) throw insertError;
         quote = inserted;
@@ -868,8 +870,20 @@ export async function handleInboundReply(
           last_detail_message_id: msg.message_id,
         },
       };
-      if (d.case_size != null) detailPatch.case_size = d.case_size;
-      if (d.unit_of_measurement) detailPatch.unit_of_measurement = d.unit_of_measurement;
+      // The detail pass reads packaging prose, not a price line, so its
+      // case_size is routinely the drum/bag it ships in. unit_price is generated
+      // as price / case_size, so letting it land on a row that already carries a
+      // price divides a per-kg quote by the drum: $3.10/kg on a 215 kg drum
+      // published as $0.0144/kg. The price extractor read the price and the
+      // basis together and already decided; only fill a gap it left.
+      if (d.case_size != null && quote.case_size == null && quote.price == null) {
+        detailPatch.case_size = d.case_size;
+      } else if (d.case_size != null && d.case_size !== quote.case_size) {
+        detailPatch.raw_extract.supplier_pack_size = d.case_size;
+      }
+      // Same reasoning: the unit labels the case_size above it, so it cannot be
+      // restated from packaging prose while the price basis stays put.
+      if (d.unit_of_measurement && quote.unit_of_measurement == null) detailPatch.unit_of_measurement = d.unit_of_measurement;
       if (d.case_type) detailPatch.case_type = d.case_type;
       if (d.lead_time_days != null) detailPatch.lead_time_days = d.lead_time_days;
       if (d.lead_time_text) detailPatch.lead_time_text = d.lead_time_text;

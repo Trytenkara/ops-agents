@@ -20,6 +20,8 @@ export interface ExtractedQuote {
   unit_price_gap_reason: string | null; // why case_size (and so unit_price) is null
   unit_of_measurement: string | null;
   currency: string | null;
+  incoterm: string | null; // document-stated delivery term (EXW, FOB, CIF, ...), never inferred
+  incoterm_location: string | null; // the named place on that term ("Shanghai"), null when bare
   grade: string | null; // supplier-stated material grade, never guessed
   lead_time_days: number | null; // normalized to days when stated; else null
   lead_time_text: string | null; // raw stated lead time ("2-3 weeks", "ARO")
@@ -45,6 +47,8 @@ Return ONLY a JSON object (no prose):
       "unit_price_gap_reason": null,  // why case_size is null, in one sentence; null when case_size is set
       "unit_of_measurement": "kg",    // the unit case_size is in (kg, lb, L, each, ...)
       "currency": "USD",
+      "incoterm": "FOB",              // the delivery term IF the document states one, else null
+      "incoterm_location": "Shanghai",// the named place on that term, else null
       "grade": "USP",                 // the material grade IF the supplier states one, else null
       "lead_time_days": 21,           // stated lead time normalized to DAYS, else null
       "lead_time_text": "2-3 weeks ARO", // the raw lead-time phrasing as written, else null
@@ -60,6 +64,7 @@ Return ONLY a JSON object (no prose):
 Rules:
 - price must be numeric or null. Strip currency symbols and codes, commas.
 - currency: the ISO 4217 code the price is listed in ("USD", "EUR", "GBP", "INR", "CNY", ...). Infer from the symbol/locale (€→EUR, £→GBP, ₹ or "Rs"/"Rs."→INR, ¥→CNY or JPY by supplier, $→USD unless clearly CAD/AUD/etc.). We convert to USD ourselves — report the currency AS LISTED, do NOT convert. CURRENCY IS HIGH-STAKES: a price reported in the wrong currency gets published as a wildly wrong USD number (₹149 shown as $149 is ~85x too high). Do NOT default to USD just because there is no symbol — many suppliers (Indian, Chinese, Pakistani, etc.) list domestic-currency prices. If you cannot positively confirm the currency, return null (better a blank than a wrong currency) and note the ambiguity.
+- incoterm: the delivery term attached to THIS price, as a bare Incoterms code in caps (EXW, FOB, FCA, CFR, CIF, CIP, DAP, DDP, ...). Put the named place in incoterm_location ("FOB Shanghai" is incoterm "FOB", incoterm_location "Shanghai"; "ex factory"/"ex works" is EXW; "CIF by sea" is CIF with a null location). Both null when no term is stated. NEVER infer a term from the supplier's country, the price level, or a shipping line that names no term: two prices on different terms are not the same price, and an assumed EXW on a CIF quote understates landed cost.
 - grade: only populate if the document EXPLICITLY names a grade/spec for the material (e.g. "USP", "EP", "Food grade", "Industrial", "SCI 80"). NEVER infer or guess a "typical" grade — if it isn't stated, return null.
 - lead_time_days: only when a lead/delivery time is stated. Normalize to days (1 week = 7, "2-3 weeks" = 21 using the upper bound, "1 month" = 30). Keep the exact wording in lead_time_text. Both null if not stated. NEVER guess.
 - moq_quantity / moq_unit: the stated minimum order quantity and its unit. Null if not stated. Do not confuse MOQ with case_size — MOQ is the smallest total order accepted.
@@ -258,6 +263,8 @@ export async function parseAttachmentBytes(
         unit_price_gap_reason: typeof q.unit_price_gap_reason === "string" ? q.unit_price_gap_reason.trim() || null : null,
         unit_of_measurement: q.unit_of_measurement ?? null,
         currency: q.currency ?? "USD",
+        incoterm: typeof q.incoterm === "string" ? q.incoterm.trim().toUpperCase() || null : null,
+        incoterm_location: typeof q.incoterm_location === "string" ? q.incoterm_location.trim() || null : null,
         grade: q.grade ?? null,
         lead_time_days: typeof q.lead_time_days === "number" ? q.lead_time_days : q.lead_time_days == null ? null : Number(q.lead_time_days) || null,
         lead_time_text: q.lead_time_text ?? null,
