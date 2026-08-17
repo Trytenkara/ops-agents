@@ -19,7 +19,7 @@ async function main() {
     for (const l of manualAggregators) {
       console.log(`  ${l.supplier_name} / ${l.material_name}`);
       console.log(`    Stage: ${l.stage}`);
-      console.log(`    Email: ${(l.payload as any)?.supplier_contact_email}`);
+      console.log(`    Email: ${l.supplier_contact_email}`);
       console.log(`    Created: ${l.created_at}`);
     }
   } else {
