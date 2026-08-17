@@ -199,13 +199,17 @@ export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
 
 // Insert `ask` as its own paragraph just before the sign-off block, or append it
 // to the end when the sign-off can't be located. No em dashes are introduced.
-function insertBeforeSignoff(body: string, ask: string, signoff: string): string {
+// Exported for scripts/test-completeness-ask.ts.
+export function insertBeforeSignoff(body: string, ask: string, signoff: string): string {
   const trimmed = body.trimEnd();
   const idx = signoff ? trimmed.indexOf(signoff) : -1;
   if (idx > 0) {
     // Back up over any short sign-off lead-in ("Thanks,", "Best,", etc.).
     let cut = trimmed.lastIndexOf("\n", idx);
-    const lead = /\n\s*(thanks|thank you|best|regards|warm regards|sincerely)[,!.]?\s*$/i;
+    // "Best regards," must match as one unit, not as the separate "best" and
+    // "regards" alternatives, or the ask gets wedged between the closing and the
+    // org name.
+    const lead = /\n\s*((warm|kind|best)\s+)?(thanks|thank you|regards|best|sincerely|cheers)[,!.]?\s*$/i;
     const upto = cut > 0 ? trimmed.slice(0, cut) : trimmed.slice(0, idx);
     const m = upto.match(lead);
     const head = m ? upto.slice(0, m.index) : upto;

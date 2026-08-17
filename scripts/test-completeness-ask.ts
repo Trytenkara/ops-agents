@@ -7,6 +7,7 @@ import {
   selectCompletenessAsks,
   MAX_ASKS_PER_REPLY,
 } from "../src/lib/quote-completeness";
+import { insertBeforeSignoff } from "../src/lib/reply-drafter";
 
 // The model's own copy, transcribed from the flagged UPI Global draft.
 const MODEL_BODY = `Hi Zach,
@@ -62,6 +63,24 @@ for (const key of alreadyCovered) {
 const uncoveredTotal = ask.length + deferred.length;
 const covered = missing.length - uncoveredTotal;
 check("no field vanishes", uncoveredTotal + covered === missing.length, `${ask.length} asked + ${deferred.length} deferred + ${covered} covered = ${missing.length}`);
+
+// The ask must land as its own paragraph ABOVE the whole sign-off block, whatever
+// closing the model chose. It used to wedge itself between "Best regards," and the
+// org name because the lead-in regex matched "best" and "regards" separately.
+console.log("\n=== SIGN-OFF PLACEMENT ===");
+const ORG = "California Chemicals Purchasing Team";
+const ASK = "To complete our review, could you also share pack or case size and unit?";
+const closings = ["Thanks,", "Best regards,", "Kind regards,", "Sincerely,", "Cheers,", ""];
+for (const closing of closings) {
+  const body = `Hi Zach,\n\nThanks for the quote.\n\nLooking forward to your response.\n\n${closing ? closing + "\n\n" : ""}${ORG}`;
+  const out = insertBeforeSignoff(body, ASK, ORG);
+  const askAt = out.indexOf(ASK);
+  const closingAt = closing ? out.indexOf(closing) : Infinity;
+  const orgAt = out.indexOf(ORG);
+  const ordered = askAt < closingAt && askAt < orgAt;
+  const closingKept = closing ? out.includes(closing) : true;
+  check(`ask precedes "${closing || "(no closing)"}" + org`, ordered && closingKept, closingKept ? "" : "closing was dropped");
+}
 
 console.log(`\n${failed === 0 ? "ALL ASSERTIONS PASSED" : `${failed} ASSERTION(S) FAILED`}`);
 process.exit(failed === 0 ? 0 : 1);
