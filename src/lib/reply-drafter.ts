@@ -3,6 +3,8 @@ import { sanitizeDraft } from "@/lib/email-style";
 import {
   buildCompletenessAsk,
   completenessFollowupEnabled,
+  selectCompletenessAsks,
+  MAX_ASKS_PER_REPLY,
   type MissingApprovalField,
 } from "@/lib/quote-completeness";
 
@@ -157,7 +159,7 @@ export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
     ...(missing.length
       ? [
           "",
-          `Still needed to complete this quote (ask for the all only, naturally, if the supplier is engaged; do not list them all, and never ask them to choose a grade): ${missing
+          `Still needed to complete this quote. Ask only if the supplier is engaged, and ask for at most ${MAX_ASKS_PER_REPLY} of these, worked naturally into the reply. Never enumerate the whole list, and never ask them to choose a grade: ${missing
             .map((m) => m.clause)
             .join("; ")}`,
         ]
@@ -181,11 +183,13 @@ export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
     draft.subject = input.theirSubject ? `Re: ${input.theirSubject.replace(/^re:\s*/i, "")}` : `Re: ${input.materialName ?? "your message"}`;
   }
 
-  // Deterministic completeness backstop: one canonical question always lists
-  // every missing supplier/quote field. This guarantees coverage regardless of
-  // how the model phrases its conversational response.
+  // Deterministic completeness backstop. Only asks for fields the model's own copy
+  // did not already cover, capped per reply: it used to append every missing field
+  // unconditionally, which duplicated asks the body had just made and read as a
+  // platform-field checklist. Deferred fields recur on the next reply.
   if (missing.length && draft.engaged && draft.body) {
-    const ask = buildCompletenessAsk(missing);
+    const { ask: toAsk } = selectCompletenessAsks(draft.body, missing);
+    const ask = buildCompletenessAsk(toAsk);
     if (ask && !draft.body.includes(ask)) draft.body = insertBeforeSignoff(draft.body, ask, signoff);
   }
   // House style (no em dashes, no "RFQ") is enforced on outbound copy; replies

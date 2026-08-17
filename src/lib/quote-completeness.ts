@@ -98,3 +98,22 @@ export function buildCompletenessAsk(missing: MissingApprovalField[]): string {
 export function missingAsksNotCovered(body: string, missing: MissingApprovalField[]): MissingApprovalField[] {
   return missing.filter((field) => !field.detect.test(body));
 }
+
+// How many still-missing fields one reply is allowed to ask for. Ops flagged that
+// enumerating every blank field in a single sentence reads as an AI checklist and
+// that suppliers will not answer it.
+export const MAX_ASKS_PER_REPLY = 3;
+
+// Which fields this reply should ask for: drop anything the drafted body already
+// covers, then take at most `limit`. Deferred fields are NOT lost. The missing set
+// is recomputed from live quote/supplier data on every inbound reply, so a field
+// left unasked here simply comes back on the next one, which is what staggering
+// the asks means.
+export function selectCompletenessAsks(
+  body: string,
+  missing: MissingApprovalField[],
+  limit: number = MAX_ASKS_PER_REPLY,
+): { ask: MissingApprovalField[]; deferred: MissingApprovalField[] } {
+  const uncovered = missingAsksNotCovered(body ?? "", missing ?? []);
+  return { ask: uncovered.slice(0, limit), deferred: uncovered.slice(limit) };
+}
