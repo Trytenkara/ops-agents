@@ -3,7 +3,9 @@ import { sanitizeDraft } from "@/lib/email-style";
 import {
   buildCompletenessAsk,
   completenessFollowupEnabled,
-  selectCompletenessAsks,
+  selectStagedAsks,
+  countAsksInBody,
+  missingAsksNotCovered,
   MAX_ASKS_PER_REPLY,
   type MissingApprovalField,
 } from "@/lib/quote-completeness";
@@ -81,9 +83,9 @@ const SYSTEM = `You draft short, professional replies to suppliers on behalf of 
 - GRADE SPEC — when the input gives a "Required grade", that grade is a client dealbreaker, not a preference. Anything else is the wrong product, however close it sounds (palm-derived MCT oil is not coconut-derived MCT oil; a technical grade is not a food grade). Never say we are open to, exploring, considering, or also interested in another grade, source, or derivation, and never widen the ask to "both" options. If the supplier offers a different grade or source, do not request pricing, MOQ, or terms on it: ask whether they can supply the required grade, and if they have already said they cannot, thank them and treat it as a decline. Ask about the required grade only, never invite them to propose alternatives. When only a "Target grade" is given it is a preference, so name it but you may ask what else they carry.
 - SHIPPING TERMS — when you ask for pricing, also cover shipping: tell them we can arrange our own shipping and prefer EXW (Ex Works) terms. If they can't do EXW that's fine, but still ask for their EXW price so we can compare. Fold this into the pricing ask naturally (EXW price for the stated quantity, plus MOQ and lead time).
 - NO US SHIPPING IS NOT A DEAD END. If the input says the supplier cannot ship to the United States, do NOT treat that as a decline and do NOT close the conversation. Say that is workable because we arrange our own freight, and ask for their EXW price at their works plus the nearest port or airport they can deliver to, so we can collect. If it fits naturally you may also ask whether they already supply a US distributor or can drop-ship on our behalf. Keep it to one or two sentences and stay on our material.
-- PAYMENT TERMS — when asking for pricing, also request payment terms (net-30, net-60, etc.) if the supplier hasn't already provided them. Fold this naturally into the pricing ask alongside MOQ and lead time.
+- PAYMENT TERMS — request payment terms (net-30, net-60, etc.) when they appear on the current ask list, or when the supplier raises them. Do not bolt them onto a pricing ask otherwise: they are collected at a later stage, and adding them early is how a reply turns into a questionnaire.
 - ASK ONLY WHAT'S RELEVANT — do NOT ask for hazmat / DOT / dangerous-goods / special-handling details unless the material is actually hazardous or the supplier themselves raised it. For a non-hazardous material, never request hazmat classification. Do not hard-block or withhold a pricing ask because details are missing.
-- KEEP INQUIRING UNTIL COMPLETE. If the input lists "Still needed to complete this quote", those are approval-required details we do not have yet. When the supplier is engaged (not declining), ask for all of them in one concise, organized question. Never re-ask for something already provided, and never ask the supplier to pick or suggest a grade.
+- KEEP INQUIRING UNTIL COMPLETE, BUT STAGGER IT. If the input lists "Still needed to complete this quote", those are approval-required details we do not have yet. We collect them over several emails, never all at once: suppliers stop replying to messages that read like a form. When the supplier is engaged, ask ONLY for the items listed there, at most ${MAX_ASKS_PER_REPLY}, worked into ordinary sentences. Do not add asks of your own beyond that list, do not produce a second list of questions, and do not chase details the list does not mention (we will ask for them on a later reply once these are answered). Never re-ask for something already provided, and never ask the supplier to pick or suggest a grade.
 - Be concise (3-6 sentences). Warm, businesslike, no fluff.
 - NEVER invent prices, quantities, commitments, ship dates, or terms. If a specific is needed, ask for it rather than stating one.
 - SHIP-TO: the input may include a "Confirmed ship-to" line, synced from our system of record. When present, that destination is verified and you SHOULD give it if the supplier asks where the material ships, or when a destination helps them quote freight. Quote it EXACTLY as written; never append a street address, building number, or suite to it. When there is no "Confirmed ship-to" line, DEFER — say the delivery location will be confirmed shortly — and never guess a city, state, or ZIP.
@@ -132,6 +134,9 @@ export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
   const missing: MissingApprovalField[] = completenessFollowupEnabled()
     ? (input.missingApprovalFields ?? []).filter((m) => m && m.key && m.clause)
     : [];
+  // Only the earliest unanswered stage is put in front of the model, so the reply
+  // it writes is already scoped. Later stages come back on later replies.
+  const { stage: stagedStage, ask: stagedAsks } = selectStagedAsks("", missing);
   const lines = [
     `Mode: ${input.mode}`,
     `Sign off as: ${signoff}`,
@@ -156,10 +161,10 @@ export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
         ]
       : []),
     ...(held.length ? ["", `Other materials we also source from this supplier (introduce only if engaged): ${held.join(", ")}`] : []),
-    ...(missing.length
+    ...(stagedAsks.length
       ? [
           "",
-          `Still needed to complete this quote. Ask only if the supplier is engaged, and ask for at most ${MAX_ASKS_PER_REPLY} of these, worked naturally into the reply. Never enumerate the whole list, and never ask them to choose a grade: ${missing
+          `Still needed to complete this quote, stage ${stagedStage} of 3. Ask only if the supplier is engaged. Ask for THESE AND NOTHING ELSE, worked naturally into the reply, and never ask them to choose a grade: ${stagedAsks
             .map((m) => m.clause)
             .join("; ")}`,
         ]
@@ -183,13 +188,14 @@ export async function composeReply(input: ReplyInput): Promise<ComposedReply> {
     draft.subject = input.theirSubject ? `Re: ${input.theirSubject.replace(/^re:\s*/i, "")}` : `Re: ${input.materialName ?? "your message"}`;
   }
 
-  // Deterministic completeness backstop. Only asks for fields the model's own copy
-  // did not already cover, capped per reply: it used to append every missing field
-  // unconditionally, which duplicated asks the body had just made and read as a
-  // platform-field checklist. Deferred fields recur on the next reply.
-  if (missing.length && draft.engaged && draft.body) {
-    const { ask: toAsk } = selectCompletenessAsks(draft.body, missing);
-    const ask = buildCompletenessAsk(toAsk);
+  // Deterministic completeness backstop. The model is now handed the current
+  // stage's asks and nothing else, so it normally makes them itself. This fires
+  // only when the drafted email asks for nothing at all, and only for the stage
+  // we already scoped: appending alongside the model's own asks is what produced
+  // the duplicate checklist ops flagged, and it also let a later stage's fields
+  // jump the queue. Anything unasked recurs on the next reply.
+  if (stagedAsks.length && draft.engaged && draft.body && countAsksInBody(draft.body) === 0) {
+    const ask = buildCompletenessAsk(missingAsksNotCovered(draft.body, stagedAsks));
     if (ask && !draft.body.includes(ask)) draft.body = insertBeforeSignoff(draft.body, ask, signoff);
   }
   // House style (no em dashes, no "RFQ") is enforced on outbound copy; replies

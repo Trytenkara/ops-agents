@@ -104,16 +104,100 @@ export function missingAsksNotCovered(body: string, missing: MissingApprovalFiel
 // that suppliers will not answer it.
 export const MAX_ASKS_PER_REPLY = 3;
 
-// Which fields this reply should ask for: drop anything the drafted body already
-// covers, then take at most `limit`. Deferred fields are NOT lost. The missing set
-// is recomputed from live quote/supplier data on every inbound reply, so a field
-// left unasked here simply comes back on the next one, which is what staggering
-// the asks means.
+// Three-stage ask cadence. Backlog #14 always intended to ask for "the top couple,
+// turn by turn", but both the prompt and the backstop asked for everything at once.
+// A supplier is only asked for what the NEXT decision needs:
+//   1 commercial   - is this even worth pursuing
+//   2 logistics    - how it packs and ships, and on what terms
+//   3 onboarding   - who we transact with, asked only once we intend to buy
+const ASK_STAGE_BY_KEY: Record<string, 1 | 2 | 3> = {
+  price: 1,
+  moq: 1,
+  lead_time: 1,
+  pack_size: 2,
+  case_type: 2,
+  case_length: 2,
+  case_width: 2,
+  case_height: 2,
+  dimensions_unit: 2,
+  case_weight: 2,
+  payment_terms: 2,
+  payment_upfront_pct: 2,
+  shipping_terms: 2,
+  shipping_address: 3,
+  poc_name: 3,
+  poc_email: 3,
+  poc_phone: 3,
+  shipping_email: 3,
+  billing_email: 3,
+  billing_poc_name: 3,
+};
+
+export function askStage(key: string): 1 | 2 | 3 {
+  return ASK_STAGE_BY_KEY[key] ?? 3;
+}
+
+const DIMENSION_KEYS = ["case_length", "case_width", "case_height", "dimensions_unit"];
+
+// "outer case length, outer case width, outer case height, dimension unit" is four
+// asks for what a human asks once. Collapse them so the cap spends on distinct
+// questions, not on one question shredded into columns.
+export function collapseDimensionAsks(fields: MissingApprovalField[]): MissingApprovalField[] {
+  const dims = fields.filter((f) => DIMENSION_KEYS.includes(f.key));
+  if (dims.length < 2) return fields;
+  const merged: MissingApprovalField = {
+    key: "case_dimensions",
+    clause: "outer case dimensions (length, width, height) and whether those are inches or centimeters",
+    detect: /\b(?:case|package|carton)\s*dimensions|\bl\s*[x×]\s*w\s*[x×]\s*h\b/i,
+  };
+  const out: MissingApprovalField[] = [];
+  let placed = false;
+  for (const f of fields) {
+    if (!DIMENSION_KEYS.includes(f.key)) { out.push(f); continue; }
+    if (!placed) { out.push(merged); placed = true; }
+  }
+  return out;
+}
+
+// Which fields this reply may ask for. Drop anything the drafted body already
+// covers, keep only the EARLIEST stage that still has anything outstanding, then
+// cap. Later stages are not lost: the missing set is recomputed from live data on
+// every reply, so once stage 1 is answered stage 2 becomes the current stage.
+export function selectStagedAsks(
+  body: string,
+  missing: MissingApprovalField[],
+  limit: number = MAX_ASKS_PER_REPLY,
+): { stage: 1 | 2 | 3 | null; ask: MissingApprovalField[]; deferred: MissingApprovalField[] } {
+  const uncovered = collapseDimensionAsks(missingAsksNotCovered(body ?? "", missing ?? []));
+  if (!uncovered.length) return { stage: null, ask: [], deferred: [] };
+  const stage = uncovered.reduce<1 | 2 | 3>((lowest, f) => (askStage(f.key) < lowest ? askStage(f.key) : lowest), 3);
+  const inStage = uncovered.filter((f) => askStage(f.key) === stage);
+  return {
+    stage,
+    ask: inStage.slice(0, limit),
+    deferred: [...inStage.slice(limit), ...uncovered.filter((f) => askStage(f.key) !== stage)],
+  };
+}
+
+// How many distinct things the drafted body already asks the supplier for. Used to
+// suppress the appended paragraph entirely when the reply is already asking enough:
+// a second list under a reply that asks four questions is what reads as a form.
+export function countAsksInBody(body: string): number {
+  const text = body ?? "";
+  const bullets = (text.match(/^\s*(?:[-*•]|\(?\d+[.)])\s+\S/gm) ?? []).length;
+  // Models very often enumerate inline: "could you confirm (1) the MOQ, (2) ...".
+  // That is one question mark but three asks, so count the markers too.
+  const inlineEnumerated = (text.match(/\(\s*\d+\s*\)\s*\S/g) ?? []).length;
+  const questions = (text.match(/\?/g) ?? []).length;
+  return Math.max(bullets, inlineEnumerated, questions);
+}
+
+// Kept for the case where a caller wants the flat, stage-agnostic selection.
 export function selectCompletenessAsks(
   body: string,
   missing: MissingApprovalField[],
   limit: number = MAX_ASKS_PER_REPLY,
 ): { ask: MissingApprovalField[]; deferred: MissingApprovalField[] } {
-  const uncovered = missingAsksNotCovered(body ?? "", missing ?? []);
+  const uncovered = collapseDimensionAsks(missingAsksNotCovered(body ?? "", missing ?? []));
   return { ask: uncovered.slice(0, limit), deferred: uncovered.slice(limit) };
 }
