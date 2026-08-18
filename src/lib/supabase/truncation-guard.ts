@@ -61,12 +61,17 @@ export function truncationGuardedFetch(
     }
     if (!Array.isArray(rows) || rows.length < PAGE_CAP) return res;
 
-    throw new Error(
+    const message =
       `Truncated read of "${tableOf(url)}": PostgREST returned exactly ${PAGE_CAP} rows ` +
         `for a query with no limit or range, so an unknown number of rows were dropped ` +
         `without an error. Page the read with selectAllPaged() from @/lib/supabase-paging ` +
         `(and give it a stable .order()), or state the bound explicitly with .limit() if ` +
-        `a partial answer is genuinely what you want.`
-    );
+        `a partial answer is genuinely what you want.`;
+
+    // postgrest-js catches a fetch rejection and hands it back as `error`, so a
+    // caller that destructures only `data` would otherwise see undefined and
+    // move on. Log as well, so an ignored error still leaves a trace.
+    console.error(`[truncation-guard] ${message}`);
+    throw new Error(message);
   } as typeof fetch;
 }

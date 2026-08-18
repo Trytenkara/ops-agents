@@ -116,6 +116,41 @@ forbid({
   }
 }
 
+// 7. Every Supabase client must keep the truncation guard, or a read that hits
+// the 1000-row cap goes back to lying about being complete.
+for (const f of ["src/lib/supabase/admin.ts", "src/lib/supabase/server.ts"]) {
+  const mod = files.find((x) => x.path.endsWith(f));
+  if (mod && !/truncationGuardedFetch\(/.test(mod.text)) {
+    violations.push({
+      rule: "reads/client-must-guard-truncation",
+      why: "PostgREST silently drops rows past 1000 and reports no error",
+      fix: "pass global: { fetch: truncationGuardedFetch() } when creating the client",
+      where: f,
+      line: "truncationGuardedFetch missing",
+    });
+  }
+}
+
+// 8. Every path that persists a price must pass it through the publish gate,
+// or an unreadable or unconverted number reaches the client again.
+for (const f of [
+  "src/agents-runtime/agents/marketplace-validation/lead-price-pull.ts",
+  "src/agents-runtime/agents/browserbase-escalation/index.ts",
+  "src/app/actions/leads.ts",
+  "src/lib/staged-quotes.ts",
+]) {
+  const mod = files.find((x) => x.path.endsWith(f));
+  if (mod && !/publishable(Price|Tiers)\(/.test(mod.text)) {
+    violations.push({
+      rule: "price/writer-must-gate",
+      why: "a price must never be stored unreadable, negative or in a foreign currency",
+      fix: "route the write through publishablePrice / publishableTiers from @/lib/price-publish",
+      where: f,
+      line: "price publish gate missing",
+    });
+  }
+}
+
 if (!violations.length) {
   console.log(`check-rules: ${files.length} files, no violations.`);
   process.exit(0);

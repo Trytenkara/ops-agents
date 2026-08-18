@@ -26,6 +26,8 @@ const UA =
 const TIMEOUT_MS = 12_000;
 const RATE_LIMIT_RETRIES = 2;
 
+import { classifyFailure, classifyResponse } from "@/lib/retry-verdict";
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function getJson(url: string, retries = RATE_LIMIT_RETRIES): Promise<any | null> {
@@ -41,11 +43,16 @@ async function getJson(url: string, retries = RATE_LIMIT_RETRIES): Promise<any |
       // Shopify answers `local_rate_limited` with a 429 per shop per IP. It
       // clears in seconds, so back off rather than mis-recording the store as
       // unreadable and losing the whole host for this run.
-      if (res.status === 429 && attempt < retries) {
-        await sleep(2000 * (attempt + 1));
-        continue;
+      if (!res.ok) {
+        // A 5xx or a rate limit is about this attempt, not about the store.
+        // Returning null here used to write the whole host off for the run.
+        const v = classifyResponse(res, null, { attempt, maxAttempts: retries + 1 });
+        if (v.verdict === "retry") {
+          await sleep(Math.min(v.backoffMs, 8000));
+          continue;
+        }
+        return null;
       }
-      if (!res.ok) return null;
       // /products/<handle>.js is served as application/javascript, not JSON, so
       // parse the body ourselves and let an HTML error page fail out.
       const body = (await res.text()).trim();
@@ -55,7 +62,14 @@ async function getJson(url: string, retries = RATE_LIMIT_RETRIES): Promise<any |
       } catch {
         return null;
       }
-    } catch {
+    } catch (e) {
+      // A timeout or dropped connection is retryable; only give up once the
+      // attempt budget is spent.
+      if (classifyFailure(e, { attempt, maxAttempts: retries + 1 }).verdict === "retry") {
+        clearTimeout(t);
+        await sleep(1000 * (attempt + 1));
+        continue;
+      }
       return null;
     } finally {
       clearTimeout(t);

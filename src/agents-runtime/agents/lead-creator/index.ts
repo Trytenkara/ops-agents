@@ -23,6 +23,7 @@ import {
 import { importYetiEnabled, runImportYetiDiscovery, ImportYetiUnavailableError } from "./importyeti";
 import { runDbReuse } from "./reuse";
 import { getMaterialAliases } from "@/lib/material-aliases";
+import { classifyFailure } from "@/lib/retry-verdict";
 import { loadDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 
 const EMPTY_OVERRIDES = new Map<string, string>();
@@ -71,6 +72,9 @@ const DISCOVERY_MAX_DRY_PAGES = envInt("DISCOVERY_MAX_DRY_PAGES", 3);
 const PAGE_CURSOR_KEY = (source: string, materialId: string) => `discovery_page:${source}:${materialId}`;
 const SCOUT_RETRY_KEY = (materialId: string) => `scout_retry_passes:${materialId}`;
 const SOURCEREADY_SEARCHED_KEY = (materialId: string) => `sourceready_searched:${materialId}`;
+// How many passes that return nothing before a material stops being re-queried
+// against SourceReady. One empty answer is not evidence the market is empty.
+const SOURCEREADY_MAX_DRY_PASSES = 3;
 const SOURCEREADY_TERM_KEY = (materialId: string) => `sourceready_term:${materialId}`;
 
 // Starvation bypass. A material under this many leads is not "sourced" yet, and
@@ -464,6 +468,31 @@ registerAgent({
       for (const r of batch) {
         const term = typeof r.value?.term === "string" ? r.value.term : null;
         if (term) sourceReadyTerms.set(r.key.slice("sourceready_term:".length), term);
+      }
+      if (batch.length < 1000) break;
+    }
+    // SourceReady pass state per material: how many passes came back with
+    // nothing, and whether the material is finished with this source.
+    //
+    // This used to be read out of `pageCursors`, which is only ever filled from
+    // `discovery_page:%` keys, so the lookup could never match and the
+    // one-pass credit gate silently did nothing. Its own map now.
+    const sourceReadyPasses = new Map<string, { dry: number; done: boolean }>();
+    for (let from = 0; ; from += 1000) {
+      const { data: rows } = await admin
+        .from("agent_state")
+        .select("key, value")
+        .eq("agent_id", ctx.agentId)
+        .like("key", "sourceready_searched:%")
+        .range(from, from + 999);
+      const batch = (rows ?? []) as { key: string; value: any }[];
+      for (const r of batch) {
+        sourceReadyPasses.set(r.key.slice("sourceready_searched:".length), {
+          dry: Number(r.value?.dry) || 0,
+          // Markers written before this field existed meant "searched once",
+          // which under the old intent was final.
+          done: r.value?.done !== undefined ? !!r.value.done : true,
+        });
       }
       if (batch.length < 1000) break;
     }
@@ -1404,7 +1433,7 @@ registerAgent({
       // burning credits on repeat pages. Scout and ImportYeti handle breadth; SourceReady
       // is a initial deep index, not a recurring crawler.
       const srBacklog = underservedIds.has(material.id);
-      const srAlreadySearched = pageCursors.has(SOURCEREADY_SEARCHED_KEY(material.id));
+      const srAlreadySearched = sourceReadyPasses.get(material.id)?.done === true;
       if (
         sourceReadyEnabled() &&
         sourceReadyFired < SOURCEREADY_MAX_MATERIALS_PER_RUN &&
@@ -1418,6 +1447,7 @@ registerAgent({
         let ok = false;
         let srDetail: Record<string, any> = {};
         let srError: string | null = null;
+        let srVerdict: ReturnType<typeof classifyFailure> | null = null;
         try {
           const r = await runSourceReadyDiscovery(
             admin,
@@ -1460,26 +1490,50 @@ registerAgent({
             );
           }
         } catch (e: any) {
-          // On transport failure, mark it searched anyway so we don't retry.
-          // If a material truly needs re-search, the operator can manually reset the marker.
           srError =
             e instanceof SourceReadyUnavailableError
               ? "mcp_unavailable"
               : (e?.message ?? String(e));
+          srVerdict = classifyFailure(e);
           noteSourceFailure("sourceready", srError ?? "unknown");
         }
         if (ok || srError) {
           sourceReadyFired++;
-          // Mark this material as searched, regardless of success.
-          // One-pass model: once fire, never re-query unless manually reset.
-          await admin.from("agent_state").upsert(
-            {
-              agent_id: ctx.agentId,
-              key: SOURCEREADY_SEARCHED_KEY(material.id),
-              value: { searched_at: new Date().toISOString(), run_id: ctx.runId },
-            },
-            { onConflict: "agent_id,key" }
-          );
+          // When to stop asking this source about this material.
+          //
+          // Two rules meet here. Credits are scarce, so a material that has been
+          // properly searched must not be re-queried every run. But zero is not
+          // "this market is empty": it is indistinguishable from a naming miss
+          // or a bad run, and writing a material off on one empty answer is how
+          // Rapeseed Fatty Acid sat at zero suppliers for four days while three
+          // marketplaces carried it.
+          //
+          // So: a pass that RETURNED suppliers is done. A pass that returned
+          // nothing counts as a dry pass and the material comes back until the
+          // dry streak is spent. A retryable failure (the endpoint was down) is
+          // not a pass at all, costs no credits, and is not counted.
+          const found = ok && (srDetail.received ?? 0) > 0;
+          const prior = sourceReadyPasses.get(material.id)?.dry ?? 0;
+          const infra = !!srError && srVerdict?.verdict === "retry";
+          const dry = found || infra ? prior : prior + 1;
+          const done = found || dry >= SOURCEREADY_MAX_DRY_PASSES;
+          if (!infra) {
+            sourceReadyPasses.set(material.id, { dry, done });
+            await admin.from("agent_state").upsert(
+              {
+                agent_id: ctx.agentId,
+                key: SOURCEREADY_SEARCHED_KEY(material.id),
+                value: {
+                  searched_at: new Date().toISOString(),
+                  run_id: ctx.runId,
+                  dry,
+                  done,
+                  last_reason: found ? "found" : (srError ?? srDetail.reason ?? "no_results"),
+                },
+              },
+              { onConflict: "agent_id,key" }
+            );
+          }
         }
         await ctx.log(
           ok

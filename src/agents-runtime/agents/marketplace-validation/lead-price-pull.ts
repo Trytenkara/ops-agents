@@ -2,6 +2,7 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 import { recheckMarketplaceQuote, type AggregatorSeller } from "./price-recheck";
 import { shopifyFeedPull } from "./shopify-feed";
 import { normalizeToUsd } from "@/lib/fx";
+import { publishableTiers } from "@/lib/price-publish";
 import { ensureMarketplaceCaseDims } from "@/lib/marketplace-case-dims-fill";
 import { neverMarketplaceHostOf } from "@/lib/marketplace-hosts";
 import { screenClonedListings } from "@/lib/clone-ring";
@@ -1238,9 +1239,18 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
               : (prior?.supplier_price_changed_at ?? null),
         };
       });
-      nextPayload.price_tiers = tiers;
+      // Last gate before the number is stored: anything unreadable, negative,
+      // implausible, or still in a foreign currency is withheld with a reason
+      // rather than published.
+      const gated = publishableTiers(tiers as any[], { where: "marketplace pull" });
+      if (gated.issues.length) {
+        result.notes = `${result.notes ? result.notes + " " : ""}Withheld: ${gated.issues
+          .map((i) => `${i.field} (${i.reason})`)
+          .join("; ")}.`;
+      }
+      nextPayload.price_tiers = gated.tiers;
       nextPayload.price_tiers_updated_at = nowIso;
-      writtenTierPacks = tiers.map((t) => t.pack_size).filter(Boolean);
+      writtenTierPacks = gated.tiers.map((t: any) => t.pack_size).filter(Boolean);
     }
 
     const { error: upErr } = await admin

@@ -5,6 +5,7 @@ import { normalizeToUsd as fxNormalize } from "@/lib/fx";
 import { estimatePerTierShipping } from "@/lib/shipping-estimation";
 import { getOrgShipToAddress, formatAddressForCheckout } from "@/lib/tenkara-ship-to";
 import { sanitizeTiers, type PriceTier } from "@/lib/price-tiers";
+import { publishablePrice, publishableTiers } from "@/lib/price-publish";
 import { sortByOrgPriority } from "@/lib/org-priority";
 
 // Agent 19 - Browserbase Price Escalation.
@@ -281,7 +282,15 @@ async function writePull(
       }
     }
 
-    nextPayload.price_tiers = sanitizeTiers(tiers);
+    const gated = publishableTiers(sanitizeTiers(tiers) as any[], { where: "escalation pull" });
+    const gatedPull = publishablePrice(pull as any, { where: "escalation pull" });
+    if (gated.issues.length || gatedPull.issues.length) {
+      pull = gatedPull.row as any;
+      pull.last_notes = `${pull.last_notes ? pull.last_notes + " " : ""}Withheld: ${[...gatedPull.issues, ...gated.issues]
+        .map((i) => `${i.field} (${i.reason})`)
+        .join("; ")}.`;
+    }
+    nextPayload.price_tiers = gated.tiers;
     nextPayload.price_tiers_updated_at = now;
   } else if (hadPrice) {
     // Keep the last known good price live and flag that today's refresh failed,

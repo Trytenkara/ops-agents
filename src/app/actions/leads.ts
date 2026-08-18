@@ -6,6 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { loadMatchCandidates, matchOrderToMaterial } from "@/lib/material-profile";
 import { sanitizeTiers, type PriceTier } from "@/lib/price-tiers";
+import { publishableTiers } from "@/lib/price-publish";
 import { normalizeCompanyName, hostOf } from "@/lib/tenkara-sourcing-exclusions";
 import { deleteTenkaraDrafts, getTenkaraConversationDetails } from "@/lib/tenkara";
 import { isSameCompanyName } from "@/lib/fuzzy";
@@ -428,7 +429,17 @@ export async function saveLeadPriceTiers(leadId: string, tiers: PriceTier[]): Pr
   if ("error" in guard) return { ok: false, error: guard.error };
   const { session, admin, lead } = guard;
 
-  const clean = sanitizeTiers(tiers);
+  // Operator-entered prices go through the same gate as scraped ones. A typo
+  // that lands a negative or a nonsense figure should not be storable just
+  // because a person typed it.
+  const gate = publishableTiers(sanitizeTiers(tiers) as any[], { where: "operator edit" });
+  if (gate.issues.length) {
+    return {
+      ok: false,
+      error: `Price not saved: ${gate.issues.map((i) => `${i.field} ${i.reason}`).join("; ")}.`,
+    };
+  }
+  const clean = gate.tiers;
   const { error } = await admin
     .from("leads_in_flight")
     .update({

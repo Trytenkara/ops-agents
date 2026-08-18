@@ -62,15 +62,27 @@ of any of these, delete it and import the shared one.
   A bare `.select()` silently stops at 1000 rows.
 - `src/lib/requirements-recheck.ts` `recheckOrgLeads` — a client/material/grade
   change re-judges EXISTING leads, not only future ones.
+- `src/lib/supabase/truncation-guard.ts` — every Supabase client refuses an
+  unbounded read that comes back at exactly the 1000-row cap, because PostgREST
+  drops the rest without an error. Page it with `selectAllPaged`, or state the
+  bound with `.limit()` if a partial answer is genuinely wanted.
+- `src/lib/retry-verdict.ts` `classifyFailure` — whether a failure earns another
+  attempt. Default is RETRY: only a structural verdict (not authorised, rejected,
+  out of credit) is terminal. A 404 is NOT terminal, it is repairable by search.
+  Never hand-roll another `retryable()` regex.
+- `src/lib/price-publish.ts` `publishablePrice` / `publishableTiers` — the last
+  gate before a price is stored. Unreadable, negative, implausible, or still in a
+  foreign currency means null plus a stored reason, never a guess.
 
 ## How these are enforced
 
 `scripts/check-rules.mjs` runs as the first step of `npm run build`, so a rule
 break fails the Vercel build and never reaches production. Run it on its own
-with `npm run check:rules`. Rules covered today: no direct `convertToUsd`, no inline consumer-mailbox
-list, no hand-rolled `is_internal` sort, no native `<select>`, no "RFQ" or em dash
-in a copy literal, and `stageDraft` must keep calling both `sanitizeDraft` and the
-contact-fabrication guard. Add a check when you add a shared guard. Reach for an
+with `npm run check:rules`. Rules covered today: no direct `convertToUsd`, no inline
+consumer-mailbox list, no hand-rolled `is_internal` sort, no native `<select>`,
+no "RFQ" or em dash in a copy literal, `stageDraft` keeping both `sanitizeDraft`
+and the contact-fabrication guard, every Supabase client keeping the truncation
+guard, and every price writer going through the publish gate. Add a check when you add a shared guard. Reach for an
 exemption only when you have first ruled out moving the logic into the shared
 module, since an exemption list decays the same way a blocklist does.
 
@@ -83,36 +95,21 @@ and it runs after the merge.
 
 ## OUTSTANDING: rules with no shared guard yet
 
-Named here so they stay visible instead of going quiet. Enforce them by hand at
-every call site you touch, and if you are already in the area, build the guard.
+Nothing on this list right now. When you add a rule that has no home, put it
+here rather than leaving it in a code comment, and add a `check-rules` entry the
+moment a shared module exists to point at.
 
-- **Paging.** `selectAllPaged` exists but only ~10 files use it against ~167
-  files with a bare `.select(`. Needs a lint rule that fails CI on an unpaged
-  `.select()` with no single-row filter, otherwise the next worklist read is
-  silently truncated at 1000 rows.
-- **Retryable vs terminal.** At least four agents hand-roll their own
-  `retryable()` regex test. Needs one `lib/retry-verdict.ts` classifier that
-  every pull and enrichment agent throws and catches through.
-- **Zero is not empty.** Each discovery source reasons about this separately in
-  comments. Needs a shared `DiscoveryResult` that requeues on an empty pass, so
-  a new source cannot report "no suppliers exist" after a bad run.
-- **No fabricated price.** Enforced by prompt text in each extractor, with no
-  write-time validator. `price-qa.ts` is a read-time pass and cannot prevent it.
-Paging, retryable-vs-terminal, zero-is-not-empty and the fabricated-price
-validator are the four that a grep cannot judge. They need real shared modules,
-not a checker rule.
+## Rules the guards cannot fully carry
 
-## Rules with no single home yet, enforce at every call site you touch
+The modules above stop the bad WRITE. They cannot supply the judgement that
+should have happened earlier, so these still need attention by hand:
 
-- Never fabricate a price. Unreadable means null plus the reason, never a
-  guess. Non-USD converts to USD, never publish an unconverted number.
-- A discovery or pull pass that returns ZERO is not "this market is empty".
-  Zero is indistinguishable from a naming miss or a crashed run, so requeue it.
-- Never give up on a retryable failure. Only a structural verdict is terminal.
-- No hidden caps on a worklist. Page to completion, and if a run is bounded,
-  say in its summary what it left behind.
-- PostgREST caps a select at 1000 rows. Page with `.range()` or your counts are
-  silently wrong, not merely short.
-- Real clients (`orgs.is_internal = false`) drain a shared capped queue before
-  internal test orgs.
-- Outbound copy: say "sourcing inquiry", never "RFQ". No em dashes.
+- A discovery pass that returns ZERO is not "this market is empty". The
+  SourceReady path now requeues a dry pass and only gives up after three, but
+  any NEW source has to make the same choice on its own. Zero is
+  indistinguishable from a naming miss or a crashed run.
+- No hidden caps on a worklist. The truncation guard catches the accidental
+  1000-row cut, not a deliberate `top N` window. If a run is bounded, say in its
+  summary what it left behind.
+- A withheld price is a job, not an outcome. `publishablePrice` stores the
+  reason; somebody still has to work the flagged rows.
