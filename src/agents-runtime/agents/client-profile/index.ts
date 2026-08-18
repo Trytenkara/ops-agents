@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { refreshStaleClientProfiles } from "@/lib/client-profile";
 import { syncAllClientSettings } from "@/lib/tenkara-client-settings";
 import { recheckOrgLeads } from "@/lib/requirements-recheck";
+import { sortByOrgPriority } from "@/lib/org-priority";
 
 // Wall-clock this run will spend re-judging leads after a requirements change.
 // Deliberately a small slice of the 300s this agent's invocation gets: the
@@ -61,11 +62,7 @@ registerAgent({
       // Real clients before internal test orgs, and orgs the fleet is actually
       // working before parked ones: this shares the run's wall clock with the
       // research sweep below, so the capacity drains in that order.
-      const rank = (orgId: string) => {
-        const o = byId.get(orgId);
-        return (o?.is_internal === false ? 0 : 2) + ((o?.sourcing_status ?? "off") === "off" ? 1 : 0);
-      };
-      const queue = [...sync.requirementsChangedOrgs].sort((a, b) => rank(a.orgId) - rank(b.orgId));
+      const queue = sortByOrgPriority([...sync.requirementsChangedOrgs], (i) => byId.get(i.orgId));
       const budgetEndsAt = Date.now() + RECHECK_BUDGET_MS;
       for (const item of queue) {
         const org = byId.get(item.orgId);

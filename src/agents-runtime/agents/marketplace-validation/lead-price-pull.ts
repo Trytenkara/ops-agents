@@ -10,6 +10,7 @@ import { getOrgAssignmentContext, orgAutoKey, resolveOperatorId, type Assignment
 import { leadMarketKind } from "@/lib/lead-market";
 import { splitPriceDelta } from "@/lib/price-delta";
 import { loadSelfSuppliedMaterialIds } from "@/lib/self-supplied-materials";
+import { partitionRealVsInternal } from "@/lib/org-priority";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -355,8 +356,9 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   // Otherwise a large internal test discovery flood sits ahead of a live client in
   // the FIFO and starves it. Internal orgs still get served — but only with whatever
   // cap is left after real clients are satisfied this run.
-  const realOrgIds = activeOrgRows.filter((o: any) => !o.is_internal).map((o: any) => o.id);
-  const internalOrgIds = activeOrgRows.filter((o: any) => o.is_internal).map((o: any) => o.id);
+  const split = partitionRealVsInternal(activeOrgRows as any[]);
+  const realOrgIds = split.real.map((o: any) => o.id);
+  const internalOrgIds = split.internal.map((o: any) => o.id);
 
   // Materials the client supplies themselves aren't being sourced, so there is no
   // price index to keep warm for them. Fail-open: an empty set on error.

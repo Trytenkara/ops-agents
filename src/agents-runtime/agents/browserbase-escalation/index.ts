@@ -5,6 +5,7 @@ import { normalizeToUsd as fxNormalize } from "@/lib/fx";
 import { estimatePerTierShipping } from "@/lib/shipping-estimation";
 import { getOrgShipToAddress, formatAddressForCheckout } from "@/lib/tenkara-ship-to";
 import { sanitizeTiers } from "@/lib/price-tiers";
+import { sortByOrgPriority } from "@/lib/org-priority";
 
 // Agent 19 - Browserbase Price Escalation.
 //
@@ -334,7 +335,7 @@ async function selectWorklist(admin: any, log: RunLog): Promise<{ leads: Lead[];
   if (error) throw new Error(`worklist query failed: ${error.message}`);
 
   let skippedWalls = 0;
-  const eligible: Lead[] = [];
+  let eligible: Lead[] = [];
   for (const r of rows ?? []) {
     const url = listingUrl(r.payload);
     if (!url) continue;
@@ -348,11 +349,7 @@ async function selectWorklist(admin: any, log: RunLog): Promise<{ leads: Lead[];
   }
 
   // Real clients always get scarce throughput before internal test orgs.
-  eligible.sort((a, b) => {
-    const ai = live.get(a.org_id)?.is_internal ? 1 : 0;
-    const bi = live.get(b.org_id)?.is_internal ? 1 : 0;
-    return ai - bi;
-  });
+  eligible = sortByOrgPriority(eligible, (l) => live.get(l.org_id));
   await log(`Worklist: ${eligible.length} eligible, ${skippedWalls} skipped as quote-request walls`, { step: "worklist" });
   return { leads: eligible.slice(0, MAX_LEADS_PER_RUN), skippedWalls };
 }

@@ -13,6 +13,7 @@ import {
   spreadOwnerId,
   type AssignmentContext,
 } from "@/lib/operator-assignment";
+import { sortOrgsByPriority } from "@/lib/org-priority";
 
 // Stops a lead from becoming a duplicate supplier in Tenkara.
 //
@@ -58,9 +59,7 @@ registerAgent({
       return;
     }
     // Real clients drain the per-run budget before internal test orgs.
-    const orgs = ((orgRows ?? []) as OrgRow[]).sort(
-      (a, b) => Number(a.is_internal) - Number(b.is_internal) || a.slug.localeCompare(b.slug)
-    );
+    const orgs = sortOrgsByPriority((orgRows ?? []) as OrgRow[]);
 
     let parked = 0;
     let cased = 0;

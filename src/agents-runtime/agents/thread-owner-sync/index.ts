@@ -1,6 +1,7 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { syncOrgThreadOwners } from "@/lib/sync-thread-owners";
+import { sortOrgsByPriority } from "@/lib/org-priority";
 
 // Agent 21 - Thread Owner Sync.
 //
@@ -67,11 +68,7 @@ registerAgent({
 
     // A paused org still has open threads an operator may be working, so it is
     // swept too; it just goes last.
-    const orgs = ((data ?? []) as OrgRow[]).sort((a, b) => {
-      const rank = (o: OrgRow) =>
-        (o.is_internal === false ? 0 : 2) + ((o.sourcing_status ?? PAUSED) === PAUSED ? 1 : 0);
-      return rank(a) - rank(b) || (a.slug ?? "").localeCompare(b.slug ?? "");
-    });
+    const orgs = sortOrgsByPriority((data ?? []) as OrgRow[]);
 
     let examined = 0;
     let moved = 0;
