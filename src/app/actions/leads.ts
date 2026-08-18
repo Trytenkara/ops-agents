@@ -10,7 +10,7 @@ import { normalizeCompanyName, hostOf } from "@/lib/tenkara-sourcing-exclusions"
 import { deleteTenkaraDrafts, getTenkaraConversationDetails } from "@/lib/tenkara";
 import { isSameCompanyName } from "@/lib/fuzzy";
 import { isMarketplaceLeadPayload, splitDirectLeadFromMarketplace } from "@/lib/marketplace-direct-split";
-import { isAggregatorEmail } from "@/agents-runtime/agents/data-enrichment/enrich";
+import { checkEmail, isAggregatorEmail } from "@/agents-runtime/agents/data-enrichment/enrich";
 import { randomUUID } from "crypto";
 
 interface ActionResult {
@@ -611,15 +611,76 @@ export async function updateLeadEmail(leadId: string, email: string): Promise<Ac
     return { ok: true };
   }
 
+  const previous = typeof payload.supplier_contact_email === "string" ? payload.supplier_contact_email.toLowerCase() : null;
   const enrichment = payload.enrichment ? { ...payload.enrichment } : {};
-  if (enrichment.contact) enrichment.contact = { ...enrichment.contact, email: trimmed || null };
+  enrichment.contact = { ...(enrichment.contact ?? {}), email: trimmed || null };
 
-  const { error } = await admin
-    .from("leads_in_flight")
-    .update({ payload: { ...payload, supplier_contact_email: trimmed || null, enrichment, contact_source: trimmed ? "manual_operator" : payload.contact_source } })
-    .eq("id", leadId);
+  // email_check describes ONE address. Carrying the old verdict onto a new
+  // address is how a stale domain_matches_website ends up authorising outreach
+  // to somewhere we never checked, and leaving it behind after a delete keeps
+  // the deleted address alive for anything that reads the check instead of the
+  // contact. Rewrite it for the new address, drop it entirely on delete.
+  if (trimmed) enrichment.email_check = checkEmail(trimmed, payload.supplier_website ?? null);
+  else delete enrichment.email_check;
+
+  const nextPayload: Record<string, any> = {
+    ...payload,
+    supplier_contact_email: trimmed || null,
+    enrichment,
+    contact_source: trimmed ? "manual_operator" : null,
+  };
+
+  if (trimmed) {
+    nextPayload.manual_email_added_at = new Date().toISOString();
+    nextPayload.manual_email_added_by = guard.session.userId;
+  }
+
+  // A delete has to remove every copy of the address, not just the one the row
+  // renders. Anything left behind is a live send target: additional_contacts is
+  // CC'd on first contact, and an alias row reserves the address org-wide so no
+  // other thread can ever use it again.
+  const purge = (target: string | null) => {
+    if (!target) return;
+    if (Array.isArray(nextPayload.additional_contacts)) {
+      nextPayload.additional_contacts = nextPayload.additional_contacts.filter(
+        (c: any) => String(c?.email ?? "").toLowerCase() !== target
+      );
+    }
+    if (String(nextPayload.aggregator_contact_email ?? "").toLowerCase() === target) {
+      nextPayload.aggregator_contact_email = null;
+    }
+    if (enrichment.aggregator_contact_email && String(enrichment.aggregator_contact_email).toLowerCase() === target) {
+      enrichment.aggregator_contact_email = null;
+    }
+  };
+  purge(trimmed ? null : previous);
+  purge(trimmed || null);
+
+  if (!trimmed) {
+    delete nextPayload.contact_confidence;
+    delete nextPayload.manual_email_added_at;
+    delete nextPayload.manual_email_added_by;
+    delete nextPayload.email_source;
+  }
+
+  const { error } = await admin.from("leads_in_flight").update({ payload: nextPayload }).eq("id", leadId);
 
   if (error) return { ok: false, error: error.message };
+
+  // Release the org-wide reservation on a deleted address. Without this the
+  // alias row outlives the contact and silently blocks the address forever.
+  if (!trimmed && previous && lead.org_id) {
+    await admin.from("supplier_email_aliases").delete().eq("org_id", lead.org_id).eq("email", previous);
+  }
+
+  await admin.from("audit_log").insert({
+    actor_user_id: guard.session.userId,
+    action: trimmed ? "lead.email_set" : "lead.email_deleted",
+    target_table: "leads_in_flight",
+    target_id: leadId,
+    diff: { from: previous, to: trimmed || null },
+  });
+
   revalidatePath("/work/review/leads");
   revalidatePath("/work/orgs/[slug]/leads", "page");
   return { ok: true };
@@ -720,10 +781,19 @@ export async function importEmailsFromCsv(orgId: string, form: FormData): Promis
         continue;
       }
       const enrichment = payload.enrichment ? { ...payload.enrichment } : {};
-      if (enrichment.contact) enrichment.contact = { ...enrichment.contact, email };
+      enrichment.contact = { ...(enrichment.contact ?? {}), email };
+      enrichment.email_check = checkEmail(email, payload.supplier_website ?? null);
       await admin
         .from("leads_in_flight")
-        .update({ payload: { ...payload, supplier_contact_email: email, enrichment, contact_source: "manual_operator" } })
+        .update({
+          payload: {
+            ...payload,
+            supplier_contact_email: email,
+            enrichment,
+            contact_source: "manual_operator",
+            manual_email_added_at: new Date().toISOString(),
+          },
+        })
         .eq("id", hit.id);
       matched++;
     }
