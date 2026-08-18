@@ -6,6 +6,8 @@ import { approvedContactsFor } from "@/lib/contact-guard";
 import { postAgentAlert } from "@/lib/slack-alert";
 import { resolveSupplierIdByName as resolveTenkaraSupplierId } from "@/lib/tenkara-supplier-linker";
 import { orgScopedExternalId } from "@/lib/org-isolation";
+import { loadThreadContext } from "@/lib/thread-context";
+import { tailorToThread } from "@/lib/thread-tailor";
 
 // Shared draft → QA building block. Every intake agent (02 expiries,
 // 04 new-material outreach) and the Tenkara inbound webhook composes its own
@@ -113,6 +115,11 @@ export interface StageDraftInput {
   // Caller-supplied metadata (outreach_mode, ghost_brand, lead_id, etc.).
   // qa_findings + the draft link are merged in here.
   metadata?: Record<string, any>;
+  // Set by a drafter that already composed against the full thread (the inbound
+  // reply path), so the staging tailor doesn't run a second model pass over
+  // copy that is already conversation-aware. Everything else, including every
+  // template-built follow-up, is tailored here.
+  threadAware?: boolean;
 }
 
 export interface StageDraftResult {
@@ -135,7 +142,29 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
   // every outbound draft passes through, not in each drafter. Three drafters
   // called sanitizeDraft themselves and any new one could simply forget to.
   // Sanitizing is idempotent, so the existing callers stay correct.
-  const { subject, body } = sanitizeDraft({ subject: input.subject, body: input.body });
+  let { subject, body } = sanitizeDraft({ subject: input.subject, body: input.body });
+
+  // No draft into an existing conversation may ignore what the supplier already
+  // said. Enforced HERE for the same reason sanitizeDraft is: the three
+  // template follow-ups had no thread awareness at all, and a fourth drafter
+  // would have started out the same way. Best-effort by design, a failed load
+  // or a rejected rewrite keeps the original copy and records why.
+  let tailorNote: Record<string, any> | null = null;
+  if (input.conversationId && !input.threadAware) {
+    const ctx = await loadThreadContext(input.conversationId);
+    if (!ctx.ok) {
+      tailorNote = { tailored: false, reason: "thread_context_unavailable", error: ctx.error };
+      console.warn(`[stageDraft] thread context load failed for ${input.conversationId}: ${ctx.error}`);
+    } else if (ctx.text) {
+      const t = await tailorToThread({ body, threadContext: ctx.text });
+      if (t.tailored) {
+        // Re-sanitize: the rewrite is model output and gets the same treatment
+        // as any other drafter's copy.
+        body = sanitizeDraft({ subject, body: t.body }).body;
+      }
+      tailorNote = { tailored: t.tailored, reason: t.reason ?? null };
+    }
+  }
 
   // draft_references.supplier_id is the key the inbound-reply path merges quote
   // details and supplier profiles on, but discovery hands most leads over
@@ -344,6 +373,7 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
     approved_contacts: approvedContacts,
     qa_findings: qaFindings,
     qa_linted_at: new Date().toISOString(),
+    ...(tailorNote ? { thread_tailor: tailorNote } : {}),
     // Record who we actually CC'd so the reply/follow-up loop knows which
     // supplier contacts have already been reached on this thread.
     ...(ccList.length ? { cc_contacts: ccList.map((c) => c.address) } : {}),

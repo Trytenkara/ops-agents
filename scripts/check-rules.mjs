@@ -115,6 +115,15 @@ forbid({
     });
   }
   const chokepoint = files.find((f) => f.path.endsWith("src/lib/draft-staging.ts"));
+  if (chokepoint && !/tailorToThread\(/.test(chokepoint.text)) {
+    violations.push({
+      rule: "copy/staging-must-tailor-to-thread",
+      why: "template follow-ups re-asked for price, pack size, lead time and MOQ the supplier had already answered in the thread",
+      fix: "restore the tailorToThread pass in stageDraft",
+      where: "src/lib/draft-staging.ts",
+      line: "tailorToThread call missing",
+    });
+  }
   if (chokepoint && !/approvedContactsFor\(/.test(chokepoint.text)) {
     violations.push({
       rule: "contacts/staging-must-guard-fabrication",

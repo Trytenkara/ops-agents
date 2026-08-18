@@ -70,10 +70,20 @@ of any of these, delete it and import the shared one.
   Applied inside `sanitizeDraft`, so no drafter can leak it by interpolating an
   internal free-text field into a body. A call drafter once shipped "From our
   conversation: - Unable to reach after two call attempts." to a live supplier.
-  OUTSTANDING: a raw Granola meeting paste and the operator de-escalation note
-  are still copied verbatim into the call follow-up body by
-  `src/lib/call-followup.ts`. The line filter only catches note text that reads
-  as internal; arbitrary internal prose in those two fields still goes out.
+  `call-followup.ts` no longer interpolates ANY internal free text (call log,
+  operator de-escalation note, Granola paste). A line filter cannot make raw
+  internal prose safe, so those fields stay in the case record and never enter
+  a body.
+- `src/lib/thread-context.ts` + `src/lib/thread-tailor.ts` — no draft into an
+  existing conversation may ignore what the supplier already said. `stageDraft`
+  loads the thread and runs `tailorToThread` on any body whose drafter did not
+  already compose against the thread (`threadAware: true`, which only the
+  inbound reply path sets). This is why the three template follow-ups no longer
+  re-ask for price, pack size, lead time and MOQ that the supplier answered in
+  prose. `renderThreadContext` trims OLDEST-first: the previous head slice threw
+  away the newest messages while still telling the model it had the full thread.
+  `loadThreadContext` reports a fetch failure instead of silently returning a
+  context-free draft; the outcome is recorded on the draft as `thread_tailor`.
 - `src/lib/supabase-paging.ts` `selectAllPaged` — use for any worklist read.
   A bare `.select()` silently stops at 1000 rows.
 - `src/lib/requirements-recheck.ts` `recheckOrgLeads` — a client/material/grade
@@ -98,7 +108,7 @@ with `npm run check:rules`. Rules covered today: no direct `convertToUsd`, no in
 consumer-mailbox list, no hand-rolled `is_internal` sort, no native `<select>`,
 no "RFQ" or em dash in a copy literal, `stageDraft` keeping both `sanitizeDraft`
 and the contact-fabrication guard, `sanitizeDraft` keeping the internal-note
-strip, every Supabase client keeping the truncation
+strip, `stageDraft` keeping the thread tailor, every Supabase client keeping the truncation
 guard, every price writer going through the publish gate, `stageDraft` keeping
 the org scoping on `external_id`, and every direct `createTenkaraConversation`
 caller scoping its key too. Add a check when you add a shared guard. Reach for an

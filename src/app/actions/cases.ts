@@ -190,8 +190,6 @@ export async function deescalateCallCase(
           contactName: (meta.supplier_contact_name as string | undefined) ?? null,
           materialName: (meta.material_name as string | undefined) ?? null,
           callLog: callLog as any,
-          deescalationNote: note || null,
-          granolaNotes: (metadata.granola_notes as string | undefined) ?? null,
           signoff: (meta.suggested_signoff as string | undefined) ?? (meta.ghost_brand as string | undefined) ?? "Sourcing Team",
         });
         const staged = await stageDraft({

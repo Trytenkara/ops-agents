@@ -13,6 +13,7 @@ import { extractDocumentFields, isDocExtractableExt } from "@/lib/document-extra
 import { getTenkaraMessageAttachments, downloadTenkaraAttachment } from "@/lib/tenkara-attachments";
 import { parseAttachmentBytes, deriveExt, isPricingCandidateExt } from "@/lib/attachment-parser";
 import { getTenkaraConversationMessages } from "@/lib/tenkara";
+import { loadThreadContext } from "@/lib/thread-context";
 import { postAgentAlert } from "@/lib/slack-alert";
 import { parseTaggedRecipient } from "@/lib/inquiry-reply-tag";
 import { isAggregatorEmail } from "@/agents-runtime/agents/data-enrichment/enrich";
@@ -1024,17 +1025,12 @@ export async function handleInboundReply(
     orgName = o?.name ?? "the client";
   }
   const mode = (refMeta.outreach_mode === "ghost" ? "ghost" : "active") as "active" | "ghost";
-  let threadContext: string | null = null;
-  try {
-    const thread = await getTenkaraConversationMessages(msg.conversation_id);
-    if (thread.length) {
-      threadContext = thread
-        .map((m) => `[${m.sent_at ?? "?"}] ${m.from_name || m.from_email || "?"}: ${(m.body_text ?? "").trim().slice(0, 1200)}`)
-        .join("\n\n")
-        .slice(0, 8000);
-    }
-  } catch {
-    // no context — proceed with just the inbound message
+  // Shared loader: newest-preserving trim, and a load failure is reported
+  // rather than silently degrading the draft to newest-message-only.
+  const threadLoad = await loadThreadContext(msg.conversation_id);
+  const threadContext: string | null = threadLoad.text;
+  if (!threadLoad.ok) {
+    console.warn(`[tenkara-inbound] thread context unavailable for ${msg.conversation_id}: ${threadLoad.error}`);
   }
   // Phased outreach: other materials for this supplier held back from the first
   // email (payload.phased_hold). If the supplier is engaged, this reply
@@ -1148,6 +1144,8 @@ export async function handleInboundReply(
     cc: (await threadCcContacts(admin, msg.conversation_id, from.address)).map((address) => ({ address })),
     subject: reply.subject,
     body: reply.body,
+    // composeReply already drafted against the full thread above.
+    threadAware: true,
     assignedOperator: ref.assigned_operator,
     metadata: {
       outreach_mode: mode,
