@@ -28,6 +28,16 @@ import { syncOrgThreadOwners } from "@/lib/sync-thread-owners";
 // Real clients are swept before internal test orgs, per fleet priority.
 
 const PAUSED = "off";
+const AGENT_ID = "00933c46-73ee-4bf5-b8ee-fb56bcedcf71";
+// Threads per client per run that get their owner re-pushed even though nothing
+// moved, walking forward from where the last run stopped. Catches pushes that
+// failed silently at the time; see ThreadOwnerSyncOptions.reassert.
+const REASSERT_PER_ORG = 40;
+// Pushing to Tenkara is seconds per thread, not milliseconds, so an unbounded
+// sweep hits the function ceiling and reports nothing at all (it did, twice).
+// Stop starting clients past this and let tomorrow's run continue the walk.
+const DEADLINE_MS = 9 * 60 * 1000;
+const CURSOR_KEY = (orgId: string) => `reassert_cursor:${orgId}`;
 
 interface OrgRow {
   id: string;
@@ -60,16 +70,38 @@ registerAgent({
 
     let examined = 0;
     let moved = 0;
+    let reasserted = 0;
     let mirrorsFailed = 0;
     let failedOrgs = 0;
+    let skippedOrgs = 0;
     const drifted: string[] = [];
+    const startedAt = Date.now();
 
     for (const org of orgs) {
       const label = org.slug ?? org.name ?? org.id;
+      if (Date.now() - startedAt > DEADLINE_MS) {
+        skippedOrgs++;
+        continue;
+      }
       try {
-        const r = await syncOrgThreadOwners(admin, org.id);
+        const { data: state } = await admin
+          .from("agent_state")
+          .select("value")
+          .eq("agent_id", AGENT_ID)
+          .eq("key", CURSOR_KEY(org.id))
+          .maybeSingle();
+        const r = await syncOrgThreadOwners(admin, org.id, {
+          reassert: { limit: REASSERT_PER_ORG, after: (state?.value as any)?.cursor ?? null },
+        });
+        await admin
+          .from("agent_state")
+          .upsert(
+            { agent_id: AGENT_ID, key: CURSOR_KEY(org.id), value: { cursor: r.cursor } },
+            { onConflict: "agent_id,key" }
+          );
         examined += r.examined;
         moved += r.moved;
+        reasserted += r.reasserted;
         mirrorsFailed += r.mirrorsFailed;
         if (r.moved > 0) {
           drifted.push(`${label} ${r.moved}${r.mirrorsFailed ? ` (${r.mirrorsFailed} not accepted)` : ""}`);
@@ -87,14 +119,17 @@ registerAgent({
     }
 
     ctx.setItemsProcessed(moved);
-    ctx.setMetadata({ orgs: orgs.length, examined, moved, mirrorsFailed, failedOrgs });
-    ctx.setStatus(failedOrgs || mirrorsFailed ? "partial" : "success");
+    ctx.setMetadata({ orgs: orgs.length, examined, moved, reasserted, mirrorsFailed, failedOrgs, skippedOrgs });
+    ctx.setStatus(failedOrgs || mirrorsFailed || skippedOrgs ? "partial" : "success");
     ctx.setSummary(
-      moved === 0 && !failedOrgs
-        ? `Inbox owners match Control Room across ${orgs.length} clients (${examined} open threads checked).`
-        : `Re-pointed ${moved} of ${examined} open threads: ${drifted.join(", ") || "none"}` +
-            (mirrorsFailed ? ` · ${mirrorsFailed} the inbox did not accept` : "") +
-            (failedOrgs ? ` · ${failedOrgs} clients could not be checked` : ""),
+      (moved === 0
+        ? `Inbox owners match Control Room across ${orgs.length - skippedOrgs} clients (${examined} open threads checked)`
+        : `Re-pointed ${moved} of ${examined} open threads: ${drifted.join(", ")}`) +
+        ` · re-confirmed ${reasserted} with the inbox` +
+        (mirrorsFailed ? ` · ${mirrorsFailed} the inbox did not accept` : "") +
+        (failedOrgs ? ` · ${failedOrgs} clients could not be checked` : "") +
+        (skippedOrgs ? ` · ${skippedOrgs} clients left for the next run (time)` : "") +
+        ".",
     );
   },
 });

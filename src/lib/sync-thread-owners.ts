@@ -26,6 +26,12 @@ const OPEN_DRAFT_STATUSES = ["staged", "blocked", "reviewed"];
 const MIRROR_CONCURRENCY = 6;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Drafts that never reached Tenkara park a synthetic id ("blocked:...",
+// "form-inquiry:...") where a conversation id would go. There is nothing to
+// push onto, and asking anyway returns a 500 the retry loop would dutifully
+// repeat.
+const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
   await Promise.all(
@@ -35,9 +41,26 @@ async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<v
   );
 }
 
+export interface ThreadOwnerSyncOptions {
+  // Re-push threads that did NOT move, walking forward from `after` in id order.
+  //
+  // Needed because a thread only gets pushed on the run that moves it. If that
+  // push failed at the time (Tenkara 429/5xx, or the process died mid-sweep, both
+  // of which have happened), the stamp is right and every later run sees "already
+  // correct" and never pushes again, so the inbox stays wrong indefinitely and
+  // this sync reports a clean match. Re-asserting a rolling slice each day closes
+  // that hole: the push is idempotent, so a thread that is already right costs one
+  // call and changes nothing.
+  reassert?: { limit: number; after?: string | null };
+}
+
 export interface ThreadOwnerSyncResult {
   examined: number;
   moved: number;
+  // Threads re-pushed although they had not moved, and how far the walk got.
+  // Feed `cursor` back as `reassert.after` next run; null means it wrapped.
+  reasserted: number;
+  cursor: string | null;
   // Threads Control Room moved but Tenkara refused. Non-zero means the inbox is
   // still behind and the sync should be run again; it is reported rather than
   // thrown so a Tenkara outage cannot roll back a config change that already saved.
@@ -46,9 +69,16 @@ export interface ThreadOwnerSyncResult {
 
 export async function syncOrgThreadOwners(
   admin: SupabaseClient,
-  orgId: string
+  orgId: string,
+  opts: ThreadOwnerSyncOptions = {}
 ): Promise<ThreadOwnerSyncResult> {
-  const result: ThreadOwnerSyncResult = { examined: 0, moved: 0, mirrorsFailed: 0 };
+  const result: ThreadOwnerSyncResult = {
+    examined: 0,
+    moved: 0,
+    reasserted: 0,
+    cursor: opts.reassert?.after ?? null,
+    mirrorsFailed: 0,
+  };
   const ctx = await getOrgAssignmentContext(admin, orgId);
 
   const drafts = await selectAllPaged<{
@@ -68,7 +98,11 @@ export async function syncOrgThreadOwners(
   ).catch(() => []);
   result.examined = drafts.length;
 
-  const moves: { id: string; threadId: string | null; operatorId: string }[] = [];
+  type Thread = { id: string; threadId: string | null; operatorId: string };
+  const moves: Thread[] = [];
+  // Already stamped with the right owner. Control Room is correct for these; the
+  // inbox is only presumed correct, which is what the re-assert walk checks.
+  const settled: Thread[] = [];
   for (const d of drafts) {
     const supplierName = (d.metadata?.supplier_name as string | undefined) ?? null;
     const owner = spreadOwnerId(
@@ -83,7 +117,11 @@ export async function syncOrgThreadOwners(
     );
     // Derivation declining to own the thread leaves the stamp alone. Clearing it
     // would blank the only record of ownership for a client whose pool went empty.
-    if (!owner || owner === d.assigned_operator) continue;
+    if (!owner) continue;
+    if (owner === d.assigned_operator) {
+      settled.push({ id: d.id, threadId: d.thread_id, operatorId: owner });
+      continue;
+    }
     moves.push({ id: d.id, threadId: d.thread_id, operatorId: owner });
   }
 
@@ -107,6 +145,26 @@ export async function syncOrgThreadOwners(
     }
     result.mirrorsFailed += 1;
   });
+
+  if (opts.reassert && opts.reassert.limit > 0) {
+    const after = opts.reassert.after ?? "";
+    const pool = settled.filter((t) => t.threadId && CONVERSATION_ID.test(t.threadId) && t.id > after);
+    const slice = pool.slice(0, opts.reassert.limit);
+    // Wrapping to null when the walk reaches the end, so the next run starts over
+    // rather than sitting past the last id and re-asserting nothing forever.
+    result.cursor = pool.length > slice.length ? slice[slice.length - 1].id : null;
+    await mapLimit(slice, MIRROR_CONCURRENCY, async (t) => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const ok = await mirrorDraftAssignee(admin, t.threadId, t.operatorId).catch(() => false);
+        if (ok) {
+          result.reasserted++;
+          return;
+        }
+        await sleep(500 * 2 ** attempt);
+      }
+      result.mirrorsFailed += 1;
+    });
+  }
 
   return result;
 }
