@@ -111,6 +111,7 @@ const GENERIC_NAME_TOKENS = new Set([
 export interface GuardLead {
   id: string;
   org_id: string | null;
+  supplier_id?: string | null;
   supplier_name: string | null;
   material_id: string | null;
   material_name: string | null;
@@ -119,6 +120,7 @@ export interface GuardLead {
 }
 
 export interface GuardSupplier {
+  id?: string | number | null;
   name: string | null;
   website: string | null;
   is_marketplace: boolean;

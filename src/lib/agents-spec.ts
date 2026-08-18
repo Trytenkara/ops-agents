@@ -208,6 +208,18 @@ export const AGENT_SPECS: AgentSpec[] = [
       "Each parked lead raises an escalation on the client's Supplier Leads tab naming the supplier we already have. Drop the lead if it is the same company, or send it back to Enriched if it is genuinely different. A parked lead sends no outreach until you decide.",
   },
   {
+    number: 22,
+    slug: "agent-22-operator-email-outreach",
+    name: "Operator Email Outreach",
+    status: "shipped",
+    cadence: "Hourly at :30 · Asia/Manila",
+    purpose: "Make sure an email an operator hand-added actually gets used.",
+    automatic:
+      "When an operator finds a supplier contact and types it in, that address is a human judgement about who can quote the material. The main outreach agent was dropping a large share of them, because it is built to open exactly one cold thread per supplier and refuses a second. This agent picks those hand-added addresses up and acts on all three cases it was refusing. If we already have a thread open with that company, the new person is added to it rather than thrown away. If someone else happens to use the same free mailbox provider (the shared consumer inboxes common with Chinese suppliers), that is no longer read as \"we already emailed them\", which had been collapsing sixteen unrelated suppliers onto five addresses. And if the lead is parked over a question about a duplicate supplier record, the material inquiry still goes out while that record question stays exactly as parked as it was.",
+    humanInput:
+      "Everything it produces is a draft in the normal review queue, never an auto-send. Each draft records who added the address and when, so you can see whose call it was before you send.",
+  },
+  {
     number: null,
     slug: "agent-fleet-summary",
     name: "Fleet Summary",

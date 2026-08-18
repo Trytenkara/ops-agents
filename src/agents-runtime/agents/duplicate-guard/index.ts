@@ -84,7 +84,7 @@ registerAgent({
       for (let from = 0; ; from += LEAD_PAGE) {
         const { data: leadRows, error: leadErr } = await admin
           .from("leads_in_flight")
-          .select("id, org_id, supplier_name, material_id, material_name, stage, payload")
+          .select("id, org_id, supplier_id, supplier_name, material_id, material_name, stage, payload")
           .eq("org_id", org.id)
           .eq("status", "active")
           .in("stage", PROMOTABLE_STAGES as unknown as string[])
@@ -110,7 +110,7 @@ registerAgent({
       let suppliers: GuardSupplier[];
       try {
         suppliers = await tenkaraQuery<GuardSupplier>(
-          `select name, website, coalesce(is_marketplace, false) as is_marketplace
+          `select id, name, website, coalesce(is_marketplace, false) as is_marketplace
              from suppliers
             where organization_ids[1] = $1
             limit ${SUPPLIER_SCAN_LIMIT}`,
@@ -150,10 +150,27 @@ registerAgent({
         }
         const lead = v.lead;
 
+        // Park the RECORD, not the material. Parking used to strand the
+        // sourcing question with the record question: nobody was asked about
+        // this material while an operator decided whether the company was
+        // already on file. If the match is unambiguous (one existing company,
+        // and we can find its supplier row), point the lead at that record now.
+        // The second record still never gets created, which is the whole job of
+        // this agent, but the material is attached to the company we already
+        // have and the inquiry can go out against it.
+        let routedTo: { id: string; name: string } | null = null;
+        if (v.existingNames.length === 1 && !lead.supplier_id) {
+          const target = suppliers.find(
+            (s) => !s.is_marketplace && (s.name ?? "").trim().toLowerCase() === v.existingNames[0].trim().toLowerCase()
+          );
+          if (target?.id != null) routedTo = { id: String(target.id), name: target.name ?? v.existingNames[0] };
+        }
+
         const { error: parkErr } = await admin
           .from("leads_in_flight")
           .update({
             stage: "ready_for_approval",
+            ...(routedTo ? { supplier_id: routedTo.id } : {}),
             payload: {
               ...(lead.payload ?? {}),
               duplicate_review: {
@@ -163,6 +180,7 @@ registerAgent({
                 kind: v.kind,
                 reason: v.reason,
                 canonical_name: v.canonicalName,
+                material_routed_to: routedTo,
                 parked_from_stage: lead.stage,
                 parked_at: new Date().toISOString(),
                 parked_by_run_id: ctx.runId,
