@@ -32,7 +32,12 @@ const AGENT_ID = "00933c46-73ee-4bf5-b8ee-fb56bcedcf71";
 // Threads per client per run that get their owner re-pushed even though nothing
 // moved, walking forward from where the last run stopped. Catches pushes that
 // failed silently at the time; see ThreadOwnerSyncOptions.reassert.
-const REASSERT_PER_ORG = 40;
+//
+// Sized against the inbox's 60-writes-a-minute limit and the deadline below:
+// 25 x 12 clients is about six minutes of pushing, which leaves room for the
+// threads that actually moved. Raising it does not speed the walk up, it just
+// starves the clients at the end of the list.
+const REASSERT_PER_ORG = 25;
 // Pushing to Tenkara is seconds per thread, not milliseconds, so an unbounded
 // sweep hits the function ceiling and reports nothing at all (it did, twice).
 // Stop starting clients past this and let tomorrow's run continue the walk.

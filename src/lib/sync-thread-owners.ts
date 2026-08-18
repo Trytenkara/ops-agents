@@ -43,18 +43,48 @@ const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 // would get lost in the noise.
 type PushOutcome = "pushed" | "gone" | "failed";
 
-async function pushOwner(
-  threadId: string,
-  email: string,
-  attempts = 3
-): Promise<PushOutcome> {
+// Tenkara allows 60 assignee writes a minute and answers 429 past that. A burst
+// of 36 at concurrency 6 got 12 through and 429ed the other 24 in seven seconds,
+// which the old half-second backoff could not survive: the window is a MINUTE,
+// so every retry landed inside the same exhausted window and the thread was
+// written off as "the inbox did not accept" (80 of them per sweep).
+//
+// So the sweep paces itself below the limit rather than discovering it. Kept
+// under 60 because draft staging pushes assignees on the same quota.
+const RATE_PER_MIN = 45;
+let windowStartedAt = 0;
+let usedInWindow = 0;
+
+async function rateGate(): Promise<void> {
+  for (;;) {
+    const now = Date.now();
+    if (now - windowStartedAt >= 60_000) {
+      windowStartedAt = now;
+      usedInWindow = 0;
+    }
+    if (usedInWindow < RATE_PER_MIN) {
+      usedInWindow++;
+      return;
+    }
+    await sleep(windowStartedAt + 60_000 - now + 100);
+  }
+}
+
+async function pushOwner(threadId: string, email: string, attempts = 3): Promise<PushOutcome> {
   for (let attempt = 0; attempt < attempts; attempt++) {
+    await rateGate();
     const res = await setTenkaraConversationAssignee(threadId, email).catch(() => ({
       ok: false,
       status: 0,
     }));
     if (res.ok) return "pushed";
     if (res.status === 404 || res.status === 403 || res.status === 422) return "gone";
+    // A 429 means somebody else spent the window, so wait for a fresh one rather
+    // than spending this attempt on a request that cannot succeed.
+    if (res.status === 429) {
+      usedInWindow = RATE_PER_MIN;
+      continue;
+    }
     await sleep(500 * 2 ** attempt);
   }
   return "failed";
