@@ -141,6 +141,27 @@ for (const f of files) {
   });
 }
 
+// 6c. Tables whose natural key is shared across clients (a supplier address, a
+// page URL) must always be upserted on a key that includes org_id. Migration
+// 0120 moved those unique constraints; this keeps the writer in step with them,
+// because an unscoped onConflict silently overwrites another client's row.
+const ORG_SCOPED_CONFLICT_KEYS = ["supplier_email", "page_hash"];
+for (const f of files) {
+  for (const m of f.text.matchAll(/onConflict:\s*"([^"]+)"/g)) {
+    const key = m[1];
+    const cols = key.split(",").map((c) => c.trim());
+    if (cols.includes("org_id")) continue;
+    if (!cols.some((c) => ORG_SCOPED_CONFLICT_KEYS.includes(c))) continue;
+    violations.push({
+      rule: "orgs/upsert-conflict-key-must-include-org",
+      why: "this key is shared between clients, so an unscoped upsert overwrites another client's row",
+      fix: `use onConflict: "org_id,${key}"`,
+      where: f.path,
+      line: `onConflict: "${key}"`,
+    });
+  }
+}
+
 // 7. Every Supabase client must keep the truncation guard, or a read that hits
 // the 1000-row cap goes back to lying about being complete.
 for (const f of ["src/lib/supabase/admin.ts", "src/lib/supabase/server.ts"]) {

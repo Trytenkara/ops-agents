@@ -4,6 +4,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { loadOrgStatuses, sourcingAllowed } from "@/lib/org-status";
 import { retrieveDocumentsFromUrl } from "@/lib/document-retrieve";
 import { syncDocRequirementsMet } from "@/lib/document-requirements";
+import { orgScopedKey } from "@/lib/org-isolation";
 
 // Agent 09 - Document Retrieval.
 //
@@ -74,7 +75,9 @@ registerAgent({
     const seen = new Set<string>();
     const push = (t: Target) => {
       if (!/^https?:\/\//i.test(t.pageUrl)) return;
-      const h = pageHash(t.pageUrl);
+      // Per client, not per URL: two clients can both need the same supplier
+      // page, and dropping the second one leaves that client's docs unfetched.
+      const h = orgScopedKey(t.orgId, pageHash(t.pageUrl));
       if (seen.has(h)) return;
       seen.add(h);
       targets.push(t);
@@ -149,16 +152,18 @@ registerAgent({
     for (let i = 0; i < hashes.length; i += 500) {
       const { data } = await admin
         .from("document_page_scans")
-        .select("page_hash")
+        .select("org_id, page_hash")
         .in("page_hash", hashes.slice(i, i + 500))
         .gte("last_scanned_at", cutoff);
-      for (const r of (data ?? []) as any[]) scannedRecently.add(r.page_hash);
+      // Scoped by client: documents are stored per-org, so one client scanning a
+      // page must not skip it for every other client for the next 60 days.
+      for (const r of (data ?? []) as any[]) scannedRecently.add(orgScopedKey(r.org_id, r.page_hash));
     }
 
     // Real clients before internal test orgs: this is a capped queue and the
     // cap is the scarce resource.
     const queue = targets
-      .filter((t) => !scannedRecently.has(pageHash(t.pageUrl)))
+      .filter((t) => !scannedRecently.has(orgScopedKey(t.orgId, pageHash(t.pageUrl))))
       .sort((a, b) => Number(a.isInternal) - Number(b.isInternal))
       .slice(0, MAX_PAGES_PER_RUN);
 
@@ -243,7 +248,7 @@ registerAgent({
           docs_found: res.inserted + res.healed,
           note: res.note ?? null,
         },
-        { onConflict: "page_hash" }
+        { onConflict: "org_id,page_hash" }
       );
 
       if (res.inserted || res.healed) {

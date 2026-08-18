@@ -102,26 +102,31 @@ that way. A pre-merge check on pull requests is still missing:
 token carries the `workflow` scope. Until then the Vercel build is the only gate,
 and it runs after the merge.
 
-## OUTSTANDING: rules with no shared guard yet
+## Org isolation reaches the schema too
 
-One client's data may never appear under another client's name. `org-isolation.ts`
-covers the keys we build ourselves, but three known holes need a schema change
-before a guard can hold them, and they are open today:
+One client's data may never appear under another client's name.
+`org-isolation.ts` covers the keys we build in code; migration 0120 closed the
+three keys that lived in the database instead:
 
-- `supplier_email_context` is unique on `supplier_email` ALONE (migration 0024),
-  so Agent 13 keeps one shared row per supplier address across every client. Six
-  rows currently hold one client's negotiation summary under another client's
-  org_id. Needs the unique key moved to `(org_id, supplier_email)` and the
-  accumulator in `inbox-context/index.ts` keyed the same way.
-- `lead_scanner_exports` has no `org_id`, so Agent 11's 7-day "already exported"
-  suppression is fleet-wide: one client's export silences another client's. The
-  CSV grouping itself is now org-scoped; the ledger is not.
-- `document_page_scans.page_hash` is the primary key and hashes the URL only, so
-  the first client to scan a supplier's document page blocks every other client
-  for 60 days and that client's qualification pack stays empty.
+- `supplier_email_context` is unique on `(org_id, supplier_email)`, not on the
+  address alone. It used to keep ONE row per supplier address fleet-wide, and
+  Agent 02 reads that row to pick its tone.
+- `document_page_scans` is unique on `(org_id, page_hash)`, not `page_hash`
+  alone. The URL hash as a primary key let the first client to scan a supplier's
+  document page block every other client for 60 days.
+- `lead_scanner_exports` has an `org_id`, so Agent 11's 7-day "already exported"
+  suppression is per client rather than fleet-wide.
 
-A `check-rules` entry cannot express "this table's unique key must include
-org_id" today. When these are migrated, add one.
+Both halves have to move together: a unique key naming `org_id` and an
+`onConflict` that does not will fail at runtime, and the reverse silently
+overwrites another client's row. Rule
+`orgs/upsert-conflict-key-must-include-org` in `check-rules` holds the writer
+side. If you add another table whose natural key is shared between clients (an
+address, a URL, a domain), add its column to `ORG_SCOPED_CONFLICT_KEYS` there.
+
+Still caller-side only: the Tenkara inbox app is not in this workspace, so
+`external_id`'s own uniqueness scope, inbound reply matching and thread merging
+are unaudited.
 
 ## Rules the guards cannot fully carry
 

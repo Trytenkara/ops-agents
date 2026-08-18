@@ -78,11 +78,15 @@ registerAgent({
     const since = new Date(Date.now() - RECENT_EXPORT_DAYS * 24 * 3600 * 1000).toISOString();
     const { data: recentExports } = await admin
       .from("lead_scanner_exports")
-      .select("supplier_id, status, generated_at")
+      .select("org_id, supplier_id, status, generated_at")
       .gte("generated_at", since)
       .neq("status", "failed");
+    // Org-scoped: an export for one client must not suppress the same supplier
+    // for another client, who has never seen that list.
     const recentSupplierIds = new Set(
-      (recentExports ?? []).map((r: any) => r.supplier_id).filter((x: any) => x != null)
+      (recentExports ?? [])
+        .filter((r: any) => r.supplier_id != null)
+        .map((r: any) => orgScopedKey(r.org_id, r.supplier_id))
     );
     await ctx.log(`${recentSupplierIds.size} suppliers already exported in last ${RECENT_EXPORT_DAYS}d (dedup)`, {
       step: "dedup",
@@ -93,14 +97,17 @@ registerAgent({
     // Org-scoped key. Grouping on supplier alone put two clients' dropped
     // material lists in ONE csv, which then went to a shared bucket and a shared
     // Slack channel — one client's sourcing list handed to whoever reads it.
-    const groups = new Map<string, { supplier_name: string; supplier_id: string | null; rows: LeadRow[] }>();
+    const groups = new Map<
+      string,
+      { org_id: string | null; supplier_name: string; supplier_id: string | null; rows: LeadRow[] }
+    >();
     for (const lead of leads) {
       const sid = lead.supplier_id;
-      if (sid && recentSupplierIds.has(sid)) continue;
+      if (sid && recentSupplierIds.has(orgScopedKey(lead.org_id, sid))) continue;
       const key = orgScopedKey(lead.org_id, sid ?? `name:${normalizeSupplierKey(lead.supplier_name)}`);
       let g = groups.get(key);
       if (!g) {
-        g = { supplier_name: lead.supplier_name ?? "(unknown supplier)", supplier_id: sid, rows: [] };
+        g = { org_id: lead.org_id ?? null, supplier_name: lead.supplier_name ?? "(unknown supplier)", supplier_id: sid, rows: [] };
         groups.set(key, g);
       }
       g.rows.push(lead);
@@ -147,6 +154,7 @@ registerAgent({
       const { data: exportRow, error: insErr } = await admin
         .from("lead_scanner_exports")
         .insert({
+          org_id: group.org_id,
           supplier_name: group.supplier_name,
           supplier_id: group.supplier_id,
           csv_payload: stored.path,

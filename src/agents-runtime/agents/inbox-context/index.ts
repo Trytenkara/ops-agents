@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenkaraConversationDetails, type TenkaraMessage } from "@/lib/tenkara";
 import { parseTaggedRecipient } from "@/lib/inquiry-reply-tag";
 import { onlyOrgNames, onlyOrgLabel } from "@/lib/org-scope";
+import { orgScopedKey } from "@/lib/org-isolation";
 import Anthropic from "@anthropic-ai/sdk";
 
 // Agent 13 - Inbox Context.
@@ -333,7 +334,11 @@ registerAgent({
           continue;
         }
 
-        let a = accum.get(t.supplier_email);
+        // Keyed by client + address, never address alone: one supplier talks to
+        // several of our clients, and merging those threads put one client's
+        // negotiation summary in front of another client's agent.
+        const accumKey = orgScopedKey(t.org_id, t.supplier_email);
+        let a = accum.get(accumKey);
         if (!a) {
           a = {
             supplier_email: t.supplier_email,
@@ -348,7 +353,7 @@ registerAgent({
             latestOutbound: null,
             transcript: [],
           };
-          accum.set(t.supplier_email, a);
+          accum.set(accumKey, a);
         }
 
         for (const m of usable) {
@@ -445,7 +450,7 @@ registerAgent({
           open_ask,
           updated_at: new Date().toISOString(),
         },
-        { onConflict: "supplier_email" }
+        { onConflict: "org_id,supplier_email" }
       );
       if (error) {
         await ctx.log(`Upsert failed for ${a.supplier_email}: ${error.message}`, {
