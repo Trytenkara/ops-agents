@@ -104,6 +104,16 @@ forbid({
       line: "sanitizeDraft call missing",
     });
   }
+  const style = files.find((f) => f.path.endsWith("src/lib/email-style.ts"));
+  if (style && !/stripInternalNotes\(/.test(style.text)) {
+    violations.push({
+      rule: "copy/sanitize-must-strip-internal-notes",
+      why: "a drafter once pasted the raw call log into a supplier email ('Unable to reach after two call attempts')",
+      fix: "restore the stripInternalNotes call in sanitizeDraft",
+      where: "src/lib/email-style.ts",
+      line: "stripInternalNotes call missing",
+    });
+  }
   const chokepoint = files.find((f) => f.path.endsWith("src/lib/draft-staging.ts"));
   if (chokepoint && !/approvedContactsFor\(/.test(chokepoint.text)) {
     violations.push({

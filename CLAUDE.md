@@ -65,6 +65,15 @@ of any of these, delete it and import the shared one.
 - `src/lib/email-style.ts` `sanitizeDraft` — applied inside `stageDraft`, so
   outbound copy cannot carry "RFQ" or an em dash. Do not rely on a drafter
   remembering to call it.
+- `src/lib/internal-notes.ts` `stripInternalNotes` — internal note material
+  (call outcomes, operator notes, pipeline state) may never reach a supplier.
+  Applied inside `sanitizeDraft`, so no drafter can leak it by interpolating an
+  internal free-text field into a body. A call drafter once shipped "From our
+  conversation: - Unable to reach after two call attempts." to a live supplier.
+  OUTSTANDING: a raw Granola meeting paste and the operator de-escalation note
+  are still copied verbatim into the call follow-up body by
+  `src/lib/call-followup.ts`. The line filter only catches note text that reads
+  as internal; arbitrary internal prose in those two fields still goes out.
 - `src/lib/supabase-paging.ts` `selectAllPaged` — use for any worklist read.
   A bare `.select()` silently stops at 1000 rows.
 - `src/lib/requirements-recheck.ts` `recheckOrgLeads` — a client/material/grade
@@ -88,7 +97,8 @@ break fails the Vercel build and never reaches production. Run it on its own
 with `npm run check:rules`. Rules covered today: no direct `convertToUsd`, no inline
 consumer-mailbox list, no hand-rolled `is_internal` sort, no native `<select>`,
 no "RFQ" or em dash in a copy literal, `stageDraft` keeping both `sanitizeDraft`
-and the contact-fabrication guard, every Supabase client keeping the truncation
+and the contact-fabrication guard, `sanitizeDraft` keeping the internal-note
+strip, every Supabase client keeping the truncation
 guard, every price writer going through the publish gate, `stageDraft` keeping
 the org scoping on `external_id`, and every direct `createTenkaraConversation`
 caller scoping its key too. Add a check when you add a shared guard. Reach for an

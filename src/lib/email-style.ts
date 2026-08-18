@@ -4,7 +4,11 @@
 //   2. Replace the term "RFQ" with "sourcing inquiry" (client-facing language rule).
 //   3. Remove a small set of canned AI phrases that slip past the system prompt.
 //   4. Collapse 3+ blank lines to a maximum of one blank line between paragraphs.
-// Conservative — never rewrites meaning, only formatting.
+//   5. Drop internal note lines (call outcomes, operator notes) that a drafter
+//      interpolated into a supplier-facing body. See internal-notes.ts.
+// Conservative, never rewrites meaning, only formatting.
+
+import { stripInternalNotes } from "@/lib/internal-notes";
 
 const DASH_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\s*—\s*/g, ", "],          // em dash with surrounding spaces → comma
@@ -26,8 +30,9 @@ const AI_PHRASE_STRIPS: RegExp[] = [
   /\bIn conclusion[,]?\s*/gi,
 ];
 
-function clean(text: string): string {
+function clean(text: string, dropInternalNotes: boolean): string {
   let out = text;
+  if (dropInternalNotes) out = stripInternalNotes(out).body;
   for (const [re, rep] of DASH_REPLACEMENTS) out = out.replace(re, rep);
   for (const [re, rep] of RFQ_REPLACEMENTS) out = out.replace(re, rep);
   for (const re of AI_PHRASE_STRIPS) out = out.replace(re, "");
@@ -39,7 +44,7 @@ function clean(text: string): string {
 }
 
 export function sanitizeDraft<T extends { subject: string; body: string }>(d: T): T {
-  return { ...d, subject: clean(d.subject), body: clean(d.body) };
+  return { ...d, subject: clean(d.subject, false), body: clean(d.body, true) };
 }
 
 // Email clients render a plain `\n`-separated body as one collapsed paragraph.
