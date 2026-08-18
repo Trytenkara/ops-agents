@@ -5,6 +5,16 @@ import { Select } from "@/components/ui/select";
 import { promoteLead, dropLead, linkLeadToConversation, requestOutreachRetry, cancelOutreachRetry } from "@/app/actions/leads";
 import { DROP_REASONS, type DropReason } from "@/app/actions/lead-drop-reasons";
 
+// The retry action answers in codes; operators need sentences.
+const RETRY_ERRORS: Record<string, string> = {
+  lead_not_retryable: "This lead is not ready for outreach yet. Promote it first.",
+  retry_group_unidentifiable: "No contact email or supplier on this lead, so there is nobody to write to.",
+  no_retryable_supplier_leads: "Nothing left to write for this supplier.",
+  supplier_already_has_live_or_sent_thread: "This supplier already has a live email thread. Open it and use Draft a reply now.",
+  forbidden: "You do not have access to this client.",
+  unauthenticated: "Session expired. Reload the page.",
+};
+
 interface Props {
   leadId: string;
   stage: string;
@@ -48,7 +58,7 @@ export function LeadRowActions({ leadId, stage, status, hasBlockedReason, disabl
     startTransition(async () => {
       const requested = await requestOutreachRetry(leadId);
       if (!requested.ok || !requested.retryRequestId) {
-        setErr(requested.error ?? "failed");
+        setErr(RETRY_ERRORS[requested.error ?? ""] ?? requested.error ?? "failed");
         return;
       }
       const response = await fetch("/api/agents/run/agent-04-outreach", {
@@ -59,8 +69,8 @@ export function LeadRowActions({ leadId, stage, status, hasBlockedReason, disabl
       const body = await response.json().catch(() => ({}));
       if (!response.ok || !body.ok) {
         await cancelOutreachRetry(requested.retryRequestId);
-        setErr(body.error ?? `HTTP ${response.status}`);
-      } else setWarn("Retry requested for this supplier group.");
+        setErr(RETRY_ERRORS[body.error ?? ""] ?? body.error ?? `HTTP ${response.status}`);
+      } else setWarn("Drafting outreach for this supplier now.");
     });
   }
 
@@ -160,7 +170,7 @@ export function LeadRowActions({ leadId, stage, status, hasBlockedReason, disabl
       )}
       {!disabled && stage === "enriched" && (
         <Button size="sm" variant="outline" onClick={onRetry} disabled={pending}>
-          {pending ? "…" : "Retry outreach"}
+          {pending ? "…" : "Draft outreach now"}
         </Button>
       )}
       {!disabled && (

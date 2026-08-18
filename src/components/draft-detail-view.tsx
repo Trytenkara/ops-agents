@@ -3,6 +3,7 @@
 import { Badge } from "@/components/ui/badge";
 import { MarkReviewedButton } from "@/components/mark-reviewed-button";
 import { RewriteDraftButton } from "@/components/rewrite-draft-button";
+import { DraftReplyNowButton } from "@/components/draft-reply-now-button";
 import { OperatorChip } from "@/components/operator-chip";
 import { relativeTime } from "@/lib/utils";
 import type { DraftDetail } from "@/lib/draft-detail";
@@ -79,6 +80,7 @@ export function DraftDetailView({
         {canReview && d.status === "staged" && d.isTenkara && d.draftKind !== "inbound_reply" && (
           <RewriteDraftButton draftId={d.id} onDone={onChanged} />
         )}
+        {canReview && d.isTenkara && d.threadId && <DraftReplyNowButton threadId={d.threadId} onDone={onChanged} />}
       </div>
 
       {d.reviewer && (
