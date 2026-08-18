@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAllPaged } from "@/lib/supabase-paging";
 import { getOrgAssignmentContext, orgAutoKey, spreadOwnerId } from "@/lib/operator-assignment";
-import { mirrorDraftAssignee } from "@/lib/draft-staging";
+import { setTenkaraConversationAssignee } from "@/lib/tenkara";
 
 // Re-derive the owner of an org's OPEN threads and push it to the Tenkara inbox.
 //
@@ -31,6 +31,34 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // push onto, and asking anyway returns a 500 the retry loop would dutifully
 // repeat.
 const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Push one thread's owner to Tenkara, telling a temporary refusal apart from a
+// permanent one. 429/5xx/network get backed off; a verdict does not.
+//
+// 404 is the one that matters at scale: a conversation the inbox no longer has
+// (deleted there, or from an environment that is gone) can never accept an
+// assignee, and there are 123 of them across the fleet. Counting those as
+// failures made every nightly sweep report "partial" and spend three retries
+// each on work that cannot succeed, which is exactly how a real Tenkara outage
+// would get lost in the noise.
+type PushOutcome = "pushed" | "gone" | "failed";
+
+async function pushOwner(
+  threadId: string,
+  email: string,
+  attempts = 3
+): Promise<PushOutcome> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const res = await setTenkaraConversationAssignee(threadId, email).catch(() => ({
+      ok: false,
+      status: 0,
+    }));
+    if (res.ok) return "pushed";
+    if (res.status === 404 || res.status === 403 || res.status === 422) return "gone";
+    await sleep(500 * 2 ** attempt);
+  }
+  return "failed";
+}
 
 async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
@@ -65,6 +93,9 @@ export interface ThreadOwnerSyncResult {
   // still behind and the sync should be run again; it is reported rather than
   // thrown so a Tenkara outage cannot roll back a config change that already saved.
   mirrorsFailed: number;
+  // Threads the inbox will never accept (404 gone, 403 not ours, 422 unknown
+  // assignee). Kept apart from mirrorsFailed so a real outage still stands out.
+  gone: number;
 }
 
 export async function syncOrgThreadOwners(
@@ -78,6 +109,7 @@ export async function syncOrgThreadOwners(
     reasserted: 0,
     cursor: opts.reassert?.after ?? null,
     mirrorsFailed: 0,
+    gone: 0,
   };
   const ctx = await getOrgAssignmentContext(admin, orgId);
 
@@ -134,35 +166,39 @@ export async function syncOrgThreadOwners(
     if (!error) result.moved++;
   }
 
+  // One lookup for every operator we are about to push, instead of one per
+  // thread: the same handful of people own hundreds of threads.
+  const emailById = new Map<string, string>();
+  const operatorIds = [...new Set([...moves, ...settled].map((t) => t.operatorId))];
+  if (operatorIds.length) {
+    const { data: users } = await admin.from("users").select("id, email").in("id", operatorIds);
+    for (const u of users ?? []) if (u.email) emailById.set(u.id, u.email as string);
+  }
+
+  const pushable = (t: Thread) =>
+    t.threadId && CONVERSATION_ID.test(t.threadId) && emailById.has(t.operatorId);
+
   // Mirror after the local writes, so a Tenkara failure leaves Control Room
   // correct and only the inbox behind. 429s back off rather than being dropped:
   // a swallowed mirror is indistinguishable from "this thread was already right".
-  await mapLimit(moves, MIRROR_CONCURRENCY, async (m) => {
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const ok = await mirrorDraftAssignee(admin, m.threadId, m.operatorId).catch(() => false);
-      if (ok) return;
-      await sleep(500 * 2 ** attempt);
-    }
-    result.mirrorsFailed += 1;
+  await mapLimit(moves.filter(pushable), MIRROR_CONCURRENCY, async (m) => {
+    const outcome = await pushOwner(m.threadId!, emailById.get(m.operatorId)!, 4);
+    if (outcome === "gone") result.gone++;
+    else if (outcome === "failed") result.mirrorsFailed++;
   });
 
   if (opts.reassert && opts.reassert.limit > 0) {
     const after = opts.reassert.after ?? "";
-    const pool = settled.filter((t) => t.threadId && CONVERSATION_ID.test(t.threadId) && t.id > after);
+    const pool = settled.filter((t) => pushable(t) && t.id > after);
     const slice = pool.slice(0, opts.reassert.limit);
     // Wrapping to null when the walk reaches the end, so the next run starts over
     // rather than sitting past the last id and re-asserting nothing forever.
     result.cursor = pool.length > slice.length ? slice[slice.length - 1].id : null;
     await mapLimit(slice, MIRROR_CONCURRENCY, async (t) => {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const ok = await mirrorDraftAssignee(admin, t.threadId, t.operatorId).catch(() => false);
-        if (ok) {
-          result.reasserted++;
-          return;
-        }
-        await sleep(500 * 2 ** attempt);
-      }
-      result.mirrorsFailed += 1;
+      const outcome = await pushOwner(t.threadId!, emailById.get(t.operatorId)!);
+      if (outcome === "pushed") result.reasserted++;
+      else if (outcome === "gone") result.gone++;
+      else result.mirrorsFailed++;
     });
   }
 

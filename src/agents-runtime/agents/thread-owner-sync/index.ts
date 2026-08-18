@@ -72,6 +72,7 @@ registerAgent({
     let moved = 0;
     let reasserted = 0;
     let mirrorsFailed = 0;
+    let gone = 0;
     let failedOrgs = 0;
     let skippedOrgs = 0;
     const drifted: string[] = [];
@@ -103,6 +104,7 @@ registerAgent({
         moved += r.moved;
         reasserted += r.reasserted;
         mirrorsFailed += r.mirrorsFailed;
+        gone += r.gone;
         if (r.moved > 0) {
           drifted.push(`${label} ${r.moved}${r.mirrorsFailed ? ` (${r.mirrorsFailed} not accepted)` : ""}`);
           await ctx.log(`${label}: ${r.moved} of ${r.examined} open threads re-pointed`, {
@@ -119,13 +121,16 @@ registerAgent({
     }
 
     ctx.setItemsProcessed(moved);
-    ctx.setMetadata({ orgs: orgs.length, examined, moved, reasserted, mirrorsFailed, failedOrgs, skippedOrgs });
+    ctx.setMetadata({ orgs: orgs.length, examined, moved, reasserted, gone, mirrorsFailed, failedOrgs, skippedOrgs });
     ctx.setStatus(failedOrgs || mirrorsFailed || skippedOrgs ? "partial" : "success");
     ctx.setSummary(
       (moved === 0
         ? `Inbox owners match Control Room across ${orgs.length - skippedOrgs} clients (${examined} open threads checked)`
         : `Re-pointed ${moved} of ${examined} open threads: ${drifted.join(", ")}`) +
         ` · re-confirmed ${reasserted} with the inbox` +
+        // Not an error: conversations the inbox no longer has. Named so the count
+        // is not mistaken for a Tenkara problem, and so a jump in it is visible.
+        (gone ? ` · ${gone} no longer exist in the inbox` : "") +
         (mirrorsFailed ? ` · ${mirrorsFailed} the inbox did not accept` : "") +
         (failedOrgs ? ` · ${failedOrgs} clients could not be checked` : "") +
         (skippedOrgs ? ` · ${skippedOrgs} clients left for the next run (time)` : "") +
