@@ -2,7 +2,7 @@ import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
 import { recheckMarketplaceQuote, type RecheckResult } from "./price-recheck";
-import { convertToUsd } from "@/lib/fx";
+import { normalizeToUsd } from "@/lib/fx";
 import { loadDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 import { pullPricesForNewMarketplaceLeads } from "./lead-price-pull";
 import { aggregatorNameOf } from "@/lib/aggregator-hosts";
@@ -236,27 +236,27 @@ registerAgent({
       // Normalize non-USD listings to USD so the baseline (USD) comparison is
       // valid, recording the rate used. If no FX rate is reachable, don't emit a
       // misleading USD number — drop the price and note it for manual review.
-      if (result.currency && result.currency !== "USD" && result.current_price != null) {
-        const conv = await convertToUsd(result.current_price, result.currency);
-        if (conv) {
-          const note = `Listed in ${result.currency} ${result.current_price}; converted to USD $${conv.usd} at FX 1 ${result.currency} = $${conv.rate}.`;
+      // One rate lookup for the whole listing, through the shared policy every
+      // other ingest path uses. Doing it per amount used to fall back to the RAW
+      // FOREIGN NUMBER when a tier's lookup failed, publishing a yuan price as if
+      // it were dollars. Unconvertible now nulls every amount, never keeps one.
+      if (result.currency && result.currency !== "USD") {
+        const fx = await normalizeToUsd(result.currency);
+        if (fx.status === "converted") {
+          const note = `Listed in ${result.currency} ${result.current_price}; ${fx.note}.`;
           result.notes = result.notes ? `${result.notes} ${note}` : note;
-          result.current_price = conv.usd;
-          if (result.unit_price != null) {
-            const u = await convertToUsd(result.unit_price, result.currency);
-            if (u) result.unit_price = u.usd;
-          }
-          const cur = result.currency;
-          result.tiers = await Promise.all(
-            result.tiers.map(async (t) => {
-              const p = t.price != null ? (await convertToUsd(t.price, cur))?.usd ?? t.price : t.price;
-              const up = t.unit_price != null ? (await convertToUsd(t.unit_price, cur))?.usd ?? t.unit_price : t.unit_price;
-              return { ...t, price: p, unit_price: up };
-            })
-          );
+          result.current_price = fx.convert(result.current_price);
+          result.unit_price = fx.convert(result.unit_price);
+          result.tiers = result.tiers.map((t) => ({
+            ...t,
+            price: fx.convert(t.price),
+            unit_price: fx.convert(t.unit_price),
+          }));
         } else {
-          result.notes = `${result.notes ? result.notes + " " : ""}Listed in ${result.currency}; USD FX rate unavailable, left unconverted.`;
+          result.notes = `${result.notes ? result.notes + " " : ""}Listed in ${result.currency}; USD FX rate unavailable, no price published.`;
           result.current_price = null;
+          result.unit_price = null;
+          result.tiers = result.tiers.map((t) => ({ ...t, price: null, unit_price: null }));
         }
       }
 

@@ -1,6 +1,6 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { createTenkaraDraft, createTenkaraConversation, setTenkaraConversationAssignee } from "@/lib/tenkara";
-import { bodyToHtml } from "@/lib/email-style";
+import { bodyToHtml, sanitizeDraft } from "@/lib/email-style";
 import { lintDraft, type Finding } from "@/agents-runtime/agents/outreach-qa/lint";
 import { approvedContactsFor } from "@/lib/contact-guard";
 import { postAgentAlert } from "@/lib/slack-alert";
@@ -127,8 +127,14 @@ export interface StageDraftResult {
 }
 
 export async function stageDraft(input: StageDraftInput): Promise<StageDraftResult> {
-  const { admin, agentId, runId, orgId, materialId, quoteId, to, subject, body, assignedOperator } = input;
+  const { admin, agentId, runId, orgId, materialId, quoteId, to, assignedOperator } = input;
   const callerMeta = input.metadata ?? {};
+
+  // Style rules (no "RFQ", no em dash) are enforced HERE, at the one chokepoint
+  // every outbound draft passes through, not in each drafter. Three drafters
+  // called sanitizeDraft themselves and any new one could simply forget to.
+  // Sanitizing is idempotent, so the existing callers stay correct.
+  const { subject, body } = sanitizeDraft({ subject: input.subject, body: input.body });
 
   // draft_references.supplier_id is the key the inbound-reply path merges quote
   // details and supplier profiles on, but discovery hands most leads over

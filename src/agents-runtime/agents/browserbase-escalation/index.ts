@@ -1,7 +1,7 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { agenticPull, type PullResult, captureShippingCost, type ShippingCaptureResult } from "@/lib/browserbase-pull";
-import { convertToUsd } from "@/lib/fx";
+import { normalizeToUsd as fxNormalize } from "@/lib/fx";
 import { estimatePerTierShipping } from "@/lib/shipping-estimation";
 import { getOrgShipToAddress, formatAddressForCheckout } from "@/lib/tenkara-ship-to";
 import { sanitizeTiers } from "@/lib/price-tiers";
@@ -191,27 +191,33 @@ async function normalizeToUsd(
 ): Promise<PullResult & { native_price?: number | null; native_currency?: string | null; fx_rate?: number | null }> {
   const cur = r.currency;
   if (!cur || cur === "USD" || r.current_price == null) return r;
-  const conv = await convertToUsd(r.current_price, cur);
-  if (!conv) {
+  // One rate for the whole listing, via the shared policy. Converting each tier
+  // separately used to fall back to the RAW FOREIGN NUMBER when a tier's lookup
+  // failed, which is the exact thing the comment above forbids.
+  const fx = await fxNormalize(cur);
+  if (fx.status !== "converted") {
     return {
       ...r,
       classification: "needs_review",
       current_price: null,
+      tiers: [],
       notes: `${r.notes} Listed in ${cur}; no USD rate reachable, left unpublished rather than unconverted.`,
     };
   }
-  const tiers = await Promise.all(
-    r.tiers.map(async (t) => ({ ...t, price: (await convertToUsd(t.price, cur))?.usd ?? t.price })),
-  );
+  // A tier whose converted price comes back null is dropped, never kept at its
+  // foreign value.
+  const tiers = r.tiers
+    .map((t) => ({ ...t, price: fx.convert(t.price), unit_price: fx.convert(t.unit_price) }))
+    .filter((t): t is typeof t & { price: number } => t.price != null);
   return {
     ...r,
-    current_price: conv.usd,
+    current_price: fx.convert(r.current_price),
     tiers,
     currency: "USD",
     native_price: r.current_price,
     native_currency: cur,
-    fx_rate: conv.rate,
-    notes: `${r.notes} Listed in ${cur} ${r.current_price}; converted to USD $${conv.usd} at 1 ${cur} = $${conv.rate}.`,
+    fx_rate: fx.rate,
+    notes: `${r.notes} Listed in ${cur} ${r.current_price}; converted to USD $${fx.convert(r.current_price)} at 1 ${cur} = $${fx.rate}.`,
   };
 }
 
