@@ -5,7 +5,7 @@
 //   npx tsx --env-file=.env scripts/dryrun-stalled-followups.mts
 import { createAdminClient } from "../src/lib/supabase/admin";
 import { loadStalledThreadState, loadRecentThreadIds } from "../src/agents-runtime/agents/reply-manager/stalled-followup";
-import { stalledFollowupDelaysMs } from "../src/lib/agent-timing";
+import { stalledFollowupGapMs } from "../src/lib/agent-timing";
 import { loadOrgStatuses, outreachAllowed } from "../src/lib/org-status";
 
 const admin = createAdminClient();
@@ -27,9 +27,7 @@ for (const [, t] of state) {
   const r = t.anchor;
   const meta = (r.metadata ?? {}) as any;
   if (!outreachAllowed(orgStatuses.byOaId.get(r.org_id) ?? "off")) { bump("org paused"); continue; }
-  const delays = stalledFollowupDelaysMs(r.org_id);
-  if (t.priorNudges >= delays.length) { bump("all nudges already sent"); continue; }
-  if (now < t.lastOutboundAt + delays[t.priorNudges]) { bump("not due yet"); continue; }
+  if (now < t.lastOutboundAt + stalledFollowupGapMs(r.org_id, t.priorNudges)) { bump("not due yet"); continue; }
   if (!(meta.supplier_contact_email ?? t.contactEmail)) { bump("no contact email"); continue; }
   would.push(
     `#${t.priorNudges + 1}  ${String(meta.supplier_name ?? meta.supplier_contact_email ?? t.contactEmail).slice(0, 34).padEnd(34)}` +

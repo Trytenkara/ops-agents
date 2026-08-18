@@ -20,9 +20,14 @@ const DAY = 24 * 3600 * 1000;
 const PROD_FOLLOWUP_DELAYS_MS: number[] = [2 * DAY, 4 * DAY];
 const PROD_CALL_TASK_DELAYS_MS: number[] = [1 * DAY, 5 * DAY];
 // Chasing a supplier who replied at least once and then went quiet mid-thread.
-// Longer and more patient than the cold-outreach nudges: this is a live
-// relationship, and the last thing they saw from us was a real answer.
-const PROD_STALLED_FOLLOWUP_DELAYS_MS: number[] = [3 * DAY, 7 * DAY, 14 * DAY];
+// Opens on the same 2d/4d rhythm as the cold-outreach nudges so the cadence a
+// supplier experiences doesn't change halfway through, then widens.
+//
+// Each entry is the gap since OUR last message, and the list does NOT cap the
+// sequence: once it runs out the final gap repeats forever (see
+// stalledFollowupGapMs). An unanswered email is never abandoned — it just gets
+// chased more slowly, monthly in the tail.
+const PROD_STALLED_FOLLOWUP_DELAYS_MS: number[] = [2 * DAY, 4 * DAY, 7 * DAY, 14 * DAY, 30 * DAY];
 const PROD_COMPILE_WAIT_MS = 7 * DAY;
 
 // OA org id of the Sierra Materials test org — the default fast-track target so
@@ -67,9 +72,18 @@ export function followupDelaysMs(orgId: string | null | undefined): number[] {
   return envFollowupDelaysMs() ?? PROD_FOLLOWUP_DELAYS_MS;
 }
 
+// The gap to wait before mid-conversation nudge number n (0-based), measured
+// from our last outbound message on the thread. Past the end of the list the
+// final gap repeats, so the sequence never runs out: we always follow up on an
+// unanswered email, only ever more slowly.
+export function stalledFollowupGapMs(orgId: string | null | undefined, n: number): number {
+  const delays = stalledFollowupDelaysMs(orgId);
+  return delays[Math.min(n, delays.length - 1)];
+}
+
 // Delay before each mid-conversation nudge, measured from our last outbound
-// message on the thread. Prod default 3d/7d/14d; compressed orgs use
-// STALLED_FOLLOWUP_MINUTES.
+// message on the thread. Prod default 2d/4d/7d/14d then monthly; compressed
+// orgs use STALLED_FOLLOWUP_MINUTES.
 export function stalledFollowupDelaysMs(orgId: string | null | undefined): number[] {
   if (!usesCompressed(orgId)) return PROD_STALLED_FOLLOWUP_DELAYS_MS;
   const raw = (process.env.STALLED_FOLLOWUP_MINUTES ?? "").trim();

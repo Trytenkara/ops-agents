@@ -1,5 +1,5 @@
 import { stageDraft } from "@/lib/draft-staging";
-import { stalledFollowupDelaysMs } from "@/lib/agent-timing";
+import { stalledFollowupGapMs } from "@/lib/agent-timing";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import type { createAdminClient } from "@/lib/supabase/admin";
 
@@ -40,7 +40,7 @@ function buildStalledBody(opts: { contactName: string | null; material: string |
       ? `Following up on our exchange${mat} below. Did you get a chance to look at my last note?`
       : opts.n === 2
         ? `Checking in again${mat}. I know things get busy, so just flagging that we're still waiting on your side.`
-        : `Last check-in from me${mat}. If the timing isn't right, no problem at all, just let me know and I'll close this out.`;
+        : `Still keen to pick this up${mat} whenever it suits you. If the timing isn't right, just say the word and I'll stop chasing.`;
   return [
     greeting,
     "",
@@ -153,9 +153,9 @@ export async function runStalledFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
     const meta = (r.metadata ?? {}) as any;
     if (!outreachAllowed(orgStatuses.byOaId.get(r.org_id) ?? "off")) continue;
 
-    const delays = stalledFollowupDelaysMs(r.org_id);
-    if (t.priorNudges >= delays.length) continue;
-    if (now < t.lastOutboundAt + delays[t.priorNudges]) continue;
+    // No exhaustion check: the gap widens and then repeats monthly, but an
+    // unanswered email is never given up on.
+    if (now < t.lastOutboundAt + stalledFollowupGapMs(r.org_id, t.priorNudges)) continue;
 
     const to = (meta.supplier_contact_email as string | undefined) ?? t.contactEmail ?? undefined;
     if (!to) {
