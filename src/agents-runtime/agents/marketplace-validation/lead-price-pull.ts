@@ -370,7 +370,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   }
 
   const cols = "id, org_id, supplier_id, supplier_name, material_id, material_name, source, payload";
-  const marketplaceFilter = "payload->>site_type.in.(M,MS,A),payload->>supplier_role.eq.Marketplace";
+  const marketplaceFilter = "payload->>site_type.in.(M,MS,A),payload->>supplier_role.eq.Marketplace,payload->enrichment->tenkara_supplier->>is_marketplace.eq.true";
   const eligible = (l: LeadRow) =>
     Boolean(l.material_name && listingUrl(l.payload)) && !(l.material_id && selfSupplied.has(l.material_id));
   const nowIso = new Date().toISOString();

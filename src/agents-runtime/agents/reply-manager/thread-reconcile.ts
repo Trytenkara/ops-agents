@@ -88,6 +88,19 @@ const COLD_INTERVAL_MIN = 7 * 24 * 60;
 // A thread that just yielded an unseen reply is live in a way its timestamps may
 // not show yet; look again soon rather than waiting out the full tier.
 const FOUND_INTERVAL_MIN = 15;
+// A thread Tenkara says does not exist (deleted, or an id that was never a
+// conversation). It cannot be left unscheduled: an unscheduled thread stays at
+// the head of the due queue forever and eats every run's read budget, which is
+// exactly what happened here — ~2,800 threads were "due" while the sweep checked
+// zero real ones for days. So a definitive miss is scheduled far out rather than
+// retried immediately, and a transient one is retried soon.
+const GONE_INTERVAL_MIN = 7 * 24 * 60;
+const TRANSIENT_MISS_INTERVAL_MIN = 60;
+
+// Placeholder ids Agent 04 writes when a lead has no real conversation yet
+// ("blocked:..."). They are not Tenkara conversations and never will be, so they
+// must never enter the reconcile rotation.
+const REAL_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -123,7 +136,10 @@ async function claimDueThreads(admin: Admin, limit: number): Promise<string[]> {
       .order("created_at", { ascending: true })
       .range(offset, offset + PAGE - 1);
     if (error) throw new Error(`thread list failed: ${error.message}`);
-    for (const r of refs ?? []) tracked.add((r as any).thread_id as string);
+    for (const r of refs ?? []) {
+      const id = (r as any).thread_id as string;
+      if (REAL_THREAD_ID.test(id)) tracked.add(id);
+    }
     if (!refs || refs.length < PAGE) break;
   }
   if (tracked.size === 0) return [];
@@ -222,6 +238,22 @@ export async function reconcileThread(
     out.unreadable = true;
     out.rateLimited = !!details.rateLimited;
     out.outcomes.push(details.rateLimited ? "rate_limited" : "thread_unreadable");
+    // Throttling tells us nothing about the thread, so leave it where it is in
+    // the queue. Anything else is an answer of some kind and must be scheduled,
+    // or this thread blocks the rotation permanently.
+    if (!details.rateLimited) {
+      const gone = details.status === 404 || details.status === 410;
+      await admin
+        .from("tenkara_thread_reconcile")
+        .update({
+          last_checked_at: new Date().toISOString(),
+          last_status: details.status,
+          next_check_at: new Date(
+            Date.now() + (gone ? GONE_INTERVAL_MIN : TRANSIENT_MISS_INTERVAL_MIN) * 60_000
+          ).toISOString(),
+        })
+        .eq("thread_id", threadId);
+    }
     return out;
   }
   out.checked = true;

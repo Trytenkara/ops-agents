@@ -25,13 +25,10 @@ export function buildCallFollowupBody(opts: CallFollowupInput): string {
     : `We tried reaching you by phone to follow up.`;
 
   const recap: string[] = [];
+  // Only include notes that provide useful context for the supplier (from Granola or operator deescalation)
+  // Exclude raw call logs (voicemail left, unreachable, wrong number, etc) — those are internal noise
   if (opts.granolaNotes) recap.push(opts.granolaNotes.trim());
   if (opts.deescalationNote) recap.push(opts.deescalationNote.trim());
-  if (!recap.length) {
-    for (const a of opts.callLog) {
-      if (a.note) recap.push(a.note.trim());
-    }
-  }
 
   const lines = [
     greeting,
@@ -39,7 +36,7 @@ export function buildCallFollowupBody(opts: CallFollowupInput): string {
     `${talkedLine} Following up in writing${mat} so we have a record and you have something to reply to when you're ready.`,
   ];
   if (recap.length) {
-    lines.push("", "From our conversation:", ...recap.map((r) => `- ${r}`));
+    lines.push("", ...recap.map((r) => `${r}`));
   }
   lines.push(
     "",

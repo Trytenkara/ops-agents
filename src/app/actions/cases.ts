@@ -207,7 +207,15 @@ export async function deescalateCallCase(
           body,
           assignedOperator: routing.emailOperator?.userId ?? null,
           conversationId: draftRow.thread_id ?? null,
-          metadata: { ...meta, draft_kind: "call_followup", source_case_id: caseId },
+          metadata: {
+            ...meta,
+            draft_kind: "call_followup",
+            source_case_id: caseId,
+            // Reset org-level branding to the actual call case's org, not the original draft's
+            ghost_brand: null,
+            suggested_signoff: null,
+            outreach_mode: "active",
+          },
         }).catch((e: any) => ({ ok: false, error: e?.message ?? String(e) }) as const);
         if (staged.ok) followupDraftRefId = (staged as any).draftRefId;
       }
