@@ -4,7 +4,7 @@ import { agenticPull, type PullResult, captureShippingCost, type ShippingCapture
 import { normalizeToUsd as fxNormalize } from "@/lib/fx";
 import { estimatePerTierShipping } from "@/lib/shipping-estimation";
 import { getOrgShipToAddress, formatAddressForCheckout } from "@/lib/tenkara-ship-to";
-import { sanitizeTiers } from "@/lib/price-tiers";
+import { sanitizeTiers, type PriceTier } from "@/lib/price-tiers";
 import { sortByOrgPriority } from "@/lib/org-priority";
 
 // Agent 19 - Browserbase Price Escalation.
@@ -268,7 +268,7 @@ async function writePull(
       shipping_cost_attempted_at: shippingResult?.attemptedAt ?? null,
       shipping_cost_failed_reason: shippingResult?.failedReason ?? null,
     };
-    const tiers = result.tiers.length
+    const tiers: PriceTier[] = result.tiers.length
       ? result.tiers.map((t) => ({ pack_size: t.pack_size ?? "", price: t.price, unit_price: t.unit_price ?? null }))
       : [{ pack_size: result.pack_size ?? "", price: result.current_price, unit_price: result.unit_price ?? null }];
 
