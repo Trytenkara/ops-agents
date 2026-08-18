@@ -12,14 +12,15 @@ import { runThreadReconcile } from "./thread-reconcile";
 // advances flow_status. What is left for a scheduled agent is the work the
 // webhook cannot do, because it fires on a message that never arrived: nudging
 // suppliers who went silent on a sent sourcing inquiry (2d and 4d), chasing
-// conversations that stalled after the supplier had already replied (3d, 7d and
-// 14d from our last message), and raising the interleaved call tasks (1d, 5d).
+// conversations that stalled after the supplier had already replied (2d, 4d,
+// 7d, 14d then monthly from our last message, never exhausting), and raising the
+// interleaved call tasks (1d, 5d).
 
 registerAgent({
   slug: "agent-15-reply-manager",
   displayName: "Agent 15 - Supplier Reply Manager",
   description:
-    "Runs the supplier cadence after a sourcing inquiry goes out: no-reply email nudges at 2d and 4d, and call tasks at 1d (intro, always) and 5d (silence only). Reply handling itself lives on the Tenkara inbound webhook. Never sends.",
+    "Runs the supplier cadence after a sourcing inquiry goes out: no-reply email nudges at 2d and 4d, stalled-conversation nudges for suppliers who replied then went quiet (2d/4d/7d/14d then monthly from our last message, never exhausting), and call tasks at 1d (intro, always) and 5d (silence only). Reply handling itself lives on the Tenkara inbound webhook. Never sends.",
   async run(ctx) {
     const admin = createAdminClient();
 
