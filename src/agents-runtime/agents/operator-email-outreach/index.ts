@@ -134,7 +134,19 @@ registerAgent({
     let skipped = 0;
     let errors = 0;
 
+    // Each draft costs a model call plus a round trip to the inbox, so a full
+    // backlog does not fit in one invocation. Stop short of the platform's own
+    // limit and finish cleanly: a timed-out run reports nothing at all, and the
+    // next run picks up exactly where this one stopped (leads are stamped as
+    // they are handled, and the fetch skips stamped ones).
+    const deadline = Date.now() + 11 * 60 * 1000;
+    let ranOutOfTime = 0;
+
     for (const lead of leads) {
+      if (Date.now() > deadline) {
+        ranOutOfTime++;
+        continue;
+      }
       const payload = (lead.payload ?? {}) as any;
       const email = String(payload.supplier_contact_email ?? "").trim().toLowerCase();
       const org = orgsById.get(lead.org_id);
@@ -358,7 +370,7 @@ registerAgent({
     ctx.setItemsProcessed(ccdOntoThread + coldStaged);
     ctx.setStatus(errors > 0 && ccdOntoThread + coldStaged === 0 ? "failure" : errors > 0 ? "partial" : "success");
     ctx.setSummary(
-      `Operator-added emails: ${coldStaged} first-contact draft${coldStaged === 1 ? "" : "s"} · ${ccdOntoThread} CC'd onto an open thread · ${alreadyReached} already reached · ${skipped} skipped${errors ? ` · ${errors} errors` : ""}`
+      `Operator-added emails: ${coldStaged} first-contact draft${coldStaged === 1 ? "" : "s"} · ${ccdOntoThread} CC'd onto an open thread · ${alreadyReached} already reached · ${skipped} skipped${errors ? ` · ${errors} errors` : ""}${ranOutOfTime ? ` · ${ranOutOfTime} left for the next run (time budget)` : ""}`
     );
   },
 });
