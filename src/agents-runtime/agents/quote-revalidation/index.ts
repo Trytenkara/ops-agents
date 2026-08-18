@@ -12,6 +12,7 @@ import { postQrSummary } from "./slack-notifier";
 import { getOrgAssignmentContext, orgAutoKey, spreadOwnerId } from "@/lib/operator-assignment";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import { mirrorDraftAssignee, threadCcContacts } from "@/lib/draft-staging";
+import { orgScopedExternalId } from "@/lib/org-isolation";
 
 // Now runs daily (was weekly), so a quote that's expiring stays "overdue" for
 // days. Debounce: don't re-draft a quote we already drafted within this window,
@@ -291,7 +292,7 @@ registerAgent({
           await ctx.log(`Replying into existing thread ${existingConversationId} for ${group.supplier_name}`, { step: "stage", data: { existing_thread: true } });
         } else {
           const c = await createTenkaraConversation({
-            externalId: `agent-02-reval-${group.client_org_id}-${group.supplier_id}`,
+            externalId: orgScopedExternalId(group.client_org_id, `agent-02-reval-${group.supplier_id}`),
             to: { name: group.supplier_contact_name ?? "", address: group.supplier_contact_email },
             subject: draft.subject,
             bodyHtml: bodyToHtml(draft.body),

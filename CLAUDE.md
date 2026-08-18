@@ -50,6 +50,13 @@ of any of these, delete it and import the shared one.
   or email in an outgoing body. Enforced at the staging chokepoint, not by
   prompt instruction.
 - `src/lib/lead-dupe-guard.ts` — what counts as a duplicate supplier.
+- `src/lib/org-isolation.ts` — one client's outreach may never land on another
+  client's conversation. `orgScopedExternalId` for any Tenkara idempotency key
+  (Tenkara returns the EXISTING conversation and draft for a repeated
+  `external_id`, so an unscoped key silently shares one draft between two
+  clients), `orgScopedKey` for any supplier/email grouping map, and
+  `foreignOrgRows` before folding a set of leads into one draft. Never build an
+  `external_id` or a supplier group key by hand.
 - `src/lib/org-priority.ts` — who drains a shared capped queue first. Real
   clients before internal test orgs. Never hand-roll an `is_internal` sort.
 - `src/lib/fx.ts` `normalizeToUsd` — the ONLY way to publish a foreign price.
@@ -82,7 +89,9 @@ with `npm run check:rules`. Rules covered today: no direct `convertToUsd`, no in
 consumer-mailbox list, no hand-rolled `is_internal` sort, no native `<select>`,
 no "RFQ" or em dash in a copy literal, `stageDraft` keeping both `sanitizeDraft`
 and the contact-fabrication guard, every Supabase client keeping the truncation
-guard, and every price writer going through the publish gate. Add a check when you add a shared guard. Reach for an
+guard, every price writer going through the publish gate, `stageDraft` keeping
+the org scoping on `external_id`, and every direct `createTenkaraConversation`
+caller scoping its key too. Add a check when you add a shared guard. Reach for an
 exemption only when you have first ruled out moving the logic into the shared
 module, since an exemption list decays the same way a blocklist does.
 

@@ -13,6 +13,7 @@ import { getNoteDerivedCountryExclusions } from "@/lib/client-sourcing-rules";
 import { resolveMaterialNames } from "@/lib/tenkara-names";
 import { loadSelfSuppliedMaterialIds } from "@/lib/self-supplied-materials";
 import { corporateDomainForMatch } from "@/lib/mailbox-domain";
+import { orgScopedKey } from "@/lib/org-isolation";
 import { randomUUID } from "crypto";
 
 // v1 trim (vs. full spec):
@@ -269,7 +270,7 @@ registerAgent({
     // Keyed by `${org_id}:${supplier_id}` — a supplier's material list is
     // per-client, so a raw lead for the same supplier under a different org must
     // not hold this org's outreach.
-    const compileKey = (orgId: string | null, supplierId: string | null) => `${orgId ?? ""}:${supplierId ?? ""}`;
+    const compileKey = (orgId: string | null, supplierId: string | null) => orgScopedKey(orgId, supplierId);
     const suppliersStillCompiling = new Set<string>();
     {
       const batchSupplierIds = Array.from(new Set(leads.map((l) => l.supplier_id).filter(Boolean) as string[]));
@@ -768,11 +769,15 @@ registerAgent({
         emailToSupplierId.set(c.email.toLowerCase(), c.lead.supplier_id);
       }
     }
+    // Org-scoped like compileKey above: two clients sourcing the same material
+    // from the same supplier are two separate first contacts, not one group. An
+    // unscoped key merged them, and whichever lead happened to sort first then
+    // decided the org, the inbox and the body copy for both.
     const supplierKeyOf = (c: Candidate): string => {
-      if (c.lead.supplier_id) return `s:${c.lead.supplier_id}`;
+      if (c.lead.supplier_id) return orgScopedKey(c.lead.org_id, "s", c.lead.supplier_id);
       const siblingId = c.email ? emailToSupplierId.get(c.email.toLowerCase()) : null;
-      if (siblingId) return `s:${siblingId}`;
-      return `e:${(c.email ?? "").toLowerCase()}`;
+      if (siblingId) return orgScopedKey(c.lead.org_id, "s", siblingId);
+      return orgScopedKey(c.lead.org_id, "e", (c.email ?? "").toLowerCase());
     };
 
     const emailBySupplier = new Map<string, Candidate[]>();

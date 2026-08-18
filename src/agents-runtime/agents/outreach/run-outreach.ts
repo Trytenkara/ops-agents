@@ -4,6 +4,7 @@ import { stageDraft } from "@/lib/draft-staging";
 import { tenkaraEmailAccountIdFor } from "@/lib/tenkara";
 import { resolveMaterialGradeSpecs, type MaterialGradeSpec } from "@/lib/tenkara-names";
 import { findSupplierProfile, missingProfileAsks } from "@/lib/supplier-profiles";
+import { foreignOrgRows } from "@/lib/org-isolation";
 
 // Short stable hash so a corrected/changed material set yields a NEW Tenkara
 // externalId (Tenkara is idempotent on externalId — reusing it would return the
@@ -83,9 +84,24 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
   const cc = (ccContacts ?? []).filter((c) => c.email && c.email.toLowerCase() !== email.toLowerCase());
   const log = input.log ?? (async () => {});
 
+  // A draft is filed under one org, sent from that org's inbox and signed with
+  // that org's name, so every lead folded into it must belong to that org. A
+  // foreign lead would put another client's material in the body and stamp that
+  // client's lead with this conversation. Drop them rather than abort: the other
+  // org's leads stay untouched and get their own draft on the next pass.
+  const foreign = foreignOrgRows(orgId, leads);
+  if (foreign.length) {
+    await log(
+      `Dropped ${foreign.length} lead(s) belonging to another org from this draft (supplier ${supplierName ?? email})`,
+      { level: "warn", step: "outreach", data: { org_id: orgId, foreign_lead_ids: foreign.map((l) => l.id) } },
+    );
+  }
+  const scopedLeads = leads.filter((l) => !foreign.includes(l));
+  if (!scopedLeads.length) return { staged: false, reason: "no leads for this org", promoted: 0 };
+
   // Sort for determinism so the same material set always renders (and hashes)
   // identically across runs.
-  const ordered = [...leads].sort((a, b) => (a.material_name ?? "").localeCompare(b.material_name ?? ""));
+  const ordered = [...scopedLeads].sort((a, b) => (a.material_name ?? "").localeCompare(b.material_name ?? ""));
   const materialIds = ordered.map((l) => l.material_id).filter(Boolean) as string[];
   // The grade(s) each material is specified at in Tenkara, so the RFQ can name
   // what we're after. Best-effort: a resolve failure just omits grade, leaving

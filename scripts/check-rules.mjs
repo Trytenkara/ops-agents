@@ -114,6 +114,31 @@ forbid({
       line: "approvedContactsFor call missing",
     });
   }
+  if (chokepoint && !/orgScopedExternalId\(/.test(chokepoint.text)) {
+    violations.push({
+      rule: "orgs/staging-must-scope-external-id",
+      why: "Tenkara is idempotent on external_id, so an unscoped key lets one client adopt another client's conversation and draft",
+      fix: "wrap the externalId in orgScopedExternalId(orgId, ...) from @/lib/org-isolation inside stageDraft",
+      where: "src/lib/draft-staging.ts",
+      line: "orgScopedExternalId call missing",
+    });
+  }
+}
+
+// 6b. Any file that creates a Tenkara conversation must scope the idempotency
+// key to an org. stageDraft is the chokepoint everything should use, but a
+// direct caller must not be able to skip the scoping just by not using it.
+for (const f of files) {
+  if (f.path.endsWith("src/lib/tenkara.ts")) continue;
+  if (!/createTenkaraConversation\(\{/.test(f.text)) continue;
+  if (/orgScopedExternalId\(/.test(f.text)) continue;
+  violations.push({
+    rule: "orgs/conversation-create-must-scope-external-id",
+    why: "Tenkara is idempotent on external_id, so an unscoped key hands one client another client's conversation",
+    fix: "build the key with orgScopedExternalId(orgId, ...) from @/lib/org-isolation, or stage through stageDraft",
+    where: f.path,
+    line: "orgScopedExternalId missing beside createTenkaraConversation",
+  });
 }
 
 // 7. Every Supabase client must keep the truncation guard, or a read that hits

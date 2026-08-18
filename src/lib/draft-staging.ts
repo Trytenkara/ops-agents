@@ -5,6 +5,7 @@ import { lintDraft, type Finding } from "@/agents-runtime/agents/outreach-qa/lin
 import { approvedContactsFor } from "@/lib/contact-guard";
 import { postAgentAlert } from "@/lib/slack-alert";
 import { resolveSupplierIdByName as resolveTenkaraSupplierId } from "@/lib/tenkara-supplier-linker";
+import { orgScopedExternalId } from "@/lib/org-isolation";
 
 // Shared draft → QA building block. Every intake agent (02 expiries,
 // 04 new-material outreach) and the Tenkara inbound webhook composes its own
@@ -183,7 +184,8 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
     // as the contact stayed unverified. Reuse the existing row instead: the
     // verdict only changes when a human adds the real contact, and that changes
     // the lint result, not this row.
-    const blockedThreadId = input.conversationId ?? `blocked:${input.externalId ?? "reply"}`;
+    const blockedThreadId =
+      input.conversationId ?? `blocked:${input.externalId ? orgScopedExternalId(orgId, input.externalId) : "reply"}`;
     // Match on org + material too, not the thread alone: one conversation carries
     // many drafts for many materials, and a `blocked:<externalId>` placeholder has
     // no org component at all, so two clients would collide on one row.
@@ -280,8 +282,13 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
       threadId = t.conversationId;
     } else if (input.externalId) {
       // Cold outbound: create a brand-new conversation + draft.
+      // Tenkara is idempotent on externalId, so an unscoped key lets a second
+      // client adopt the first client's conversation and draft. Scoped HERE, at
+      // the one chokepoint every cold-outbound draft passes through, rather than
+      // trusting each caller to remember.
+      const scopedExternalId = orgScopedExternalId(orgId, input.externalId);
       const c = await createTenkaraConversation({
-        externalId: input.externalId,
+        externalId: scopedExternalId,
         to: { name: to.name ?? "", address: to.address },
         subject,
         bodyHtml: bodyToHtml(body),
@@ -294,7 +301,7 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
       draftId = c.draftId;
       threadId = c.conversationId;
       extraMeta.draft_kind = callerMeta.draft_kind ?? "cold_outbound";
-      extraMeta.external_id = input.externalId;
+      extraMeta.external_id = scopedExternalId;
       extraMeta.requires_sender_selection = c.requiresSenderSelection;
       if (c.conversationUrl) extraMeta.conversation_url = c.conversationUrl;
     } else {
