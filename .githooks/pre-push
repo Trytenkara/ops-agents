@@ -1,0 +1,20 @@
+#!/bin/sh
+# Pushing to main deploys production. A build that fails there does NOT roll
+# back or alert: Vercel silently keeps serving the last good deploy, so broken
+# main went unnoticed for five days (2026-08-13 .. 08-18). Refuse the push
+# instead of finding out later.
+#
+# Bypass with `git push --no-verify` only if you have already run the build.
+remote_ref=$(while read -r _local _lsha remote _rsha; do echo "$remote"; done)
+case "$remote_ref" in
+  *refs/heads/main*) ;;
+  *) exit 0 ;;
+esac
+
+echo "pre-push: running production build before deploying main..."
+if ! npm run build >/tmp/ops-agents-prepush.log 2>&1; then
+  echo "pre-push: BUILD FAILED, push refused. Production would have stayed on the previous deploy."
+  tail -30 /tmp/ops-agents-prepush.log
+  exit 1
+fi
+echo "pre-push: build ok."

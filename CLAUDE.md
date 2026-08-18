@@ -115,12 +115,25 @@ caller scoping its key too. Add a check when you add a shared guard. Reach for a
 exemption only when you have first ruled out moving the logic into the shared
 module, since an exemption list decays the same way a blocklist does.
 
-Main deploys straight to production, and a failed build is silent: production
-keeps serving the previous deploy. A type error once sat red on main for hours
-that way. A pre-merge check on pull requests is still missing:
-`.github/workflows/ci.yml` is written but cannot be pushed until the deploy
-token carries the `workflow` scope. Until then the Vercel build is the only gate,
-and it runs after the merge.
+Main deploys straight to production, and a failed build is SILENT: Vercel keeps
+serving the previous deploy and nothing anywhere says so. Main stayed red from
+2026-08-13 to 08-18 that way, with five days of merged work sitting undeployed
+while everyone assumed it was live. Two guards now stand in front of that:
+
+- `.githooks/pre-push` runs `npm run build` and refuses a push to `main` that
+  does not compile. The `prepare` script points `core.hooksPath` at it, so
+  `npm install` wires it up and nobody has to remember. `--no-verify` bypasses
+  it; only use that when you have already built.
+- OUTSTANDING: a GitHub Actions build on every push and pull request, for a
+  machine that never installed or a `--no-verify` push. `.github/workflows/`
+  still cannot be written because the deploy token has no `workflow` scope
+  (confirmed again 2026-08-18, the push was rejected). Widen the token's scope
+  and the hook stops being the only gate.
+
+`tsconfig.json` compiles `src/` only. It used to compile `**/*.ts`, so a
+throwaway debugging script left in the repo root became part of the production
+build and broke it (the first of the two failures above). Ad-hoc scripts belong
+in `scripts/`, which is excluded, and should be deleted when they are done.
 
 ## Org isolation reaches the schema too
 
