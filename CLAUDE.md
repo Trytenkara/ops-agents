@@ -50,6 +50,38 @@ of any of these, delete it and import the shared one.
   or email in an outgoing body. Enforced at the staging chokepoint, not by
   prompt instruction.
 - `src/lib/lead-dupe-guard.ts` — what counts as a duplicate supplier.
+- `src/lib/org-priority.ts` — who drains a shared capped queue first. Real
+  clients before internal test orgs. Never hand-roll an `is_internal` sort.
+- `src/lib/fx.ts` `normalizeToUsd` — the ONLY way to publish a foreign price.
+  One rate per listing. Never call `convertToUsd` per amount: a failed lookup
+  then falls back to the raw foreign number and publishes yuan as dollars.
+- `src/lib/email-style.ts` `sanitizeDraft` — applied inside `stageDraft`, so
+  outbound copy cannot carry "RFQ" or an em dash. Do not rely on a drafter
+  remembering to call it.
+- `src/lib/supabase-paging.ts` `selectAllPaged` — use for any worklist read.
+  A bare `.select()` silently stops at 1000 rows.
+- `src/lib/requirements-recheck.ts` `recheckOrgLeads` — a client/material/grade
+  change re-judges EXISTING leads, not only future ones.
+
+## OUTSTANDING: rules with no shared guard yet
+
+Named here so they stay visible instead of going quiet. Enforce them by hand at
+every call site you touch, and if you are already in the area, build the guard.
+
+- **Paging.** `selectAllPaged` exists but only ~10 files use it against ~167
+  files with a bare `.select(`. Needs a lint rule that fails CI on an unpaged
+  `.select()` with no single-row filter, otherwise the next worklist read is
+  silently truncated at 1000 rows.
+- **Retryable vs terminal.** At least four agents hand-roll their own
+  `retryable()` regex test. Needs one `lib/retry-verdict.ts` classifier that
+  every pull and enrichment agent throws and catches through.
+- **Zero is not empty.** Each discovery source reasons about this separately in
+  comments. Needs a shared `DiscoveryResult` that requeues on an empty pass, so
+  a new source cannot report "no suppliers exist" after a bad run.
+- **No fabricated price.** Enforced by prompt text in each extractor, with no
+  write-time validator. `price-qa.ts` is a read-time pass and cannot prevent it.
+- **Native `<select>`.** None exist today and 26 files use the app `Select`, but
+  nothing stops a new one. Needs an eslint `no-restricted-syntax` rule.
 
 ## Rules with no single home yet, enforce at every call site you touch
 
