@@ -303,6 +303,34 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
       extraMeta.draft_kind = callerMeta.draft_kind ?? "cold_outbound";
       extraMeta.external_id = scopedExternalId;
       extraMeta.requires_sender_selection = c.requiresSenderSelection;
+      extraMeta.idempotent_replay = c.idempotent;
+      // Tenkara tells us when a create replayed an existing conversation, and we
+      // ignored it for months — which is how one client silently inherited
+      // another client's draft. With the key org-scoped a replay should only ever
+      // be this org retrying, so a replay landing on a conversation we have
+      // recorded under a DIFFERENT org means the scoping has been defeated
+      // somewhere else. Alert loudly rather than stage into it.
+      if (c.idempotent && threadId) {
+        const { data: otherOrgRows } = await admin
+          .from("draft_references")
+          .select("id, org_id")
+          .eq("email_client", "rod_app")
+          .eq("thread_id", threadId)
+          .limit(50);
+        const foreign = (otherOrgRows ?? []).filter((r: any) => (r.org_id ?? null) !== (orgId ?? null));
+        if (foreign.length) {
+          extraMeta.cross_org_replay = true;
+          await postAgentAlert(
+            `:rotating_light: Cross-client conversation reuse: a draft for org ${orgId ?? "none"} replayed conversation ${threadId}, which already carries ${foreign.length} draft(s) from another client. External id: ${scopedExternalId}.`,
+            {
+              channel: CONTACT_GUARD_CHANNEL(),
+              severity: "p1",
+              key: `cross_org_replay:${threadId}`,
+              title: `Cross-client conversation reuse on \`${threadId.slice(0, 8)}\``,
+            },
+          );
+        }
+      }
       if (c.conversationUrl) extraMeta.conversation_url = c.conversationUrl;
     } else {
       return { ok: false, error: "drafts require conversationId (reply) or externalId (cold outbound)", qaFindings };
