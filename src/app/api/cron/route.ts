@@ -36,7 +36,13 @@ export async function GET(request: NextRequest) {
     if (!Number.isInteger(lane) || lane < 1) {
       return NextResponse.json({ error: `bad lane: ${laneParam}` }, { status: 400 });
     }
-    const r = await executeAgentRun({ agentSlug: explicitSlug, triggerSource: "manual", lane });
+    // Any other query param rides along as run input, so a manual trigger can
+    // scope a run (e.g. &org_slug=california-chemicals) without a new endpoint.
+    const input: Record<string, any> = {};
+    for (const [k, val] of new URL(request.url).searchParams.entries()) {
+      if (k !== "slug" && k !== "lane") input[k] = val;
+    }
+    const r = await executeAgentRun({ agentSlug: explicitSlug, triggerSource: "manual", lane, input });
     return NextResponse.json({ explicit: true, slug: explicitSlug, lane, result: r, at: new Date().toISOString() });
   }
 

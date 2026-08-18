@@ -72,9 +72,18 @@ registerAgent({
     const admin = createAdminClient();
 
     const orgStatuses = await loadOrgStatuses(admin);
-    const activeOrgIds = Array.from(orgStatuses.byOaId.entries())
+    let activeOrgIds = Array.from(orgStatuses.byOaId.entries())
       .filter(([, s]) => outreachAllowed(s))
       .map(([id]) => id);
+
+    // Manual trigger can scope the run to one client (?slug=…&org_slug=…), used
+    // to drain a single client's backlog under supervision before the hourly
+    // schedule takes the rest.
+    const onlyOrgSlug = typeof ctx.input?.org_slug === "string" ? ctx.input.org_slug : null;
+    if (onlyOrgSlug) {
+      const { data: only } = await admin.from("orgs").select("id").eq("slug", onlyOrgSlug).maybeSingle();
+      activeOrgIds = only && activeOrgIds.includes(only.id) ? [only.id] : [];
+    }
     if (!activeOrgIds.length) {
       ctx.setSummary("No orgs are open for outreach.");
       ctx.setStatus("success");
