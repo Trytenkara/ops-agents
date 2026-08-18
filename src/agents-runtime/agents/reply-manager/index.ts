@@ -1,6 +1,7 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runNoReplyFollowups } from "./no-reply-followup";
+import { runStalledFollowups } from "./stalled-followup";
 import { runCallTasks } from "./call-tasks";
 import { runThreadReconcile } from "./thread-reconcile";
 
@@ -10,8 +11,9 @@ import { runThreadReconcile } from "./thread-reconcile";
 // (lib/tenkara-inbound.ts), which classifies the reply, extracts pricing, and
 // advances flow_status. What is left for a scheduled agent is the work the
 // webhook cannot do, because it fires on a message that never arrived: nudging
-// suppliers who went silent on a sent sourcing inquiry (2d and 4d), and raising
-// the interleaved call tasks (1d and 5d).
+// suppliers who went silent on a sent sourcing inquiry (2d and 4d), chasing
+// conversations that stalled after the supplier had already replied (3d, 7d and
+// 14d from our last message), and raising the interleaved call tasks (1d, 5d).
 
 registerAgent({
   slug: "agent-15-reply-manager",
@@ -53,6 +55,19 @@ registerAgent({
       return;
     }
 
+    // Suppliers who answered once and then went quiet mid-thread. Isolated from
+    // the no-reply sweep above so a failure here costs neither set of nudges.
+    let stalled = { drafted: 0, skipped: 0 };
+    try {
+      stalled = await runStalledFollowups(
+        { agentId: ctx.agentId, runId: ctx.runId, log: (m, o) => ctx.log(m, o) },
+        admin
+      );
+    } catch (e: any) {
+      await ctx.log(`Stalled-conversation sweep failed: ${e?.message ?? e}`, { level: "warn", step: "stalled_followup" });
+      degraded = true;
+    }
+
     // Call tasks run on their own offsets from the RFQ, so a failure here must
     // not cost us the nudges that already drafted above.
     let calls = { raised: 0, skipped: 0 };
@@ -65,7 +80,7 @@ registerAgent({
       await ctx.log(`Call task sweep failed: ${e?.message ?? e}`, { level: "warn", step: "call_task" });
       degraded = true;
     }
-    ctx.setItemsProcessed(followups.drafted + calls.raised + reconcile.drafted);
+    ctx.setItemsProcessed(followups.drafted + stalled.drafted + calls.raised + reconcile.drafted);
     ctx.setStatus(degraded ? "partial" : "success");
     ctx.setSummary(
       `Reconcile: ${reconcile.threadsChecked} threads · ${reconcile.replayed} unseen replies replayed · ${reconcile.drafted} drafted` +
@@ -75,6 +90,7 @@ registerAgent({
         `${reconcile.failed ? ` · ${reconcile.failed} failed` : ""}` +
         ` · ${reconcile.backlog} due${reconcile.oldestDueMinutes !== null ? ` (oldest ${reconcile.oldestDueMinutes}m overdue)` : ""}. ` +
         `No-reply sweep: ${followups.drafted} follow-ups · ${followups.handedOff} handed to phone · ${followups.skipped} skipped. ` +
+        `Stalled sweep: ${stalled.drafted} follow-ups · ${stalled.skipped} skipped. ` +
         `Call tasks: ${calls.raised} raised · ${calls.skipped} aged out.`
     );
   },

@@ -19,6 +19,10 @@ const DAY = 24 * 3600 * 1000;
 // Production defaults (used for every org not in the compressed set).
 const PROD_FOLLOWUP_DELAYS_MS: number[] = [2 * DAY, 4 * DAY];
 const PROD_CALL_TASK_DELAYS_MS: number[] = [1 * DAY, 5 * DAY];
+// Chasing a supplier who replied at least once and then went quiet mid-thread.
+// Longer and more patient than the cold-outreach nudges: this is a live
+// relationship, and the last thing they saw from us was a real answer.
+const PROD_STALLED_FOLLOWUP_DELAYS_MS: number[] = [3 * DAY, 7 * DAY, 14 * DAY];
 const PROD_COMPILE_WAIT_MS = 7 * DAY;
 
 // OA org id of the Sierra Materials test org — the default fast-track target so
@@ -61,6 +65,16 @@ function envCompileWaitMs(): number | null {
 export function followupDelaysMs(orgId: string | null | undefined): number[] {
   if (!usesCompressed(orgId)) return PROD_FOLLOWUP_DELAYS_MS;
   return envFollowupDelaysMs() ?? PROD_FOLLOWUP_DELAYS_MS;
+}
+
+// Delay before each mid-conversation nudge, measured from our last outbound
+// message on the thread. Prod default 3d/7d/14d; compressed orgs use
+// STALLED_FOLLOWUP_MINUTES.
+export function stalledFollowupDelaysMs(orgId: string | null | undefined): number[] {
+  if (!usesCompressed(orgId)) return PROD_STALLED_FOLLOWUP_DELAYS_MS;
+  const raw = (process.env.STALLED_FOLLOWUP_MINUTES ?? "").trim();
+  const mins = raw.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n) && n >= 0);
+  return mins.length ? mins.map((m) => m * MINUTE) : PROD_STALLED_FOLLOWUP_DELAYS_MS;
 }
 
 // Delay before each call task, as ms-after-the-inquiry-was-sent. The list length also

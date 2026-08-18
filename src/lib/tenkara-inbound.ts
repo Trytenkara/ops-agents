@@ -1158,6 +1158,9 @@ export async function handleInboundReply(
       introduced_material_ids: introducedMaterialIds,
       required_grade: materialGrade?.required ?? null,
       draft_kind: introduceHeld ? "inbound_reply_with_followup" : "inbound_reply",
+      // Nothing left for the supplier to answer, so their silence after this is
+      // the expected ending — see agents/reply-manager/stalled-followup.ts.
+      conversation_complete: reply.conversationComplete || bodyExtraction.declined || undefined,
       in_reply_to_draft_ref: ref.id,
       in_reply_to_message_id: msg.message_id,
       reply_to_conversation_id: msg.conversation_id,

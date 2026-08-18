@@ -74,6 +74,10 @@ export interface ComposedReply {
   engaged: boolean;
   // The held material names the draft actually introduced ([] if none).
   introducedMaterials: string[];
+  // True when this reply closes the conversation out (a thank-you/sign-off with
+  // nothing outstanding from the supplier). Silence after one of these is the
+  // expected ending, so the stalled-conversation sweep must not nudge it.
+  conversationComplete: boolean;
 }
 
 const SYSTEM = `You draft short, professional replies to suppliers on behalf of a procurement team. The operator will review and send — so:
@@ -98,7 +102,9 @@ Also judge engagement: set "engaged" true when the supplier showed genuine inter
 
 If "Other materials we also source from this supplier" is provided AND engaged is true, ALSO briefly introduce those materials in the same reply — naturally ask whether they can supply/quote them too (one short sentence or a compact list, never a wall of items). List the exact material names you introduced in "introduced_materials". If engaged is false, do NOT introduce them and return "introduced_materials": [].
 
-Return ONLY a JSON object: {"subject": "...", "body": "...", "engaged": true|false, "introduced_materials": ["..."]}. The body is plain text with line breaks; no greeting placeholders left unfilled.`;
+Also judge whether this reply ENDS the conversation: set "conversation_complete" true only when your reply is a closing message that leaves the supplier nothing to answer — a thank-you / sign-off after a decline, or a wrap-up once everything we needed has been provided. Set it false whenever you asked for anything, acknowledged something we are still waiting on, or otherwise expect them to write back. When in doubt, false: this flag stops us from ever chasing them again.
+
+Return ONLY a JSON object: {"subject": "...", "body": "...", "engaged": true|false, "conversation_complete": true|false, "introduced_materials": ["..."]}. The body is plain text with line breaks; no greeting placeholders left unfilled.`;
 
 function extractJson(text: string): ComposedReply {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -111,6 +117,7 @@ function extractJson(text: string): ComposedReply {
     subject: String(obj.subject ?? ""),
     body: String(obj.body ?? ""),
     engaged: obj.engaged === true,
+    conversationComplete: obj.conversation_complete === true,
     introducedMaterials: Array.isArray(obj.introduced_materials) ? obj.introduced_materials.map((m: any) => String(m)) : [],
   };
 }
