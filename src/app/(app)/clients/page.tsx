@@ -4,6 +4,7 @@ import { seesAllOrgs } from "@/lib/org-access";
 import { PageExplainer } from "@/components/page-explainer";
 import { ClientsGrid } from "@/components/clients-grid";
 import { orgDisplayName } from "@/lib/org-display";
+import { compareOrgPriority } from "@/lib/org-priority";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +29,7 @@ export default async function ClientsPage() {
     orgRows = ((data ?? []) as any)
       .map((r: any) => r.orgs)
       .filter(Boolean)
-      .sort((a: any, b: any) => Number(a.is_internal) - Number(b.is_internal) || orgDisplayName(a).localeCompare(orgDisplayName(b)));
+      .sort((a: any, b: any) => compareOrgPriority(a, b) || orgDisplayName(a).localeCompare(orgDisplayName(b)));
   }
   // Present the dashboard display name (Sierra Materials) while keeping the
   // canonical name for matching/routing elsewhere.

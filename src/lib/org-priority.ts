@@ -30,6 +30,15 @@ export function orgPriorityRank(org: PriorityOrg | null | undefined): number {
   return (real ? 0 : 2) + (paused ? 1 : 0);
 }
 
+/**
+ * Comparator for use as the FIRST key of a composite sort, where the caller has
+ * its own tiebreakers (most-visited, display name). Returns 0 for same tier so
+ * the caller's next key decides.
+ */
+export function compareOrgPriority(a: PriorityOrg | null | undefined, b: PriorityOrg | null | undefined): number {
+  return orgPriorityRank(a) - orgPriorityRank(b);
+}
+
 /** Sort in place-safe order: real clients first, then by slug for stability. */
 export function sortOrgsByPriority<T extends PriorityOrg>(orgs: T[]): T[] {
   return [...orgs].sort(

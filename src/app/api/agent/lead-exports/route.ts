@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
   if (parsed.data.send_to_slack && parsed.data.andrew_channel) {
     const slackRes = await postSlackMessage({
       channel: parsed.data.andrew_channel,
-      text: `Lead Scanner export for *${parsed.data.supplier_name ?? "supplier"}* — please upload to the catalog. CSV stored at export ${row.id}.`,
+      text: `Lead Scanner export for *${parsed.data.supplier_name ?? "supplier"}*: please upload to the catalog. CSV stored at export ${row.id}.`,
     });
     if (slackRes.ok) {
       slack_ts = slackRes.ts;

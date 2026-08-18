@@ -305,7 +305,7 @@ registerAgent({
     }
     const res = await postSlackMessage({
       channel: process.env.SOURCING_HEALTH_SLACK_CHANNEL,
-      text: `*Sourcing health watchdog* — ${status}\n\`\`\`${sections.join("\n\n")}\`\`\``,
+      text: `*Sourcing health watchdog*: ${status}\n\`\`\`${sections.join("\n\n")}\`\`\``,
     });
     if (!res.ok) {
       await ctx.log(`Slack digest not sent: ${res.error}`, { level: "warn", step: "slack" });

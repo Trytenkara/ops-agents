@@ -63,6 +63,24 @@ of any of these, delete it and import the shared one.
 - `src/lib/requirements-recheck.ts` `recheckOrgLeads` — a client/material/grade
   change re-judges EXISTING leads, not only future ones.
 
+## How these are enforced
+
+`scripts/check-rules.mjs` runs as the first step of `npm run build`, so a rule
+break fails the Vercel build and never reaches production. Run it on its own
+with `npm run check:rules`. Rules covered today: no direct `convertToUsd`, no inline consumer-mailbox
+list, no hand-rolled `is_internal` sort, no native `<select>`, no "RFQ" or em dash
+in a copy literal, and `stageDraft` must keep calling both `sanitizeDraft` and the
+contact-fabrication guard. Add a check when you add a shared guard. Reach for an
+exemption only when you have first ruled out moving the logic into the shared
+module, since an exemption list decays the same way a blocklist does.
+
+Main deploys straight to production, and a failed build is silent: production
+keeps serving the previous deploy. A type error once sat red on main for hours
+that way. A pre-merge check on pull requests is still missing:
+`.github/workflows/ci.yml` is written but cannot be pushed until the deploy
+token carries the `workflow` scope. Until then the Vercel build is the only gate,
+and it runs after the merge.
+
 ## OUTSTANDING: rules with no shared guard yet
 
 Named here so they stay visible instead of going quiet. Enforce them by hand at
@@ -80,8 +98,9 @@ every call site you touch, and if you are already in the area, build the guard.
   a new source cannot report "no suppliers exist" after a bad run.
 - **No fabricated price.** Enforced by prompt text in each extractor, with no
   write-time validator. `price-qa.ts` is a read-time pass and cannot prevent it.
-- **Native `<select>`.** None exist today and 26 files use the app `Select`, but
-  nothing stops a new one. Needs an eslint `no-restricted-syntax` rule.
+Paging, retryable-vs-terminal, zero-is-not-empty and the fabricated-price
+validator are the four that a grep cannot judge. They need real shared modules,
+not a checker rule.
 
 ## Rules with no single home yet, enforce at every call site you touch
 

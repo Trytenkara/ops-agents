@@ -156,11 +156,11 @@ export async function flagMaterialNames(admin: Admin, orgId: string, names: stri
     const preview = f.wrong.length > 80 ? `${f.wrong.slice(0, 80)}…` : f.wrong;
     let text: string;
     if (f.kind === "malformed") {
-      text = `:rotating_light: *Malformed material name* — *${orgLabel}*: "${preview}" looks like junk/test data (repeated or over-long text). Outreach is held; fix the name on the client's Materials/Leads page. Suggested cleanup: *"${f.suggested}"*.`;
+      text = `:rotating_light: *Malformed material name*: *${orgLabel}*: "${preview}" looks like junk/test data (repeated or over-long text). Outreach is held; fix the name on the client's Materials/Leads page. Suggested cleanup: *"${f.suggested}"*.`;
     } else if (f.kind === "typo") {
-      text = `:pencil2: *Material spelling flag* — *${orgLabel}*: "${f.wrong}" looks misspelled → suggest *"${f.suggested}"*. Review on the client's Materials/Leads page to correct all instances.`;
+      text = `:pencil2: *Material spelling flag*: *${orgLabel}*: "${f.wrong}" looks misspelled → suggest *"${f.suggested}"*. Review on the client's Materials/Leads page to correct all instances.`;
     } else {
-      text = `:pencil2: *Material name misspelled at source* — *${orgLabel}*: "${f.wrong}" should be *"${f.suggested}"*.` +
+      text = `:pencil2: *Material name misspelled at source*: *${orgLabel}*: "${f.wrong}" should be *"${f.suggested}"*.` +
         (f.duplicate ? ` :warning: A separate *"${f.suggested}"* material also exists — these are duplicates; consolidate them.` : "") +
         ` The name comes from Tenkara (read-only here) — rename it in the Tenkara app. The Control Room shows it corrected meanwhile.`;
     }

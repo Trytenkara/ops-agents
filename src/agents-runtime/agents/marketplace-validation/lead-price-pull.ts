@@ -1,7 +1,7 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { recheckMarketplaceQuote, type AggregatorSeller } from "./price-recheck";
 import { shopifyFeedPull } from "./shopify-feed";
-import { convertToUsd, roundUsd } from "@/lib/fx";
+import { normalizeToUsd } from "@/lib/fx";
 import { ensureMarketplaceCaseDims } from "@/lib/marketplace-case-dims-fill";
 import { neverMarketplaceHostOf } from "@/lib/marketplace-hosts";
 import { screenClonedListings } from "@/lib/clone-ring";
@@ -726,22 +726,21 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     // downgrade to needs_review and drop the numbers rather than publish a wrong price.
     if (result.currency && result.currency !== "USD") {
       const listed = result.currency;
-      const probe = await convertToUsd(1, listed).catch(() => null);
-      if (!probe) {
+      const fx = await normalizeToUsd(listed);
+      if (fx.status !== "converted") {
         result.classification = "needs_review";
         result.current_price = null;
         result.unit_price = null;
         result.tiers = [];
-        result.notes = `Listed in ${listed}; USD conversion unavailable — not publishing an unconverted price. ${result.notes ?? ""}`.trim();
+        result.notes = `Listed in ${listed}; USD conversion unavailable, not publishing an unconverted price. ${result.notes ?? ""}`.trim();
       } else {
         // Keep the listed amount and the rate we used. Converting in place used to
         // destroy both, which made a later USD move impossible to attribute: a lead
         // going $100 → $105 could be the seller repricing or just the rupee moving,
         // and nothing on the row distinguished them. With native + rate stored, the
         // split is arithmetic, and the 6h FX pass can restate USD without a re-scrape.
-        const rate = probe.rate;
-        const toUsd = (n: number | null): number | null =>
-          n == null || !Number.isFinite(n) ? n : roundUsd(n * rate);
+        const rate = fx.rate!;
+        const toUsd = fx.convert;
         result.native_price = result.current_price;
         result.native_unit_price = result.unit_price;
         result.native_currency = listed;

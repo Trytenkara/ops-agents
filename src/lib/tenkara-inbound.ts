@@ -20,6 +20,7 @@ import { splitDirectLeadFromMarketplace, isMarketplaceLeadPayload } from "@/lib/
 import { upsertSupplierProfile } from "@/lib/supplier-profiles";
 import { getClientShipTo } from "@/lib/tenkara-client-settings";
 import { resolveMaterialGradeSpecs } from "@/lib/tenkara-names";
+import { isConsumerMailboxDomain } from "@/lib/mailbox-domain";
 import {
   completenessFollowupEnabled,
   computeMissingApprovalFields,
@@ -71,14 +72,7 @@ function parseFrom(from: string): { name: string | null; address: string } {
   return { name: null, address: from.trim() };
 }
 
-// Generic free-email domains — too common across unrelated suppliers to use for
-// domain-based thread matching. Companies that use these are identified by their
-// exact address (which is already in draft_id / thread_id lookups), not by domain.
-const GENERIC_EMAIL_DOMAINS = new Set([
-  "gmail.com", "outlook.com", "hotmail.com", "yahoo.com", "yahoo.co.in",
-  "ymail.com", "icloud.com", "me.com", "aol.com", "live.com", "msn.com",
-  "protonmail.com", "proton.me", "qq.com", "163.com", "126.com", "sina.com",
-]);
+
 
 async function resolveInboundOrg(admin: Admin, msg: InboundMessage): Promise<{ orgId: string; accountKey: string; replyTag: string | null } | null> {
   let accountId = msg.email_account_id?.trim() || null;
@@ -248,7 +242,10 @@ export async function handleInboundReply(
   if (!ref && inboundOrg) {
     const fromAddr = parseFrom(msg.from).address.toLowerCase();
     const senderDomain = fromAddr.split("@")[1] ?? null;
-    if (senderDomain && !GENERIC_EMAIL_DOMAINS.has(senderDomain)) {
+    // A consumer mailbox is too common across unrelated suppliers to thread on
+    // by domain. Those senders match on their exact address instead. The list of
+    // providers lives in one place; do not restate it here.
+    if (senderDomain && !isConsumerMailboxDomain(senderDomain)) {
       const { data: domainRefs, error } = await admin
         .from("draft_references")
         .select("id, org_id, supplier_id, material_id, thread_id, subject, assigned_operator, metadata")

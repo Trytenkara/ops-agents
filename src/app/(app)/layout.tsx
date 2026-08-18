@@ -4,6 +4,7 @@ import { Shell, type OrgItem } from "@/components/nav";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { orgDisplayName } from "@/lib/org-display";
 import { orgVisitCounts } from "@/lib/org-visits";
+import { compareOrgPriority } from "@/lib/org-priority";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
@@ -36,7 +37,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   const visits = await orgVisitCounts(session.userId);
   orgRows.sort(
     (a, b) =>
-      Number(a.is_internal) - Number(b.is_internal) ||
+      compareOrgPriority(a, b) ||
       (visits.get(b.id) ?? 0) - (visits.get(a.id) ?? 0) ||
       orgDisplayName(a).localeCompare(orgDisplayName(b)),
   );

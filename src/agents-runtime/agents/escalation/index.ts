@@ -291,7 +291,7 @@ registerAgent({
           const fresh = await shouldPostDigest("escalation_nudge", fingerprint);
           if (fresh) {
             const res = await postSlackMessage({
-              text: `*Action pending* — items waiting on ops for >${NUDGE_STALE_DAYS}d:\n${lines.join("\n")}`,
+              text: `*Action pending*: items waiting on ops for >${NUDGE_STALE_DAYS}d:\n${lines.join("\n")}`,
             });
             if (res.ok) await recordDigestPosted("escalation_nudge", fingerprint);
             await ctx.log(

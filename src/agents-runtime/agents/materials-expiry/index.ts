@@ -218,7 +218,7 @@ registerAgent({
           type: "section",
           text: {
             type: "mrkdwn",
-            text: `:alarm_clock: *Materials expiring within ${DAYS} days* — ${rows.length} material(s) need attention`,
+            text: `:alarm_clock: *Materials expiring within ${DAYS} days*: ${rows.length} material(s) need attention`,
           },
         },
         { type: "context", elements: [{ type: "mrkdwn", text: LEGEND }] },
