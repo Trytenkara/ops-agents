@@ -410,7 +410,7 @@ registerAgent({
               suggested_from_email: r.group.client_purchasing_email,
               ghost_brand: r.ghostBrand ?? null,
               draft_kind: "cold_outbound",
-              external_id: `agent-02-reval-${r.group.client_org_id}-${r.group.supplier_id}`,
+              external_id: orgScopedExternalId(r.group.client_org_id, `agent-02-reval-${r.group.supplier_id}`),
               qa_findings: qaFindings,
               qa_linted_at: new Date().toISOString(),
             },

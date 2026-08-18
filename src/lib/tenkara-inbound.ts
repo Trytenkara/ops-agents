@@ -334,7 +334,10 @@ export async function handleInboundReply(
       `:warning: *Bounce* on outreach to *${supplierLabel}*. The email didn't deliver — add a working email on the case to restart outreach.`,
       {
         severity: "p2",
-        key: `bounce:${ref.supplier_id ?? supplierLabel}`,
+        // Org-scoped: the same supplier address bounces for every client that
+        // wrote to it, and an unscoped key let the first client's digest line
+        // suppress the rest. The other clients' threads then just went quiet.
+        key: `bounce:${ref.org_id ?? "none"}:${ref.supplier_id ?? supplierLabel}`,
         digestGroup: "Bounced outreach, needs a working email",
         title: `${supplierLabel} (${from.address})`,
       }

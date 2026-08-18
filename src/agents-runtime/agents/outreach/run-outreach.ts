@@ -4,7 +4,7 @@ import { stageDraft } from "@/lib/draft-staging";
 import { tenkaraEmailAccountIdFor } from "@/lib/tenkara";
 import { resolveMaterialGradeSpecs, type MaterialGradeSpec } from "@/lib/tenkara-names";
 import { findSupplierProfile, missingProfileAsks } from "@/lib/supplier-profiles";
-import { foreignOrgRows } from "@/lib/org-isolation";
+import { foreignOrgRows, orgScopedKey } from "@/lib/org-isolation";
 
 // Short stable hash so a corrected/changed material set yields a NEW Tenkara
 // externalId (Tenkara is idempotent on externalId — reusing it would return the
@@ -126,7 +126,10 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
   const primary = ordered[0];
 
   // Unique subject reference so no two supplier threads share a subject.
-  const reference = outreachReference(supplierId ?? email.toLowerCase(), materialNames);
+  // Org-scoped seed: without it two clients emailing the same supplier about the
+  // same material on the same day put the SAME reference number in front of that
+  // supplier, which is exactly the mix-up the reference exists to prevent.
+  const reference = outreachReference(orgScopedKey(orgId, supplierId ?? email.toLowerCase()), materialNames);
 
   // Marketplace sellers only: their whole record is scraped off a listing, so the
   // bulk-pricing email is the one chance to ask for the setup details we do not

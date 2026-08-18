@@ -4,6 +4,7 @@ import { uploadCsvAndSign } from "@/lib/storage";
 import { postSlackMessage } from "@/lib/slack";
 import { alertExportFailed72h } from "@/lib/safety-alerts";
 import { buildSupplierCsv, normalizeSupplierKey, type LeadRow } from "./csv-builder";
+import { orgScopedKey } from "@/lib/org-isolation";
 
 // Dropped-lead CSVs post to the ops group channel (#op-assistant-agents) — the
 // same channel the QA Watchdog uses — so the handoff is visible to the team
@@ -89,11 +90,14 @@ registerAgent({
     });
 
     // 3. Group by supplier (case-insensitive, trimmed). One CSV per supplier.
+    // Org-scoped key. Grouping on supplier alone put two clients' dropped
+    // material lists in ONE csv, which then went to a shared bucket and a shared
+    // Slack channel — one client's sourcing list handed to whoever reads it.
     const groups = new Map<string, { supplier_name: string; supplier_id: string | null; rows: LeadRow[] }>();
     for (const lead of leads) {
       const sid = lead.supplier_id;
       if (sid && recentSupplierIds.has(sid)) continue;
-      const key = sid ?? `name:${normalizeSupplierKey(lead.supplier_name)}`;
+      const key = orgScopedKey(lead.org_id, sid ?? `name:${normalizeSupplierKey(lead.supplier_name)}`);
       let g = groups.get(key);
       if (!g) {
         g = { supplier_name: lead.supplier_name ?? "(unknown supplier)", supplier_id: sid, rows: [] };

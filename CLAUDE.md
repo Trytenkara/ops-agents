@@ -104,9 +104,24 @@ and it runs after the merge.
 
 ## OUTSTANDING: rules with no shared guard yet
 
-Nothing on this list right now. When you add a rule that has no home, put it
-here rather than leaving it in a code comment, and add a `check-rules` entry the
-moment a shared module exists to point at.
+One client's data may never appear under another client's name. `org-isolation.ts`
+covers the keys we build ourselves, but three known holes need a schema change
+before a guard can hold them, and they are open today:
+
+- `supplier_email_context` is unique on `supplier_email` ALONE (migration 0024),
+  so Agent 13 keeps one shared row per supplier address across every client. Six
+  rows currently hold one client's negotiation summary under another client's
+  org_id. Needs the unique key moved to `(org_id, supplier_email)` and the
+  accumulator in `inbox-context/index.ts` keyed the same way.
+- `lead_scanner_exports` has no `org_id`, so Agent 11's 7-day "already exported"
+  suppression is fleet-wide: one client's export silences another client's. The
+  CSV grouping itself is now org-scoped; the ledger is not.
+- `document_page_scans.page_hash` is the primary key and hashes the URL only, so
+  the first client to scan a supplier's document page blocks every other client
+  for 60 days and that client's qualification pack stays empty.
+
+A `check-rules` entry cannot express "this table's unique key must include
+org_id" today. When these are migrated, add one.
 
 ## Rules the guards cannot fully carry
 
