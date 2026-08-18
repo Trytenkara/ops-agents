@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { freezeDerivedOwners } from "@/lib/freeze-assignments";
+import { syncOrgThreadOwners } from "@/lib/sync-thread-owners";
 import { ALL_SUPPLIER_TYPES, type AssignmentMode, type OperatorType } from "@/lib/operator-assignment";
 import type { MarketKind } from "@/lib/lead-market";
 
@@ -10,6 +11,11 @@ interface Result {
   ok: boolean;
   error?: string;
   frozen?: number;
+  // Open threads this change moved to a different operator, and how many of those
+  // the email app refused. Surfaced so an ops lead can see that a lane edit was
+  // not just a label change, and that the inbox caught up with it.
+  threadsMoved?: number;
+  mirrorsFailed?: number;
 }
 
 const MODES: AssignmentMode[] = ["manual", "auto_new", "auto_all"];
@@ -119,8 +125,13 @@ export async function setOperatorWork(input: {
     target_id: input.userId,
     diff: { org_id: input.orgId, ...patch },
   });
+  // Lanes and desk type are inputs to the derived owner, so this edit just moved
+  // threads. Control Room re-derives on the next render either way; the email app
+  // only knows what it was last told, and left alone it keeps showing the previous
+  // operator indefinitely.
+  const sync = await syncOrgThreadOwners(admin, input.orgId).catch(() => null);
   if (input.orgSlug) revalidatePath(`/work/orgs/${input.orgSlug}`);
-  return { ok: true };
+  return { ok: true, threadsMoved: sync?.moved, mirrorsFailed: sync?.mirrorsFailed };
 }
 
 // Take one operator out of (or back into) an org's auto loop. Membership and
@@ -150,6 +161,9 @@ export async function setOperatorAutoAssignable(input: {
     target_id: input.userId,
     diff: { org_id: input.orgId, auto_assignable: input.autoAssignable },
   });
+  // Same as a lane edit: taking someone out of the auto loop redistributes their
+  // derived book, and the email app has to be told.
+  const sync = await syncOrgThreadOwners(admin, input.orgId).catch(() => null);
   if (input.orgSlug) revalidatePath(`/work/orgs/${input.orgSlug}`);
-  return { ok: true };
+  return { ok: true, threadsMoved: sync?.moved, mirrorsFailed: sync?.mirrorsFailed };
 }
