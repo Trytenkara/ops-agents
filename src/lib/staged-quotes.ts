@@ -1,6 +1,7 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { computeCaseDimensions } from "@/lib/case-dimensions";
 import { normalizeToUsd } from "@/lib/fx";
+import { publishablePrice } from "@/lib/price-publish";
 
 // Shared writer for the staged_quotes table (migration 0025). Both the email
 // reply-body extractor and the attachment parser funnel through here so the row
@@ -217,6 +218,26 @@ export async function insertStagedQuotes(
         .join(" ");
     }
 
+    // Last gate before the row is stored. The FX branch above handles currency;
+    // this catches a number that is unreadable, negative or implausible, and
+    // replaces it with a null plus the reason rather than a stored guess.
+    {
+      const gate = publishablePrice(
+        { price, currency, native_currency: nativeCurrency, fx_rate: fxRate },
+        { where: "quote capture" }
+      );
+      if (gate.issues.length) {
+        price = gate.row.price ?? null;
+        confidence = "needs_review";
+        extractionNotes = [
+          `Price withheld: ${gate.issues.map((i) => i.reason).join("; ")}. Confirm before approving.`,
+          extractionNotes,
+        ]
+          .filter(Boolean)
+          .join(" ");
+      }
+    }
+
     // unit_price is generated from price / case_size, so a null case_size is how
     // an unknown price basis reaches the UI as a blank cell. Guarantee the blank
     // always carries a why: the extractor supplies one when it recognises the
@@ -292,7 +313,7 @@ export async function insertStagedQuotes(
       // may later restate `price` and overwrite this with 'fx_refresh', which is
       // the point: it distinguishes a number the supplier stands behind from one
       // we recomputed for them.
-      price_source: "supplier_quote",
+      price_source: r.source ?? "supplier_quote",
       price_source_at: new Date().toISOString(),
       price_change_source: quotedBefore.has(approvedKey(r.orgId, r.supplierName ?? null, r.materialName ?? null)) ? "supplier" : "none",
       // At insert the quote has not drifted yet, so the supplier-only price is
