@@ -4,9 +4,9 @@ import { revalidatePath } from "next/cache";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAssignedOrgIds, seesAllOrgs } from "@/lib/org-access";
+import { isConsumerMailboxDomain } from "@/lib/mailbox-domain";
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-const FREE_DOMAINS = new Set(["gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com", "icloud.com", "protonmail.com", "proton.me", "live.com"]);
 function hostOf(value: string | null | undefined): string | null {
   if (!value) return null;
   try { return new URL(value.includes("://") ? value : `https://${value}`).hostname.toLowerCase().replace(/^www\./, ""); }
@@ -45,7 +45,7 @@ export async function approveMarketplaceOutreach(leadId: string, correctedEmail?
   const existingVerified = !!existingEmail && emailCheck?.format_valid === true && emailCheck?.domain_matches_website === true && emailCheck?.is_aggregator_domain !== true;
   const websiteHost = hostOf(payload.supplier_website ?? payload.enrichment?.contact?.contact_url ?? payload.source_url);
   const correctedDomain = corrected.split("@")[1] ?? "";
-  const correctedVerified = EMAIL_RE.test(corrected) && !!websiteHost && !FREE_DOMAINS.has(correctedDomain) && (correctedDomain === websiteHost || correctedDomain.endsWith(`.${websiteHost}`));
+  const correctedVerified = EMAIL_RE.test(corrected) && !!websiteHost && !isConsumerMailboxDomain(correctedDomain) && (correctedDomain === websiteHost || correctedDomain.endsWith(`.${websiteHost}`));
   if (!existingVerified && !correctedVerified) return { ok: false, error: "supplier_domain_email_required" };
   const approvedEmail = existingVerified ? existingEmail : corrected;
   const fingerprint = approvalFingerprint(approvedEmail, payload);

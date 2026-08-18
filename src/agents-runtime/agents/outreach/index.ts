@@ -12,6 +12,7 @@ import { getSourcingExclusions, exclusionReason } from "@/lib/tenkara-sourcing-e
 import { getNoteDerivedCountryExclusions } from "@/lib/client-sourcing-rules";
 import { resolveMaterialNames } from "@/lib/tenkara-names";
 import { loadSelfSuppliedMaterialIds } from "@/lib/self-supplied-materials";
+import { corporateDomainForMatch } from "@/lib/mailbox-domain";
 import { randomUUID } from "crypto";
 
 // v1 trim (vs. full spec):
@@ -865,10 +866,6 @@ registerAgent({
           await holdForFollowup(group, [], alias.draftRefId ?? undefined);
           continue;
         }
-        const FREE_DOMAINS = new Set([
-          "gmail.com", "yahoo.com", "hotmail.com", "outlook.com", "aol.com",
-          "icloud.com", "me.com", "protonmail.com", "proton.me", "live.com",
-        ]);
         let existing: any[] = [];
         if (supplierId) {
           const { data } = await admin
@@ -882,15 +879,23 @@ registerAgent({
         }
         if (!existing.length && primary.email) {
           const emailAddr = primary.email;
-          const domain = emailAddr.split("@")[1]?.toLowerCase();
+          // Widen to the whole domain ONLY when it is provably the supplier's own
+          // corporate domain. A shared mailbox (163.com, qq.com, gmail...) or a
+          // domain we cannot tie to this supplier stays an exact-address match,
+          // otherwise unrelated companies read as "already contacted" and are
+          // never written to. See lib/mailbox-domain.ts.
+          const corporate = corporateDomainForMatch(
+            emailAddr,
+            (primary.lead.payload as any)?.supplier_website ?? null
+          );
           let q = admin
             .from("draft_references")
             .select("id")
             .eq("org_id", primary.lead.org_id)
             .in("status", ["staged", "reviewed", "sent", "linked"])
             .limit(1);
-          if (domain && !FREE_DOMAINS.has(domain)) {
-            q = q.or(`metadata->>supplier_contact_email.ilike.${emailAddr},metadata->>supplier_contact_email.ilike.%@${domain}`);
+          if (corporate) {
+            q = q.or(`metadata->>supplier_contact_email.ilike.${emailAddr},metadata->>supplier_contact_email.ilike.%@${corporate}`);
           } else {
             q = q.ilike("metadata->>supplier_contact_email", emailAddr);
           }
