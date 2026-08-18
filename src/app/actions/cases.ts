@@ -578,7 +578,12 @@ export async function addSupplierEmailToCase(caseId: string, email: string) {
       .update({
         payload: {
           ...(((directLead?.payload ?? {}) as Record<string, any>)),
+          // Both markers, deliberately. email_source is what this screen has
+          // always written; contact_source is what the outreach agents read to
+          // tell a hand-added address from a scraped one, and without it an
+          // email added here is invisible to Agent 22.
           email_source: "manual_operator",
+          contact_source: "manual_operator",
           manual_email_added_by: session.userId,
           manual_email_added_at: new Date().toISOString(),
         },
@@ -616,6 +621,7 @@ export async function addSupplierEmailToCase(caseId: string, email: string) {
       email_check: { email: clean, format_valid: true, domain_matches_website: null, is_aggregator_domain: isAggregatorEmail(clean) },
     },
     email_source: "manual_operator",
+    contact_source: "manual_operator",
     manual_email_added_by: session.userId,
     manual_email_added_at: new Date().toISOString(),
   };
