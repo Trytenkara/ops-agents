@@ -61,7 +61,10 @@ for (const [i, r] of rounds.entries()) {
 const cold = computeMissingApprovalFields([], null);
 const coldPick = selectStagedAsks("", cold);
 check("no contact details asked before pricing exists", coldPick.ask.every((f) => askStage(f.key) === 1));
-check("dimensions collapse to one ask", buildCompletenessAsk(selectStagedAsks("", cold.filter((f) => f.key.startsWith("case_") || f.key === "dimensions_unit")).ask).split(",").length <= 3);
+const dimsOnly = selectStagedAsks("", cold.filter((f) => ["case_length", "case_width", "case_height", "dimensions_unit"].includes(f.key))).ask;
+check("dimensions collapse to one ask", dimsOnly.length === 1 && dimsOnly[0].key === "case_dimensions", dimsOnly.map((f) => f.key).join(","));
+const pocOnly = selectStagedAsks("", cold.filter((f) => ["poc_name", "poc_email", "poc_phone"].includes(f.key))).ask;
+check("sales contact collapses to one ask", pocOnly.length === 1 && pocOnly[0].key === "poc_contact", pocOnly.map((f) => f.key).join(","));
 
 console.log("\n=== APPENDED-PARAGRAPH SUPPRESSION ===");
 const chatty = `Hi Zach,\n\nThanks for the quote.\n\nCould you confirm (1) the MOQ for the drum option, (2) whether a deposit is required, and (3) your EXW price?\n\nCalifornia Chemicals Purchasing Team`;

@@ -1,4 +1,6 @@
 import { stageDraft } from "@/lib/draft-staging";
+import { loadMissingApprovalFields } from "@/lib/completeness-state";
+import { selectStagedAsks } from "@/lib/quote-completeness";
 import { stalledFollowupGapMs } from "@/lib/agent-timing";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import type { createAdminClient } from "@/lib/supabase/admin";
@@ -32,7 +34,17 @@ const TERMINAL = new Set(["closed_declined", "finalized", "price_captured"]);
 type Ctx = { agentId: string | null; runId: string | null; log: (m: string, o?: any) => Promise<void> };
 type Admin = ReturnType<typeof createAdminClient>;
 
-function buildStalledBody(opts: { contactName: string | null; material: string | null; signoff: string; n: number }): string {
+export function buildStalledBody(opts: {
+  contactName: string | null;
+  material: string | null;
+  signoff: string;
+  n: number;
+  // The current stage's outstanding items, already capped upstream. Since asks
+  // are staggered across replies, a chase that only says "did you see my note"
+  // leaves the supplier guessing at what we want; restating the same one to
+  // three items is what actually gets them answered.
+  outstanding: string[];
+}): string {
   const greeting = opts.contactName ? `Hi ${opts.contactName.split(/\s+/)[0]},` : "Hi there,";
   const mat = opts.material ? ` on ${opts.material}` : "";
   const opener =
@@ -41,10 +53,17 @@ function buildStalledBody(opts: { contactName: string | null; material: string |
       : opts.n === 2
         ? `Checking in again${mat}. I know things get busy, so just flagging that we're still waiting on your side.`
         : `Still keen to pick this up${mat} whenever it suits you. If the timing isn't right, just say the word and I'll stop chasing.`;
+  const restate = opts.outstanding.length
+    ? ` To move forward we still need ${
+        opts.outstanding.length === 1
+          ? opts.outstanding[0]
+          : `${opts.outstanding.slice(0, -1).join(", ")}, and ${opts.outstanding[opts.outstanding.length - 1]}`
+      }.`
+    : "";
   return [
     greeting,
     "",
-    `${opener} Happy to resend anything or answer questions if that helps move it along.`,
+    `${opener}${restate} Happy to resend anything or answer questions if that helps move it along.`,
     "",
     "Thanks,",
     opts.signoff,
@@ -164,6 +183,10 @@ export async function runStalledFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
     }
 
     const n = t.priorNudges + 1;
+    // Restate only the stage we are currently on, never the whole missing set:
+    // the chase has to match the staggered cadence of the replies it is chasing.
+    const missing = await loadMissingApprovalFields(admin, r.org_id, r.supplier_id, r.material_id);
+    const outstanding = selectStagedAsks("", missing).ask.map((f) => f.clause);
     const staged = await stageDraft({
       admin,
       agentId: ctx.agentId,
@@ -178,6 +201,7 @@ export async function runStalledFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
         material: meta.material_name ?? null,
         signoff: meta.suggested_signoff ?? meta.ghost_brand ?? "Sourcing Team",
         n,
+        outstanding,
       }),
       assignedOperator: r.assigned_operator ?? null,
       conversationId: threadId,

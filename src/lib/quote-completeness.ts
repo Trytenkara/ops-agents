@@ -131,30 +131,61 @@ const ASK_STAGE_BY_KEY: Record<string, 1 | 2 | 3> = {
   shipping_email: 3,
   billing_email: 3,
   billing_poc_name: 3,
+  // Merged group keys produced by collapseRelatedAsks. They must be staged
+  // explicitly: the default below is stage 3, which would quietly push case
+  // dimensions to the end of the conversation.
+  case_dimensions: 2,
+  poc_contact: 3,
+  billing_contact: 3,
 };
 
 export function askStage(key: string): 1 | 2 | 3 {
   return ASK_STAGE_BY_KEY[key] ?? 3;
 }
 
-const DIMENSION_KEYS = ["case_length", "case_width", "case_height", "dimensions_unit"];
+// Groups a person asks as ONE question. Left as separate fields they eat the
+// per-reply cap and read as a form: "outer case length, outer case width, outer
+// case height, dimension unit" is four asks for one question, and so is
+// "primary sales contact name, primary sales contact email, primary sales
+// contact phone number".
+const ASK_GROUPS: { keys: string[]; merged: MissingApprovalField }[] = [
+  {
+    keys: ["case_length", "case_width", "case_height", "dimensions_unit"],
+    merged: {
+      key: "case_dimensions",
+      clause: "outer case dimensions (length, width, height) and whether those are inches or centimeters",
+      detect: /\b(?:case|package|carton)\s*dimensions|\bl\s*[x×]\s*w\s*[x×]\s*h\b/i,
+    },
+  },
+  {
+    keys: ["poc_name", "poc_email", "poc_phone"],
+    merged: {
+      key: "poc_contact",
+      clause: "your primary sales contact's name, email and phone number",
+      detect: /\b(?:sales|primary)\s*contact\b|\bcontact details\b/i,
+    },
+  },
+  {
+    keys: ["billing_email", "billing_poc_name"],
+    merged: {
+      key: "billing_contact",
+      clause: "your billing contact's name and email",
+      detect: /\bbilling contact\b|\baccounts? receivable\b/i,
+    },
+  },
+];
 
-// "outer case length, outer case width, outer case height, dimension unit" is four
-// asks for what a human asks once. Collapse them so the cap spends on distinct
-// questions, not on one question shredded into columns.
-export function collapseDimensionAsks(fields: MissingApprovalField[]): MissingApprovalField[] {
-  const dims = fields.filter((f) => DIMENSION_KEYS.includes(f.key));
-  if (dims.length < 2) return fields;
-  const merged: MissingApprovalField = {
-    key: "case_dimensions",
-    clause: "outer case dimensions (length, width, height) and whether those are inches or centimeters",
-    detect: /\b(?:case|package|carton)\s*dimensions|\bl\s*[x×]\s*w\s*[x×]\s*h\b/i,
-  };
-  const out: MissingApprovalField[] = [];
-  let placed = false;
-  for (const f of fields) {
-    if (!DIMENSION_KEYS.includes(f.key)) { out.push(f); continue; }
-    if (!placed) { out.push(merged); placed = true; }
+export function collapseRelatedAsks(fields: MissingApprovalField[]): MissingApprovalField[] {
+  let out = fields;
+  for (const group of ASK_GROUPS) {
+    if (out.filter((f) => group.keys.includes(f.key)).length < 2) continue;
+    const next: MissingApprovalField[] = [];
+    let placed = false;
+    for (const f of out) {
+      if (!group.keys.includes(f.key)) { next.push(f); continue; }
+      if (!placed) { next.push(group.merged); placed = true; }
+    }
+    out = next;
   }
   return out;
 }
@@ -168,7 +199,7 @@ export function selectStagedAsks(
   missing: MissingApprovalField[],
   limit: number = MAX_ASKS_PER_REPLY,
 ): { stage: 1 | 2 | 3 | null; ask: MissingApprovalField[]; deferred: MissingApprovalField[] } {
-  const uncovered = collapseDimensionAsks(missingAsksNotCovered(body ?? "", missing ?? []));
+  const uncovered = collapseRelatedAsks(missingAsksNotCovered(body ?? "", missing ?? []));
   if (!uncovered.length) return { stage: null, ask: [], deferred: [] };
   const stage = uncovered.reduce<1 | 2 | 3>((lowest, f) => (askStage(f.key) < lowest ? askStage(f.key) : lowest), 3);
   const inStage = uncovered.filter((f) => askStage(f.key) === stage);
@@ -198,6 +229,6 @@ export function selectCompletenessAsks(
   missing: MissingApprovalField[],
   limit: number = MAX_ASKS_PER_REPLY,
 ): { ask: MissingApprovalField[]; deferred: MissingApprovalField[] } {
-  const uncovered = collapseDimensionAsks(missingAsksNotCovered(body ?? "", missing ?? []));
+  const uncovered = collapseRelatedAsks(missingAsksNotCovered(body ?? "", missing ?? []));
   return { ask: uncovered.slice(0, limit), deferred: uncovered.slice(limit) };
 }
