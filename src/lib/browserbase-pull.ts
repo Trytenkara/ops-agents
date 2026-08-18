@@ -506,3 +506,156 @@ export async function agenticPull(opts: {
   }
   return emptyResult("login_required", `blocked across ${maxAttempts} proxy IPs: ${msg.slice(0, 140)}`, url);
 }
+
+// Shipping cost extraction from marketplace checkouts. After capturing product
+// prices, attempt to fill in a test shipping address and extract the displayed
+// shipping cost from the checkout summary. This captures the NUMERIC cost that
+// appears only after address entry (not the static "Free shipping" text).
+export interface ShippingCaptureResult {
+  shippingCost: number | null; // numeric cost in USD, or null on failure
+  currency: string | null; // currency code if non-USD
+  shippingAddress: string | null; // formatted address used for the quote
+  failedReason: string | null; // null on success, or explanation of failure
+  attemptedAt: string;
+}
+
+async function fillShippingAddress(
+  stagehand: Stagehand,
+  page: any,
+  address: { country: string; state: string; city: string; zip: string },
+): Promise<boolean> {
+  try {
+    // Try to find and fill shipping address form fields semantically
+    const fillAction = `Find the shipping address form fields (Country, State/Province, City, ZIP/Postal code) and fill them with:
+Country: ${address.country}
+State: ${address.state}
+City: ${address.city}
+ZIP: ${address.zip}
+
+If the form uses dropdowns, select the matching option. If you can't find all fields, fill what you can find. Do NOT submit the form, just fill the fields and wait for the shipping cost to recalculate.`;
+
+    await stagehand.act(fillAction);
+
+    // Wait a moment for the page to recalculate shipping
+    await page.waitForTimeout(2000);
+    return true;
+  } catch (error) {
+    console.error("Failed to fill shipping address:", error);
+    return false;
+  }
+}
+
+async function extractShippingCost(stagehand: Stagehand, page: any, supplier: string): Promise<number | null> {
+  try {
+    // Extract the shipping cost displayed on the checkout page
+    const result = await stagehand.extract(
+      `Extract the NUMERIC shipping cost displayed on this checkout page. Look for labels like "Shipping", "Delivery", "Freight", "Shipping Cost", etc. Return the numeric value in USD (e.g., 25.00, 47.50, 0.00 for free shipping). If shipping is not visible or not a numeric value, return null.`,
+      z.object({
+        shippingCost: z.number().nullable(),
+      }),
+    );
+
+    return result?.shippingCost ?? null;
+  } catch (error) {
+    console.error("Failed to extract shipping cost:", error);
+    return null;
+  }
+}
+
+export async function captureShippingCost(
+  page: any,
+  stagehand: Stagehand,
+  address: { country: string; state: string; city: string; zip: string } | null,
+  supplierName: string,
+): Promise<ShippingCaptureResult> {
+  const attemptedAt = new Date().toISOString();
+
+  if (!address) {
+    return {
+      shippingCost: null,
+      currency: null,
+      shippingAddress: null,
+      failedReason: "no_address_configured",
+      attemptedAt,
+    };
+  }
+
+  try {
+    // Step 1: Attempt to navigate to cart/checkout if needed
+    const currentUrl = page.url();
+    const hasCheckout = /checkout|cart|shipping|order/.test(currentUrl.toLowerCase());
+
+    if (!hasCheckout) {
+      // Try to access the checkout page. This is best-effort; skip if it fails.
+      try {
+        // Most marketplaces have /checkout or /cart endpoints
+        const baseUrl = new URL(currentUrl).origin;
+        const checkoutUrls = [
+          `${baseUrl}/checkout`,
+          `${baseUrl}/cart`,
+          `${baseUrl}/order`,
+        ];
+
+        let foundCheckout = false;
+        for (const checkoutUrl of checkoutUrls) {
+          try {
+            await page.goto(checkoutUrl, { waitUntil: "domcontentloaded", timeout: 10000 });
+            foundCheckout = true;
+            break;
+          } catch {
+            // Continue to next URL
+          }
+        }
+
+        if (!foundCheckout) {
+          // If checkout URLs fail, stay on product page and hope there's a quick-checkout widget
+          // (like Shopify's buy button). This is acceptable failure — we tried.
+        }
+      } catch {
+        // Silently skip checkout nav if it fails
+      }
+    }
+
+    // Step 2: Fill shipping address fields
+    const addressFilled = await fillShippingAddress(stagehand, page, address);
+    if (!addressFilled) {
+      return {
+        shippingCost: null,
+        currency: null,
+        shippingAddress: `${address.city}, ${address.state}, ${address.zip}, ${address.country}`,
+        failedReason: "address_form_not_found",
+        attemptedAt,
+      };
+    }
+
+    // Step 3: Extract the numeric shipping cost
+    const shippingCost = await extractShippingCost(stagehand, page, supplierName);
+
+    if (shippingCost !== null) {
+      return {
+        shippingCost,
+        currency: "USD",
+        shippingAddress: `${address.city}, ${address.state}, ${address.zip}, ${address.country}`,
+        failedReason: null,
+        attemptedAt,
+      };
+    } else {
+      return {
+        shippingCost: null,
+        currency: null,
+        shippingAddress: `${address.city}, ${address.state}, ${address.zip}, ${address.country}`,
+        failedReason: "shipping_cost_not_extracted",
+        attemptedAt,
+      };
+    }
+  } catch (error) {
+    console.error("Shipping capture error:", error);
+    return {
+      shippingCost: null,
+      currency: null,
+      shippingAddress: `${address.city}, ${address.state}, ${address.zip}, ${address.country}`,
+      failedReason: `error: ${String(error).slice(0, 80)}`,
+      attemptedAt,
+    };
+  }
+}

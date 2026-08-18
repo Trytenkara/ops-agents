@@ -14,6 +14,10 @@ export interface PriceTier {
   case_size?: number | null; // units per case, e.g. 55
   unit_of_measurement?: string | null; // kg, lb, g, L, oz, ml, gal, ton…
   case_type?: string | null; // container / packaging, e.g. drum, pail, bag
+  // Shipping cost estimate for this tier in USD. For the MOQ tier (index 0),
+  // this is the actual cost captured from checkout; for other tiers, it is
+  // model-estimated based on weight/volume ratios. Null if not available.
+  shipping_cost_estimate?: number | null;
 }
 
 // Unit tokens → the canonical unit_of_measurement string Tenkara expects.
@@ -180,6 +184,7 @@ export function sanitizeTiers(input: unknown): PriceTier[] {
       case_size: numOrNull(t?.case_size),
       unit_of_measurement: textOrNull(t?.unit_of_measurement, 30),
       case_type: textOrNull(t?.case_type, 40),
+      shipping_cost_estimate: numOrNull(t?.shipping_cost_estimate),
     }))
     .filter(
       (t) =>
@@ -188,6 +193,7 @@ export function sanitizeTiers(input: unknown): PriceTier[] {
         t.unit_price != null ||
         t.case_size != null ||
         t.unit_of_measurement ||
-        t.case_type,
+        t.case_type ||
+        t.shipping_cost_estimate != null,
     );
 }
