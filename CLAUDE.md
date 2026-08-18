@@ -59,6 +59,15 @@ of any of these, delete it and import the shared one.
   `external_id` or a supplier group key by hand.
 - `src/lib/org-priority.ts` — who drains a shared capped queue first. Real
   clients before internal test orgs. Never hand-roll an `is_internal` sort.
+- `src/lib/operator-assignment.ts` `recordOwnerId` — who owns one open draft or
+  case. Every read surface derives the owner instead of trusting the stamp, so
+  four places had rebuilt the same key from the same metadata and agreed only by
+  inspection. One of them did not: `/api/agent/drafts` keyed on the thread id and
+  ignored the lead id and contact address, so an externally-staged draft was
+  stamped one operator and rendered as another. `agent-21-thread-owner-sync`
+  pushes this same answer to the Tenkara inbox, which is what keeps the email app
+  from naming a different person; a second copy of the rule is how that comes
+  back. Never pair `spreadOwnerId` with a `metadata.supplier_name` read.
 - `src/lib/fx.ts` `normalizeToUsd` — the ONLY way to publish a foreign price.
   One rate per listing. Never call `convertToUsd` per amount: a failed lookup
   then falls back to the raw foreign number and publishes yuan as dollars.
@@ -110,8 +119,9 @@ no "RFQ" or em dash in a copy literal, `stageDraft` keeping both `sanitizeDraft`
 and the contact-fabrication guard, `sanitizeDraft` keeping the internal-note
 strip, `stageDraft` keeping the thread tailor, every Supabase client keeping the truncation
 guard, every price writer going through the publish gate, `stageDraft` keeping
-the org scoping on `external_id`, and every direct `createTenkaraConversation`
-caller scoping its key too. Add a check when you add a shared guard. Reach for an
+the org scoping on `external_id`, every direct `createTenkaraConversation`
+caller scoping its key too, and no second copy of the open-record owner
+derivation. Add a check when you add a shared guard. Reach for an
 exemption only when you have first ruled out moving the logic into the shared
 module, since an exemption list decays the same way a blocklist does.
 
