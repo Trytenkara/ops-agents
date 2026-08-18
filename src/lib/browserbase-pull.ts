@@ -35,6 +35,9 @@ export interface PullResult {
   source_url: string;
   viewUrl?: string;
   sessionId?: string;
+  // Optional shipping cost captured from checkout (populated when capturing shipping is enabled)
+  shippingCost?: number | null;
+  shippingAddress?: string | null;
 }
 
 // Browserbase's Model Router: billed on BROWSERBASE_API_KEY, so navigation needs
@@ -338,8 +341,9 @@ async function attempt(opts: {
   material: string;
   supplier: string;
   maxSteps: number;
+  shipToAddress?: { country: string; state: string; city: string; zip: string } | null;
 }): Promise<PullResult> {
-  const { url, material, supplier, maxSteps } = opts;
+  const { url, material, supplier, maxSteps, shipToAddress } = opts;
   const variants = materialVariants(material);
   const stagehand = new Stagehand({
     env: "BROWSERBASE",
@@ -451,7 +455,27 @@ async function attempt(opts: {
       };
     }
 
-    return { ...guard(price, page.url()), viewUrl, sessionId };
+    const result = { ...guard(price, page.url()), viewUrl, sessionId };
+
+    // Attempt to capture shipping cost if enabled and price was found
+    if (
+      shipToAddress &&
+      result.classification === "current_price_found" &&
+      result.current_price != null
+    ) {
+      try {
+        const shippingResult = await captureShippingCost(page, stagehand, shipToAddress, supplier);
+        if (shippingResult.shippingCost != null) {
+          result.shippingCost = shippingResult.shippingCost;
+          result.shippingAddress = shippingResult.shippingAddress;
+        }
+      } catch (e) {
+        console.error("Shipping capture failed (non-fatal):", e);
+        // Silently skip shipping failure — price capture succeeded, that's what matters
+      }
+    }
+
+    return result;
   } finally {
     await stagehand.close().catch(() => {});
   }
@@ -470,6 +494,8 @@ async function backoff(i: number) {
  * Agentic pull with retry. A 403/429/503, a model-router rate limit, a blank or
  * failed navigation, or a dead session each earn a fresh Stagehand session (and
  * so a fresh residential IP), up to maxAttempts.
+ *
+ * Optional shipToAddress enables shipping cost extraction from checkout after price capture.
  */
 export async function agenticPull(opts: {
   url: string;
@@ -477,12 +503,13 @@ export async function agenticPull(opts: {
   supplier: string;
   maxSteps?: number;
   maxAttempts?: number;
+  shipToAddress?: { country: string; state: string; city: string; zip: string } | null;
 }): Promise<PullResult> {
-  const { url, material, supplier, maxSteps = 15, maxAttempts = 4 } = opts;
+  const { url, material, supplier, maxSteps = 15, maxAttempts = 4, shipToAddress } = opts;
   let lastErr: any;
   for (let i = 0; i < maxAttempts; i++) {
     try {
-      return await attempt({ url, material, supplier, maxSteps });
+      return await attempt({ url, material, supplier, maxSteps, shipToAddress });
     } catch (e: any) {
       lastErr = e;
       const msg = String(e?.message ?? e);

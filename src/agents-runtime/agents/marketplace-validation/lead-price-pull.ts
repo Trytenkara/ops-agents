@@ -1098,6 +1098,15 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
           moq: result.moq,
           lead_time: result.lead_time,
           shipping: result.shipping,
+          // Shipping cost fields (populated by Agent 19 checkout capture):
+          // shipping_cost = numeric cost in USD for MOQ tier (actual from checkout)
+          // shipping_address_used = the test address used (e.g., "Los Angeles, CA, 90001")
+          // shipping_cost_attempted_at = ISO timestamp of checkout attempt
+          // shipping_cost_failed_reason = null on success, or reason string on failure
+          shipping_cost: null as number | null,
+          shipping_address_used: null as string | null,
+          shipping_cost_attempted_at: null as string | null,
+          shipping_cost_failed_reason: null as string | null,
           source_url: result.source_url ?? url,
           pulled_at: nowIso,
           // What actually moved this number last. A price can change without any

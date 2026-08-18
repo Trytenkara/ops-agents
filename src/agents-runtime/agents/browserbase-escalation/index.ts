@@ -1,7 +1,10 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { agenticPull, type PullResult } from "@/lib/browserbase-pull";
+import { agenticPull, type PullResult, captureShippingCost, type ShippingCaptureResult } from "@/lib/browserbase-pull";
 import { convertToUsd } from "@/lib/fx";
+import { estimatePerTierShipping } from "@/lib/shipping-estimation";
+import { getOrgShipToAddress, formatAddressForCheckout } from "@/lib/tenkara-ship-to";
+import { sanitizeTiers } from "@/lib/price-tiers";
 
 // Agent 19 - Browserbase Price Escalation.
 //
@@ -218,7 +221,12 @@ async function normalizeToUsd(
  * cannot read a price NEVER wipes a price we already have. It records the miss
  * beside the good number instead.
  */
-async function writePull(admin: any, lead: Lead, raw: PullResult): Promise<boolean> {
+async function writePull(
+  admin: any,
+  lead: Lead,
+  raw: PullResult,
+  shippingResult?: ShippingCaptureResult | null,
+): Promise<boolean> {
   const result = await normalizeToUsd(dropZeroPrices(raw));
   const now = new Date().toISOString();
   const gotPrice = result.classification === "current_price_found" && result.current_price != null;
@@ -247,11 +255,26 @@ async function writePull(admin: any, lead: Lead, raw: PullResult): Promise<boole
       price_source: "marketplace_scrape",
       price_source_at: now,
       ...(priceChanged ? { previous_price: prev.price, price_changed_at: now } : {}),
+      // Shipping cost fields (populated by captureShippingCost after price capture)
+      shipping_cost: shippingResult?.shippingCost ?? null,
+      shipping_address_used: shippingResult?.shippingAddress ?? null,
+      shipping_cost_attempted_at: shippingResult?.attemptedAt ?? null,
+      shipping_cost_failed_reason: shippingResult?.failedReason ?? null,
     };
     const tiers = result.tiers.length
       ? result.tiers.map((t) => ({ pack_size: t.pack_size ?? "", price: t.price, unit_price: t.unit_price ?? null }))
       : [{ pack_size: result.pack_size ?? "", price: result.current_price, unit_price: result.unit_price ?? null }];
-    nextPayload.price_tiers = tiers;
+
+    // Add per-tier shipping cost estimates if we captured an MOQ shipping cost
+    if (shippingResult?.shippingCost != null && tiers.length > 0) {
+      const estimates = await estimatePerTierShipping(shippingResult.shippingCost, tiers, lead.material_name ?? "");
+      for (const [tierIdx, estimatedCost] of Object.entries(estimates)) {
+        const idx = parseInt(tierIdx, 10);
+        if (tiers[idx]) tiers[idx].shipping_cost_estimate = estimatedCost;
+      }
+    }
+
+    nextPayload.price_tiers = sanitizeTiers(tiers);
     nextPayload.price_tiers_updated_at = now;
   } else if (hadPrice) {
     // Keep the last known good price live and flag that today's refresh failed,
@@ -379,13 +402,27 @@ registerAgent({
         try {
           let result: PullResult | null = null;
           let lastErr: any = null;
+
+          // Fetch org's ship-to address for shipping cost capture (optional, non-blocking)
+          let shipToAddress: { country: string; state: string; city: string; zip: string } | null = null;
+          try {
+            shipToAddress = await getOrgShipToAddress(admin, lead.org_id);
+          } catch (e) {
+            // Silently ignore — shipping is optional, not critical
+          }
+
           // agenticPull returns a classified result rather than throwing for
           // normal outcomes, so the only case worth retrying here is our own
           // wall-clock abandonment: re-run it once in a fresh session.
           for (let attempt = 1; attempt <= 2; attempt++) {
             try {
               result = await withTimeout(
-                agenticPull({ url: lead.url, supplier: lead.supplier_name ?? "", material: lead.material_name ?? "" }),
+                agenticPull({
+                  url: lead.url,
+                  supplier: lead.supplier_name ?? "",
+                  material: lead.material_name ?? "",
+                  shipToAddress,
+                }),
                 LEAD_TIMEOUT_MS,
               );
               break;
@@ -409,7 +446,19 @@ registerAgent({
               source_url: lead.url,
             };
           }
-          const gotPrice = await writePull(admin, lead, result);
+
+          // Wrap shipping result for writePull
+          const shippingResult: ShippingCaptureResult | null = result.shippingCost != null
+            ? {
+                shippingCost: result.shippingCost,
+                currency: "USD",
+                shippingAddress: shipToAddress ? `${shipToAddress.city}, ${shipToAddress.state}, ${shipToAddress.zip}, ${shipToAddress.country}` : null,
+                failedReason: null,
+                attemptedAt: new Date().toISOString(),
+              }
+            : null;
+
+          const gotPrice = await writePull(admin, lead, result, shippingResult);
           if (gotPrice) {
             pulled++;
             await ctx.log(
