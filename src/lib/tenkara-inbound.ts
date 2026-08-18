@@ -22,6 +22,7 @@ import { upsertSupplierProfile } from "@/lib/supplier-profiles";
 import { getClientShipTo } from "@/lib/tenkara-client-settings";
 import { resolveMaterialGradeSpecs } from "@/lib/tenkara-names";
 import { isConsumerMailboxDomain } from "@/lib/mailbox-domain";
+import { soleOrgOwner } from "@/lib/org-isolation";
 import {
   completenessFollowupEnabled,
   computeMissingApprovalFields,
@@ -30,6 +31,8 @@ import {
 
 // A "reply" from a mailer-daemon isn't the supplier — it's a delivery failure.
 // Detect it so we never draft a reply to the daemon and can restart outreach.
+const CONTACT_GUARD_CHANNEL = () => process.env.SLACK_CONTACT_GUARD_CHANNEL_ID ?? "C0B5M1QCE9E";
+
 function isBounce(senderAddr: string | null, subject: string | null): boolean {
   const a = (senderAddr ?? "").toLowerCase();
   const s = (subject ?? "").toLowerCase();
@@ -172,9 +175,18 @@ export async function handleInboundReply(
       .eq("draft_id", msg.in_reply_to_draft_id)
       .eq("email_client", "rod_app");
     if (inboundOrg) lookup = lookup.eq("org_id", inboundOrg.orgId);
-    const { data, error } = await lookup.maybeSingle();
+    const { data, error } = await lookup.order("created_at", { ascending: false });
     if (error) return { status: 503, body: { error: "draft_match_failed", detail: error.message } };
-    ref = data;
+    // Without a resolved inbound org, one draft id could still be shared by two
+    // clients (that is exactly what the unscoped external_id produced). Attach
+    // only when the candidates are unanimous about who owns them.
+    ref = soleOrgOwner(data as any[]) !== null ? (data ?? [])[0] : null;
+    if (!ref && (data?.length ?? 0) > 1) {
+      await postAgentAlert(
+        `:rotating_light: Inbound reply matched drafts from more than one client (draft ${msg.in_reply_to_draft_id}). Sent to triage instead of being filed.`,
+        { channel: CONTACT_GUARD_CHANNEL(), severity: "p1", key: `inbound_ambiguous_org:${msg.in_reply_to_draft_id}` }
+      ).catch(() => {});
+    }
   }
   if (!ref) {
     let lookup = admin
@@ -192,8 +204,17 @@ export async function handleInboundReply(
     // (domain, address, or triage).
     if (threadRefs && threadRefs.length > 0) {
       const uniqueTargets = new Set(threadRefs.map((r: any) => `${r.supplier_id ?? ""}:${r.material_id ?? ""}`));
-      if (uniqueTargets.size === 1 && threadRefs[0]?.supplier_id && threadRefs[0]?.material_id) {
+      // Unanimous on the client as well as on supplier+material. A thread that
+      // two clients share (the July/August contamination) must never resolve by
+      // thread id: whoever's draft sorted first would inherit the other's reply.
+      const owner = soleOrgOwner(threadRefs as any[]);
+      if (uniqueTargets.size === 1 && owner !== null && threadRefs[0]?.supplier_id && threadRefs[0]?.material_id) {
         ref = threadRefs[0];
+      } else if (owner === null) {
+        await postAgentAlert(
+          `:rotating_light: Inbound reply landed on a conversation shared by more than one client (thread ${msg.conversation_id}). Sent to triage instead of being filed.`,
+          { channel: CONTACT_GUARD_CHANNEL(), severity: "p1", key: `inbound_shared_thread:${msg.conversation_id}` }
+        ).catch(() => {});
       }
     }
   }

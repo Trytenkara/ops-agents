@@ -144,6 +144,19 @@ overwrites another client's row. Rule
 side. If you add another table whose natural key is shared between clients (an
 address, a URL, a domain), add its column to `ORG_SCOPED_CONFLICT_KEYS` there.
 
+Inbound is held by the same invariant: `soleOrgOwner` in `org-isolation.ts`. A
+supplier reply may only be attached to an existing outreach when every candidate
+draft belongs to ONE client. Where the receiving mailbox does not resolve the
+client, an ambiguous draft-id or thread-id match now goes to triage with a p1
+alert instead of being filed under whichever row sorted first.
+
+Guards only stop the mistakes we have already seen, so `agent-23-org-isolation-audit`
+reads the live data every morning (06:00 Manila, migration 0121) and reports
+shared conversations, shared drafts, colliding reference keys, drafts naming
+another client, and replies parked with no client. It is read-only on purpose:
+deciding whose a contaminated record is needs a human, and a repair loop that
+guessed would hide the fault. Add a check there whenever you add a guard here.
+
 Still caller-side only: the Tenkara inbox app is not in this workspace, so
 `external_id`'s own uniqueness scope, inbound reply matching and thread merging
 are unaudited.

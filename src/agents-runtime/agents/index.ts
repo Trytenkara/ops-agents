@@ -26,3 +26,4 @@ import "./duplicate-guard";
 import "./marketplace-type-mismatch";
 import "./thread-owner-sync";
 import "./operator-email-outreach";
+import "./org-isolation-audit";

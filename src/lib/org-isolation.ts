@@ -46,3 +46,16 @@ export function foreignOrgRows<T extends OrgScopedRow>(orgId: string | null | un
   const owner = orgId ?? null;
   return rows.filter((r) => (r.org_id ?? null) !== owner);
 }
+
+// The inbound half of the same invariant. When we cannot tell from the receiving
+// mailbox which client an incoming supplier reply belongs to, the only safe way
+// to attach it to an existing outreach is if every candidate row belongs to ONE
+// client. Two clients' drafts on the same thread means the sender is ambiguous,
+// and guessing files a supplier's reply (prices, terms, documents) under a
+// company that never asked. Returns null so the caller sends it to triage, which
+// is a human reading it a few hours later rather than a silent misattribution.
+export function soleOrgOwner<T extends { org_id: string | null }>(rows: T[] | null | undefined): string | null {
+  const owners = new Set((rows ?? []).map((r) => r.org_id ?? null));
+  if (owners.size !== 1) return null;
+  return [...owners][0];
+}
