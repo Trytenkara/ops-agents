@@ -10,7 +10,7 @@ import { ThreadsList, type ThreadRow, type ThreadKind } from "@/components/threa
 import { PanelTabs } from "@/components/panel-tabs";
 import { CasesSection } from "@/components/cases-section";
 import { loadOrgCases } from "@/lib/org-cases";
-import { getOrgAssignmentContext, orgAutoKey, spreadOwnerId, type AssignmentContext } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, recordOwnerId, type AssignmentContext } from "@/lib/operator-assignment";
 import { getOutreachTracker } from "@/lib/outreach-tracker";
 import { selectAllPaged } from "@/lib/supabase-paging";
 import { OutreachSummaryView } from "@/components/outreach-summary-view";
@@ -51,17 +51,7 @@ function deriveThreadOwners(ctx: AssignmentContext, rows: any[]): void {
   const byId = new Map(ctx.pool.map((op) => [op.id, op]));
   for (const d of rows) {
     if (!DERIVABLE_DRAFT_STATUSES.has(d.status)) continue;
-    const supplierName = (d.metadata as any)?.supplier_name ?? null;
-    const ownerId = spreadOwnerId(
-      ctx,
-      orgAutoKey(ctx, {
-        supplierId: d.supplier_id,
-        supplierName,
-        email: (d.metadata as any)?.supplier_contact_email ?? null,
-        leadId: (d.metadata as any)?.lead_id ?? d.id,
-      }),
-      { nameHint: supplierName, workType: "email" }
-    );
+    const ownerId = recordOwnerId(ctx, d, "email");
     const owner = ownerId ? byId.get(ownerId) : null;
     // Derivation declining to own the draft (manual mode with no claim, empty
     // pool) is an answer, not a gap: clear the stale stamp rather than keep

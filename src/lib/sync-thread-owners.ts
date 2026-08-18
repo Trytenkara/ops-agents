@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAllPaged } from "@/lib/supabase-paging";
-import { getOrgAssignmentContext, orgAutoKey, spreadOwnerId } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, recordOwnerId } from "@/lib/operator-assignment";
 import { setTenkaraConversationAssignee } from "@/lib/tenkara";
 
 // Re-derive the owner of an org's OPEN threads and push it to the Tenkara inbox.
@@ -166,17 +166,9 @@ export async function syncOrgThreadOwners(
   // inbox is only presumed correct, which is what the re-assert walk checks.
   const settled: Thread[] = [];
   for (const d of drafts) {
-    const supplierName = (d.metadata?.supplier_name as string | undefined) ?? null;
-    const owner = spreadOwnerId(
-      ctx,
-      orgAutoKey(ctx, {
-        supplierId: d.supplier_id,
-        supplierName,
-        email: (d.metadata?.supplier_contact_email as string | undefined) ?? null,
-        leadId: (d.metadata?.lead_id as string | undefined) ?? d.id,
-      }),
-      { nameHint: supplierName, workType: "email" }
-    );
+    // Same helper the Thread Tracker renders with, so "the email app matches
+    // Control Room" cannot become a claim about two separate copies of the rule.
+    const owner = recordOwnerId(ctx, d, "email");
     // Derivation declining to own the thread leaves the stamp alone. Clearing it
     // would blank the only record of ownership for a client whose pool went empty.
     if (!owner) continue;

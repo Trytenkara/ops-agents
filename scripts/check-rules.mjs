@@ -216,6 +216,31 @@ for (const f of [
   }
 }
 
+// 9. The owner of an open draft or case is derived on every read, and the
+// Tenkara inbox is kept in step by pushing that same answer. Three surfaces had
+// hand-copied the key-building, which is precisely how Control Room and the
+// email app came to name different people in the first place: they agreed only
+// as long as nobody edited one copy. Rebuilding it from a record's metadata
+// anywhere outside the shared helper is the break.
+// The copies spanned several lines each, so this is a whole-file test: building
+// an auto key AND reading supplier_name out of a record's metadata in the same
+// file means the derivation was re-implemented rather than called.
+for (const f of files) {
+  if (f.path.endsWith("src/lib/operator-assignment.ts")) continue;
+  // spreadOwnerId, not orgAutoKey: the reset planner legitimately builds keys to
+  // project the split without deriving anyone's owner, and the rule must not
+  // push it into a waiver list.
+  if (/spreadOwnerId\(/.test(f.text) && /metadata[^\n]{0,30}supplier_name/.test(f.text)) {
+    violations.push({
+      rule: "assignment/derive-owner-via-recordOwnerId",
+      why: "copies of the owner derivation drift apart, and Control Room then disagrees with the email app",
+      fix: "use recordOwnerId(ctx, row, workType) from @/lib/operator-assignment",
+      where: f.path,
+      line: "owner derivation rebuilt from record metadata",
+    });
+  }
+}
+
 if (!violations.length) {
   console.log(`check-rules: ${files.length} files, no violations.`);
   process.exit(0);

@@ -1,8 +1,7 @@
 import { operatorRoles, primaryRole } from "@/lib/operator";
 import {
   getOrgAssignmentContext,
-  orgAutoKey,
-  spreadOwnerId,
+  recordOwnerId,
   type AssignmentContext,
 } from "@/lib/operator-assignment";
 import type { CaseRow } from "@/components/cases-list";
@@ -88,20 +87,10 @@ async function deriveCaseOwners(admin: any, orgId: string, rows: any[], ctx?: As
   const assignment = ctx ?? (await getOrgAssignmentContext(admin, orgId));
   const byId = new Map(assignment.pool.map((op) => [op.id, op]));
   for (const c of rows) {
-    const supplierName = (c.metadata?.supplier_name as string | undefined) ?? null;
-    const ownerId = spreadOwnerId(
-      assignment,
-      orgAutoKey(assignment, {
-        supplierId: c.supplier_id,
-        supplierName,
-        email: (c.metadata?.supplier_contact_email as string | undefined) ?? null,
-        leadId: (c.metadata?.lead_id as string | undefined) ?? c.id,
-      }),
-      // Calls resolve over the client's call operators; everything else is desk
-      // work. A client with no caller gets an unowned call rather than a ping to
-      // someone who does not make calls.
-      { nameHint: supplierName, workType: isCallCase(c) ? "call" : "email" }
-    );
+    // Calls resolve over the client's call operators; everything else is desk
+    // work. A client with no caller gets an unowned call rather than a ping to
+    // someone who does not make calls.
+    const ownerId = recordOwnerId(assignment, c, isCallCase(c) ? "call" : "email");
     const owner = ownerId ? byId.get(ownerId) : null;
     if (!owner) continue;
     c.assigned_operator = owner.id;

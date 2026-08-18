@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authenticateAgent, unauthorized } from "@/lib/agent-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getOrgAssignmentContext, orgAutoKey, spreadOwnerId } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, recordOwnerId } from "@/lib/operator-assignment";
 
 const postSchema = z.object({
   email_client: z.literal("rod_app").default("rod_app"),
@@ -57,16 +57,15 @@ export async function POST(request: NextRequest) {
     // Without a supplier the draft still gets an owner, spread on its thread id.
     const assignCtx = await getOrgAssignmentContext(admin, org_id!).catch(() => null);
     if (assignCtx) {
-      const sname = (parsed.data.metadata as any)?.supplier_name ?? null;
-      assigned_operator = spreadOwnerId(
-        assignCtx,
-        orgAutoKey(assignCtx, {
-          supplierId: parsed.data.supplier_id,
-          supplierName: sname,
-          leadId: parsed.data.thread_id,
-        }),
-        { nameHint: sname }
-      );
+      // Through the shared helper, so an externally-staged draft is stamped with
+      // the owner Control Room will derive for it. Keying this by hand left out
+      // the lead id and contact address the read surfaces key on, so a draft with
+      // no supplier row was stamped one operator and rendered as another.
+      assigned_operator = recordOwnerId(assignCtx, {
+        id: parsed.data.thread_id,
+        supplier_id: parsed.data.supplier_id,
+        metadata: parsed.data.metadata,
+      });
     }
   }
 

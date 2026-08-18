@@ -554,6 +554,33 @@ export function spreadOwnerId(
   );
 }
 
+// The owner of one open record (a draft, a case) as every read surface must show
+// it. This existed as three hand-copied blocks — the Thread Tracker, the case
+// list, and the Tenkara inbox sync — each rebuilding the same key from the same
+// metadata fields. They agreed only by inspection, and the whole reason the sync
+// exists is that Control Room and the email app once named different people.
+// Two copies of the rule is how that comes back, so there is one.
+export function recordOwnerId(
+  ctx: AssignmentContext,
+  row: { id: string; supplier_id?: string | null; metadata?: any },
+  workType: OperatorType = "email"
+): string | null {
+  const supplierName = (row.metadata?.supplier_name as string | undefined) ?? null;
+  return spreadOwnerId(
+    ctx,
+    orgAutoKey(ctx, {
+      supplierId: row.supplier_id ?? null,
+      supplierName,
+      email: (row.metadata?.supplier_contact_email as string | undefined) ?? null,
+      // A supplier reached through one lead keeps one owner, so the lead is the
+      // key when there is no supplier row yet; the draft's own id only as a last
+      // resort, which is per-draft and therefore not sticky.
+      leadId: (row.metadata?.lead_id as string | undefined) ?? row.id,
+    }),
+    { nameHint: supplierName, workType }
+  );
+}
+
 // Sticky-random owner per supplier id, for tables that show the auto default
 // alongside a claim. Names are optional but keep scoped orgs accurate.
 export function autoOperatorBySupplier(
