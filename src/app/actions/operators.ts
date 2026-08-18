@@ -3,6 +3,7 @@ import { getSession, hasAnyRole, type AppRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ASSIGNABLE_OPERATOR_ROLES } from "@/lib/operator-assignment";
 import { reassignIneligibleOwners } from "@/lib/reassign-owners";
+import { syncOrgThreadOwners } from "@/lib/sync-thread-owners";
 
 interface Result<T = void> { ok: boolean; error?: string; data?: T }
 
@@ -28,6 +29,27 @@ async function reassignAcrossOrgs(
     );
   for (const orgId of orgs) {
     await reassignIneligibleOwners(admin, orgId, [userId], actorUserId).catch(() => null);
+  }
+}
+
+// Gaining an operator is the mirror image of losing one: the spread hands them
+// roughly one share of every other operator's book. Control Room shows that on
+// the next render; the Tenkara inbox keeps naming the previous owner until it is
+// told, which is what operators see as "the email app disagrees with the Control
+// Room". reassignIneligibleOwners covers the losing side, this covers the gaining
+// side.
+async function syncThreadsAcrossOrgs(
+  admin: ReturnType<typeof createAdminClient>,
+  userId: string,
+  orgIds?: string[]
+) {
+  const orgs =
+    orgIds ??
+    ((await admin.from("user_org_assignments").select("org_id").eq("user_id", userId)).data ?? []).map(
+      (r: any) => r.org_id as string
+    );
+  for (const orgId of orgs) {
+    await syncOrgThreadOwners(admin, orgId).catch(() => null);
   }
 }
 
@@ -155,6 +177,8 @@ export async function changeUserRole(userId: string, newRole: AppRole): Promise<
   const wasAssignable = targetRoleList.some((r) => ASSIGNABLE.has(r));
   if (wasAssignable && !ASSIGNABLE.has(newRole)) {
     await reassignAcrossOrgs(admin, userId, session.userId);
+  } else if (!wasAssignable && ASSIGNABLE.has(newRole)) {
+    await syncThreadsAcrossOrgs(admin, userId);
   }
   return { ok: true };
 }
@@ -214,6 +238,9 @@ export async function setOrgAssignments(userId: string, orgIds: string[]): Promi
   if (droppedOrgIds.length > 0 && ASSIGNABLE.has(role)) {
     await reassignAcrossOrgs(admin, userId, session.userId, droppedOrgIds);
   }
+  if (added.length > 0 && ASSIGNABLE.has(role)) {
+    await syncThreadsAcrossOrgs(admin, userId, added);
+  }
   return { ok: true };
 }
 
@@ -269,5 +296,8 @@ export async function reactivateUser(userId: string): Promise<Result> {
     actor_user_id: session.userId, action: "operator.reactivated",
     target_table: "users", target_id: userId,
   });
+  // They are back in every pool they belong to, so their share of the spread
+  // comes back with them. Tell the inbox.
+  await syncThreadsAcrossOrgs(admin, userId);
   return { ok: true };
 }

@@ -77,8 +77,12 @@ export async function setOrgAssignmentSettings(input: {
     target_id: input.orgId,
     diff: { from: before ?? null, to: patch, pinned_assignees: frozen },
   });
+  // Mode and lane scope are both inputs to the derived owner, so this edit moved
+  // threads too. Same reason as a lane edit: Control Room re-derives, the inbox
+  // does not.
+  const sync = await syncOrgThreadOwners(admin, input.orgId).catch(() => null);
   if (input.orgSlug) revalidatePath(`/work/orgs/${input.orgSlug}`);
-  return { ok: true, frozen };
+  return { ok: true, frozen, threadsMoved: sync?.moved, mirrorsFailed: sync?.mirrorsFailed };
 }
 
 // What kind of work one operator takes on one client: phone or email, and which
