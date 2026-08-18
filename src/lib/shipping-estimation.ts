@@ -72,7 +72,11 @@ Where keys are tier indices (as strings) and values are estimated costs in USD o
     const text = (response.content[0] as { type: "text"; text: string })?.text;
     if (!text) return {};
 
-    const estimates = JSON.parse(text);
+    // Claude may wrap JSON in markdown code blocks, extract it
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return {};
+
+    const estimates = JSON.parse(jsonMatch[0]);
     const result: Record<number, number | null> = {};
 
     for (const [key, value] of Object.entries(estimates)) {
