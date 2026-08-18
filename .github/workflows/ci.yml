@@ -1,0 +1,24 @@
+name: CI
+
+# main deploys straight to production, so a break here is a break in prod.
+# 049397b sat red on main for hours with nobody alerted, which is why this exists.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Standing rules (see /CLAUDE.md)
+        run: npm run check:rules
+      - name: Types
+        run: npm run typecheck

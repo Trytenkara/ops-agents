@@ -89,10 +89,9 @@ async function fetchExpiringMarketplaceQuotes(): Promise<QuoteRow[]> {
         and length(regexp_replace(mq.product_url, '^https?://[^/]+', '')) > 1
         -- The platform counts both an unset status and 'active' as a live quote.
         and (mq.status is null or mq.status = 'active')
-        and mq.reanalyze is not null
-        and mq.reanalyze::date >= current_date
-        and mq.reanalyze::date <  current_date + 7
-      order by mq.reanalyze asc
+        -- Re-check: either due by explicit reanalyze date, or null/missing (catch all)
+        and (mq.reanalyze is null or (mq.reanalyze::date >= current_date and mq.reanalyze::date < current_date + 7))
+      order by mq.reanalyze asc nulls first
       limit $1`,
     [MAX_QUOTES_PER_RUN]
   );

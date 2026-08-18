@@ -1,5 +1,6 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { truncationGuardedFetch } from "@/lib/supabase/truncation-guard";
 
 export function createClient() {
   const cookieStore = cookies();
@@ -7,6 +8,9 @@ export function createClient() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      // See truncation-guard: an unbounded read that returns exactly the
+      // PostgREST cap is treated as truncated rather than trusted.
+      global: { fetch: truncationGuardedFetch() },
       cookies: {
         get(name: string) {
           return cookieStore.get(name)?.value;
