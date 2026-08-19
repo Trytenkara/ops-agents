@@ -1,16 +1,25 @@
-// Safety alerter — DM's Sam when something noteworthy or invariant-breaking happens.
+// Safety alerter — says something when a run breaks or an invariant is violated.
 //
 // Destination: the one ops channel (COMM-06). These used to be a DM to Sam;
 // nothing goes to a DM any more.
 //
+// Timing: a broken run waits for the 18:00 digest like everything else
+// (COMM-07). It queues as p1, so it leads the digest. Only the Tenkara
+// write attempt still posts on the spot, because it means a read-only
+// guarantee has already been violated and every minute of it is worse.
+//
+// Why this is not live: 73 runs failed or went partial in 24h on 2026-08-19,
+// 65 of them one agent. Live-posting that at a 4h debounce is ten-plus
+// messages a day for a condition the digest states once, which is exactly the
+// noise the consolidation removed.
+//
 // Debounce:
-//   - Error-event alerts are debounced per agent per hour via agent_state.
-//   - Critical alerts (from_field, tenkara write attempt) bypass the debounce
-//     because they should NEVER fire under normal operation.
+//   - Error-event alerts are debounced per agent per hour via agent_state,
+//     then deduped again by condition in the alert policy.
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { postSlackMessage, deepLink } from "@/lib/slack";
-import { shouldPostDigest, recordDigestPosted } from "@/lib/alert-policy";
+import { dispatchAlert } from "@/lib/alert-policy";
 
 const ERROR_DEBOUNCE_MS = 60 * 60 * 1000; // 1h per agent per error type
 
@@ -21,9 +30,26 @@ type AlertReason =
   | "tenkara_write_attempt"
   | "export_failed_72h";
 
-async function send(reason: AlertReason, lines: string[], critical = false): Promise<void> {
-  const prefix = critical ? ":rotating_light: *CRITICAL* — " : ":warning: ";
-  await postSlackMessage({ text: `${prefix}${lines.join("\n")}` });
+// Queued for the daily digest. key identifies the CONDITION (an agent failing),
+// not the run, so a chronically broken agent is one digest line a day.
+async function queue(
+  reason: AlertReason,
+  key: string,
+  title: string,
+  lines: string[],
+  digestGroup: string,
+): Promise<void> {
+  await dispatchAlert(`:warning: ${lines.join("\n")}`, {
+    key: `${reason}:${key}`,
+    severity: "p1",
+    digestGroup,
+    title,
+  });
+}
+
+// Only for a violated invariant. Bypasses the digest deliberately.
+async function sendNow(lines: string[]): Promise<void> {
+  await postSlackMessage({ text: `:rotating_light: *CRITICAL* — ${lines.join("\n")}` });
 }
 
 // agent_state row used for debounce. Stores last alert timestamps per (agent_id, key).
@@ -57,17 +83,19 @@ export async function alertRunFinished(opts: {
 }): Promise<void> {
   if (opts.status === "success") return;
   const reason: AlertReason = opts.status === "failure" ? "run_failed" : "run_partial";
-  // A chronically failing agent used to DM on every single run: agent-01 runs
-  // every minute. The debounce below was only ever wired into error events.
-  const digestKey = `run_${opts.status}:${opts.agentSlug}`;
-  const fingerprint = opts.summary ?? "no summary";
-  if (!(await shouldPostDigest(digestKey, fingerprint, 240))) return;
-  await send(reason, [
-    `*${opts.agentName}* (${opts.agentSlug}) — ${opts.status.toUpperCase()}`,
-    opts.summary ? `> ${opts.summary}` : "(no summary)",
-    `Run: ${deepLink(`/agents/runs/${opts.runId}`)}`,
-  ]);
-  await recordDigestPosted(digestKey, fingerprint);
+  // Keyed on the agent, not the run: agent-01 runs every minute, and a broken
+  // agent is one fact however many times it re-runs.
+  await queue(
+    reason,
+    opts.agentSlug,
+    `${opts.agentName} — ${opts.status.toUpperCase()}: ${opts.summary ?? "no summary"}`.slice(0, 300),
+    [
+      `*${opts.agentName}* (${opts.agentSlug}) — ${opts.status.toUpperCase()}`,
+      opts.summary ? `> ${opts.summary}` : "(no summary)",
+      `Run: ${deepLink(`/agents/runs/${opts.runId}`)}`,
+    ],
+    "Agent runs that broke",
+  );
 }
 
 export async function alertErrorEvent(opts: {
@@ -80,22 +108,27 @@ export async function alertErrorEvent(opts: {
 }): Promise<void> {
   const fire = await shouldFire(opts.agentId, "alert_error_event", ERROR_DEBOUNCE_MS);
   if (!fire) return;
-  await send("error_event", [
-    `*${opts.agentName}* (${opts.agentSlug}) — error event`,
-    opts.step ? `step: \`${opts.step}\`` : null,
-    `> ${opts.message.slice(0, 800)}`,
-    `Run: ${deepLink(`/agents/runs/${opts.runId}`)}`,
-    `_(debounced 1h per agent)_`,
-  ].filter(Boolean) as string[]);
+  await queue(
+    "error_event",
+    opts.agentSlug,
+    `${opts.agentName} — error: ${opts.message.slice(0, 200)}`,
+    [
+      `*${opts.agentName}* (${opts.agentSlug}) — error event`,
+      opts.step ? `step: \`${opts.step}\`` : null,
+      `> ${opts.message.slice(0, 800)}`,
+      `Run: ${deepLink(`/agents/runs/${opts.runId}`)}`,
+    ].filter(Boolean) as string[],
+    "Agent runs that broke",
+  );
 }
 
 // CRITICAL — Tenkara client refused a connection that wasn't using the mcp_readonly role.
 export async function alertTenkaraWriteAttempt(detail: string): Promise<void> {
-  await send("tenkara_write_attempt", [
+  await sendNow([
     "Tenkara client refused a non-readonly connection.",
     `> ${detail}`,
     "Action: audit env vars and code paths that touch Tenkara prod.",
-  ], true);
+  ]);
 }
 
 export async function alertExportFailed72h(opts: {
@@ -104,10 +137,16 @@ export async function alertExportFailed72h(opts: {
   supplierId: string | null;
   generatedAt: string;
 }): Promise<void> {
-  await send("export_failed_72h", [
-    `Lead Scanner export marked *failed* (no upload confirmation for 72h)`,
-    `supplier: ${opts.supplierName ?? opts.supplierId ?? "—"}`,
-    `generated: ${opts.generatedAt}`,
-    `Re-trigger from ${deepLink("/agents/health")}`,
-  ]);
+  await queue(
+    "export_failed_72h",
+    opts.exportId,
+    `Lead Scanner export failed (no upload for 72h): ${opts.supplierName ?? opts.supplierId ?? "—"}`,
+    [
+      `Lead Scanner export marked *failed* (no upload confirmation for 72h)`,
+      `supplier: ${opts.supplierName ?? opts.supplierId ?? "—"}`,
+      `generated: ${opts.generatedAt}`,
+      `Re-trigger from ${deepLink("/agents/health")}`,
+    ],
+    "Lead Scanner exports that failed",
+  );
 }

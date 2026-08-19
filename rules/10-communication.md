@@ -76,10 +76,15 @@ retired channel env vars, everywhere except `src/lib/slack.ts`.
 
 There is no live agent alert. p1 and p2 both queue in `slack_alert_log` and
 leave in the 18:00 digest; p1 leads it, keeps its `@`-mentions and carries a
-:rotating_light:. p3 stays ledger-only. The two exceptions are an operator
-pressing a button in the Control Room (Report Issue, escalate-to-call — a human
-is already waiting on that post) and the fail-open path in `alert-policy.ts`
-when the ledger itself is unreachable.
+:rotating_light:. p3 stays ledger-only. The exceptions are an operator pressing a
+button in the Control Room (Report Issue, escalate-to-call — a human is already
+waiting on that post), a violated read-only guarantee against Tenkara prod
+(`alertTenkaraWriteAttempt`, which should never fire at all), and the fail-open
+path in `alert-policy.ts` when the ledger itself is unreachable.
+
+A failed or partial agent run is NOT an exception. It queues as p1 and leads
+the digest. 73 runs broke in 24h on 2026-08-19, 65 of them one agent; live-
+posting that is the noise this rule exists to stop.
 
 The cost is real and accepted: a cross-client contamination alert can now wait
 up to 24h to reach Slack. The audit that finds it runs daily anyway, and the
