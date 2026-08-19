@@ -12,6 +12,7 @@ import { deleteTenkaraDrafts, getTenkaraConversationDetails } from "@/lib/tenkar
 import { isSameCompanyName } from "@/lib/fuzzy";
 import { isMarketplaceLeadPayload, splitDirectLeadFromMarketplace } from "@/lib/marketplace-direct-split";
 import { checkEmail, isAggregatorEmail } from "@/agents-runtime/agents/data-enrichment/enrich";
+import { applyContactChange } from "@/lib/contact-change";
 import { randomUUID } from "crypto";
 
 interface ActionResult {
@@ -667,34 +668,58 @@ export async function updateLeadEmail(leadId: string, email: string): Promise<Ac
   purge(trimmed ? null : previous);
   purge(trimmed || null);
 
+  // Retiring the replaced address is one operation, not a field write: it also
+  // kills the draft already staged to it, releases its org-wide reservation and
+  // clears Agent 22's one-shot stamp so this correction gets acted on too.
+  const change = await applyContactChange(admin, {
+    lead: { id: leadId, org_id: lead.org_id, supplier_id: lead.supplier_id },
+    payload: nextPayload,
+    previous,
+    next: trimmed || null,
+    actorUserId: guard.session.userId,
+  });
+  const finalPayload = change.payload;
+
   if (!trimmed) {
-    delete nextPayload.contact_confidence;
-    delete nextPayload.manual_email_added_at;
-    delete nextPayload.manual_email_added_by;
-    delete nextPayload.email_source;
+    delete finalPayload.contact_confidence;
+    delete finalPayload.manual_email_added_at;
+    delete finalPayload.manual_email_added_by;
+    delete finalPayload.email_source;
   }
 
-  const { error } = await admin.from("leads_in_flight").update({ payload: nextPayload }).eq("id", leadId);
+  // A corrected address is only worth anything if outreach looks at this lead
+  // again. The bounced-address case resolver has always requeued; an inline edit
+  // did not, so a lead that had already been mailed on the wrong address just
+  // sat there. Requeue unless the supplier can already see a sent thread, in
+  // which case Agent 22 CCs the new address onto it rather than cold mailing the
+  // same company twice.
+  const requeue =
+    trimmed && previous !== trimmed && !change.hasLiveThread && lead.status === "active" && lead.stage !== "ready_for_outreach";
+
+  const { error } = await admin
+    .from("leads_in_flight")
+    .update({ payload: finalPayload, ...(requeue ? { stage: "enriched", status: "active" } : {}) })
+    .eq("id", leadId);
 
   if (error) return { ok: false, error: error.message };
-
-  // Release the org-wide reservation on a deleted address. Without this the
-  // alias row outlives the contact and silently blocks the address forever.
-  if (!trimmed && previous && lead.org_id) {
-    await admin.from("supplier_email_aliases").delete().eq("org_id", lead.org_id).eq("email", previous);
-  }
 
   await admin.from("audit_log").insert({
     actor_user_id: guard.session.userId,
     action: trimmed ? "lead.email_set" : "lead.email_deleted",
     target_table: "leads_in_flight",
     target_id: leadId,
-    diff: { from: previous, to: trimmed || null },
+    diff: {
+      from: previous,
+      to: trimmed || null,
+      drafts_discarded: change.draftsDiscarded,
+      requeued: !!requeue,
+      live_thread: change.hasLiveThread,
+    },
   });
 
   revalidatePath("/work/review/leads");
   revalidatePath("/work/orgs/[slug]/leads", "page");
-  return { ok: true };
+  return change.warning ? { ok: true, warning: change.warning } : { ok: true };
 }
 
 // Manually update the contact phone for a single lead. Mirrors updateLeadEmail:
@@ -759,16 +784,16 @@ export async function importEmailsFromCsv(orgId: string, form: FormData): Promis
   const admin = createAdminClient();
   const { data: leads } = await admin
     .from("leads_in_flight")
-    .select("id, supplier_name, payload")
+    .select("id, supplier_id, supplier_name, payload")
     .eq("org_id", orgId)
     .eq("status", "active");
 
-  const byName = new Map<string, { id: string; payload: any }[]>();
+  const byName = new Map<string, { id: string; supplier_id: string | null; payload: any }[]>();
   for (const l of leads ?? []) {
     const key = normalizeCompanyName(l.supplier_name ?? "");
     if (!key) continue;
     const arr = byName.get(key) ?? [];
-    arr.push({ id: l.id, payload: l.payload });
+    arr.push({ id: l.id, supplier_id: (l as any).supplier_id ?? null, payload: l.payload });
     byName.set(key, arr);
   }
 
@@ -794,16 +819,24 @@ export async function importEmailsFromCsv(orgId: string, form: FormData): Promis
       const enrichment = payload.enrichment ? { ...payload.enrichment } : {};
       enrichment.contact = { ...(enrichment.contact ?? {}), email };
       enrichment.email_check = checkEmail(email, payload.supplier_website ?? null);
+      const change = await applyContactChange(admin, {
+        lead: { id: hit.id, org_id: orgId, supplier_id: hit.supplier_id ?? null },
+        payload: {
+          ...payload,
+          supplier_contact_email: email,
+          enrichment,
+          contact_source: "manual_operator",
+          manual_email_added_at: new Date().toISOString(),
+        },
+        previous: String(payload.supplier_contact_email ?? "") || null,
+        next: email,
+        actorUserId: session.userId,
+      });
       await admin
         .from("leads_in_flight")
         .update({
-          payload: {
-            ...payload,
-            supplier_contact_email: email,
-            enrichment,
-            contact_source: "manual_operator",
-            manual_email_added_at: new Date().toISOString(),
-          },
+          payload: change.payload,
+          ...(change.hasLiveThread ? {} : { stage: "enriched", status: "active" }),
         })
         .eq("id", hit.id);
       matched++;

@@ -8,6 +8,7 @@ import { isAggregatorDomain } from "../data-enrichment/enrich";
 import { stageDraft } from "@/lib/draft-staging";
 import { tenkaraEmailAccountIdFor } from "@/lib/tenkara";
 import { randomUUID } from "crypto";
+import { isRetiredContact } from "@/lib/contact-change";
 
 // Agent 22 — Operator-injected email outreach.
 //
@@ -150,6 +151,13 @@ registerAgent({
       const payload = (lead.payload ?? {}) as any;
       const email = String(payload.supplier_contact_email ?? "").trim().toLowerCase();
       const org = orgsById.get(lead.org_id);
+      // An address an operator replaced, or one that bounced, is not an address
+      // to reach out on, even if it is still sitting on the row somewhere.
+      if (isRetiredContact(payload, email)) {
+        skipped++;
+        await stamp(admin, lead.id, payload, { action: "skipped", reason: "retired_email", runId: ctx.runId });
+        continue;
+      }
       if (!org || !EMAIL_RE.test(email)) {
         skipped++;
         await stamp(admin, lead.id, payload, { action: "skipped", reason: org ? "invalid_email" : "unmapped_org", runId: ctx.runId });

@@ -5,6 +5,7 @@ import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAssignedOrgIds, seesAllOrgs } from "@/lib/org-access";
 import { isConsumerMailboxDomain } from "@/lib/mailbox-domain";
+import { applyContactChange } from "@/lib/contact-change";
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 function hostOf(value: string | null | undefined): string | null {
@@ -50,6 +51,16 @@ export async function approveMarketplaceOutreach(leadId: string, correctedEmail?
   const approvedEmail = existingVerified ? existingEmail : corrected;
   const fingerprint = approvalFingerprint(approvedEmail, payload);
   const now = new Date().toISOString();
+  // An operator correcting the address here retires the one we had, same as
+  // anywhere else: otherwise the rejected address stays CC-able and its staged
+  // draft stays live in the inbox.
+  const change = await applyContactChange(admin, {
+    lead: { id: lead.id, org_id: lead.org_id, supplier_id: (lead as any).supplier_id ?? null },
+    payload,
+    previous: existingEmail || null,
+    next: approvedEmail,
+    actorUserId: session.userId,
+  });
   const { data: updated, error } = await admin
     .from("leads_in_flight")
     .update({
@@ -58,7 +69,7 @@ export async function approveMarketplaceOutreach(leadId: string, correctedEmail?
       outreach_approved_by: session.userId,
       outreach_reject_reason: null,
       payload: {
-        ...payload,
+        ...change.payload,
         supplier_contact_email: approvedEmail,
         contact_owned_verified: true,
         contact_source: "manual_operator",

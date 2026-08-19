@@ -15,6 +15,7 @@ import { loadSelfSuppliedMaterialIds } from "@/lib/self-supplied-materials";
 import { corporateDomainForMatch } from "@/lib/mailbox-domain";
 import { orgScopedKey } from "@/lib/org-isolation";
 import { randomUUID } from "crypto";
+import { isRetiredContact } from "@/lib/contact-change";
 
 // v1 trim (vs. full spec):
 //   - pre-outreach only. Reply tracking lands with the Tenkara inbound webhook
@@ -379,7 +380,11 @@ registerAgent({
       // channel so an operator handles it. Enrichment normally strips these, but
       // guard here too for leads enriched before that landed.
       const aggregatorEmail = isAggregatorEmail(email);
-      const hasEmail = !!email && formatValid && !aggregatorEmail;
+      // An address an operator replaced, or one that bounced, is never mailed
+      // again. The retired list lives on the lead, so this holds no matter which
+      // surface retired it.
+      const retiredEmail = isRetiredContact(payload, email);
+      const hasEmail = !!email && formatValid && !aggregatorEmail && !retiredEmail;
       // A reachable non-email channel: a discovered contact/quote form, or the
       // supplier's own site/listing.
       const channelUrl =
@@ -941,6 +946,7 @@ registerAgent({
           ccMap.set(candidate.email.toLowerCase(), candidate.contactName ?? null);
         }
         for (const ac of candidate.additionalContacts) {
+          if (isRetiredContact(candidate.lead.payload ?? {}, ac.email)) continue;
           if (ac.email !== primaryEmail && !ccMap.has(ac.email)) ccMap.set(ac.email, ac.name);
         }
       }

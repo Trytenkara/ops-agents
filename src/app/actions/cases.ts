@@ -4,6 +4,7 @@ import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAggregatorEmail } from "@/agents-runtime/agents/data-enrichment/enrich";
 import { splitDirectLeadFromMarketplace, isMarketplaceLeadPayload } from "@/lib/marketplace-direct-split";
+import { applyContactChange } from "@/lib/contact-change";
 import { dialablePhone, buildCallBrief, CALL_OUTCOMES, type CallOutcome } from "@/lib/call-brief";
 import { CallOperatorResolver, notifyCallEscalation } from "@/lib/call-escalation";
 import { stageDraft, threadCcContacts } from "@/lib/draft-staging";
@@ -564,7 +565,7 @@ export async function addSupplierEmailToCase(caseId: string, email: string) {
 
   const { data: lead } = await admin
     .from("leads_in_flight")
-    .select("id, payload")
+    .select("id, org_id, supplier_id, payload")
     .eq("id", leadId)
     .maybeSingle();
   if (!lead) return { ok: false, error: "linked lead not found" } as const;
@@ -632,9 +633,21 @@ export async function addSupplierEmailToCase(caseId: string, email: string) {
     manual_email_added_at: new Date().toISOString(),
   };
 
+  // Same retirement the inline editor performs: the address this case was opened
+  // about is usually a bounced or wrong one, and leaving it in additional_contacts
+  // (or leaving its draft live in the inbox) means we mail it again.
+  const change = await applyContactChange(admin, {
+    lead: { id: leadId, org_id: lead.org_id, supplier_id: lead.supplier_id },
+    payload: mergedPayload,
+    previous: String(payload.supplier_contact_email ?? "") || null,
+    next: clean,
+    reason: "replaced",
+    actorUserId: session.userId,
+  });
+
   const { error: leadErr } = await admin
     .from("leads_in_flight")
-    .update({ stage: "enriched", status: "active", payload: mergedPayload })
+    .update({ stage: "enriched", status: "active", payload: change.payload })
     .eq("id", leadId);
   if (leadErr) return { ok: false, error: leadErr.message } as const;
 

@@ -1,6 +1,7 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { getTenkaraConversationDetails } from "@/lib/tenkara";
 import { handleInboundReply } from "@/lib/tenkara-inbound";
+import { harvestThreadContacts } from "@/lib/thread-contacts";
 
 // Reconciles tracked Tenkara threads against what we actually processed.
 //
@@ -257,6 +258,29 @@ export async function reconcileThread(
     return out;
   }
   out.checked = true;
+
+  // Everyone actually in this conversation, including anyone an operator added
+  // by hand inside the email app, gets filed onto the lead. Best effort: a
+  // failure here must not cost the reply this pass exists to draft.
+  try {
+    const { data: orgRef } = await admin
+      .from("draft_references")
+      .select("org_id")
+      .eq("thread_id", threadId)
+      .limit(1)
+      .maybeSingle();
+    const harvested = await harvestThreadContacts(admin, {
+      orgId: (orgRef as any)?.org_id ?? null,
+      threadId,
+      messages: details.messages,
+    });
+    if (harvested) {
+      out.outcomes.push(`contacts_harvested:${harvested}`);
+      await deps.log(`Filed ${harvested} contact(s) seen on thread ${threadId}`, { step: "reconcile" });
+    }
+  } catch (e: any) {
+    await deps.log(`Contact harvest failed on ${threadId}: ${e?.message ?? e}`, { level: "warn", step: "reconcile" });
+  }
 
   const inbound = details.messages.filter((m) => m.is_outbound === false && m.id);
   let unseen: typeof inbound = [];

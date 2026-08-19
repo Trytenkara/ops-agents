@@ -23,6 +23,7 @@ import { getClientShipTo } from "@/lib/tenkara-client-settings";
 import { resolveMaterialGradeSpecs } from "@/lib/tenkara-names";
 import { isConsumerMailboxDomain } from "@/lib/mailbox-domain";
 import { soleOrgOwner } from "@/lib/org-isolation";
+import { retireInPayload } from "@/lib/contact-change";
 import {
   completenessFollowupEnabled,
   computeMissingApprovalFields,
@@ -364,6 +365,26 @@ export async function handleInboundReply(
         title: `${supplierLabel} (${from.address})`,
       }
     );
+    // The bounce lands on the DRAFT, but the address lives on the LEAD. Without
+    // retiring it there the same dead address stays the lead's contact and gets
+    // picked straight back up by the next outreach pass, so the supplier bounces
+    // forever. Retire it on every active lead in this client that carries it.
+    const bouncedAddress = String(refMeta.supplier_contact_email ?? "").trim().toLowerCase();
+    if (bouncedAddress && ref.org_id) {
+      const { data: carrying } = await admin
+        .from("leads_in_flight")
+        .select("id, payload")
+        .eq("org_id", ref.org_id)
+        .eq("status", "active")
+        .eq("payload->>supplier_contact_email", bouncedAddress)
+        .limit(500);
+      for (const row of (carrying ?? []) as any[]) {
+        await admin
+          .from("leads_in_flight")
+          .update({ payload: retireInPayload(row.payload ?? {}, bouncedAddress, "bounced") })
+          .eq("id", row.id);
+      }
+    }
     if (bounceLeadId) {
       const { data: existingCase } = await admin
         .from("cases")
