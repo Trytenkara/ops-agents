@@ -4,15 +4,15 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-107 rules. 45 are actually enforced, 36 owe a check or a job,
+111 rules. 46 are actually enforced, 39 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 44 |
+| **Guard** | A shared module or build check makes it impossible. | 45 |
 | **Audit** | A scheduled job reports the break after the fact. | 1 |
-| **Check owed** | A build check is possible and is not built yet. | 30 |
-| **Audit owed** | No build check can see it; a scheduled job can. Not built. | 6 |
+| **Check owed** | A build check is possible and is not built yet. | 32 |
+| **Audit owed** | No build check can see it; a scheduled job can. Not built. | 7 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
 | **None** | Outside this repository. Cannot be checked here. | 2 |
@@ -21,7 +21,7 @@ source of truth and this is only a view of them.
 Anything "owed" is also listed in `OUTSTANDING.md`; the build refuses
 otherwise, so a gap cannot go quiet.
 
-## Guard (44)
+## Guard (45)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -43,6 +43,7 @@ otherwise, so a gap cannot go quiet.
 | `DATA-10` | A write that fails is never silent | Guard — unconditional `console.error` on insert failure in |
 | `DATA-11` | An unstated currency is a question, never a dollar sign | Guard — `normalizeToUsd` in `src/lib/fx.ts` returns status |
 | `DATA-12` | The same company held twice is surfaced, never merged | Guard — `findSupplierDupeSuspicions` and |
+| `DATA-13` | An operator's correction re-anchors a price, it does not freeze it | Guard — `updateStagedQuote` in |
 | `PERS-01` | Only a structural verdict is terminal | Guard — `src/lib/retry-verdict.ts` `classifyFailure`. Owed: |
 | `PERS-06` | No hidden caps on a worklist | Guard for the accidental cut — `src/lib/supabase-paging.ts` |
 | `DISC-01` | Search the trade's name, not ours | Guard — shared resolver, threaded into all three sources. |
@@ -76,7 +77,7 @@ otherwise, so a gap cannot go quiet.
 |---|---|---|
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 
-## Check owed (30)
+## Check owed (32)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -88,6 +89,8 @@ otherwise, so a gap cannot go quiet.
 | `DATA-05` | Guessing a recipient is allowed; guessing content is not | Check owed — |
 | `DATA-06` | Only a same-run verification counts as a confirmed email | Check owed — `contacts/confidence-derived-from-source`: |
 | `DATA-07` | Density: bulk for solids, specific gravity for liquids | Check owed — `density/solids-require-bulk`. Partially held |
+| `DATA-14` | A captured price carries the words it was read from | Check owed — `price/capture-must-carry-source-text`: every |
+| `DATA-16` | Every rung of a tiered quote is its own row | Check owed — `price/tier-rungs-never-collapse`: a priceless or |
 | `PRICING-01` | A shipping cost is a number or it is nothing | Check owed — `shipping/cost-must-be-numeric`. |
 | `PRICING-02` | Delivery cost is per pack tier when pack size changes it | Check owed — `shipping/cost-per-tier`. |
 | `PRICING-03` | Delivery-cost extraction is opt-in per client | Check owed — `shipping/extraction-org-opt-in`. |
@@ -111,11 +114,12 @@ otherwise, so a gap cannot go quiet.
 | `SHIP-02` | Never stage everything | Check owed — a pre-commit hook that refuses paths outside |
 | `SHIP-07` | Deploy and schema move together | Check owed — `ship/migration-must-accompany-schema-read`. |
 
-## Audit owed (6)
+## Audit owed (7)
 
 | Rule | | Enforcement |
 |---|---|---|
 | `DATA-08` | A dealbreaker grade is a hard specification | Audit owed — a daily check that a client with a stated |
+| `DATA-15` | Extraction records what it did not take | Audit owed — per-message capture reconciliation: a second |
 | `PRICING-04` | Delivery-cost extraction is audited every run | Audit owed — daily shipping-capture health job, |
 | `PERS-07` | A withheld price is a job, not an outcome | Audit owed — a daily count of withheld prices with no |
 | `DISC-08` | A source's own paging must advance | Audit owed — a daily check that every paged source's cursor |

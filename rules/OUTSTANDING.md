@@ -81,6 +81,47 @@ price: the escalation agent's selection excludes them structurally.
 **Owed:** surface the flagged set on the client's own tab; include withheld
 prices in the escalation agent's selection.
 
+## P0 — Supplier-email prices are captured wrong and missed silently
+
+Breaks DATA-14, DATA-15 and the basis half of DATA-01. Found 2026-08-19 by
+re-reading all 77 California Chemicals supplier threads from Tenkara and
+reconciling them against `staged_quotes`, because the table could not be
+checked against itself.
+
+Against 54 price points the suppliers actually sent, the table holds 48
+distinct rows (plus one duplicate). Of those 48, five are wrong and all five
+are stamped `confidence: high`:
+
+- Katonah: the email says "Drums are 518lbs at 1.1975/lb"; the row says
+  620.5410 USD/lb. The extractor multiplied the unit price by the drum weight
+  and stored the product as a unit price. That number was never quoted.
+- Four rows (Jiangsu Yny 2900, Shandong Andy 1335, Henan Chemger 1280, Yujiang
+  1015) hold per-tonne prices labelled per kg. All arrived as `usd####/mt`.
+
+Six price points produced no row at all, and no record that anything was read:
+Shandong Depu (usd1300/mt), Sinochem Nanjing (USD1450/MT) and Hefei TNJ
+(USD1490/mt) were missed entirely; Foodchem's revision (1.53 FOB / 1.81 CIF)
+was dropped, leaving the superseded 1.49 as the client's live figure; Reroot's
+second material was dropped.
+
+Two things make this a P0 rather than a data-cleanup task. `confidence` is the
+model's own self-report and is only ever downgraded for currency problems, so
+every bad row above presents to an operator as the most trustworthy grade.
+And nothing measures the miss rate: a message that yielded nothing is
+indistinguishable from a message with nothing in it, so this ran unnoticed and
+the same blindness would hide whether any fix worked. Scope beyond this one
+client is unmeasured — the same read has not been run for the rest of the
+fleet.
+
+**Owed:** `price/capture-must-carry-source-text` (DATA-14);
+per-message capture reconciliation (DATA-15); wire the existing
+`src/lib/price-qa.ts` into `insertStagedQuotes`, where its
+`unit_price_math_off` and `sub_dollar_no_basis` checks would have caught all
+five bad rows and where it has never been called; stop presenting a
+self-reported `confidence` as a trust grade until it is derived; a re-extract
+path, since none exists and every prompt fix otherwise leaves the bad rows
+live; and the same reconciliation run fleet-wide to size the residue.
+
 ## P1 — The em dash and RFQ check matches nothing
 
 Breaks COMM-08. The pattern requires the offending line to BEGIN with one of
@@ -272,6 +313,8 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | PRICING-02 | `shipping/cost-per-tier` |
 | PRICING-03 | `shipping/extraction-org-opt-in` |
 | PRICING-05 | `shipping/no-fabricated-costs` — the per-tier estimator breaks it today, see the P2 above |
+| DATA-14 | `price/capture-must-carry-source-text` — see the P0 above |
+| DATA-16 | `price/tier-rungs-never-collapse` |
 
 ### Audit owed — no build check can see it, a scheduled job can
 
@@ -283,6 +326,7 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | DISC-08 | daily: every paged source's cursor advanced, and the marker written is the marker read |
 | OUT-09 | daily: conversations past their follow-up cadence with no outbound |
 | SHIP-08 | weekly: the rules review, to Sam |
+| DATA-15 | per-message: price points present vs rows staged, daily shortfall report — see the P0 above |
 
 ## Open decisions
 
