@@ -221,9 +221,12 @@ function strongerKey(current: string | undefined, candidate: string): string {
 //
 // Only a name key whose rows are ALL newer than this date is merged onto an
 // established sibling. Merging retrospectively would move suppliers a client's
-// operators are already working, which ops asked us not to do: this applies from
-// the next sourcing exercise onward.
-const SIMILAR_NAME_GROUPING_FROM = "2026-08-19T00:00:00.000Z";
+// operators are already working, which ops asked us not to do.
+//
+// The date is the day AFTER this shipped, so leads that arrived earlier on
+// shipping day count as established as well: grouping starts at the next
+// sourcing exercise, not partway through the one already running.
+const SIMILAR_NAME_GROUPING_FROM = "2026-08-20T00:00:00.000Z";
 
 export function mergeSimilarNameKeys(keys: Map<string, string>, firstSeen: Map<string, string>): void {
   const established: string[] = [];
