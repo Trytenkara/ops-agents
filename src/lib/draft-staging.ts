@@ -8,6 +8,7 @@ import { resolveSupplierIdByName as resolveTenkaraSupplierId } from "@/lib/tenka
 import { orgScopedExternalId } from "@/lib/org-isolation";
 import { loadThreadContext } from "@/lib/thread-context";
 import { tailorToThread } from "@/lib/thread-tailor";
+import { isDraftSuppressed } from "@/lib/draft-suppression";
 
 // Shared draft → QA building block. Every intake agent (02 expiries,
 // 04 new-material outreach) and the Tenkara inbound webhook composes its own
@@ -128,6 +129,9 @@ export interface StageDraftResult {
   draftId?: string;           // the Tenkara draft UUID
   conversationId?: string | null;
   qaFindings?: Finding[];
+  // True when an operator already discarded this exact draft, so nothing was
+  // composed or staged. Not a failure: callers log it as a skip.
+  suppressed?: boolean;
   // True when the anti-fabrication guard held the draft: no provider draft was
   // created and the draft_references row is status="blocked" (not sendable).
   blocked?: boolean;
@@ -136,6 +140,25 @@ export interface StageDraftResult {
 export async function stageDraft(input: StageDraftInput): Promise<StageDraftResult> {
   const { admin, agentId, runId, orgId, materialId, quoteId, to, assignedOperator } = input;
   const callerMeta = input.metadata ?? {};
+
+  // An operator already threw this exact draft away. Checked before anything
+  // else so a rejected draft costs no model pass and never reaches the inbox a
+  // second time. See draft-suppression for the three cases that are NOT a
+  // repeat: our own discards, a different recipient, and a reply to a fresh
+  // supplier message.
+  const suppression = await isDraftSuppressed(admin, {
+    orgId,
+    supplierId: input.supplierId ?? null,
+    threadId: input.conversationId ?? null,
+    kind: (callerMeta.draft_kind as string | undefined) ?? null,
+    toAddress: to.address,
+  });
+  if (suppression.suppressed) {
+    console.warn(
+      `[stageDraft] skipped ${callerMeta.draft_kind} to ${to.address}: ${suppression.reason} at ${suppression.discardedAt}`
+    );
+    return { ok: false, suppressed: true, error: `suppressed:${suppression.reason}` };
+  }
 
   // Style rules (no "RFQ", no em dash) are enforced HERE, at the one chokepoint
   // every outbound draft passes through, not in each drafter. Three drafters

@@ -36,7 +36,7 @@ export interface GroupResult {
   };
   mode: "active" | "ghost";
   ghostBrand?: string;
-  stage: "ok" | "llm_error" | "tenkara_error";
+  stage: "ok" | "llm_error" | "tenkara_error" | "suppressed";
   error?: string;
   subject?: string;
   body?: string;

@@ -218,10 +218,15 @@ export async function runOutreachForSupplier(input: RunOutreachSupplierInput): P
   });
 
   if (!staged.ok) {
-    await log(`Outreach staging failed for ${supplierName} × [${materialNames.join(", ")}]: ${staged.error}`, {
-      step: "outreach",
-      data: { supplier_id: supplierId, lead_ids: leadIds },
-    });
+    await log(
+      staged.suppressed
+        ? `No first contact for ${supplierName}: an operator already discarded one`
+        : `Outreach staging failed for ${supplierName} × [${materialNames.join(", ")}]: ${staged.error}`,
+      {
+        step: "outreach",
+        data: { supplier_id: supplierId, lead_ids: leadIds },
+      }
+    );
     return { staged: false, reason: staged.error, promoted: 0 };
   }
 

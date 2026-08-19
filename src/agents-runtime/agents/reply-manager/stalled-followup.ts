@@ -222,7 +222,12 @@ export async function runStalledFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
       await ctx.log(`Stalled-conversation follow-up #${n} drafted for ${meta.supplier_name ?? to}`, { step: "stalled_followup" });
     } else {
       skipped++;
-      await ctx.log(`Stalled follow-up stage failed for ${to}: ${staged.error}`, { level: "warn", step: "stalled_followup" });
+      await ctx.log(
+        staged.suppressed
+          ? `No stalled follow-up for ${to}: an operator already discarded one`
+          : `Stalled follow-up stage failed for ${to}: ${staged.error}`,
+        { level: staged.suppressed ? "info" : "warn", step: "stalled_followup" }
+      );
     }
   }
 

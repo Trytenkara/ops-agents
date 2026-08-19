@@ -6,6 +6,7 @@ import { generateRevalidationEmail, formatUserMessage } from "./drafter";
 import { buildCsv, type GroupResult } from "./csv-builder";
 import { uploadCsvAndSign } from "@/lib/storage";
 import { createTenkaraConversation, createTenkaraDraft, tenkaraEmailAccountIdFor } from "@/lib/tenkara";
+import { isDraftSuppressed } from "@/lib/draft-suppression";
 import { bodyToHtml } from "@/lib/email-style";
 import { lintDraft } from "../outreach-qa/lint";
 import { postQrSummary } from "./slack-notifier";
@@ -228,6 +229,26 @@ registerAgent({
           data: { client: group.client_org_name, supplier: group.supplier_name },
         });
         return { ...baseResult, stage: "llm_error", error: e.message };
+      }
+
+      // This agent creates its Tenkara draft directly instead of going through
+      // stageDraft, so it asks the shared question itself. Its own debounce only
+      // delayed a redraft by a week; an operator discarding the check-in meant
+      // they did not want it, not "not this week".
+      const { data: suppOrg } = await admin
+        .from("orgs").select("id").eq("tenkara_org_id", group.client_org_id).maybeSingle();
+      const suppression = await isDraftSuppressed(admin, {
+        orgId: (suppOrg as any)?.id ?? null,
+        supplierId: group.supplier_id,
+        kind: "cold_outbound",
+        toAddress: group.supplier_contact_email,
+      });
+      if (suppression.suppressed) {
+        await ctx.log(
+          `Skipped ${group.supplier_name}: an operator already discarded this check-in (${suppression.reason})`,
+          { step: "stage", data: { supplier: group.supplier_name, discarded_at: suppression.discardedAt } }
+        );
+        return { ...baseResult, stage: "suppressed" };
       }
 
       let draftIdValue: string;

@@ -77,3 +77,27 @@ Cancelling in bulk without deleting the email alias leaves a ghost address that
 still receives replies nobody reads.
 
 **Enforcement:** Honour.
+
+## OUT-11 — A rejected draft is not redrafted
+
+When an operator discards a draft, in the Control Room or in the email app,
+that decision stands. No sweep composes the same kind of draft to that supplier
+and address again.
+
+Three things are not a repeat of the rejected draft, and are still allowed: a
+draft we discarded ourselves (retiring a bounced or replaced address discards
+its drafts precisely so a new one can go out), a draft to a different address,
+and a reply to a message the supplier has just sent us.
+
+**Enforcement:** Guard — `src/lib/draft-suppression.ts` `isDraftSuppressed`,
+called by `stageDraft` and by Agent 02, which stages its own draft directly.
+
+## OUT-12 — A supplier the client denied is never written to
+
+Suppliers are approved or denied in Tenkara. A denial there is final and
+outranks everything else, including a reply from that supplier. Nothing in the
+fleet may source, draft or send to them.
+
+**Enforcement:** Guard — `isDraftSuppressed` reads `suppliers.approval` from
+Tenkara. The lookup fails open: an unreachable read-only database must not stop
+ops getting a draft.

@@ -286,7 +286,12 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
     } else {
       skipped++;
       if (ccReservationId) await admin.rpc("release_supplier_email_reservation", { p_org_id: r.org_id, p_reservation_id: ccReservationId });
-      await ctx.log(`Follow-up stage failed for ${to}: ${staged.error}`, { level: "warn", step: "followup" });
+      await ctx.log(
+        staged.suppressed
+          ? `No follow-up for ${to}: an operator already discarded one`
+          : `Follow-up stage failed for ${to}: ${staged.error}`,
+        { level: staged.suppressed ? "info" : "warn", step: "followup" }
+      );
     }
   }
 

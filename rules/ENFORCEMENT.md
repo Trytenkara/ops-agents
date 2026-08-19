@@ -125,6 +125,8 @@ Audited 2026-08-19. Totals: Audit 1, Guard 23, Honour 43, None 2, Partial 15, Re
 | `UI-01` | Never ship a native OS dropdown | Guard — `ui/no-native-select`. |
 | `SHIP-03` | A red build is silent, so build before you push | Guard — pre-push hook, on machines that ran `npm install`. |
 | `SHIP-04` | Rules are checked before the build | Guard. |
+| `OUT-11` | A rejected draft is not redrafted | Guard — `isDraftSuppressed` in `stageDraft` + Agent 02. |
+| `OUT-12` | A supplier the client denied is never written to | Guard — `isDraftSuppressed` reads Tenkara `suppliers.approval`. |
 
 ## Retired (1)
 
