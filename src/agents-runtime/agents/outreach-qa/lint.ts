@@ -38,6 +38,17 @@ const GRADE_WIDENING_RE = new RegExp(
 const CLIENT_NAMES = ["Aurora", "Bobber", "Vita Organica", "McGinley", "Nutripro", "PharmaLab", "Sphere", "Ulo", "Tenkara", "Rove"];
 
 export const RULES: Record<string, Rule> = {
+  // OUT-05 / PERS-02: staging flags a draft whose thread-tailoring attempt
+  // failed. The flag must not be where it ends, so the QA sweep turns it into
+  // a visible finding on the draft the operator opens.
+  thread_tailor_incomplete: ({ metadata }) => {
+    if (!metadata?.thread_tailor_retry) return [];
+    return [{
+      severity: "warn",
+      code: "thread_tailor_incomplete",
+      message: `Not tailored to the thread (${metadata?.thread_tailor?.reason ?? "unknown"}); may re-ask something the supplier already answered. Redraft to retry.`,
+    }];
+  },
   placeholders_in_body: ({ body_preview }) => {
     if (!body_preview) return [];
     const matches = body_preview.match(PLACEHOLDER_RE);

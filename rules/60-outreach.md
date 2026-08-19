@@ -39,6 +39,14 @@ worse than no context.
 A failure to load the thread is reported, never silently turned into a
 context-free draft.
 
+The tailoring model call is retried on any repairable failure, per PERS-01.
+Named bound (PERS-04): **3 attempts inside one staging request**, backoff from
+`classifyFailure`, capped at 4s. That is a spend control on a synchronous
+request, not a verdict. A draft that exhausts them is staged untailored AND
+flagged `metadata.thread_tailor_retry = true` so a later pass can redraft it; a
+rewrite the output guardrail declines is NOT retried, because the model
+answered and we rejected its answer.
+
 **Enforcement:** Guard — `src/lib/thread-context.ts`,
 `src/lib/thread-tailor.ts`, `copy/staging-must-tailor-to-thread`.
 

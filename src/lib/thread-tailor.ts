@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { classifyFailure } from "@/lib/retry-verdict";
 
 // No supplier-facing email may ignore what the supplier already said.
 //
@@ -36,7 +37,18 @@ export interface TailorResult {
   body: string;
   tailored: boolean;
   reason?: string;
+  attempts?: number;
 }
+
+// PERS-01: a transport failure earns another attempt, it is not an answer.
+// PERS-04: this run is bounded, so the bound is named here and in the rules.
+// Three attempts inside the staging request; a still-failing draft is staged
+// UNTAILORED AND FLAGGED (needsTailorRetry) rather than silently shipped, so
+// the sweep can pick it up on a later run. Bounding attempts inside one run is
+// a spend control on a synchronous request, not a verdict on the work.
+const MAX_ATTEMPTS = 3;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const SYSTEM = `You adjust an already-written supplier email so it does not ask for information the supplier has already provided earlier in the conversation.
 
@@ -67,26 +79,49 @@ export async function tailorToThread(input: TailorInput): Promise<TailorResult> 
   if (!threadContext.trim()) return { body, tailored: false, reason: "no_thread_context" };
   if (!process.env.ANTHROPIC_API_KEY) return { body, tailored: false, reason: "no_api_key" };
 
-  try {
-    const res = await anthropic().messages.create({
-      model: MODEL,
-      max_tokens: 1200,
-      system: SYSTEM,
-      messages: [
-        {
-          role: "user",
-          content: `Conversation so far (oldest first):\n\n${threadContext}\n\n---\n\nDraft email to adjust:\n\n${body}`,
-        },
-      ],
-    });
-    const text = res.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("")
-      .trim();
-    if (!acceptable(body, text)) return { body, tailored: false, reason: "rejected_by_guardrail" };
-    return { body: text, tailored: true };
-  } catch (e: any) {
-    return { body, tailored: false, reason: `error: ${e?.message ?? String(e)}` };
+  let lastReason = "unknown";
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await anthropic().messages.create({
+        model: MODEL,
+        max_tokens: 1200,
+        system: SYSTEM,
+        messages: [
+          {
+            role: "user",
+            content: `Conversation so far (oldest first):\n\n${threadContext}\n\n---\n\nDraft email to adjust:\n\n${body}`,
+          },
+        ],
+      });
+      const text = res.content
+        .filter((b): b is Anthropic.TextBlock => b.type === "text")
+        .map((b) => b.text)
+        .join("")
+        .trim();
+      // A rejected rewrite is a verdict about the OUTPUT, not the attempt: the
+      // model answered, we declined its answer. Retrying is not going to make a
+      // hallucinating rewrite acceptable, so this one does not loop.
+      if (!acceptable(body, text)) {
+        return { body, tailored: false, reason: "rejected_by_guardrail", attempts: attempt + 1 };
+      }
+      return { body: text, tailored: true, attempts: attempt + 1 };
+    } catch (e: any) {
+      const verdict = classifyFailure(e, { attempt, maxAttempts: MAX_ATTEMPTS });
+      lastReason = verdict.reason;
+      if (verdict.verdict === "terminal") {
+        return { body, tailored: false, reason: `terminal: ${verdict.reason}`, attempts: attempt + 1 };
+      }
+      if (attempt < MAX_ATTEMPTS - 1) await sleep(Math.min(verdict.backoffMs, 4000));
+    }
   }
+  return { body, tailored: false, reason: `retryable_exhausted: ${lastReason}`, attempts: MAX_ATTEMPTS };
+}
+
+// A draft staged without tailoring because the ATTEMPT failed (not because the
+// rewrite was declined, and not because there was nothing to tailor against).
+// These are the ones a later sweep should redraft.
+export function needsTailorRetry(note: { tailored?: boolean; reason?: string | null } | null | undefined): boolean {
+  if (!note || note.tailored) return false;
+  const r = note.reason ?? "";
+  return r.startsWith("retryable_exhausted") || r === "thread_context_unavailable";
 }

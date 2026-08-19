@@ -7,7 +7,7 @@ import { postAgentAlert } from "@/lib/slack-alert";
 import { resolveSupplierIdByName as resolveTenkaraSupplierId } from "@/lib/tenkara-supplier-linker";
 import { orgScopedExternalId } from "@/lib/org-isolation";
 import { loadThreadContext } from "@/lib/thread-context";
-import { tailorToThread } from "@/lib/thread-tailor";
+import { tailorToThread, needsTailorRetry } from "@/lib/thread-tailor";
 import { isDraftSuppressed } from "@/lib/draft-suppression";
 
 // Shared draft → QA building block. Every intake agent (02 expiries,
@@ -184,7 +184,7 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
         // as any other drafter's copy.
         body = sanitizeDraft({ subject, body: t.body }).body;
       }
-      tailorNote = { tailored: t.tailored, reason: t.reason ?? null };
+      tailorNote = { tailored: t.tailored, reason: t.reason ?? null, attempts: t.attempts ?? null };
     }
   }
 
@@ -393,7 +393,15 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
     approved_contacts: approvedContacts,
     qa_findings: qaFindings,
     qa_linted_at: new Date().toISOString(),
-    ...(tailorNote ? { thread_tailor: tailorNote } : {}),
+    ...(tailorNote
+      ? {
+          thread_tailor: tailorNote,
+          // Queryable rather than silent: a draft that missed tailoring because
+          // the ATTEMPT failed is flagged for a later redraft (PERS-01/PERS-02,
+          // a flag must not be a queue exit).
+          ...(needsTailorRetry(tailorNote) ? { thread_tailor_retry: true } : {}),
+        }
+      : {}),
     // Record who we actually CC'd so the reply/follow-up loop knows which
     // supplier contacts have already been reached on this thread.
     ...(ccList.length ? { cc_contacts: ccList.map((c) => c.address) } : {}),
