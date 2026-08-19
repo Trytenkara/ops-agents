@@ -156,6 +156,23 @@ export interface SuppressionQuery {
   threadId?: string | null;
   kind: string | null | undefined;
   toAddress: string | null | undefined;
+  /**
+   * The materials this draft is about. A discard rejects THAT email, not the
+   * address: a supplier turned down for one material is still worth asking
+   * about another. Omit it and the old behaviour stands (the whole kind is
+   * blocked), which is right for a draft that names no material.
+   */
+  materialIds?: (string | null | undefined)[] | null;
+}
+
+/** Every material a staged draft covered. Outreach consolidates several into one email. */
+function materialsOf(row: { material_id?: string | null }, meta: Record<string, any>): Set<string> {
+  const ids = [
+    ...(Array.isArray(meta.material_ids) ? meta.material_ids : []),
+    ...(Array.isArray(meta.consolidated_material_ids) ? meta.consolidated_material_ids : []),
+    row.material_id ?? null,
+  ];
+  return new Set(ids.filter(Boolean).map(String));
 }
 
 export interface SuppressionVerdict {
@@ -181,7 +198,7 @@ export async function isDraftSuppressed(
 
   let query = admin
     .from("draft_references")
-    .select("id, reviewed_at, created_at, metadata")
+    .select("id, reviewed_at, created_at, metadata, material_id")
     .eq("org_id", q.orgId)
     .eq("status", "discarded")
     .eq("metadata->>draft_kind", kind)
@@ -197,10 +214,15 @@ export async function isDraftSuppressed(
   const { data, error } = await query;
   if (error || !data?.length) return { suppressed: false };
 
+  const wanted = new Set((q.materialIds ?? []).filter(Boolean).map(String));
   for (const row of data as any[]) {
     const meta = (row.metadata ?? {}) as Record<string, any>;
     if (norm(meta.supplier_contact_email) !== to) continue;
     if (SYSTEM_DISCARD_REASONS.has(String(meta.discarded_reason ?? ""))) continue;
+    // Different material, so a different email. Only skip when both sides name
+    // their materials; a draft that names none could be about anything.
+    const covered = materialsOf(row, meta);
+    if (wanted.size && covered.size && ![...wanted].some((m) => covered.has(m))) continue;
     return {
       suppressed: true,
       reason: meta.tenkara_webhook?.event === "draft.discarded" ? "discarded_in_email_app" : "discarded_by_operator",

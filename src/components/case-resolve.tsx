@@ -1,8 +1,16 @@
 "use client";
 import { useState, useTransition } from "react";
-import { resolveCase, addSupplierEmailToCase } from "@/app/actions/cases";
+import { resolveCase, addSupplierEmailToCase, rejectSupplierFromCase } from "@/app/actions/cases";
 
-export function CaseResolve({ caseId, canAddEmail = false }: { caseId: string; canAddEmail?: boolean }) {
+export function CaseResolve({
+  caseId,
+  canAddEmail = false,
+  canReject = false,
+}: {
+  caseId: string;
+  canAddEmail?: boolean;
+  canReject?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState("");
   const [email, setEmail] = useState("");
@@ -13,6 +21,15 @@ export function CaseResolve({ caseId, canAddEmail = false }: { caseId: string; c
     setErr(null);
     start(async () => {
       const r = await resolveCase(caseId, note);
+      if (!r.ok) setErr(r.error);
+      else setOpen(false);
+    });
+  }
+
+  function onReject() {
+    setErr(null);
+    start(async () => {
+      const r = await rejectSupplierFromCase(caseId, note);
       if (!r.ok) setErr(r.error);
       else setOpen(false);
     });
@@ -75,6 +92,17 @@ export function CaseResolve({ caseId, canAddEmail = false }: { caseId: string; c
         >
           {pending ? "…" : "Done"}
         </button>
+        {canReject && (
+          <button
+            type="button"
+            onClick={onReject}
+            disabled={pending}
+            className="rounded-md border border-destructive text-destructive px-2 py-1 text-xs hover:bg-destructive/10 disabled:opacity-50"
+            title="Adds the supplier to this client's do-not-contact list"
+          >
+            {pending ? "…" : "Not a fit, stop contacting"}
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setOpen(false)}

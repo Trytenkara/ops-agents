@@ -113,13 +113,20 @@ still receives replies nobody reads.
 ## OUT-11 — A rejected draft is not redrafted
 
 When an operator discards a draft, in the Control Room or in the email app,
-that decision stands. No sweep composes the same kind of draft to that supplier
-and address again.
+that decision stands. No sweep composes that same email again: same kind, same
+address, same material.
 
-Three things are not a repeat of the rejected draft, and are still allowed: a
-draft we discarded ourselves (retiring a bounced or replaced address discards
-its drafts precisely so a new one can go out), a draft to a different address,
-and a reply to a message the supplier has just sent us.
+What is rejected is the email, not the address. A supplier turned down for one
+material is still worth asking about another, so a draft about a material the
+discarded one did not cover is allowed. When neither draft names its materials
+the whole kind stays blocked, because we cannot tell the two apart. Rejecting
+the SUPPLIER is a different instruction and has its own list (OUT-13), which
+the discard escalation writes to when ops answers "not a fit" (OUT-15).
+
+Three more things are not a repeat of the rejected draft, and are still
+allowed: a draft we discarded ourselves (retiring a bounced or replaced address
+discards its drafts precisely so a new one can go out), a draft to a different
+address, and a reply to a message the supplier has just sent us.
 
 **Enforcement:** Guard — `src/lib/draft-suppression.ts` `isDraftSuppressed`,
 called by `stageDraft` and by Agent 02, which stages its own draft directly.

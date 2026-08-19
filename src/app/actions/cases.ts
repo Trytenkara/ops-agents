@@ -10,6 +10,7 @@ import { CallOperatorResolver, notifyCallEscalation } from "@/lib/call-escalatio
 import { stageDraft, threadCcContacts } from "@/lib/draft-staging";
 import { buildCallFollowupBody } from "@/lib/call-followup";
 import { undoLastAttemptPatch } from "@/lib/call-undo";
+import { addDoNotContact } from "@/app/actions/do-not-contact";
 
 export async function resolveCase(caseId: string, resolutionNote: string) {
   const session = await getSession();
@@ -40,6 +41,45 @@ export async function resolveCase(caseId: string, resolutionNote: string) {
   });
 
   revalidatePath(`/work/orgs/[slug]/cases`, "page");
+  return { ok: true } as const;
+}
+
+// "Not a fit" on a discarded-draft escalation. A discard now blocks only the
+// email it was (OUT-15), so resolving with a note alone would let the next
+// material reach a supplier ops has already rejected. This writes the real
+// exclusion instead: the client's do-not-contact list, which every draft path
+// checks and which kills anything already staged.
+export async function rejectSupplierFromCase(caseId: string, reason: string) {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" } as const;
+  if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator"])) return { ok: false, error: "forbidden" } as const;
+
+  const admin = createAdminClient();
+  const { data: row } = await admin.from("cases").select("id, org_id, type, status, supplier_id, metadata").eq("id", caseId).maybeSingle();
+  if (!row) return { ok: false, error: "case not found" } as const;
+  if (row.type !== "draft_discarded") return { ok: false, error: "not a discarded-draft case" } as const;
+  if (row.status === "resolved") return { ok: false, error: "already resolved" } as const;
+
+  const meta = (row.metadata ?? {}) as Record<string, any>;
+  const blocked = await addDoNotContact(row.org_id, {
+    supplierId: row.supplier_id,
+    companyName: (meta.supplier_name as string | undefined) ?? null,
+    email: (meta.supplier_contact_email as string | undefined) ?? null,
+    reason: reason?.trim() || "Rejected after a discarded draft",
+  });
+  if (!blocked.ok) return { ok: false, error: blocked.error ?? "could not block" } as const;
+
+  const { error } = await admin
+    .from("cases")
+    .update({
+      status: "resolved",
+      resolution_note: `Not a fit, added to do-not-contact${reason?.trim() ? `: ${reason.trim()}` : ""}`,
+      resolved_at: new Date().toISOString(),
+    })
+    .eq("id", caseId);
+  if (error) return { ok: false, error: error.message } as const;
+
+  revalidatePath(`/work/orgs/[slug]/threads`, "page");
   return { ok: true } as const;
 }
 

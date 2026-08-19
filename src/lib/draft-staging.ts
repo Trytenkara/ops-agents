@@ -153,6 +153,12 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
     threadId: input.conversationId ?? null,
     kind: (callerMeta.draft_kind as string | undefined) ?? null,
     toAddress: to.address,
+    // Outreach consolidates several materials into one email, so the whole pool
+    // decides whether this is the same email that was thrown away.
+    materialIds: [
+      ...(Array.isArray(callerMeta.material_ids) ? (callerMeta.material_ids as string[]) : []),
+      materialId ?? null,
+    ],
   });
   if (suppression.suppressed) {
     console.warn(

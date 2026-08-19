@@ -243,6 +243,9 @@ registerAgent({
         supplierId: group.supplier_id,
         kind: "cold_outbound",
         toAddress: group.supplier_contact_email,
+        // A discarded check-in rejects the materials it asked about, not the
+        // supplier: a new material is a new question.
+        materialIds: group.rows.map((r) => r.material_id),
       });
       if (suppression.suppressed) {
         await ctx.log(
