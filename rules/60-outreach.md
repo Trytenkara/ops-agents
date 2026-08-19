@@ -62,15 +62,19 @@ all.
 **Enforcement:** Guard — `src/lib/internal-notes.ts` `stripInternalNotes`
 inside `sanitizeDraft`, `copy/sanitize-must-strip-internal-notes`.
 
-## OUT-14 — Never invite a supplier to end the conversation
+## OUT-14 — Never offer to stop contacting a supplier
 
-No draft offers the supplier an exit, and none apologises for having been sent.
-"If the timing isn't right, just say the word and I'll stop chasing" was live in
-the stalled-thread chase; "No worries if this isn't something you can help with"
-was in a few-shot example the revalidation drafter was learning from. We are the
-buyer, with money, asking a seller for a price. Handing them a scripted no is
-not politeness, it is a lost supplier, and it is what reads as apologetic in a
-chase that is otherwise fine.
+No draft volunteers to go away. "If the timing isn't right, just say the word
+and I'll stop chasing" was live in the stalled-thread chase. We are the buyer,
+with money, asking a seller for a price; handing them a scripted exit is how a
+live supplier goes quiet for good.
+
+Scope is narrow, and was narrowed on 2026-08-19 after a first version overreached
+and started deleting ordinary courtesy. These are FINE and must not be stripped:
+"say the word and", "no worries if", "if the timing isn't right", "if this isn't
+a fit", "sorry to bother you", and "say the word and I'll take you off the list"
+(signed off by ops on 2026-08-19). Only an outright offer to stop chasing goes:
+"stop chasing", "stop following up", "stop emailing", "I'll leave you alone".
 
 This is about the WORDING, not the cadence. The follow-up schedule is OUT-09 and
 is deliberately unchanged.

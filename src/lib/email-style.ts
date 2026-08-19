@@ -4,8 +4,8 @@
 //   2. Replace the term "RFQ" with "sourcing inquiry" (client-facing language rule).
 //   3. Remove a small set of canned AI phrases that slip past the system prompt.
 //   4. Collapse 3+ blank lines to a maximum of one blank line between paragraphs.
-//   5. Drop sentences that invite the supplier to end the conversation or
-//      apologise for writing. See CONCESSION_STRIPS.
+//   5. Drop sentences offering to stop contacting the supplier. See
+//      CONCESSION_STRIPS.
 //   6. Drop internal note lines (call outcomes, operator notes) that a drafter
 //      interpolated into a supplier-facing body. See internal-notes.ts.
 // Conservative, never rewrites meaning, only formatting.
@@ -25,21 +25,22 @@ const RFQ_REPLACEMENTS: Array<[RegExp, string]> = [
   [/\bRFQ\b/g, "sourcing inquiry"],
 ];
 
-// Sentences that hand the supplier a way out of the conversation, or apologise
-// for having sent it. "If the timing isn't right, just say the word and I'll
-// stop chasing" was live in the stalled-thread chase and in a few-shot example
-// the revalidation drafter learned from. We are a buyer with money asking a
-// seller for a price; inviting a no is not politeness, it is a lost supplier.
+// Sentences that offer to go away. "If the timing isn't right, just say the
+// word and I'll stop chasing" was live in the stalled-thread chase. We are a
+// buyer with money asking a seller for a price; volunteering to stop asking is
+// how a live supplier goes quiet for good.
+//
+// Deliberately narrow, and narrowed again on 2026-08-19 after it went too far.
+// Ordinary softeners are FINE and are not touched: "say the word and", "no
+// worries if", "if the timing isn't right", "if this isn't a fit", "sorry to
+// bother you", and "say the word and I'll take you off the list" (ops signed
+// that one off explicitly). Only an outright offer to stop chasing is removed.
+//
 // Whole sentence goes, not just the phrase, or the remainder reads as debris.
 const CONCESSION_STRIPS: RegExp[] = [
-  /[^.!?\n]*\b(?:stop chasing|stop (?:following|reaching) (?:up|out)|say the word and)\b[^.!?\n]*[.!?]?[ \t]*/gi,
-  /[^.!?\n]*\bno worries if\b[^.!?\n]*[.!?]?[ \t]*/gi,
-  /[^.!?\n]*\bfeel free to ignore\b[^.!?\n]*[.!?]?[ \t]*/gi,
-  /[^.!?\n]*\bif (?:the )?timing (?:isn'?t|is not) right\b[^.!?\n]*[.!?]?[ \t]*/gi,
-  /[^.!?\n]*\bif (?:this|that) (?:isn'?t|is not) (?:something you|of interest|a fit)\b[^.!?\n]*[.!?]?[ \t]*/gi,
-  /[^.!?\n]*\b(?:sorry|apologies) (?:to|for) (?:bother|bothering|keep|the )\b[^.!?\n]*[.!?]?[ \t]*/gi,
-  /[^.!?\n]*\b(?:I'?ll|we'?ll) (?:stop|leave you (?:alone|be))\b[^.!?\n]*[.!?]?[ \t]*/gi,
-  /[^.!?\n]*\blet me know (?:if|and) (?:you'?d like me to|I(?:'| wi)ll) stop\b[^.!?\n]*[.!?]?[ \t]*/gi,
+  /[^.!?\n]*\bstop chasing\b[^.!?\n]*[.!?]?[ \t]*/gi,
+  /[^.!?\n]*\bstop (?:following up|reaching out|emailing|contacting)\b[^.!?\n]*[.!?]?[ \t]*/gi,
+  /[^.!?\n]*\b(?:I'?ll|we'?ll|I will|we will) (?:stop|leave you (?:alone|be))\b[^.!?\n]*[.!?]?[ \t]*/gi,
 ];
 
 const AI_PHRASE_STRIPS: RegExp[] = [
