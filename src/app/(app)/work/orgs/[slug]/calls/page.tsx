@@ -4,6 +4,7 @@ import { ListPageHeader } from "@/components/list-page-header";
 import { CallsList } from "@/components/calls-list";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { relativeTime } from "@/lib/utils";
+import { UndoCallAttempt } from "@/components/undo-call-attempt";
 import { loadOrgCases, toCallCaseRow, loadInboxContext } from "@/lib/org-cases";
 
 export const dynamic = "force-dynamic";
@@ -52,6 +53,7 @@ export default async function CallsPage({ params }: { params: { slug: string } }
                 <TableHead>Closed</TableHead>
                 <TableHead>By</TableHead>
                 <TableHead>Outcome</TableHead>
+                <TableHead></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -63,6 +65,13 @@ export default async function CallsPage({ params }: { params: { slug: string } }
                   <TableCell className="text-xs text-muted-foreground">{relativeTime(c.resolved_at)}</TableCell>
                   <TableCell className="text-muted-foreground">{c.users?.display_name ?? c.users?.email ?? "-"}</TableCell>
                   <TableCell className="text-muted-foreground">{c.resolution_note ?? "-"}</TableCell>
+                  <TableCell className="text-right">
+                    {/* A closed call task is off the worklist, so this is the only
+                        place a wrongly logged outcome can be taken back. */}
+                    {Array.isArray(c.metadata?.call_log) && c.metadata.call_log.length > 0 && (
+                      <UndoCallAttempt caseId={c.id} label="Undo" />
+                    )}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

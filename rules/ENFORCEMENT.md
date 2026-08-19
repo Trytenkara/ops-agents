@@ -4,12 +4,12 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-94 rules. 37 are actually enforced, 32 owe a check or a job,
+98 rules. 41 are actually enforced, 32 owe a check or a job,
 19 are human judgement that nothing could ever check.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 36 |
+| **Guard** | A shared module or build check makes it impossible. | 40 |
 | **Audit** | A scheduled job reports the break after the fact. | 1 |
 | **Check owed** | A build check is possible and is not built yet. | 26 |
 | **Audit owed** | No build check can see it; a scheduled job can. Not built. | 6 |
@@ -21,7 +21,7 @@ source of truth and this is only a view of them.
 Anything "owed" is also listed in `OUTSTANDING.md`; the build refuses
 otherwise, so a gap cannot go quiet.
 
-## Guard (36)
+## Guard (40)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -34,7 +34,8 @@ otherwise, so a gap cannot go quiet.
 | `AUTO-02` | Decide alone: volume of change | Guard — `src/lib/requirements-recheck.ts` `recheckOrgLeads`. |
 | `AUTO-07` | Owner of an open record is derived, never trusted | Guard — `src/lib/operator-assignment.ts` `recordOwnerId`, |
 | `AUTO-09` | Real clients before internal test orgs | Guard — `src/lib/org-priority.ts`, |
-| `AUTO-10` | Near-duplicate supplier names reach one operator | Guard. `src/lib/operator-assignment.ts` `mergeSimilarNameKeys` in `getOrgLeadIndex`. |
+| `AUTO-10` | Near-duplicate supplier names reach one operator | Guard — `src/lib/operator-assignment.ts` |
+| `AUTO-11` | The lead names the operator, every other surface follows | Guard — `src/lib/operator-assignment.ts` `orgAutoKey` resolves |
 | `DATA-01` | Never fabricate, approximate or infer a price | Guard — `src/lib/price-publish.ts` `publishablePrice` / |
 | `DATA-02` | A foreign price is published only through one conversion | Guard — `fx/no-direct-convertToUsd`. |
 | `DATA-04` | Agents may never invent a contact detail in an outgoing body | Guard — `src/lib/contact-guard.ts`, |
@@ -50,6 +51,7 @@ otherwise, so a gap cannot go quiet.
 | `DISC-06` | Duplicate suppliers have one definition | Guard — `src/lib/lead-dupe-guard.ts`. |
 | `OUT-05` | No draft into an existing thread may ignore what was already said | Guard — `src/lib/thread-context.ts`, |
 | `OUT-06` | Internal notes never reach a supplier | Guard — `src/lib/internal-notes.ts` `stripInternalNotes` |
+| `OUT-14` | Never invite a supplier to end the conversation | Guard — `CONCESSION_STRIPS` in `src/lib/email-style.ts`, run |
 | `OUT-07` | Copy bans are applied at staging (see COMM-08) | Guard — `copy/staging-must-sanitize`. |
 | `OUT-11` | A rejected draft is not redrafted | Guard — `src/lib/draft-suppression.ts` `isDraftSuppressed`, |
 | `OUT-13` | Do-not-contact has two authors, and one gate | Guard — `src/lib/do-not-contact.ts` `isDoNotContact`, called |
@@ -60,6 +62,7 @@ otherwise, so a gap cannot go quiet.
 | `ORG-08` | Membership in `organization_ids` tests the whole set, never a fixed slot | Guard — `orgs/no-fixed-index-org-membership`. |
 | `ORG-09` | A supplier shared across clients never suppresses a client-owned supplier | Guard — `orgs/duplicate-guard-requires-exclusive-supplier`. |
 | `UI-01` | Never ship a native OS dropdown | Guard — `ui/no-native-select`. |
+| `UI-09` | A one-click write needs a way back | Guard — `src/lib/call-undo.ts` `undoLastAttemptPatch`, surfaced |
 | `SHIP-03` | A red build is silent, so build before you push | Guard — pre-push hook, on machines that ran `npm install`. |
 | `SHIP-04` | Rules are checked before the build | Guard. |
 

@@ -15,6 +15,7 @@ import {
   createManualCallTask,
 } from "@/app/actions/cases";
 import { CALL_OUTCOMES, type CallOutcome, type CallBrief, type CallAttempt } from "@/lib/call-brief";
+import { UndoCallAttempt } from "@/components/undo-call-attempt";
 import { zoneOffsetMinutes, isWithinWindow, shiftRangeLabel } from "@/lib/call-window";
 
 // What the Tenkara inbox knows about this supplier, read live at render time
@@ -575,11 +576,14 @@ function CallCard({ row, expanded, onToggle }: { row: CallCaseRow; expanded: boo
       )}
 
       {row.callLog.length > 0 && (
-        <Panel className="text-sm text-muted-foreground">
-          <span className="font-medium text-foreground">Attempts:</span>{" "}
-          {row.callLog
-            .map((a) => `${CALL_OUTCOMES[a.outcome]?.label ?? a.outcome} ${relativeTime(a.at)}${a.note ? ` (${a.note})` : ""}`)
-            .join("; ")}
+        <Panel className="space-y-2 text-sm text-muted-foreground">
+          <div>
+            <span className="font-medium text-foreground">Attempts:</span>{" "}
+            {row.callLog
+              .map((a) => `${CALL_OUTCOMES[a.outcome]?.label ?? a.outcome} ${relativeTime(a.at)}${a.note ? ` (${a.note})` : ""}`)
+              .join("; ")}
+          </div>
+          <UndoCallAttempt caseId={row.id} />
         </Panel>
       )}
 

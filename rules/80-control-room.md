@@ -54,6 +54,18 @@ An empty or test-only view tells you nothing about whether the design works.
 
 **Enforcement:** Judgement.
 
+## UI-09 — A one-click write needs a way back
+
+Any control that writes on a single click, with no confirm step, must offer an
+undo, and the undo has to be reachable after the write has taken effect. A
+control that closes the row it lives on has to leave the undo somewhere the
+operator can still see, not only on the row that just disappeared. Undo takes
+back the effect and keeps the audit trail; it never erases the record.
+
+**Enforcement:** Guard — `src/lib/call-undo.ts` `undoLastAttemptPatch`, surfaced
+by `UndoCallAttempt` on both the open call task and the recently-closed table.
+Judgement for other one-click controls.
+
 ## UI-08 — RETIRED: the CSV export sweep
 
 Closed. Do not reopen or resurface it.

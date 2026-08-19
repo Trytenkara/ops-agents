@@ -9,6 +9,7 @@ import { dialablePhone, buildCallBrief, CALL_OUTCOMES, type CallOutcome } from "
 import { CallOperatorResolver, notifyCallEscalation } from "@/lib/call-escalation";
 import { stageDraft, threadCcContacts } from "@/lib/draft-staging";
 import { buildCallFollowupBody } from "@/lib/call-followup";
+import { undoLastAttemptPatch } from "@/lib/call-undo";
 
 export async function resolveCase(caseId: string, resolutionNote: string) {
   const session = await getSession();
@@ -72,6 +73,12 @@ export async function logCallAttempt(caseId: string, outcome: CallOutcome, note:
   // next operator back to the same dead line.
   const brief = metadata.call_brief ? { ...(metadata.call_brief as Record<string, any>) } : null;
   if (brief && outcome === "wrong_number") {
+    // Keep what we are about to wipe on the attempt itself, so undoing a
+    // misclicked "wrong number" puts the number back rather than leaving the
+    // supplier unreachable.
+    (attempt as any).prev_phone = brief.contact?.phone ?? null;
+    (attempt as any).prev_phone_source = brief.contact?.phoneSource ?? null;
+    (attempt as any).prev_phone_status = brief.phoneStatus ?? null;
     brief.contact = { ...(brief.contact ?? {}), phone: null, phoneSource: null };
     brief.phoneStatus = "missing";
   }
@@ -99,7 +106,44 @@ export async function logCallAttempt(caseId: string, outcome: CallOutcome, note:
   });
 
   revalidatePath(`/work/orgs/[slug]/threads`, "page");
+  revalidatePath(`/work/orgs/[slug]/calls`, "page");
   return { ok: true, resolved: spec.terminal } as const;
+}
+
+// Take back the last outcome logged on a call task. The outcome buttons write on
+// one click and a terminal one closes the task, so a misclick used to be
+// permanent and the row vanished from the queue with it.
+//
+// Only the most recent attempt comes off, and the history keeps a record that it
+// happened: this is an undo, not an eraser.
+export async function undoLastCallAttempt(caseId: string) {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" } as const;
+  if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator"])) return { ok: false, error: "forbidden" } as const;
+
+  const admin = createAdminClient();
+  const { data: row } = await admin.from("cases").select("id, type, status, metadata").eq("id", caseId).maybeSingle();
+  if (!row) return { ok: false, error: "case not found" } as const;
+  if (row.type !== "calling_escalation") return { ok: false, error: "not a calling escalation" } as const;
+
+  const undo = undoLastAttemptPatch((row.metadata ?? {}) as Record<string, any>, row.status);
+  if (!undo) return { ok: false, error: "nothing to undo" } as const;
+  const { patch, undone: last, reopened: wasTerminal } = undo;
+
+  const { error } = await admin.from("cases").update(patch).eq("id", caseId);
+  if (error) return { ok: false, error: error.message } as const;
+
+  await admin.from("audit_log").insert({
+    actor_user_id: session.userId,
+    action: "case.call_attempt_undone",
+    target_table: "cases",
+    target_id: caseId,
+    diff: { undone: last, reopened: !!wasTerminal },
+  });
+
+  revalidatePath(`/work/orgs/[slug]/calls`, "page");
+  revalidatePath(`/work/orgs/[slug]/threads`, "page");
+  return { ok: true, reopened: !!wasTerminal } as const;
 }
 
 // Load a calling escalation an operator is allowed to act on. Every caller-jobs
