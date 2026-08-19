@@ -12,6 +12,7 @@ export interface ClientSupplier {
   poc_email: string | null;
   approval_notes: string | null;
   last_approved_at: string | null;
+  website: string | null;
 }
 
 export interface ClientSuppliers {
@@ -38,6 +39,7 @@ export async function getClientSuppliers(orgTenkaraId: string | null): Promise<C
               coalesce((is_qualified ->> $1::text)::boolean, false) as qualified,
               poc_name,
               poc_email,
+              website,
               approval_notes,
               last_approved_at
          from public.suppliers

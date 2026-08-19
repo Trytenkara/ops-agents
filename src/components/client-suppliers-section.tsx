@@ -41,6 +41,8 @@ export function ClientSuppliersSection({
   canAct,
   claimsIgnored,
   claimWinsIds,
+  dupeSiblings,
+  otherVersions,
 }: {
   suppliers: ClientSuppliers;
   orgId: string;
@@ -51,6 +53,8 @@ export function ClientSuppliersSection({
   canAct?: boolean;
   claimsIgnored?: boolean;              // org on "auto, reassign all": auto beats a claim
   claimWinsIds?: string[];              // …except these, claimed since that spread ran
+  dupeSiblings?: Record<string, { name: string; owner: string | null }[]>;             // same lane, looks like the same company
+  otherVersions?: Record<string, { name: string; owner: string | null; lane: string }[]>; // other lane, deliberately separate
 }) {
   const claimWins = new Set(claimWinsIds ?? []);
   const autoBeatsClaim = (supplierId: string) => !!claimsIgnored && !claimWins.has(supplierId);
@@ -78,7 +82,7 @@ export function ClientSuppliersSection({
   const operatorNameOf = (s: ClientSupplier): string | null => ownerOf(s)?.name ?? null;
 
   const { filtered, controls } = useListFilter(statusRows, {
-    searchText: (r) => `${r.name ?? ""} ${r.poc_email ?? ""} ${r.poc_name ?? ""} ${operatorNameOf(r) ?? ""}`,
+    searchText: (r) => `${r.name ?? ""} ${r.poc_email ?? ""} ${r.poc_name ?? ""} ${operatorNameOf(r) ?? ""}${dupeSiblings?.[r.id]?.length ? " possible duplicate" : ""}`,
     searchPlaceholder: "supplier, email or operator…",
     sorts: [
       { value: "status", label: "Status", compare: (a, b) => STATUS_ORDER[a.approval] - STATUS_ORDER[b.approval] || (a.name ?? "").localeCompare(b.name ?? "") },
@@ -138,6 +142,35 @@ export function ClientSuppliersSection({
                       <span className="flex items-center gap-2">
                         {s.name ?? "—"}
                         {s.is_marketplace && <Badge variant="secondary">marketplace</Badge>}
+                        {/* Held twice in this same lane under different names.
+                            A suspicion, never a merge: two names can be one
+                            company or two real firms, and only an operator can
+                            tell. Naming the siblings and their owners is the
+                            whole feature. */}
+                        {dupeSiblings?.[s.id]?.length ? (
+                          <Badge
+                            variant="warn"
+                            title={`Possibly the same company as: ${dupeSiblings[s.id]
+                              .map((o) => `${o.name}${o.owner ? ` (${o.owner})` : ""}`)
+                              .join(", ")}`}
+                          >
+                            possible duplicate ×{dupeSiblings[s.id].length + 1}
+                          </Badge>
+                        ) : null}
+                        {/* The other lane's version of this supplier. Correct
+                            and deliberate, but invisible from either side, so
+                            an operator can quote direct without knowing a
+                            listing price exists. */}
+                        {otherVersions?.[s.id]?.length ? (
+                          <Badge
+                            variant="outline"
+                            title={`Also held as ${otherVersions[s.id]
+                              .map((o) => `the ${o.lane} version "${o.name}"${o.owner ? `, owned by ${o.owner}` : ""}`)
+                              .join("; ")}`}
+                          >
+                            {s.is_marketplace ? "direct version exists" : "marketplace version exists"}
+                          </Badge>
+                        ) : null}
                       </span>
                     </TableCell>
                     <TableCell><StatusBadge s={s.approval} /></TableCell>

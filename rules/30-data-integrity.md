@@ -117,3 +117,21 @@ price.
 price with a needs-review note, and which the lead headline mirror in
 `src/lib/tenkara-inbound.ts` refuses to publish. Parsers return null rather
 than a default.
+
+## DATA-12 — The same company held twice is surfaced, never merged
+
+A client's supplier list carries the same company under several names ("BASF",
+"BASF SE", "H&amp;D PLASTICS" and "H&D PLASTICS"). Those are named on the
+supplier, with the sibling names and who owns each, so an operator can judge
+them. They are never merged automatically: two names can be one company or two
+genuinely different firms, suppliers are per client (SUP-01), and merging is a
+human call.
+
+Separately, a marketplace version and a direct version of one company are NOT
+duplicates. They are deliberate, they price differently and by the assignment
+rules they usually carry different operators. Each one names the other so
+neither is negotiated blind, and nothing about the split changes.
+
+**Enforcement:** Guard — `findSupplierDupeSuspicions` and
+`findCrossLaneVersions` in `src/lib/supplier-dupe-suspicion.ts`, rendered on the
+per-client Suppliers tab. Both return labels only; neither writes.

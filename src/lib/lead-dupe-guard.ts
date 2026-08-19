@@ -87,7 +87,7 @@ export function normalizeName(raw: string | null | undefined): string {
  * five-character prefix covers those without letting a directory in, because a
  * directory's brand shares no prefix with its sellers' names.
  */
-function brandRelates(domain: string, name: string): boolean {
+export function brandRelates(domain: string, name: string): boolean {
   const brand = domain.split(".")[0].replace(/[^a-z0-9]/g, "");
   const flat = name.replace(/\s+/g, "");
   if (brand.length < 3 || !flat) return false;

@@ -7,6 +7,7 @@ import { getClientSuppliers } from "@/lib/client-suppliers";
 import { getOrgAssignmentContext, autoOperatorBySupplier, overridesAuto } from "@/lib/operator-assignment";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { orgDisplayName } from "@/lib/org-display";
+import { findSupplierDupeSuspicions, findCrossLaneVersions, type SuspectSupplier } from "@/lib/supplier-dupe-suspicion";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,30 @@ export default async function OrgSuppliersPage({ params }: { params: { slug: str
   const operatorNames: Record<string, string> = {};
   for (const op of ctx.pool) operatorNames[op.id] = op.name;
 
+  // Two different things, both computed from the same list and neither of them
+  // an automatic merge:
+  //  - the same company held twice inside one lane, which is a mistake nobody
+  //    can see today because the names differ (BASF, BASF SE, BASF SE.)
+  //  - the same company held once per lane, which is correct and deliberate,
+  //    but invisible from either side.
+  const suspectRows: SuspectSupplier[] = all.map((s) => ({
+    id: s.id,
+    name: s.name ?? "",
+    website: s.website ?? null,
+    lane: s.is_marketplace ? "marketplace" : "direct",
+    owner: assignments[s.id] ? operatorNames[assignments[s.id]] ?? null : autoNames[s.id] ?? null,
+  }));
+  const dupeSiblings: Record<string, { name: string; owner: string | null }[]> = {};
+  for (const g of findSupplierDupeSuspicions(suspectRows)) {
+    for (const m of g.members) {
+      dupeSiblings[m.id] = g.members.filter((o) => o.id !== m.id).map((o) => ({ name: o.name, owner: o.owner }));
+    }
+  }
+  const otherVersions: Record<string, { name: string; owner: string | null; lane: string }[]> = {};
+  for (const [id, others] of findCrossLaneVersions(suspectRows)) {
+    otherVersions[id] = others.map((o) => ({ name: o.name, owner: o.owner, lane: o.lane }));
+  }
+
   const canAct = hasAnyRole(session, ["admin", "ops_lead", "ops_operator"]);
   const operatorOptions = ctx.pool.map((op) => ({ id: op.id, name: op.name }));
 
@@ -52,6 +77,8 @@ export default async function OrgSuppliersPage({ params }: { params: { slug: str
         operatorNames={operatorNames}
         canAct={canAct}
         claimsIgnored={ctx.config.mode === "auto_all"}
+        dupeSiblings={dupeSiblings}
+        otherVersions={otherVersions}
         claimWinsIds={[...ctx.manual.keys()].filter((sid) => overridesAuto(ctx, ctx.manualAt.get(sid)))}
       />
     </div>
