@@ -111,7 +111,7 @@ registerAgent({
         suppliers = await tenkaraQuery<GuardSupplier>(
           `select id, name, website, coalesce(is_marketplace, false) as is_marketplace
              from suppliers
-            where organization_ids[1] = $1
+            where $1 = any(organization_ids)
             limit ${SUPPLIER_SCAN_LIMIT}`,
           [org.tenkara_org_id]
         );

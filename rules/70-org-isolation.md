@@ -62,6 +62,21 @@ query itself is scoped.
 **Enforcement:** Honour. Owed guard, and an outstanding repair of the records
 already mislabelled. See `OUTSTANDING.md`.
 
+## ORG-08 — Membership in `organization_ids` tests the whole set, never a fixed slot
+
+`organization_ids` is the set of every client that owns a shared row. Indexing a
+fixed element (`organization_ids[1] = $1`) only matches rows where that client
+happens to sort first, so a supplier owned by two clients is invisible to the
+query. Agent 20's duplicate guard read the supplier list this way, so any
+supplier already shared with a second client looked like it did not exist, and
+the incoming lead was promoted as a brand-new duplicate of it — the exact thing
+the guard exists to stop.
+
+Test membership with `$n = any(organization_ids)` in SQL or `.includes(orgId)`
+in TypeScript. A positional index is never a membership test.
+
+**Enforcement:** Guard — `orgs/no-fixed-index-org-membership`.
+
 ## ORG-07 — Unaudited edge
 
 The inbox application is not in this repository, so the uniqueness scope of the

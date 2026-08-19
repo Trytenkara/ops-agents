@@ -269,6 +269,20 @@ for (const f of files) {
   }
 }
 
+// ORG-08. `organization_ids` is the set of every client that owns a shared row.
+// Indexing a fixed slot (`organization_ids[1]`) only matches rows where that
+// client sorts first, so a supplier shared with a second client is invisible to
+// the query. Agent 20 read the supplier list this way and promoted leads as
+// brand-new duplicates of suppliers it simply could not see. Membership is
+// `$n = any(organization_ids)` in SQL or `.includes(orgId)` in TS, never a
+// positional index.
+forbid({
+  rule: "orgs/no-fixed-index-org-membership",
+  why: "organization_ids holds every client that owns the row; a fixed index (organization_ids[1]) only matches rows where that client sorts first, so a supplier shared by two clients is missed and the lead is promoted as a brand-new duplicate",
+  fix: "test membership with `$n = any(organization_ids)` in SQL or `.includes(orgId)` in TS, never a positional index",
+  test: (line) => /organization_ids\s*\[\s*\d+\s*\]/.test(line),
+});
+
 // Every rule in rules/ must declare whether anything actually enforces it.
 // A rule with no Enforcement line reads as enforced and is not, which is how
 // half of these got broken in the first place.

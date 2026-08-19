@@ -7,7 +7,7 @@ the rule file wins and this needs regenerating.
 `check-rules` fails the build if any rule in this folder has no Enforcement
 line, so a new rule cannot be added without declaring its status.
 
-Audited 2026-08-19. Totals: Audit 1, Guard 22, Honour 43, None 2, Partial 15, Retired 1, 84 rules.
+Audited 2026-08-19. Totals: Audit 1, Guard 23, Honour 43, None 2, Partial 15, Retired 1, 85 rules.
 
 | Status | Meaning |
 |---|---|
@@ -121,6 +121,7 @@ Audited 2026-08-19. Totals: Audit 1, Guard 22, Honour 43, None 2, Partial 15, Re
 | `ORG-02` | Never fold leads from two clients into one draft | Guard — `foreignOrgRows`. |
 | `ORG-03` | Shared natural keys carry the organisation in the database too | Guard — `orgs/upsert-conflict-key-must-include-org` plus the schema migrations. |
 | `ORG-04` | An ambiguous inbound reply goes to triage, not to a guess | Guard — `soleOrgOwner`. |
+| `ORG-08` | Membership in `organization_ids` tests the whole set, never a fixed slot | Guard — `orgs/no-fixed-index-org-membership`. |
 | `UI-01` | Never ship a native OS dropdown | Guard — `ui/no-native-select`. |
 | `SHIP-03` | A red build is silent, so build before you push | Guard — pre-push hook, on machines that ran `npm install`. |
 | `SHIP-04` | Rules are checked before the build | Guard. |
