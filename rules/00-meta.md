@@ -17,7 +17,8 @@ the class fix as OUTSTANDING. Do not let it go quiet.
 A single-site edit in response to a general rule is a spot fix and is not
 acceptable on its own.
 
-**Enforcement:** Honour (process). Partially backed by `scripts/check-rules.mjs`.
+**Enforcement:** Judgement. Process rule; partially visible via
+`scripts/check-rules.mjs` coverage and the weekly review (SHIP-08).
 
 ## META-02 — Prefer a positive invariant over a blocklist
 
@@ -38,7 +39,8 @@ shared component, the bug is still open. Name it as open until it is fixed at
 the source. A skill-based sweep that compensates for a gap in a shared guard is
 a workaround, not a fix, and must appear in `OUTSTANDING.md`.
 
-**Enforcement:** Honour.
+**Enforcement:** Judgement. Visible only because a workaround must be
+written into `OUTSTANDING.md` when it is made.
 
 ## META-04 — One shared module per invariant
 
@@ -47,8 +49,9 @@ copies of a rule agree only by inspection, and one day one of them will not.
 The open-record owner derivation existed in four places; three agreed and the
 fourth stamped the wrong operator on every externally-staged draft.
 
-**Enforcement:** Guard for the invariants that have a `check-rules` id. Honour
-for the rest.
+**Enforcement:** Guard for the invariants that have a `check-rules` id.
+Check owed — `meta/no-second-copy-of-a-shared-guard`, extending coverage to
+the rest.
 
 ## META-05 — Ad-hoc scripts live in `scripts/` and get deleted
 
@@ -65,7 +68,7 @@ question about production, schema, org settings, agent schedules or data
 volumes, read the live source. If a remembered fact conflicts with what you
 observe, trust the observation and correct the record.
 
-**Enforcement:** Honour.
+**Enforcement:** Judgement.
 
 ## META-07 — Read, do not pattern-match
 
@@ -73,11 +76,11 @@ When an extractor misses, the fix is to have a model read the page, not to add
 another regex or another unit special-case. Each new pattern only covers the
 example in front of you and grows a blocklist by another name.
 
-**Enforcement:** Honour.
+**Enforcement:** Judgement.
 
 ## META-08 — Never filter your own diagnostic output
 
 A broad `grep -vi` over a log eats the line that explains the failure. Print
 error bodies in full while diagnosing.
 
-**Enforcement:** Honour.
+**Enforcement:** Judgement.

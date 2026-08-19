@@ -307,25 +307,54 @@ forbid({
   allow: ["src/lib/slack.ts"],
 });
 
-// Every rule in rules/ must declare whether anything actually enforces it.
-// A rule with no Enforcement line reads as enforced and is not, which is how
-// half of these got broken in the first place.
+// Every rule in rules/ must declare, in a fixed vocabulary, what actually
+// enforces it. "Honour" used to be allowed and 51 rules quietly accumulated
+// under it, each one reading as protected and none of them being protected.
+// The vocabulary forces the author to choose at the moment of writing:
+//   Guard       a check or shared module makes it impossible. Built.
+//   Audit       a scheduled job reports the break. Built.
+//   Check owed  a build check is possible and is not built yet.
+//   Audit owed  no build check can see it, a scheduled job can. Not built.
+//   Judgement   nothing mechanical can ever verify it. Human, by design.
+//   None        outside this repository, cannot be checked here.
+//   Retired     the rule no longer applies.
+// Anything "owed" is a debt, so it must also be named in OUTSTANDING.md.
 {
   const dir = join(ROOT, "rules");
+  const vocabulary =
+    /^\*\*Enforcement:\*\* (Guard\b|Audit —|Audit owed\b|Check owed\b|Judgement\.|None\.|Retired\b|See [A-Z]+-\d+\.)/m;
+  const outstanding = readFileSync(join(dir, "OUTSTANDING.md"), "utf8");
+
   for (const name of readdirSync(dir)) {
     if (!/^\d+.*\.md$/.test(name)) continue;
     const text = readFileSync(join(dir, name), "utf8");
     for (const section of text.split(/\n(?=## )/)) {
       const head = section.match(/^## ([A-Z]+-\d+) — (.+)/);
       if (!head) continue;
-      if (/^\*\*Enforcement:\*\* \S/m.test(section)) continue;
-      violations.push({
-        rule: "rules/every-rule-declares-enforcement",
-        why: "a rule with no Enforcement line looks enforced and is not, so nobody knows it needs a guard",
-        fix: "add a line '**Enforcement:** Guard — <module or check-rules id>' or 'Audit — <job>' or 'Honour.', and if it is Honour add it to rules/OUTSTANDING.md",
-        where: `rules/${name}`,
-        line: `${head[1]} — ${head[2]}`,
-      });
+      const where = `rules/${name}`;
+      const line = `${head[1]} — ${head[2]}`;
+
+      if (!vocabulary.test(section)) {
+        violations.push({
+          rule: "rules/every-rule-declares-enforcement",
+          why: "a rule whose enforcement is not stated in the fixed vocabulary reads as protected without saying what protects it",
+          fix: "make the Enforcement line begin with one of: 'Guard — <module or check-rules id>', 'Audit — <job>', 'Check owed — <check-rules id>', 'Audit owed — <job>', 'Judgement.', 'None.', 'Retired <date>', or 'See <RULE-ID>.'",
+          where,
+          line,
+        });
+        continue;
+      }
+
+      // A debt that is not on the outstanding list is a debt nobody will pay.
+      if (/^\*\*Enforcement:\*\*[\s\S]*?\bowed\b/m.test(section) && !outstanding.includes(head[1])) {
+        violations.push({
+          rule: "rules/owed-enforcement-must-be-outstanding",
+          why: "a rule that admits it needs a guard, and is not on the outstanding list, is how a gap goes quiet",
+          fix: `add ${head[1]} to rules/OUTSTANDING.md, or change its Enforcement line to Judgement if nothing mechanical can ever check it`,
+          where,
+          line,
+        });
+      }
     }
   }
 }

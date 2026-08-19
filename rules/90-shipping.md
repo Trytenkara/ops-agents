@@ -8,7 +8,7 @@ pair of eyes by default, so the gates below are the whole safety system.
 No feature-branch and pull-request dance unless asked for. A push to `main` is
 a production deploy and is treated as one.
 
-**Enforcement:** Honour.
+**Enforcement:** Judgement.
 
 ## SHIP-02 — Never stage everything
 
@@ -17,7 +17,8 @@ shared and often holds other people's uncommitted work; a blanket stage once
 swept another agent's in-progress files into an unrelated commit. Check what a
 commit actually contains before pushing, including commits you did not make.
 
-**Enforcement:** Honour. Owed guard. See `OUTSTANDING.md`.
+**Enforcement:** Check owed — a pre-commit hook that refuses paths outside
+those explicitly staged. See `OUTSTANDING.md`.
 
 ## SHIP-03 — A red build is silent, so build before you push
 
@@ -48,7 +49,8 @@ confirm the remote has the commit and that the running deployment is the new
 one. Report the confirmed outcome (COMM-04). If it was not confirmed, say it
 was not confirmed.
 
-**Enforcement:** Honour. This is the rule whose breach reads as "fake pushing".
+**Enforcement:** Judgement. This is the rule whose breach reads as "fake
+pushing".
 
 ## SHIP-06 — The deploy gate must not depend on one machine
 
@@ -67,7 +69,7 @@ applied to the same environment. Deploying the code ahead of the migration
 leaves production running against a schema that does not have the columns it
 reads.
 
-**Enforcement:** Honour.
+**Enforcement:** Check owed — `ship/migration-must-accompany-schema-read`.
 
 ## SHIP-08 — Weekly rules review
 
@@ -75,4 +77,5 @@ Once a week: what rules were added, what checks were added, what is still on
 the outstanding list, and anything where two rules contradicted each other.
 Short, and to Sam.
 
-**Enforcement:** Honour.
+**Enforcement:** Audit owed — a weekly scheduled task that assembles the
+review.

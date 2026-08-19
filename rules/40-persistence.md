@@ -18,7 +18,7 @@ only three call sites use it and two hand-rolled classifiers remain. See
 Marking a record as needing attention must not remove it from the work queue.
 If it leaves the queue it stops being retried and nobody ever sees it again.
 
-**Enforcement:** Honour.
+**Enforcement:** Check owed — `queues/flag-must-not-exit-queue`.
 
 ## PERS-03 — A zero-result pass is never "this market is empty"
 
@@ -29,8 +29,8 @@ source may write a terminal "searched, nothing here" state on a single zero.
 Any NEW discovery source has to make this choice itself; the guard is
 per-source today.
 
-**Enforcement:** Honour per source. Owed: one shared dry-pass helper. See
-`OUTSTANDING.md`.
+**Enforcement:** Check owed — `discovery/zero-must-not-be-terminal`, over
+one shared dry-pass helper. Honoured per source today. See `OUTSTANDING.md`.
 
 ## PERS-04 — Retry limits are a spend control, and must be named
 
@@ -41,7 +41,8 @@ Currently bounded: the SourceReady discovery path gives up after three
 consecutive dry passes. This is a deliberate credit control, recorded here so
 it is not mistaken for the rule.
 
-**Enforcement:** Honour.
+**Enforcement:** Check owed — `retry/bound-must-be-declared`: a bounded
+retry must name its bound here and in the run summary.
 
 ## PERS-05 — Never give up on a lead with no contact
 
@@ -49,8 +50,9 @@ A lead with no channel stays in the retry queue permanently. A lead promoted
 past raw that has a website but still no email must also keep being retried; a
 promotion must never be the thing that ends the search.
 
-**Enforcement:** Honour. A scheduled sweep currently compensates for the gap,
-which is a workaround under META-03 and is named in `OUTSTANDING.md`.
+**Enforcement:** Check owed — `outreach/no-terminal-drop-without-channel`. A
+scheduled sweep compensates today, which is a workaround under META-03 and
+is named in `OUTSTANDING.md`.
 
 ## PERS-06 — No hidden caps on a worklist
 
@@ -64,7 +66,8 @@ Make it complete and raise the cost if it is real (AUTO-03).
 
 **Enforcement:** Guard for the accidental cut — `src/lib/supabase-paging.ts`
 `selectAllPaged` and `src/lib/supabase/truncation-guard.ts`,
-`reads/client-must-guard-truncation`. Honour for deliberate windows.
+`reads/client-must-guard-truncation`. Check owed —
+`reads/limit-must-report-remainder` for deliberate windows.
 
 ## PERS-07 — A withheld price is a job, not an outcome
 
@@ -72,5 +75,6 @@ The reason is stored so somebody can work the row. That only means anything if
 the flagged rows appear somewhere a person looks. A withheld price that is
 written and never surfaced is a silent failure wearing a reason code.
 
-**Enforcement:** Honour. Owed: the flagged set must appear on the client's own
-tab (see `80-control-room.md`). See `OUTSTANDING.md`.
+**Enforcement:** Audit owed — a daily count of withheld prices with no
+surface, plus the surface itself on the client's own tab (see
+`80-control-room.md`). See `OUTSTANDING.md`.

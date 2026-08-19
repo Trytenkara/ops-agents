@@ -11,14 +11,16 @@ The resolver is `src/lib/material-aliases.ts`, model-resolved and cached per
 material. Any new source must use it rather than resolving its own.
 
 **Enforcement:** Guard — shared resolver, threaded into all three sources.
-Owed: nothing forces a NEW source to call it.
+Check owed — `discovery/source-must-use-alias-resolver`, so a NEW source
+cannot skip it.
 
 ## DISC-02 — Aliases must reach the relevance filter too
 
 A source that searches aliases but filters results against the original string
 discards the very rows the alias search just won.
 
-**Enforcement:** Honour.
+**Enforcement:** Check owed —
+`discovery/relevance-filter-must-accept-aliases`.
 
 ## DISC-03 — Aliases never re-specify (see DATA-09)
 
@@ -26,7 +28,7 @@ discards the very rows the alias search just won.
 
 ## DISC-04 — Zero is not empty (see PERS-03)
 
-**Enforcement:** Honour — see PERS-03.
+**Enforcement:** See PERS-03.
 
 ## DISC-05 — A platform is never the supplier
 
@@ -37,7 +39,7 @@ treated as a supplier's own domain for contact purposes.
 This is a classification rule. It is NOT a reason to drop the lead: see
 OUT-02.
 
-**Enforcement:** Honour.
+**Enforcement:** Check owed — `discovery/platform-is-never-manufacturer`.
 
 ## DISC-06 — Duplicate suppliers have one definition
 
@@ -52,7 +54,7 @@ name-match to guess at.
 Two materials that share a name but differ in grade are intentionally distinct
 and must never be merged.
 
-**Enforcement:** Honour.
+**Enforcement:** Check owed — `materials/never-merge-on-name-alone`.
 
 ## DISC-08 — A source's own paging must advance
 
@@ -60,11 +62,15 @@ A page cursor that resets every run re-reads page one forever: it burns credits
 and returns the same suppliers. Every paged source stores and advances its
 cursor, and the marker it writes must be the marker it reads.
 
-**Enforcement:** Honour. A credit gate once wrote its marker under one key and
-read it under another, so it never fired and the source re-ran every pass.
+**Enforcement:** Audit owed — a daily check that every paged source's cursor
+advanced, and that the marker written is the marker read. A credit gate once
+wrote its marker under one key and read it under another, so it never fired
+and the source re-ran every pass.
 
 ## DISC-09 — A self-supplied material is not sourced
 
 Where a client makes the material themselves, discovery does not run for it.
 
-**Enforcement:** Honour, currently several fail-open gates.
+**Enforcement:** Check owed —
+`discovery/self-supplied-gate-must-fail-closed`: the gates are fail-open
+today.

@@ -6,7 +6,7 @@ A few sentences. No section headers, no tables, no bullet lists recapping
 work, even after a long task. Say what changed and anything that needs a
 decision. Drop the rest.
 
-**Enforcement:** Honour.
+**Enforcement:** Judgement.
 
 ## COMM-02 — Write for a non-developer
 
@@ -15,7 +15,7 @@ too cheap"), not the mechanism. No file paths, function names, commit ids,
 table or column names, or code in the reply unless asked. Full technical
 detail belongs in the commit message and in this folder.
 
-**Enforcement:** Honour.
+**Enforcement:** Judgement.
 
 ## COMM-03 — Claim only what a command proved
 
@@ -32,7 +32,8 @@ production is actually serving.
 The evidence is kept and can be produced on request; it is not pasted into the
 reply by default (see COMM-04 and `CONFLICTS.md` A).
 
-**Enforcement:** Honour. This is the rule whose breach reads as "fake pushing".
+**Enforcement:** Judgement. This is the rule whose breach reads as "fake
+pushing".
 
 ## COMM-04 — Report the outcome, keep the receipts
 
@@ -45,7 +46,7 @@ session and in the commit message so it can be produced immediately.
 If verification did NOT happen, say so plainly. "Pushed but not yet confirmed
 live" is an acceptable sentence; silence is not.
 
-**Enforcement:** Honour.
+**Enforcement:** Judgement.
 
 ## COMM-05 — Never speak as the human
 
@@ -53,8 +54,8 @@ The connected Slack account can post as Sam. It never does. Anything an agent
 sends goes out as the `tenkara_agents` bot, or is staged as a draft for a human
 to send. This includes failure alerts and direct messages.
 
-**Enforcement:** Honour. Owed guard: a single Slack send helper that only
-accepts the bot token. See `OUTSTANDING.md`.
+**Enforcement:** Check owed — `comm/one-slack-sender`: a single send helper
+that accepts only the bot token, and no user token anywhere.
 
 ## COMM-06 — One channel, one post a day
 
@@ -102,4 +103,4 @@ can still slip through. See `OUTSTANDING.md`.
 A crawler that identifies itself as an agent gets blocked or served different
 content, which then reads as a site that cannot be scraped.
 
-**Enforcement:** Honour.
+**Enforcement:** Check owed — `crawl/no-agent-identifying-user-agent`.

@@ -59,8 +59,8 @@ Add a check there whenever you add a guard here.
 A name search across a shared table returns other clients' rows unless the
 query itself is scoped.
 
-**Enforcement:** Honour. Owed guard, and an outstanding repair of the records
-already mislabelled. See `OUTSTANDING.md`.
+**Enforcement:** Check owed — `orgs/name-lookup-must-scope-query`, plus an
+outstanding repair of the records already mislabelled. See `OUTSTANDING.md`.
 
 ## ORG-08 — Membership in `organization_ids` tests the whole set, never a fixed slot
 

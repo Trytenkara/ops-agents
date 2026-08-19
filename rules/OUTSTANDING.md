@@ -213,6 +213,73 @@ into an unrelated commit.
 those explicitly staged for the current task, or at minimum refuses untracked
 scratch files at the repository root.
 
+## P2 — Shipping extraction success rate is not monitored
+
+Breaks PRICING-04. Agent 19 logs `shippingAttempted` and `shippingCaptured` per
+run, but nothing queries these metrics to alert if extraction rate falls below
+50% (or a configured threshold). A feature that is not monitored is a feature
+that silently stops working.
+
+**Owed:** daily health job querying leads where `marketplace_pull.shipping_cost
+!= null` divided by leads where org has `ship_to_address AND
+marketplace_pull.status='pulled'`, alert if ratio drops below threshold;
+`check-rules` id `shipping/health-must-monitor-extraction-rate`.
+
+## The full enforcement debt
+
+Sorted 2026-08-19. Every rule whose Enforcement line says "owed" appears here;
+the build refuses otherwise. The sections above describe the breaks already
+found and are the priority. This is the complete list, including the rules
+where nothing is known to be broken yet and only the guard is missing.
+
+A rule leaves this list by having its check or its job built, or by being
+reclassified as `Judgement` because nothing mechanical can ever verify it.
+
+### Check owed — a build check is possible and is not built
+
+| Rule | The check |
+| --- | --- |
+| META-04 | `meta/no-second-copy-of-a-shared-guard`, beyond the invariants already covered |
+| COMM-05 | `comm/one-slack-sender` — one send helper, bot token only, no user token anywhere |
+| COMM-09 | `crawl/no-agent-identifying-user-agent` |
+| AUTO-05 | `orgs/no-operator-membership-writes` |
+| AUTO-06 | `outreach/no-send-outside-operator-action` |
+| AUTO-08 | `assignment/call-owner-must-be-call-operator` |
+| DATA-05 | `contacts/guessed-combo-requires-own-domain-and-flag` |
+| DATA-06 | `contacts/confidence-derived-from-source` — see the P0 above |
+| DATA-07 | `density/solids-require-bulk` |
+| PERS-02 | `queues/flag-must-not-exit-queue` |
+| PERS-03 | `discovery/zero-must-not-be-terminal` — see the P1 above |
+| PERS-04 | `retry/bound-must-be-declared` |
+| PERS-05 | `outreach/no-terminal-drop-without-channel` — see the P0 above |
+| PERS-06 | `reads/limit-must-report-remainder` — see the P1 above |
+| DISC-01 | `discovery/source-must-use-alias-resolver`, so a NEW source cannot skip it |
+| DISC-02 | `discovery/relevance-filter-must-accept-aliases` |
+| DISC-05 | `discovery/platform-is-never-manufacturer` |
+| DISC-07 | `materials/never-merge-on-name-alone` |
+| DISC-09 | `discovery/self-supplied-gate-must-fail-closed` — gates are fail-open today |
+| OUT-02 | `outreach/no-terminal-drop-without-channel` — see the P0 above |
+| OUT-04 | `outreach/one-thread-per-supplier` |
+| OUT-08 | `outreach/asks-must-be-staged` |
+| OUT-10 | `outreach/cancel-must-release-alias` |
+| OUT-12 | `suppliers/approval-denied-is-not-do-not-contact` |
+| ORG-06 | `orgs/name-lookup-must-scope-query` — see the P2 above |
+| UI-02 | `ui/no-global-review-route` |
+| UI-06 | `ui/flagged-set-must-have-a-surface` — see the P0 above |
+| SHIP-02 | pre-commit hook refusing unstaged paths — see the P2 above |
+| SHIP-07 | `ship/migration-must-accompany-schema-read` |
+
+### Audit owed — no build check can see it, a scheduled job can
+
+| Rule | The job |
+| --- | --- |
+| DATA-08 | daily: a client with a stated required grade has it set, and no draft invites an adjacent grade (see `CONFLICTS.md` L) |
+| PRICING-04 | daily: shipping capture rate against a threshold |
+| PERS-07 | daily: withheld prices with no surface — see the P0 above |
+| DISC-08 | daily: every paged source's cursor advanced, and the marker written is the marker read |
+| OUT-09 | daily: conversations past their follow-up cadence with no outbound |
+| SHIP-08 | weekly: the rules review, to Sam |
+
 ## Open decisions
 
 See `CONFLICTS.md` K (scope of the em dash ban) and L (whether the flagship

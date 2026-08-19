@@ -29,16 +29,37 @@ lost. Anything in here is versioned, reviewed, and travels with the code.
 ## How a rule is written
 
 Every rule gets a stable id (`DATA-03`), a one-line statement, the reason it
-exists (usually an incident), and an **Enforcement** line that is one of:
+exists (usually an incident), and an **Enforcement** line.
 
-- **Guard:** the shared module or `check-rules` id that makes it impossible.
-- **Audit:** a job that detects the break after the fact and reports it.
-- **Honour:** nothing stops it. Every honour rule must also appear in
-  `OUTSTANDING.md` with what the guard would be.
+The Enforcement line is mandatory and its first words come from a fixed
+vocabulary. There is no "we'll be careful" option, because that is what the
+old `Honour` status was and 51 rules accumulated under it, every one reading
+as protected and none of them protected:
 
-The Enforcement line is mandatory: `check-rules` fails the build if a rule in
-this folder does not have one. `ENFORCEMENT.md` is the ledger of all of them,
-and is where you look to see how much of this folder is real.
+| Begins with | Means |
+|---|---|
+| `Guard — <module or check-rules id>` | Built. A check or shared module makes the break impossible. |
+| `Audit — <job>` | Built. A scheduled job reports the break afterwards. |
+| `Check owed — <check-rules id>` | A build check is possible and is not built yet. |
+| `Audit owed — <job>` | No build check can see it; a scheduled job can. Not built. |
+| `Judgement.` | Nothing mechanical could ever verify this. Human, by design. |
+| `None.` | Outside this repository; cannot be checked here. |
+| `Retired <date>` | No longer applies. |
+| `See <RULE-ID>.` | Restates a rule enforced elsewhere. |
+
+Two things follow from that, both enforced by `check-rules`:
+
+- A rule that does not use the vocabulary fails the build.
+- Anything **owed** must also be named in `OUTSTANDING.md`, so a debt cannot
+  go quiet. Clearing it means building the thing, or reclassifying the rule as
+  `Judgement` and saying why nothing could ever check it.
+
+Reach for `Judgement` last. It is the honest answer for "keep replies short"
+and the wrong answer for anything a script could look at.
+
+`ENFORCEMENT.md` is the ledger of every rule and its status. It is generated
+by `npm run gen:enforcement`, never hand-edited; regenerate it whenever you
+add or reclassify a rule.
 
 Ids are permanent. If a rule is retired, mark it RETIRED in place with the
 date and the reason; never reuse or renumber.
@@ -52,6 +73,7 @@ A new rule is not landed until all four exist in the same change:
 3. An entry in the right file here, with an Enforcement line.
 4. A check in `scripts/check-rules.mjs` that fails the build when the rule is
    broken, OR an entry in `OUTSTANDING.md` naming the check that is owed.
+5. `npm run gen:enforcement`, so the ledger matches.
 
 Prefer a positive invariant over a blocklist. A list of bad values is never
 complete; a rule that says what IS allowed is.

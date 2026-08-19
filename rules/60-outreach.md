@@ -2,7 +2,7 @@
 
 ## OUT-01 — Nothing auto-sends (see AUTO-06)
 
-**Enforcement:** Honour — see AUTO-06.
+**Enforcement:** See AUTO-06.
 
 ## OUT-02 — Marketplace storefronts get drafted, on a different channel
 
@@ -14,11 +14,12 @@ an email to a person.
 "Directory host" as a terminal verdict applies to a search-results or listing
 page that sells nothing, not to a storefront with a real seller behind it.
 
-**Enforcement:** Honour.
+**Enforcement:** Check owed — `outreach/no-terminal-drop-without-channel`.
+See `OUTSTANDING.md`.
 
 ## OUT-03 — Never guess a contact on a platform host (see DATA-05)
 
-**Enforcement:** Honour — see DATA-05.
+**Enforcement:** See DATA-05.
 
 ## OUT-04 — One email per supplier, one thread
 
@@ -26,7 +27,7 @@ A supplier with several matching materials gets one consolidated email, not one
 per material. Multiple contacts at the same supplier go on one thread as To
 plus copies, and replies preserve the copied recipients.
 
-**Enforcement:** Honour.
+**Enforcement:** Check owed — `outreach/one-thread-per-supplier`.
 
 ## OUT-05 — No draft into an existing thread may ignore what was already said
 
@@ -70,21 +71,22 @@ inside `sanitizeDraft`, `copy/sanitize-must-strip-internal-notes`.
 Do not ask a supplier for everything at once. Asks are spread across stages of
 the conversation.
 
-**Enforcement:** Honour.
+**Enforcement:** Check owed — `outreach/asks-must-be-staged`.
 
 ## OUT-09 — Stalled conversations get chased
 
 A conversation with no reply is followed up on a fixed cadence measured from
 the last outbound message, not abandoned.
 
-**Enforcement:** Honour.
+**Enforcement:** Audit owed — a daily report of conversations past their
+follow-up cadence with no outbound.
 
 ## OUT-10 — A cancelled outreach must release its alias
 
 Cancelling in bulk without deleting the email alias leaves a ghost address that
 still receives replies nobody reads.
 
-**Enforcement:** Honour.
+**Enforcement:** Check owed — `outreach/cancel-must-release-alias`.
 
 ## OUT-11 — A rejected draft is not redrafted
 
@@ -108,8 +110,10 @@ opposite of silence: confirm EXW with them, check the supplier email for a
 contact, ask whether they ship outside the EU. Do not build a do-not-contact
 list out of it. A real do-not-contact list is the exclusion list on the lead.
 
-**Enforcement:** Honour. Recorded because a guard was built on the wrong
-reading of this column on 2026-08-19 and removed the same day.
+**Enforcement:** Check owed —
+`suppliers/approval-denied-is-not-do-not-contact`. Recorded because a guard
+was built on the wrong reading of this column on 2026-08-19 and removed the
+same day.
 
 ## OUT-13 — Do-not-contact has two authors, and one gate
 

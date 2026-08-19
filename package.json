@@ -9,6 +9,7 @@
     "start": "next start",
     "lint": "next lint",
     "check:rules": "node scripts/check-rules.mjs",
+    "gen:enforcement": "node scripts/gen-enforcement.mjs",
     "typecheck": "tsc --noEmit",
     "db:push": "node -r dotenv/config scripts/db-push.mjs dotenv_config_path=.env.local",
     "sync:orgs": "node -r dotenv/config scripts/sync-orgs.mjs dotenv_config_path=.env.local"
