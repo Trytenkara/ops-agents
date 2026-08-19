@@ -262,7 +262,10 @@ export async function parseAttachmentBytes(
         case_size: typeof q.case_size === "number" ? q.case_size : q.case_size == null ? null : Number(q.case_size) || null,
         unit_price_gap_reason: typeof q.unit_price_gap_reason === "string" ? q.unit_price_gap_reason.trim() || null : null,
         unit_of_measurement: q.unit_of_measurement ?? null,
-        currency: q.currency ?? "USD",
+        // Never defaulted. The prompt above tells the model to return null when
+        // it cannot confirm the currency, and this line used to overrule it and
+        // stamp USD anyway, so an unlabelled rupee price sheet stored as dollars.
+        currency: typeof q.currency === "string" ? q.currency.trim().toUpperCase() || null : null,
         incoterm: typeof q.incoterm === "string" ? q.incoterm.trim().toUpperCase() || null : null,
         incoterm_location: typeof q.incoterm_location === "string" ? q.incoterm_location.trim() || null : null,
         grade: q.grade ?? null,

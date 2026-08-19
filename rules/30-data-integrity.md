@@ -103,3 +103,17 @@ absence of output is the alarm, not the presence of an error.
 `insertStagedQuotes` (`src/lib/staged-quotes.ts`), plus the
 `quote_capture_silent` check in the QA watchdog, which fires when supplier
 replies keep arriving and nothing is staged from them.
+
+## DATA-11 — An unstated currency is a question, never a dollar sign
+
+A price with no currency on it is not a USD price. No extractor, parser or
+writer may default a missing currency to USD. The number is withheld from
+publication, the row is flagged for review with the figure quoted in its note,
+and an operator confirms the currency with the supplier before it becomes a
+price.
+
+**Enforcement:** Guard — `normalizeToUsd` in `src/lib/fx.ts` returns status
+`unknown` for a blank currency, which `insertStagedQuotes` stores as a null
+price with a needs-review note, and which the lead headline mirror in
+`src/lib/tenkara-inbound.ts` refuses to publish. Parsers return null rather
+than a default.

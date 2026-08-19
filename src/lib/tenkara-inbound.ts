@@ -817,6 +817,11 @@ export async function handleInboundReply(
         for (const c of captured) {
           if (c.q.price == null) continue;
           const norm = await normalizeToUsd(c.q.currency);
+          // This is the headline number on the lead, read as dollars everywhere
+          // it renders. A quote we could not put in dollars, either because no
+          // currency was stated or because no rate was reachable, does not get
+          // to be the headline. It still lands in review with its reason.
+          if (norm.status === "unknown" || norm.status === "unconvertible") continue;
           const price = norm.status === "converted" ? norm.convert(c.q.price) : c.q.price;
           const case_size = c.q.case_size;
           priced.push({

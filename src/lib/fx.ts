@@ -170,13 +170,17 @@ export async function loadFxSnapshot(): Promise<FxSnapshot | null> {
 }
 
 export interface UsdNormalization {
-  // "usd": already USD (or blank, treated as USD) — leave the number untouched.
+  // "usd": stated as USD — leave the number untouched.
+  // "unknown": no currency stated at all. NOT the same as USD. Many suppliers
+  //   quote in their domestic currency with no symbol, so assuming dollars here
+  //   publishes a rupee figure as a dollar one. The caller must withhold the
+  //   number and ask, never store it as USD.
   // "converted": a rate was found; `convert` restates any amount from the listed
   //   currency into USD, and `currency` is "USD".
   // "unconvertible": listed in a foreign currency but no rate is reachable — the
   //   caller MUST quarantine (flag needs_review) rather than let a raw foreign
   //   number render as USD. `convert` is identity and `currency` stays foreign.
-  status: "usd" | "converted" | "unconvertible";
+  status: "usd" | "unknown" | "converted" | "unconvertible";
   currency: string;                       // resulting currency label
   rate: number | null;                    // USD per 1 unit of the listed currency
   note: string | null;                    // human provenance note (null when USD)
@@ -190,7 +194,16 @@ export interface UsdNormalization {
 // covers many amounts on the same quote (per-case price, unit price, tiers).
 export async function normalizeToUsd(currency: string | null | undefined): Promise<UsdNormalization> {
   const cur = (currency ?? "").trim().toUpperCase();
-  if (!cur || cur === "USD") {
+  if (!cur) {
+    return {
+      status: "unknown",
+      currency: "",
+      rate: null,
+      note: "No currency stated on the quote; not stored as USD",
+      convert: (n) => n,
+    };
+  }
+  if (cur === "USD") {
     return { status: "usd", currency: "USD", rate: null, note: null, convert: (n) => n };
   }
   const probe = await convertToUsd(1, cur).catch(() => null);

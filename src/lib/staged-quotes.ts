@@ -240,6 +240,23 @@ export async function insertStagedQuotes(
       nativeCurrency = "USD";
       fxRate = 1;
       fxRateAt = new Date().toISOString();
+    } else if (norm.status === "unknown" && r.price != null) {
+      // No currency anywhere on the quote. The number is kept where an operator
+      // can see it and confirm it, but it is not stored as a price, because a
+      // stored price is a published price and we would be publishing a guess.
+      // Not written to native_price either: that column means "the amount as
+      // the supplier stated it, in this currency", and the currency is exactly
+      // what we do not have. The figure stays in the note and the raw extract,
+      // where an operator reads it, until someone confirms what it is in.
+      price = null;
+      currency = "";  // stored as null: unknown, not dollars
+      confidence = "needs_review";
+      extractionNotes = [
+        `Supplier stated ${r.price} with no currency. Confirm the currency with the supplier before approving; withheld rather than assumed to be USD.`,
+        extractionNotes,
+      ]
+        .filter(Boolean)
+        .join(" ");
     } else if (norm.status === "unconvertible") {
       confidence = "needs_review";
       extractionNotes = [`${norm.note}. Confirm currency/price before approving.`, extractionNotes]
@@ -378,7 +395,9 @@ export async function insertStagedQuotes(
       case_size: r.caseSize,
       unit_price_gap_reason: gapReason,
       unit_of_measurement: r.unitOfMeasurement,
-      currency,
+      // Empty means the supplier never said. Stored as null so no reader can
+      // mistake it for a confirmed USD quote.
+      currency: currency || null,
       incoterm: r.incoterm ?? null,
       incoterm_location: r.incotermLocation ?? null,
       grade: r.grade ?? null,
