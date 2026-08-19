@@ -601,7 +601,11 @@ export async function addSupplierEmailToCase(caseId: string, email: string) {
     .eq("id", caseId)
     .maybeSingle();
   if (!row) return { ok: false, error: "case not found" } as const;
-  if (row.type !== "manual_outreach") return { ok: false, error: "not a manual-outreach case" } as const;
+  // draft_discarded asks the same question from the other direction ("was the
+  // contact wrong?") and wants the same answer applied, so it shares this path.
+  if (row.type !== "manual_outreach" && row.type !== "draft_discarded") {
+    return { ok: false, error: "not a contact-gap case" } as const;
+  }
   if (row.status === "resolved") return { ok: false, error: "already resolved" } as const;
 
   const leadId = (row.metadata as any)?.lead_id as string | undefined;

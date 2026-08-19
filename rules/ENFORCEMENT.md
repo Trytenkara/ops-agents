@@ -4,12 +4,12 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-103 rules. 41 are actually enforced, 36 owe a check or a job,
+106 rules. 44 are actually enforced, 36 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 40 |
+| **Guard** | A shared module or build check makes it impossible. | 43 |
 | **Audit** | A scheduled job reports the break after the fact. | 1 |
 | **Check owed** | A build check is possible and is not built yet. | 30 |
 | **Audit owed** | No build check can see it; a scheduled job can. Not built. | 6 |
@@ -21,7 +21,7 @@ source of truth and this is only a view of them.
 Anything "owed" is also listed in `OUTSTANDING.md`; the build refuses
 otherwise, so a gap cannot go quiet.
 
-## Guard (40)
+## Guard (43)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -41,6 +41,7 @@ otherwise, so a gap cannot go quiet.
 | `DATA-04` | Agents may never invent a contact detail in an outgoing body | Guard — `src/lib/contact-guard.ts`, |
 | `DATA-09` | Aliases never add a qualifier the input lacked | Guard — `GRADE_WORDS` in `src/lib/material-aliases.ts`. |
 | `DATA-10` | A write that fails is never silent | Guard — unconditional `console.error` on insert failure in |
+| `DATA-11` | An unstated currency is a question, never a dollar sign | Guard — `normalizeToUsd` in `src/lib/fx.ts` returns status |
 | `PERS-01` | Only a structural verdict is terminal | Guard — `src/lib/retry-verdict.ts` `classifyFailure`. Owed: |
 | `PERS-06` | No hidden caps on a worklist | Guard for the accidental cut — `src/lib/supabase-paging.ts` |
 | `DISC-01` | Search the trade's name, not ours | Guard — shared resolver, threaded into all three sources. |
@@ -53,6 +54,7 @@ otherwise, so a gap cannot go quiet.
 | `OUT-07` | Copy bans are applied at staging (see COMM-08) | Guard — `copy/staging-must-sanitize`. |
 | `OUT-11` | A rejected draft is not redrafted | Guard — `src/lib/draft-suppression.ts` `isDraftSuppressed`, |
 | `OUT-13` | Do-not-contact has two authors, and one gate | Guard — `src/lib/do-not-contact.ts` `isDoNotContact`, called |
+| `OUT-15` | A discard has to say why, or it is a silent kill | Guard — `src/lib/draft-suppression.ts` |
 | `ORG-01` | Every idempotency key is scoped to the organisation | Guard — `src/lib/org-isolation.ts` `orgScopedExternalId`, |
 | `ORG-02` | Never fold leads from two clients into one draft | Guard — `foreignOrgRows`. |
 | `ORG-03` | Shared natural keys carry the organisation in the database too | Guard — `orgs/upsert-conflict-key-must-include-org` plus the |
@@ -63,6 +65,7 @@ otherwise, so a gap cannot go quiet.
 | `SUP-01` | Suppliers are unique per client | Guard — `orgs/duplicate-guard-requires-exclusive-supplier` |
 | `UI-01` | Never ship a native OS dropdown | Guard — `ui/no-native-select`. |
 | `UI-09` | A one-click write needs a way back | Guard — `src/lib/call-undo.ts` `undoLastAttemptPatch`, surfaced |
+| `UI-10` | A withheld value shows its reason where it renders | Guard — the withheld-price cells in |
 | `SHIP-03` | A red build is silent, so build before you push | Guard — pre-push hook, on machines that ran `npm install`. |
 | `SHIP-04` | Rules are checked before the build | Guard. |
 

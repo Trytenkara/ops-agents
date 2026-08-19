@@ -18,7 +18,7 @@ import { selectAllPaged } from "@/lib/supabase-paging";
 //   quote    → Agent Quotes "Quotes Escalations" (a price couldn't be captured)
 export type CaseCategory = "call" | "email" | "supplier" | "quote";
 
-const EMAIL_CASE_TYPES = new Set(["supplier_form"]);
+const EMAIL_CASE_TYPES = new Set(["supplier_form", "draft_discarded"]);
 const QUOTE_CASE_TYPES = new Set([
   "marketplace_price_pull",
   "price_change",
@@ -235,6 +235,6 @@ export function toCaseRow(c: any): CaseRow {
     createdAt: c.created_at ?? null,
     formType: (c.metadata?.form_type as string | undefined) ?? null,
     formAvailable: c.type === "supplier_form" && !!c.metadata?.form_available,
-    canAddEmail: c.type === "manual_outreach" && !!c.metadata?.lead_id,
+    canAddEmail: (c.type === "manual_outreach" || c.type === "draft_discarded") && !!c.metadata?.lead_id,
   };
 }

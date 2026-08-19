@@ -20,7 +20,7 @@ export type CaseRow = {
   createdAt: string | null;
   formType: string | null;     // present for supplier_form cases
   formAvailable: boolean;      // true when a downloadable file is stored
-  canAddEmail: boolean;        // true for manual_outreach cases with a linked lead
+  canAddEmail: boolean;        // true for manual_outreach / draft_discarded cases with a linked lead
 };
 
 const FORM_TYPE_LABEL: Record<string, string> = {

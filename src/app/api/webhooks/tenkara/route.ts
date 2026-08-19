@@ -175,7 +175,7 @@ export async function POST(request: NextRequest) {
   // Match on Tenkara's draft id within Rod's app namespace.
   let lookup = admin
     .from("draft_references")
-    .select("id, status, metadata")
+    .select("id, status, metadata, org_id, supplier_id, material_id, assigned_operator, thread_id, draft_id")
     .eq("draft_id", draft_id)
     .eq("email_client", "rod_app");
   if (thread_id) lookup = lookup.eq("thread_id", thread_id);
@@ -199,6 +199,13 @@ export async function POST(request: NextRequest) {
     .update({ status: newStatus, reviewed_at: reviewedAt, metadata })
     .eq("id", draft.id);
   if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 });
+
+  // A discard suppresses this address for good and tells us nothing about why,
+  // so ask on our side. See raiseDiscardReviewCase.
+  if (newStatus === "discarded") {
+    const { raiseDiscardReviewCase } = await import("@/lib/draft-suppression");
+    await raiseDiscardReviewCase(admin, { ...(draft as any), metadata });
+  }
 
   await admin.from("audit_log").insert({
     action: `draft.${newStatus}`,

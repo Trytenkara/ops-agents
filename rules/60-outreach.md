@@ -156,3 +156,26 @@ perfectly good supplier for another (see SUP-01).
 **Enforcement:** Guard — `src/lib/do-not-contact.ts` `isDoNotContact`, called
 by `stageDraft`; the client list also still filters candidates in Agents 03
 and 04.
+
+## OUT-15 — A discard has to say why, or it is a silent kill
+
+An operator throwing a draft away stops us writing to that address for good
+(OUT-11), and the email app tells us only that it happened, never why. The two
+reasons need opposite handling: a rejected supplier should stay out, a wrong
+contact should be re-hunted and kept.
+
+Treated as one, it silently killed the supplier. The contact re-hunt only
+picks up leads holding no address at all, so a supplier whose single address
+was discarded could never re-enter it: measured 2026-08-19, 149 suppliers
+across California Chemicals and SaponIQ sat with a dead draft, no live draft
+and no second address, and not one of the 342 discards carried a reason.
+
+So every operator discard raises an escalation on that client's Email Thread
+Tracker asking why, and answering it acts: a working address requeues the lead
+for outreach, resolving without one leaves the supplier out. Our own discards
+(a retired address, a dropped lead) already know why they happened and never
+ask. The question is asked once per supplier and address, not once per draft.
+
+**Enforcement:** Guard — `src/lib/draft-suppression.ts`
+`raiseDiscardReviewCase`, called from the Tenkara discard webhook, which is
+the only place an operator discard is recorded.

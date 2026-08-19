@@ -40,6 +40,87 @@ const OPERATOR_SUPPRESSIBLE_KINDS = new Set([
 
 const norm = (v: unknown) => String(v ?? "").trim().toLowerCase();
 
+/**
+ * A discard suppresses the address, and we are never told why. That is fine when
+ * the supplier was rejected and wrong when only the contact was: the supplier
+ * keeps its lead and profile, but nothing writes to it again, and the contact
+ * re-hunt only picks up leads holding NO address, so a supplier whose one
+ * address was discarded can never re-enter it. 149 sat in exactly that state.
+ *
+ * The email app is not ours and its discard event carries no reason, so we ask
+ * afterwards: every operator discard raises an escalation on the client's Email
+ * Thread Tracker. Answering it acts. Wrong contact -> add the working address,
+ * which requeues the lead (the suppression is address-level, so the new one is
+ * free to send). Not a fit -> resolve, and the supplier stays out.
+ *
+ * Only operator discards. Our own discards (a retired address, a dropped lead)
+ * already know why they happened and must not ask anyone.
+ */
+export async function raiseDiscardReviewCase(
+  admin: SupabaseClient<any, any, any>,
+  ref: {
+    id: string;
+    org_id: string | null;
+    supplier_id: string | null;
+    material_id?: string | null;
+    assigned_operator?: string | null;
+    draft_id?: string | null;
+    thread_id?: string | null;
+    metadata: Record<string, any> | null;
+  }
+): Promise<{ raised: boolean; reason?: string }> {
+  const meta = (ref.metadata ?? {}) as Record<string, any>;
+  const kind = norm(meta.draft_kind);
+  if (!ref.org_id) return { raised: false, reason: "no_org" };
+  if (!OPERATOR_SUPPRESSIBLE_KINDS.has(kind)) return { raised: false, reason: "kind_not_suppressible" };
+  if (SYSTEM_DISCARD_REASONS.has(String(meta.discarded_reason ?? ""))) return { raised: false, reason: "system_discard" };
+
+  const address = String(meta.supplier_contact_email ?? "").trim();
+  if (!address) return { raised: false, reason: "no_address" };
+
+  // One question per supplier and address, not per draft: several materials to
+  // one supplier discard as several drafts and it is a single decision.
+  let dupe = admin
+    .from("cases")
+    .select("id")
+    .eq("org_id", ref.org_id)
+    .eq("type", "draft_discarded")
+    .eq("status", "open")
+    .eq("metadata->>supplier_contact_email", address.toLowerCase());
+  dupe = ref.supplier_id ? dupe.eq("supplier_id", ref.supplier_id) : dupe.is("supplier_id", null);
+  const { data: existing } = await dupe.limit(1).maybeSingle();
+  if (existing) return { raised: false, reason: "already_open" };
+
+  const supplierLabel = (meta.supplier_name as string | undefined) ?? "this supplier";
+  const { error } = await admin.from("cases").insert({
+    org_id: ref.org_id,
+    type: "draft_discarded",
+    status: "open",
+    supplier_id: ref.supplier_id,
+    material_id: ref.material_id ?? null,
+    assigned_operator: ref.assigned_operator ?? null,
+    recommended_action:
+      `The email to ${supplierLabel} (${address}) was discarded in the email app. Why? ` +
+      `If the contact was wrong, enter a working address and outreach restarts. ` +
+      `If the supplier is not a fit, resolve with a note and we leave them out.`,
+    metadata: {
+      source: "tenkara-draft-discarded",
+      draft_reference_id: ref.id,
+      draft_id: ref.draft_id ?? null,
+      thread_id: ref.thread_id ?? null,
+      lead_id: (meta.lead_id as string | undefined) ?? null,
+      supplier_name: (meta.supplier_name as string | undefined) ?? null,
+      material_name: (meta.material_name as string | undefined) ?? null,
+      supplier_contact_email: address.toLowerCase(),
+      draft_kind: kind,
+      discarded_at: meta.tenkara_webhook?.occurred_at ?? new Date().toISOString(),
+      discarded_by: meta.tenkara_webhook?.operator ?? null,
+    },
+  });
+  if (error) return { raised: false, reason: error.message };
+  return { raised: true };
+}
+
 export interface SuppressionQuery {
   orgId: string | null;
   supplierId?: string | null;

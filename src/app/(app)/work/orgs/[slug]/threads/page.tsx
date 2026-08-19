@@ -216,7 +216,7 @@ export default async function OrgThreadsPage({ params }: { params: { slug: strin
                 resolvedRows={emailCasesResolved}
                 resolvedTotal={emailCasesResolvedTotal}
                 slug={params.slug}
-                emptyLabel="No email escalations right now. Supplier forms to sign and no-reply calling escalations show up here."
+                emptyLabel="No email escalations right now. Discarded drafts waiting on a reason, and supplier forms to sign, show up here."
               />
             ),
           },
