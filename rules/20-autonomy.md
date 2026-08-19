@@ -94,3 +94,24 @@ do.
 **Enforcement:** Guard — `src/lib/operator-assignment.ts`
 `mergeSimilarNameKeys`, applied inside `getOrgLeadIndex` so every surface that
 resolves an owner shares one key map.
+
+## AUTO-11 — The lead names the operator, every other surface follows
+
+The lead assignment is the source of truth for who owns a supplier. Threads,
+drafts, quotes, the Tenkara inbox and the Suppliers tab all show the operator
+the lead names. Nothing else is allowed to reach its own answer.
+
+In particular a Tenkara `supplier_id` is not an identity of its own. A lead
+almost never carries one (it is resolved later, at first draft, and written onto
+the conversation alone), so a surface that hashes on the id is hashing on
+something the lead does not have, and names a different person: 759 of
+California Chemicals' 2,208 threads and 197 of SaponIQ's 894 did exactly that.
+The one exception is a supplier an operator claimed by hand, because claims are
+recorded against the supplier id.
+
+The direction is one-way. Aligning a surface means pulling it onto the lead's
+answer, never moving a lead to match a thread.
+
+**Enforcement:** Guard — `src/lib/operator-assignment.ts` `orgAutoKey` resolves
+every row through the key map built from the leads and profiles, and every
+derivation site goes through it.

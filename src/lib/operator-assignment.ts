@@ -373,16 +373,29 @@ export function leadAutoKey(input: {
   return name ? nameKey(name) : input.leadId;
 }
 
-// The key a row hashes on, once the org's other rows have had their say. A row
-// carrying a supplier_id keeps it: it is already supplier-scoped, and it is what
-// supplier_assignment claims key on. Everything else adopts its supplier's key,
-// so a quote with only a name, a Scout lead with only an email, and a lead
-// carrying the supplier id all resolve to ONE operator instead of three.
+// The key a row hashes on, once the org's other rows have had their say. Every
+// row of one supplier adopts that supplier's key, so a quote with only a name, a
+// Scout lead with only an email and a draft carrying the Tenkara supplier id all
+// resolve to ONE operator instead of three.
+//
+// THE LEAD IS THE SOURCE OF TRUTH for who owns a supplier, and this key map is
+// built from the leads and profiles. So a row carrying a supplier_id does NOT
+// keep it, it adopts the key its supplier's leads already hash on. It used to
+// short-circuit on the id, and a lead almost never carries one (the id is
+// resolved later, at first draft, and written onto the conversation alone), so
+// the lead hashed on the name or contact address while the thread hashed on the
+// Tenkara id: same company, two identities, two owners. 759 of California
+// Chemicals' 2,208 threads and 197 of SaponIQ's 894 named someone other than the
+// Leads tab. Where the leads DO carry the id it is still the strongest key and
+// nothing moves, so this only ever pulls a thread onto its lead's answer, it
+// never moves a lead.
 export function orgAutoKey(
   ctx: AssignmentContext,
   input: { supplierId?: string | null; supplierName?: string | null; email?: string | null; leadId: string }
 ): string {
-  if (input.supplierId) return input.supplierId;
+  // A supplier an operator claimed by hand is the one exception: claims key on
+  // the Tenkara supplier id, so adopting the lead's key here would lose the claim.
+  if (input.supplierId && ctx.manual.has(input.supplierId)) return input.supplierId;
   const name = String(input.supplierName ?? "").trim();
   if (name) return ctx.supplierKeys.get(nameKey(name)) ?? leadAutoKey(input);
   return leadAutoKey(input);
