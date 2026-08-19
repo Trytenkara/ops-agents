@@ -396,7 +396,14 @@ export async function insertStagedQuotes(
       status: "pending_review",
     });
     if (error) {
-      if (process.env.STAGED_QUOTE_DEBUG) console.error("[staged_quotes insert]", error.message);
+      // Always loud. A swallowed insert here once killed every reply and
+      // attachment quote in production for a day and a half without a trace.
+      console.error("[staged_quotes insert failed]", {
+        supplier: r.supplierName ?? null,
+        material: r.materialName ?? null,
+        conversation: r.sourceConversationId ?? null,
+        error: error.message,
+      });
       result.errors++;
       continue;
     }

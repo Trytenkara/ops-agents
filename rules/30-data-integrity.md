@@ -91,3 +91,15 @@ resolve to "Crude Palm Oil". Grade, purity and refinement words are blocked in
 code, not left to a prompt.
 
 **Enforcement:** Guard — `GRADE_WORDS` in `src/lib/material-aliases.ts`.
+
+## DATA-10 — A write that fails is never silent
+
+When a capture write fails, the failure is logged unconditionally, with enough
+of the row to identify it, and never behind a debug flag or a counter nobody
+reads. A pipeline that stops producing rows must also raise on its own: the
+absence of output is the alarm, not the presence of an error.
+
+**Enforcement:** Guard — unconditional `console.error` on insert failure in
+`insertStagedQuotes` (`src/lib/staged-quotes.ts`), plus the
+`quote_capture_silent` check in the QA watchdog, which fires when supplier
+replies keep arriving and nothing is staged from them.

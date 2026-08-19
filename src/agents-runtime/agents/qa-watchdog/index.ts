@@ -21,6 +21,8 @@ import { shouldPostDigest, recordDigestPosted } from "@/lib/alert-policy";
 
 const STALE_DAYS = 7;
 const FAILURE_LOOKBACK_HOURS = 24;
+const CAPTURE_SILENCE_HOURS = 24;
+const CAPTURE_SILENCE_MIN_REPLIES = 5;
 
 interface Issue {
   key: string;
@@ -122,6 +124,42 @@ registerAgent({
       }
     } catch (e: any) {
       await ctx.log(`check staged_quotes failed: ${e?.message ?? e}`, { level: "warn", step: "check" });
+    }
+
+    // 4a2. Quote capture gone silent. Replies keep landing but nothing is being
+    // staged from them. That is what a broken insert looks like from the
+    // outside: no error anywhere, just a table that stops growing.
+    try {
+      const captureCutoff = new Date(Date.now() - CAPTURE_SILENCE_HOURS * 3600 * 1000).toISOString();
+      const { data: refs } = await admin
+        .from("draft_references")
+        .select("metadata")
+        .neq("status", "discarded")
+        .not("metadata->reply_detected", "is", null);
+      const recentReplies = (refs ?? []).filter((r: any) => {
+        const at = r.metadata?.reply_detected?.detected_at;
+        return typeof at === "string" && at >= captureCutoff;
+      }).length;
+      if (recentReplies >= CAPTURE_SILENCE_MIN_REPLIES) {
+        const { count: staged } = await admin
+          .from("staged_quotes")
+          .select("id", { count: "exact", head: true })
+          .gte("created_at", captureCutoff)
+          // Priced rows only. The detail-intake path writes priceless rows even
+          // when price capture itself is dead, so counting those hides it.
+          .not("price", "is", null);
+        if (!staged) {
+          issues.push({
+            key: "quote_capture_silent",
+            label: "Supplier replies arriving but no quotes captured",
+            count: recentReplies,
+            detail: `${recentReplies} replies in the last ${CAPTURE_SILENCE_HOURS}h and zero staged quotes — capture is failing silently, check the insert errors in the agent logs.`,
+            link: deepLink("/work/review/staged-quotes"),
+          });
+        }
+      }
+    } catch (e: any) {
+      await ctx.log(`check quote_capture_silent failed: ${e?.message ?? e}`, { level: "warn", step: "check" });
     }
 
     // 4b. Marketplace findings stuck in review.
