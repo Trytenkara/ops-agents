@@ -166,9 +166,9 @@ contact should be re-hunted and kept.
 
 Treated as one, it silently killed the supplier. The contact re-hunt only
 picks up leads holding no address at all, so a supplier whose single address
-was discarded could never re-enter it: measured 2026-08-19, 149 suppliers
-across California Chemicals and SaponIQ sat with a dead draft, no live draft
-and no second address, and not one of the 342 discards carried a reason.
+was discarded could never re-enter it: measured 2026-08-19, 53 suppliers (42
+California Chemicals, 11 SaponIQ) sat with a discarded draft and nothing live
+or sent, and not one discard on record carried a reason.
 
 So every operator discard raises an escalation on that client's Email Thread
 Tracker asking why, and answering it acts: a working address requeues the lead

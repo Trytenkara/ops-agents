@@ -45,7 +45,8 @@ const norm = (v: unknown) => String(v ?? "").trim().toLowerCase();
  * the supplier was rejected and wrong when only the contact was: the supplier
  * keeps its lead and profile, but nothing writes to it again, and the contact
  * re-hunt only picks up leads holding NO address, so a supplier whose one
- * address was discarded can never re-enter it. 149 sat in exactly that state.
+ * address was discarded can never re-enter it. 53 suppliers across the paying
+ * clients sat in exactly that state on 2026-08-19.
  *
  * The email app is not ours and its discard event carries no reason, so we ask
  * afterwards: every operator discard raises an escalation on the client's Email
@@ -91,6 +92,23 @@ export async function raiseDiscardReviewCase(
   const { data: existing } = await dupe.limit(1).maybeSingle();
   if (existing) return { raised: false, reason: "already_open" };
 
+  // The lead is what "wrong contact" acts on, and only outreach drafts carry its
+  // id. A revalidation draft is composed off a quote, so fall back to the
+  // client's own lead for that supplier; without it the case can only be
+  // answered, never acted on.
+  let leadId = (meta.lead_id as string | undefined) ?? null;
+  if (!leadId && ref.supplier_id) {
+    const { data: lead } = await admin
+      .from("leads_in_flight")
+      .select("id")
+      .eq("org_id", ref.org_id)
+      .eq("supplier_id", ref.supplier_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    leadId = lead?.id ?? null;
+  }
+
   const supplierLabel = (meta.supplier_name as string | undefined) ?? "this supplier";
   const { error } = await admin.from("cases").insert({
     org_id: ref.org_id,
@@ -108,7 +126,7 @@ export async function raiseDiscardReviewCase(
       draft_reference_id: ref.id,
       draft_id: ref.draft_id ?? null,
       thread_id: ref.thread_id ?? null,
-      lead_id: (meta.lead_id as string | undefined) ?? null,
+      lead_id: leadId,
       supplier_name: (meta.supplier_name as string | undefined) ?? null,
       material_name: (meta.material_name as string | undefined) ?? null,
       supplier_contact_email: address.toLowerCase(),
