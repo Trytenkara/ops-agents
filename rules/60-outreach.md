@@ -110,3 +110,23 @@ list out of it. A real do-not-contact list is the exclusion list on the lead.
 
 **Enforcement:** Honour. Recorded because a guard was built on the wrong
 reading of this column on 2026-08-19 and removed the same day.
+
+## OUT-13 — Do-not-contact has two authors, and one gate
+
+A company can be off-limits because the client said so, in their own settings
+in Tenkara, or because ops said so, in the ops list. Both are the same
+instruction and are enforced in the same place, at draft time, so every path
+obeys them: cold outreach, follow-ups, check-ins and replies alike.
+
+Checking only at discovery is not enough. Discovery covers new leads, so a
+company added to either list after outreach had started kept receiving
+follow-ups. Adding a company to the ops list also discards any draft already
+staged for it, because a block that leaves a sendable draft in the inbox is not
+a block.
+
+Scope is one client. The same company can be off-limits for one client and a
+perfectly good supplier for another (see SUP-01).
+
+**Enforcement:** Guard — `src/lib/do-not-contact.ts` `isDoNotContact`, called
+by `stageDraft`; the client list also still filters candidates in Agents 03
+and 04.

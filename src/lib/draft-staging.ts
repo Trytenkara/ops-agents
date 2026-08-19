@@ -9,6 +9,7 @@ import { orgScopedExternalId } from "@/lib/org-isolation";
 import { loadThreadContext } from "@/lib/thread-context";
 import { tailorToThread, needsTailorRetry } from "@/lib/thread-tailor";
 import { isDraftSuppressed } from "@/lib/draft-suppression";
+import { isDoNotContact, tenkaraOrgIdFor } from "@/lib/do-not-contact";
 
 // Shared draft → QA building block. Every intake agent (02 expiries,
 // 04 new-material outreach) and the Tenkara inbound webhook composes its own
@@ -158,6 +159,24 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
       `[stageDraft] skipped ${callerMeta.draft_kind} to ${to.address}: ${suppression.reason} at ${suppression.discardedAt}`
     );
     return { ok: false, suppressed: true, error: `suppressed:${suppression.reason}` };
+  }
+
+  // Do-not-contact, both the client's own list and the one ops writes. Checked
+  // here as well as at discovery, because discovery only covers new leads: a
+  // company added to the list after outreach started kept getting follow-ups.
+  if (orgId) {
+    const dnc = await isDoNotContact(admin, {
+      orgId,
+      tenkaraOrgId: await tenkaraOrgIdFor(admin, orgId),
+      supplierId: input.supplierId ?? null,
+      companyName: input.supplierCompany ?? (to.name ?? null),
+      website: (callerMeta.supplier_website as string | undefined) ?? null,
+      email: to.address,
+    });
+    if (dnc.blocked) {
+      console.warn(`[stageDraft] skipped ${callerMeta.draft_kind} to ${to.address}: ${dnc.source}`);
+      return { ok: false, suppressed: true, error: `suppressed:${dnc.source}` };
+    }
   }
 
   // Style rules (no "RFQ", no em dash) are enforced HERE, at the one chokepoint

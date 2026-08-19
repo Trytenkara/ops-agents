@@ -30,6 +30,7 @@ export function LeadRowActions({ leadId, stage, status, hasBlockedReason, disabl
   const [conversationId, setConversationId] = useState("");
   const [reason, setReason] = useState<DropReason>("duplicate");
   const [note, setNote] = useState("");
+  const [dnc, setDnc] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [warn, setWarn] = useState<string | null>(null);
 
@@ -78,7 +79,7 @@ export function LeadRowActions({ leadId, stage, status, hasBlockedReason, disabl
     setErr(null);
     setWarn(null);
     startTransition(async () => {
-      const res = await dropLead(leadId, reason, note);
+      const res = await dropLead(leadId, reason, note, dnc);
       if (!res.ok) setErr(res.error ?? "failed");
       else {
         setDropping(false);
@@ -148,6 +149,15 @@ export function LeadRowActions({ leadId, stage, status, hasBlockedReason, disabl
             disabled={pending}
           />
         )}
+        <label className="flex items-center gap-1 text-[10px] text-muted-foreground w-40">
+          <input
+            type="checkbox"
+            checked={dnc}
+            onChange={(e) => setDnc(e.target.checked)}
+            disabled={pending}
+          />
+          Never contact this supplier for this client again
+        </label>
         <div className="flex gap-1">
           <Button size="sm" variant="destructive" onClick={onConfirmDrop} disabled={pending}>
             {pending ? "…" : "Confirm drop"}

@@ -131,6 +131,7 @@ Audited 2026-08-19. Totals: Audit 1, Guard 23, Honour 43, None 2, Partial 15, Re
 | `SHIP-04` | Rules are checked before the build | Guard. |
 | `OUT-11` | A rejected draft is not redrafted | Guard — `isDraftSuppressed` in `stageDraft` + Agent 02. |
 | `OUT-12` | "denied" in Tenkara is a validation state, not do-not-contact | Honour. |
+| `OUT-13` | Do-not-contact (client list + ops list) blocks every draft | Guard. `src/lib/do-not-contact.ts` `isDoNotContact`, called by `stageDraft`. |
 | `PRICING-04` | Shipping extraction is audited per run | Honour. Owed guard: daily health job checking shipping capture rate against threshold. See `OUTSTANDING.md`. |
 | `PRICING-05` | Shipping is never fabricated or hallucinated | Honour. |
 

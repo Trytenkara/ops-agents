@@ -1,6 +1,7 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { DROP_REASONS, type DropReason } from "@/app/actions/lead-drop-reasons";
+import { addDoNotContact } from "@/app/actions/do-not-contact";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
@@ -514,7 +515,12 @@ export async function removeLeads(
   return { ok: true, removed: found.length };
 }
 
-export async function dropLead(leadId: string, reason: DropReason, note?: string): Promise<ActionResult> {
+export async function dropLead(
+  leadId: string,
+  reason: DropReason,
+  note?: string,
+  neverContactAgain?: boolean
+): Promise<ActionResult> {
   if (!DROP_REASONS.some((r) => r.value === reason)) {
     return { ok: false, error: "invalid_reason" };
   }
@@ -574,6 +580,19 @@ export async function dropLead(leadId: string, reason: DropReason, note?: string
     } else {
       draftWarning = `lead dropped, but the email draft could not be deleted (${del.error ?? "unknown"}) — remove it in the Inbox`;
     }
+  }
+
+  // Dropping ends one lead. Ops asked for the company itself to stop coming
+  // back, which is a separate, explicit decision: without it the next discovery
+  // pass rediscovers the same supplier and writes the same email again.
+  if (neverContactAgain) {
+    await addDoNotContact(lead.org_id, {
+      supplierId: (lead as any).supplier_id ?? null,
+      companyName: payload.supplier_name ?? payload.company_name ?? null,
+      website: payload.supplier_website ?? payload.source_url ?? null,
+      email: payload.supplier_contact_email ?? null,
+      reason: `dropped: ${reasonText}`,
+    });
   }
 
   await admin.from("audit_log").insert({
