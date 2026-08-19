@@ -83,6 +83,75 @@ export async function rejectSupplierFromCase(caseId: string, reason: string) {
   return { ok: true } as const;
 }
 
+// The third answer to "why was this draft discarded": the supplier is fine, the
+// address was not, and the operator does not have a working one to type in.
+// Retiring the address (and only the address) leaves the lead alive and empties
+// its contact fields, which is exactly what requeue_parked_contact_leads looks
+// for, so the contact hunt picks the supplier back up on its own. Deleting the
+// lead would throw the supplier away over a bad mailbox.
+export async function removeContactFromCase(caseId: string) {
+  const session = await getSession();
+  if (!session) return { ok: false, error: "unauthenticated" } as const;
+  if (!hasAnyRole(session, ["admin", "ops_lead", "ops_operator"])) return { ok: false, error: "forbidden" } as const;
+
+  const admin = createAdminClient();
+  const { data: row } = await admin.from("cases").select("id, org_id, type, status, metadata").eq("id", caseId).maybeSingle();
+  if (!row) return { ok: false, error: "case not found" } as const;
+  if (row.type !== "draft_discarded") return { ok: false, error: "not a discarded-draft case" } as const;
+  if (row.status === "resolved") return { ok: false, error: "already resolved" } as const;
+
+  const meta = (row.metadata ?? {}) as Record<string, any>;
+  const leadId = meta.lead_id as string | undefined;
+  if (!leadId) return { ok: false, error: "case has no linked lead" } as const;
+  const address = String(meta.supplier_contact_email ?? "").trim().toLowerCase();
+  if (!address) return { ok: false, error: "case has no address" } as const;
+
+  const { data: lead } = await admin
+    .from("leads_in_flight")
+    .select("id, org_id, supplier_id, payload")
+    .eq("id", leadId)
+    .maybeSingle();
+  if (!lead) return { ok: false, error: "linked lead not found" } as const;
+
+  const payload = (lead.payload ?? {}) as Record<string, any>;
+  const { drop_reason: _drop, ...restPayload } = payload;
+  const change = await applyContactChange(admin, {
+    lead: { id: leadId, org_id: lead.org_id, supplier_id: lead.supplier_id },
+    payload: restPayload,
+    previous: address,
+    next: null,
+    reason: "deleted",
+    actorUserId: session.userId,
+  });
+
+  const { error: leadErr } = await admin
+    .from("leads_in_flight")
+    .update({ stage: "enriched", status: "active", payload: change.payload })
+    .eq("id", leadId);
+  if (leadErr) return { ok: false, error: leadErr.message } as const;
+
+  const { error } = await admin
+    .from("cases")
+    .update({
+      status: "resolved",
+      resolution_note: `Bad contact: ${address} removed, supplier kept and back in the contact hunt`,
+      resolved_at: new Date().toISOString(),
+    })
+    .eq("id", caseId);
+  if (error) return { ok: false, error: error.message } as const;
+
+  await admin.from("audit_log").insert({
+    actor_user_id: session.userId,
+    action: "case.contact_removed",
+    target_table: "cases",
+    target_id: caseId,
+    diff: { retired_email: address, lead_id: leadId },
+  });
+
+  revalidatePath(`/work/orgs/[slug]/threads`, "page");
+  return { ok: true } as const;
+}
+
 // Record a call attempt on a calling escalation. Each attempt is appended, never
 // overwritten: "called three times, two voicemails" is the evidence for dropping
 // a supplier, and it only exists if every attempt is kept.

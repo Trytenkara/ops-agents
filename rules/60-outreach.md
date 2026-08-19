@@ -178,8 +178,13 @@ California Chemicals, 11 SaponIQ) sat with a discarded draft and nothing live
 or sent, and not one discard on record carried a reason.
 
 So every operator discard raises an escalation on that client's Email Thread
-Tracker asking why, and answering it acts: a working address requeues the lead
-for outreach, resolving without one leaves the supplier out. Our own discards
+Tracker asking why, and answering it acts. A working address requeues the lead
+for outreach. No working address to hand, but the supplier is still wanted, is
+the common case, so removing the address is its own answer: it retires that
+address alone, keeps the lead active, and the contact hunt picks it up again.
+Only "not a fit" ends the supplier, and that writes the do-not-contact list
+(OUT-13) rather than relying on the discard. A bad mailbox must never cost a
+supplier. Our own discards
 (a retired address, a dropped lead) already know why they happened and never
 ask. The question is asked once per supplier and address, not once per draft.
 

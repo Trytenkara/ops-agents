@@ -237,5 +237,6 @@ export function toCaseRow(c: any): CaseRow {
     formAvailable: c.type === "supplier_form" && !!c.metadata?.form_available,
     canAddEmail: (c.type === "manual_outreach" || c.type === "draft_discarded") && !!c.metadata?.lead_id,
     canReject: c.type === "draft_discarded",
+    canRemoveContact: c.type === "draft_discarded" && !!c.metadata?.lead_id && !!c.metadata?.supplier_contact_email,
   };
 }

@@ -130,7 +130,8 @@ export async function raiseDiscardReviewCase(
     assigned_operator: ref.assigned_operator ?? null,
     recommended_action:
       `The email to ${supplierLabel} (${address}) was discarded in the email app. Why? ` +
-      `If the contact was wrong, enter a working address and outreach restarts. ` +
+      `If the contact was wrong, enter a working address and outreach restarts, ` +
+      `or remove the address and the contact hunt looks for a new one. ` +
       `If the supplier is not a fit, resolve with a note and we leave them out.`,
     metadata: {
       source: "tenkara-draft-discarded",

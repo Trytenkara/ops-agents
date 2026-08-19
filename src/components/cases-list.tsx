@@ -22,6 +22,7 @@ export type CaseRow = {
   formAvailable: boolean;      // true when a downloadable file is stored
   canAddEmail: boolean;        // true for manual_outreach / draft_discarded cases with a linked lead
   canReject: boolean;          // true for draft_discarded: "not a fit" writes do-not-contact
+  canRemoveContact: boolean;   // true for draft_discarded with a lead: retire the bad address, keep the lead
 };
 
 const FORM_TYPE_LABEL: Record<string, string> = {
@@ -103,7 +104,7 @@ export function CasesList({ rows, slug }: { rows: CaseRow[]; slug: string }) {
                 <OperatorChip name={c.assignedName} email={c.assignedEmail} role={c.assignedRole} />
               </TableCell>
               <TableCell className="text-muted-foreground text-xs">{relativeTime(c.createdAt)}</TableCell>
-              <TableCell className="text-right"><CaseResolve caseId={c.id} canAddEmail={c.canAddEmail} canReject={c.canReject} /></TableCell>
+              <TableCell className="text-right"><CaseResolve caseId={c.id} canAddEmail={c.canAddEmail} canReject={c.canReject} canRemoveContact={c.canRemoveContact} /></TableCell>
             </TableRow>
           ))}
           {filtered.length === 0 && (

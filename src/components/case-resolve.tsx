@@ -1,15 +1,17 @@
 "use client";
 import { useState, useTransition } from "react";
-import { resolveCase, addSupplierEmailToCase, rejectSupplierFromCase } from "@/app/actions/cases";
+import { resolveCase, addSupplierEmailToCase, rejectSupplierFromCase, removeContactFromCase } from "@/app/actions/cases";
 
 export function CaseResolve({
   caseId,
   canAddEmail = false,
   canReject = false,
+  canRemoveContact = false,
 }: {
   caseId: string;
   canAddEmail?: boolean;
   canReject?: boolean;
+  canRemoveContact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [note, setNote] = useState("");
@@ -30,6 +32,15 @@ export function CaseResolve({
     setErr(null);
     start(async () => {
       const r = await rejectSupplierFromCase(caseId, note);
+      if (!r.ok) setErr(r.error);
+      else setOpen(false);
+    });
+  }
+
+  function onRemoveContact() {
+    setErr(null);
+    start(async () => {
+      const r = await removeContactFromCase(caseId);
       if (!r.ok) setErr(r.error);
       else setOpen(false);
     });
@@ -75,6 +86,17 @@ export function CaseResolve({
             {pending ? "…" : "Add email & requeue"}
           </button>
         </div>
+      )}
+      {canRemoveContact && (
+        <button
+          type="button"
+          onClick={onRemoveContact}
+          disabled={pending}
+          className="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted disabled:opacity-50"
+          title="Retires this address only. The supplier and its lead stay, and the contact hunt looks for a new address."
+        >
+          {pending ? "…" : "Bad contact, remove the address"}
+        </button>
       )}
       <div className="flex items-center gap-2">
         <input
