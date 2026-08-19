@@ -4,16 +4,16 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-95 rules. 39 are actually enforced, 31 owe a check or a job,
-19 are human judgement that nothing could ever check.
+103 rules. 41 are actually enforced, 36 owe a check or a job,
+20 are human judgement that nothing could ever check.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 38 |
+| **Guard** | A shared module or build check makes it impossible. | 40 |
 | **Audit** | A scheduled job reports the break after the fact. | 1 |
-| **Check owed** | A build check is possible and is not built yet. | 26 |
-| **Audit owed** | No build check can see it; a scheduled job can. Not built. | 5 |
-| **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 19 |
+| **Check owed** | A build check is possible and is not built yet. | 30 |
+| **Audit owed** | No build check can see it; a scheduled job can. Not built. | 6 |
+| **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
 | **None** | Outside this repository. Cannot be checked here. | 2 |
 | **Retired** | No longer applies. | 1 |
@@ -21,7 +21,7 @@ source of truth and this is only a view of them.
 Anything "owed" is also listed in `OUTSTANDING.md`; the build refuses
 otherwise, so a gap cannot go quiet.
 
-## Guard (38)
+## Guard (40)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -46,6 +46,7 @@ otherwise, so a gap cannot go quiet.
 | `DISC-01` | Search the trade's name, not ours | Guard — shared resolver, threaded into all three sources. |
 | `DISC-03` | Aliases never re-specify (see DATA-09) | Guard — see DATA-09. |
 | `DISC-06` | Duplicate suppliers have one definition | Guard — `src/lib/lead-dupe-guard.ts`. |
+| `DISC-10` | Checkout decides what a marketplace is | Guard — the price read downgrades any marketplace-labelled |
 | `OUT-05` | No draft into an existing thread may ignore what was already said | Guard — `src/lib/thread-context.ts`, |
 | `OUT-06` | Internal notes never reach a supplier | Guard — `src/lib/internal-notes.ts` `stripInternalNotes` |
 | `OUT-14` | Never offer to stop contacting a supplier | Guard — `CONCESSION_STRIPS` in `src/lib/email-style.ts`, run |
@@ -59,6 +60,7 @@ otherwise, so a gap cannot go quiet.
 | `ORG-08` | Membership in `organization_ids` tests the whole set, never a fixed slot | Guard — `orgs/no-fixed-index-org-membership`. |
 | `ORG-09` | A supplier shared across clients never suppresses a client-owned supplier | Guard — `orgs/duplicate-guard-requires-exclusive-supplier`. |
 | `ORG-10` | A supplier id is checked against its owners before it is stored | Guard — the shared resolver `scopedSupplierId` in |
+| `SUP-01` | Suppliers are unique per client | Guard — `orgs/duplicate-guard-requires-exclusive-supplier` |
 | `UI-01` | Never ship a native OS dropdown | Guard — `ui/no-native-select`. |
 | `UI-09` | A one-click write needs a way back | Guard — `src/lib/call-undo.ts` `undoLastAttemptPatch`, surfaced |
 | `SHIP-03` | A red build is silent, so build before you push | Guard — pre-push hook, on machines that ran `npm install`. |
@@ -70,7 +72,7 @@ otherwise, so a gap cannot go quiet.
 |---|---|---|
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 
-## Check owed (26)
+## Check owed (30)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -82,6 +84,10 @@ otherwise, so a gap cannot go quiet.
 | `DATA-05` | Guessing a recipient is allowed; guessing content is not | Check owed — |
 | `DATA-06` | Only a same-run verification counts as a confirmed email | Check owed — `contacts/confidence-derived-from-source`: |
 | `DATA-07` | Density: bulk for solids, specific gravity for liquids | Check owed — `density/solids-require-bulk`. Partially held |
+| `PRICING-01` | A shipping cost is a number or it is nothing | Check owed — `shipping/cost-must-be-numeric`. |
+| `PRICING-02` | Delivery cost is per pack tier when pack size changes it | Check owed — `shipping/cost-per-tier`. |
+| `PRICING-03` | Delivery-cost extraction is opt-in per client | Check owed — `shipping/extraction-org-opt-in`. |
+| `PRICING-05` | A delivery cost is never fabricated | Check owed — `shipping/no-fabricated-costs`. |
 | `PERS-02` | "Needs a human" is a display flag, never a queue exit | Check owed — `queues/flag-must-not-exit-queue`. |
 | `PERS-03` | A zero-result pass is never "this market is empty" | Check owed — `discovery/zero-must-not-be-terminal`, over |
 | `PERS-04` | Retry limits are a spend control, and must be named | Check owed — `retry/bound-must-be-declared`: a bounded |
@@ -101,17 +107,18 @@ otherwise, so a gap cannot go quiet.
 | `SHIP-02` | Never stage everything | Check owed — a pre-commit hook that refuses paths outside |
 | `SHIP-07` | Deploy and schema move together | Check owed — `ship/migration-must-accompany-schema-read`. |
 
-## Audit owed (5)
+## Audit owed (6)
 
 | Rule | | Enforcement |
 |---|---|---|
 | `DATA-08` | A dealbreaker grade is a hard specification | Audit owed — a daily check that a client with a stated |
+| `PRICING-04` | Delivery-cost extraction is audited every run | Audit owed — daily shipping-capture health job, |
 | `PERS-07` | A withheld price is a job, not an outcome | Audit owed — a daily count of withheld prices with no |
 | `DISC-08` | A source's own paging must advance | Audit owed — a daily check that every paged source's cursor |
 | `OUT-09` | Stalled conversations get chased | Audit owed — a daily report of conversations past their |
 | `SHIP-08` | Weekly rules review | Audit owed — a weekly scheduled task that assembles the |
 
-## Judgement (19)
+## Judgement (20)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -128,6 +135,7 @@ otherwise, so a gap cannot go quiet.
 | `AUTO-03` | Escalate: a real tradeoff, not a guess about one | Judgement. |
 | `AUTO-04` | Escalate: anything irreversible or outside the pipeline | Judgement. |
 | `DATA-03` | FX rates refresh daily, not intraday | Judgement. |
+| `PRICING-06` | The primary price pull runs on the fleet's own platform | Judgement. |
 | `UI-03` | Never build a screen over data this application cannot write to | Judgement. |
 | `UI-04` | The Inbox is a triage queue, not an email client | Judgement. |
 | `UI-05` | Clutter is a bug, not a tradeoff | Judgement. |

@@ -74,3 +74,16 @@ Where a client makes the material themselves, discovery does not run for it.
 **Enforcement:** Check owed —
 `discovery/self-supplied-gate-must-fail-closed`: the gates are fail-open
 today.
+
+## DISC-10 — Checkout decides what a marketplace is
+
+A page where you can actually check out and buy is a marketplace. A page that
+shows a price with no way to buy is a listing, and a listing is not a
+marketplace, whatever the domain's reputation or a sign-in wall suggests.
+Checkout availability is the primary classification signal; reputation and
+`login_required` are secondary at best.
+
+**Enforcement:** Guard — the price read downgrades any marketplace-labelled
+page with no checkout at the single read chokepoint (`marketplace_checkout`
+downgrade in `lead-price-pull.ts`), and the scout prompt applies the same
+test at classification time.

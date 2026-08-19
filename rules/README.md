@@ -16,6 +16,7 @@ lost. Anything in here is versioned, reviewed, and travels with the code.
 | `10-communication.md` | Reply style, evidence, Slack, who may speak as whom |
 | `20-autonomy.md` | What an agent decides alone, what it escalates, what it never touches |
 | `30-data-integrity.md` | Never fabricate: prices, currency, contacts, density |
+| `35-marketplace-pricing.md` | Prices read off listings, and delivery-cost capture |
 | `40-persistence.md` | Never give up: retries, zero results, hidden caps, flagged work |
 | `50-discovery.md` | Trade aliases, sources, relevance, duplicates |
 | `60-outreach.md` | Drafting, threading, internal notes, channels, copy bans |

@@ -268,6 +268,10 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | UI-06 | `ui/flagged-set-must-have-a-surface` — see the P0 above |
 | SHIP-02 | pre-commit hook refusing unstaged paths — see the P2 above |
 | SHIP-07 | `ship/migration-must-accompany-schema-read` |
+| PRICING-01 | `shipping/cost-must-be-numeric` |
+| PRICING-02 | `shipping/cost-per-tier` |
+| PRICING-03 | `shipping/extraction-org-opt-in` |
+| PRICING-05 | `shipping/no-fabricated-costs` — the per-tier estimator breaks it today, see the P2 above |
 
 ### Audit owed — no build check can see it, a scheduled job can
 

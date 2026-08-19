@@ -121,3 +121,21 @@ external reference, inbound reply matching, and thread merging are enforced
 caller-side only and are not audited.
 
 **Enforcement:** None. Known gap.
+
+## SUP-01 — Suppliers are unique per client
+
+The same company qualified for two different clients is two supplier records
+on purpose, never a duplicate. All sourcing work is per client: a supplier's
+history, contacts, do-not-contact standing and quotes for one client say
+nothing about another. Any duplicate detection, clustering or merge, the
+hand-run dupe scan, the online duplicate guard, or any future version, may
+only ever compare records that share a client; cross-client matches are
+excluded by definition. A scanner may read across clients to build shared
+guards, but may never cluster across them.
+
+Written after a scan clustered the same company across clients and proposed
+merges that would have leaked one client's sourcing history into another's.
+
+**Enforcement:** Guard — `orgs/duplicate-guard-requires-exclusive-supplier`
+covers the online guard; the hand-run scan unions pairs only when their
+client sets intersect, enforced in its own code outside this repository.
