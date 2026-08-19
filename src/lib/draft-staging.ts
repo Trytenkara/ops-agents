@@ -21,7 +21,6 @@ type Admin = ReturnType<typeof createAdminClient>;
 // else is advisory and surfaces as a pill in the Control Room.
 const BLOCKING_CODES = new Set(["fabricated_contact_info", "grade_ask_widened"]);
 
-const CONTACT_GUARD_CHANNEL = () => process.env.SLACK_CONTACT_GUARD_CHANNEL_ID ?? "C0B5M1QCE9E";
 const BLOCKED_DIGEST_GROUP = "Drafts held for unverified contacts";
 
 // Auto-assign a Tenkara conversation to the operator the draft is assigned to in
@@ -277,7 +276,6 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
     await postAgentAlert(
       `:no_entry: Blocked a supplier draft (${fabrication.code}). ${fabrication.message} Brand: ${brand}, supplier: ${supplierLabel}, draft_ref: ${draftRefId ?? "?"}. Held (status=blocked), not sent.`,
       {
-        channel: CONTACT_GUARD_CHANNEL(),
         severity: "p2",
         key: `blocked_draft:${orgId ?? "none"}:${fabrication.code}:${supplierLabel}`,
         digestGroup: BLOCKED_DIGEST_GROUP,
@@ -352,8 +350,7 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
           await postAgentAlert(
             `:rotating_light: Cross-client conversation reuse: a draft for org ${orgId ?? "none"} replayed conversation ${threadId}, which already carries ${foreign.length} draft(s) from another client. External id: ${scopedExternalId}.`,
             {
-              channel: CONTACT_GUARD_CHANNEL(),
-              severity: "p1",
+                    severity: "p1",
               key: `cross_org_replay:${threadId}`,
               title: `Cross-client conversation reuse on \`${threadId.slice(0, 8)}\``,
             },

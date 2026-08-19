@@ -7,7 +7,6 @@ import { correctMaterialSpelling } from "@/lib/material-spelling";
 // ops channel; an operator applies it, writing an OA-side canonical override.
 
 const MODEL = "claude-haiku-4-5";
-const FEEDBACK_CHANNEL = "C0BATUWBHC7"; // #control-room-feedback
 
 // Characters that shouldn't appear inside a material name — these are the
 // reliable, zero-false-positive signal (hyphens, commas, periods, parens, %,
@@ -169,7 +168,6 @@ export async function flagMaterialNames(admin: Admin, orgId: string, names: stri
     await dispatchAlert(text, {
       severity: "p3",
       key: `material_name_flag:${orgId}:${f.wrong.toLowerCase()}`,
-      channel: FEEDBACK_CHANNEL,
       digestGroup: "Material names flagged",
       title: `${orgLabel}: "${preview}" → "${f.suggested}"`,
     }).catch(() => {});

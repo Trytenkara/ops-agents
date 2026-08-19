@@ -1,9 +1,7 @@
 // Safety alerter — DM's Sam when something noteworthy or invariant-breaking happens.
 //
-// Channels:
-//   - SAM_SLACK_DM_ID env: Sam's Slack user/DM id. Falls back to SLACK_ESCALATION_CHANNEL_ID
-//     so a misconfig doesn't silently drop alerts; the worst case is a missing env =
-//     alert console.error'd and forgotten.
+// Destination: the one ops channel (COMM-06). These used to be a DM to Sam;
+// nothing goes to a DM any more.
 //
 // Debounce:
 //   - Error-event alerts are debounced per agent per hour via agent_state.
@@ -14,7 +12,6 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { postSlackMessage, deepLink } from "@/lib/slack";
 import { shouldPostDigest, recordDigestPosted } from "@/lib/alert-policy";
 
-const SAM_DM = () => process.env.SAM_SLACK_DM_ID ?? process.env.SLACK_ESCALATION_CHANNEL_ID;
 const ERROR_DEBOUNCE_MS = 60 * 60 * 1000; // 1h per agent per error type
 
 type AlertReason =
@@ -25,13 +22,8 @@ type AlertReason =
   | "export_failed_72h";
 
 async function send(reason: AlertReason, lines: string[], critical = false): Promise<void> {
-  const channel = SAM_DM();
-  if (!channel) {
-    console.error(`[safety-alerts] ${reason} fired but no SAM_SLACK_DM_ID/SLACK_ESCALATION_CHANNEL_ID configured:`, lines.join("\n"));
-    return;
-  }
   const prefix = critical ? ":rotating_light: *CRITICAL* — " : ":warning: ";
-  await postSlackMessage({ channel, text: `${prefix}${lines.join("\n")}` });
+  await postSlackMessage({ text: `${prefix}${lines.join("\n")}` });
 }
 
 // agent_state row used for debounce. Stores last alert timestamps per (agent_id, key).

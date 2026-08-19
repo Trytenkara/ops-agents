@@ -58,22 +58,34 @@ accepts the bot token. See `OUTSTANDING.md`.
 
 ## COMM-06 — One channel, one post a day
 
-Routine agent output goes to `#control-room-feedback` (`C0BATUWBHC7`) only, as
-one consolidated post per day. No other channel, no per-event chatter.
+Everything the fleet says goes to `#op-assistant-agents` (`C0B5M1QCE9E`), as
+one consolidated post per day. No other channel, no direct message, no
+per-event chatter. Callers do not choose a destination: `postSlackMessage`
+resolves the channel itself and takes no channel argument.
 
-**Enforcement:** Honour. See COMM-07 and `OUTSTANDING.md`; the default
-Slack destination is currently a direct message, not the feedback channel.
+Changed 2026-08-19 (was `#control-room-feedback`, plus a DM to Sam for
+failures, plus five other configurable targets). Sam asked for one channel and
+for the p1 exception to go with it.
 
-## COMM-07 — Failures are the exception to COMM-06
+**Enforcement:** Guard — `comm/one-slack-channel` in `scripts/check-rules.mjs`
+rejects any channel argument, any hardcoded `C0…`/`D0…` id and any of the
+retired channel env vars, everywhere except `src/lib/slack.ts`.
 
-A genuine failure (agents down, a run producing nothing, a client-visible
-break) is sent directly to Sam rather than waiting for the daily post. It is
-sent BY THE BOT, never as Sam (COMM-05). This is the only sanctioned
-destination outside `#control-room-feedback`.
+## COMM-07 — Everything an agent raises waits for the daily post
 
-**Enforcement:** Honour. Owed guard: the channel allowlist currently ends the
-session on any channel that is not `C0BATUWBHC7`, which also blocks the
-sanctioned failure DM. See `OUTSTANDING.md`.
+There is no live agent alert. p1 and p2 both queue in `slack_alert_log` and
+leave in the 18:00 digest; p1 leads it, keeps its `@`-mentions and carries a
+:rotating_light:. p3 stays ledger-only. The two exceptions are an operator
+pressing a button in the Control Room (Report Issue, escalate-to-call — a human
+is already waiting on that post) and the fail-open path in `alert-policy.ts`
+when the ledger itself is unreachable.
+
+The cost is real and accepted: a cross-client contamination alert can now wait
+up to 24h to reach Slack. The audit that finds it runs daily anyway, and the
+Control Room shows it immediately.
+
+**Enforcement:** Guard — `dispatchAlert` queues every severity except p3;
+nothing else in the repo posts an agent alert. Fail-open is deliberate.
 
 ## COMM-08 — Copy bans
 

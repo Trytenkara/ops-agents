@@ -16,7 +16,6 @@ import { shouldPostDigest, recordDigestPosted } from "@/lib/alert-policy";
 //
 // Read-only against Tenkara.
 
-const CHANNEL = process.env.EXPIRY_CHANNEL_ID ?? "C0BCZ5CPAKU"; // #ops-sam
 const DAYS = Number(process.env.EXPIRY_DAYS_AHEAD ?? 7);
 
 const DEFAULT_EXCLUDED_ORGS = [
@@ -315,7 +314,7 @@ registerAgent({
       ctx.setSummary(`${rows.length} material(s) expiring within ${DAYS} days — unchanged, not reposted`);
       return;
     }
-    const res = await postSlackMessage({ channel: CHANNEL, text: fallback, blocks });
+    const res = await postSlackMessage({ text: fallback, blocks });
     if (!res.ok) throw new Error(`Slack post failed: ${res.error}`);
     await recordDigestPosted("materials_expiry", fingerprint);
 

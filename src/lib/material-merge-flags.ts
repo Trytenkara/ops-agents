@@ -6,7 +6,6 @@ import { hostOf, normalizeCompanyName } from "@/lib/tenkara-sourcing-exclusions"
 // (and would be emailed) twice for one chemical. Names come from Tenkara
 // (read-only), so we flag the pair for an operator instead of renaming at source.
 
-const FEEDBACK_CHANNEL = "C0BATUWBHC7"; // #control-room-feedback
 
 export type MergeReason = "identical_name" | "locant_variant";
 
@@ -218,7 +217,6 @@ export async function flagDuplicateMaterials(
       {
         severity: "p3",
         key: `duplicate_material:${orgId}:${(c.drop.name ?? c.drop.id).toLowerCase()}`,
-        channel: FEEDBACK_CHANNEL,
         digestGroup: "Duplicate materials flagged",
         title: `${orgLabel}: "${c.drop.name}" duplicates "${c.keep.name}"`,
       },

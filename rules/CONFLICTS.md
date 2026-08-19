@@ -14,17 +14,16 @@ push, paste the evidence".
 evidence in the session and the commit message and produce it on request. If
 verification did not happen, say so.
 
-## B — Never post outside the feedback channel vs. DM on failure vs. never speak as Sam — RESOLVED
+## B — Never post outside the feedback channel vs. DM on failure vs. never speak as Sam — DISSOLVED 2026-08-19
 
-Three rules fire on one action and currently block it entirely: a hard guard
-ends the session on any channel that is not the feedback channel, which also
-kills the sanctioned failure alert.
+Three rules used to fire on one action: a guard ended the session on any
+channel that was not the feedback channel, which also killed the sanctioned
+failure DM.
 
-**Ruling:** COMM-05, COMM-06, COMM-07. Routine output goes to the feedback
-channel once a day. A genuine failure is direct to Sam. Both go out as the bot,
-never as Sam. The channel guard must be widened to allow the failure DM
-specifically; until then failure alerts do not reach anyone. Tracked in
-`OUTSTANDING.md`.
+**Ruling:** there is no longer a second destination to conflict over. Sam
+consolidated everything into `#op-assistant-agents`, and the failure DM is
+retired along with the exception that justified it (COMM-06, COMM-07). Output
+still always goes out as the bot, never as Sam (COMM-05). Nothing to reconcile.
 
 ## C — Never fabricate a contact vs. pattern-guessed email addresses — RESOLVED
 

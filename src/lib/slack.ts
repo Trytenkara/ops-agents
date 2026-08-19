@@ -1,8 +1,14 @@
-// Slack notifier. Token + channel from env. Fails soft so a missing token doesn't
+// Slack notifier. Token from env. Fails soft so a missing token doesn't
 // blow up an API request — the endpoint logs and returns ok:false.
+//
+// There is ONE destination for everything the fleet says: #op-assistant-agents.
+// Callers cannot choose a channel — see COMM-06 in rules/10-communication.md.
+// The env var exists only so the channel can be moved without a deploy.
+
+export const OPS_CHANNEL_ID = (): string =>
+  process.env.SLACK_OPS_CHANNEL_ID ?? "C0B5M1QCE9E";
 
 interface PostArgs {
-  channel?: string;
   text: string;
   blocks?: any[];
 }
@@ -15,8 +21,8 @@ interface PostResult {
 
 export async function postSlackMessage(args: PostArgs): Promise<PostResult> {
   const token = process.env.SLACK_BOT_TOKEN;
-  const channel = args.channel ?? process.env.SLACK_ESCALATION_CHANNEL_ID;
-  if (!token || !channel) {
+  const channel = OPS_CHANNEL_ID();
+  if (!token) {
     return { ok: false, error: "slack_not_configured" };
   }
   const res = await fetch("https://slack.com/api/chat.postMessage", {

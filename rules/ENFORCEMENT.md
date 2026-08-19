@@ -17,7 +17,7 @@ Audited 2026-08-19. Totals: Audit 1, Guard 23, Honour 43, None 2, Partial 15, Re
 | **Honour** | Nothing stops it and nothing reports it. |
 | **None** | Known hole, no owner yet. |
 
-## Honour (43)
+## Honour (42)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -29,7 +29,6 @@ Audited 2026-08-19. Totals: Audit 1, Guard 23, Honour 43, None 2, Partial 15, Re
 | `COMM-02` | Write for a non-developer | Honour. |
 | `COMM-03` | Claim only what a command proved | Honour. This is the rule whose breach reads as "fake pushing". |
 | `COMM-04` | Report the outcome, keep the receipts | Honour. |
-| `COMM-06` | One channel, one post a day | Honour. See COMM-07 and `OUTSTANDING.md`; the default Slack destination is currently a direct message, not the feedback channel. |
 | `COMM-09` | Never announce as a bot in a crawler user agent | Honour. |
 | `AUTO-01` | Decide alone: anything reversible inside the pipeline | Honour. |
 | `AUTO-03` | Escalate: a real tradeoff, not a guess about one | Honour. |
@@ -65,14 +64,13 @@ Audited 2026-08-19. Totals: Audit 1, Guard 23, Honour 43, None 2, Partial 15, Re
 | `SHIP-07` | Deploy and schema move together | Honour. |
 | `SHIP-08` | Weekly rules review | Honour. |
 
-## Partial (15)
+## Partial (14)
 
 | Rule | | Enforcement |
 |---|---|---|
 | `META-01` | Every rule and correction becomes code, permanently | Honour (process). Partially backed by `scripts/check-rules.mjs`. |
 | `META-04` | One shared module per invariant | Guard for the invariants that have a `check-rules` id. Honour for the rest. |
 | `COMM-05` | Never speak as the human | Honour. Owed guard: a single Slack send helper that only accepts the bot token. See `OUTSTANDING.md`. |
-| `COMM-07` | Failures are the exception to COMM-06 | Honour. Owed guard: the channel allowlist currently ends the session on any channel that is not `C0BATUWBHC7`, which also blocks the sanctioned failure DM. See `OUTSTANDING.md`. |
 | `AUTO-08` | Call tasks belong to call operators only | Honour, partially held by the operator-type pool filter. |
 | `DATA-05` | Guessing a recipient is allowed; guessing content is not | Honour. Owed guard: reject a guessed combo whose domain is a known platform host, and require the guessed flag. See `OUTSTANDING.md`. |
 | `DATA-07` | Density: bulk for solids, specific gravity for liquids | Honour, partially held by the enrichment sanitiser. |
@@ -98,10 +96,12 @@ Audited 2026-08-19. Totals: Audit 1, Guard 23, Honour 43, None 2, Partial 15, Re
 |---|---|---|
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 
-## Guard (22)
+## Guard (24)
 
 | Rule | | Enforcement |
 |---|---|---|
+| `COMM-06` | One channel, one post a day | Guard — `comm/one-slack-channel`. |
+| `COMM-07` | Everything an agent raises waits for the daily post | Guard — `dispatchAlert` queues every severity except p3. |
 | `META-02` | Prefer a positive invariant over a blocklist | Guard — `src/lib/mailbox-domain.ts`, `contacts/no-inline-mailbox-list`. |
 | `META-05` | Ad-hoc scripts live in `scripts/` and get deleted | Guard — `tsconfig.json` include scope. |
 | `COMM-08` | Copy bans | Guard — `sanitizeDraft` inside `stageDraft`, plus `copy/no-rfq-or-em-dash-in-templates`. The guard covers recognised copy literals only; model prompts, database-sourced copy and concatenated strings can still slip through. See `OUTSTANDING.md`. |

@@ -174,7 +174,6 @@ registerAgent({
     }
 
     const res = await postSlackMessage({
-      channel: process.env.SOURCING_HEALTH_SLACK_CHANNEL,
       text: `*Marketplace classification drift*\n\`\`\`${rendered}\`\`\``,
     });
 

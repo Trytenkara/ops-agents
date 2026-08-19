@@ -54,7 +54,7 @@ This grants `admin`, `ops_lead`, and `monitor` roles to your user so you can see
 | `SUPABASE_SERVICE_ROLE_KEY` | Same page → secret key (`sb_secret_*`). **Server-side only, never expose** |
 | `OA_DATABASE_URL` | Supabase → Connect → Session pooler (the direct host is IPv6-only — use the pooler). This project is on `aws-1-us-west-2.pooler.supabase.com:5432`, user `postgres.<project_ref>`. URL-encode special chars in the password (e.g. `@` → `%40`). |
 | `SLACK_BOT_TOKEN` | Slack app → OAuth & Permissions → Bot User OAuth Token (`xoxb-…`). The token currently in `.env.local` is **blank** — Slack posts will return `{ok:false, error:"slack_not_configured"}` until you add a real token. |
-| `SLACK_ESCALATION_CHANNEL_ID` | The DM/channel ID, currently `D09PNM480E5`. Bot must be in the channel (or be authorized to DM Andrew/the team). |
+| `SLACK_OPS_CHANNEL_ID` | The one channel everything posts to, currently `C0B5M1QCE9E` (#op-assistant-agents). Optional — the code defaults to it. The bot must be in the channel. |
 | `NEXT_PUBLIC_APP_URL` | `http://localhost:3000` for dev. In Vercel, your prod URL — Slack deep links use this. |
 
 ### Slack note

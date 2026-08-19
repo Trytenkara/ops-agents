@@ -283,6 +283,17 @@ forbid({
   test: (line) => /organization_ids\s*\[\s*\d+\s*\]/.test(line),
 });
 
+forbid({
+  rule: "comm/one-slack-channel",
+  why: "COMM-06: everything the fleet says goes to one channel. When each caller picked its own, agent output landed in four channels plus two DMs and nobody could tell what had already been read",
+  fix: "call postSlackMessage({ text }) — it resolves the single ops channel itself. Never pass a channel, and never read a channel id from env or a literal",
+  test: (line) =>
+    /postSlackMessage\(\s*\{[^}]*\bchannel\s*:/.test(line) ||
+    /\bchannel\s*:\s*(process\.env\.[A-Z_]*(CHANNEL|SLACK|DM)[A-Z_]*|["'`]C0[A-Z0-9]{8,}|["'`]D0[A-Z0-9]{8,})/.test(line) ||
+    /process\.env\.(SLACK_ESCALATION_CHANNEL_ID|SLACK_FEEDBACK_CHANNEL_ID|SLACK_CONTACT_GUARD_CHANNEL_ID|SOURCING_HEALTH_SLACK_CHANNEL|EXPIRY_CHANNEL_ID|LEAD_SCANNER_SLACK_CHANNEL_ID|SAM_SLACK_DM_ID)\b/.test(line),
+  allow: ["src/lib/slack.ts"],
+});
+
 // Every rule in rules/ must declare whether anything actually enforces it.
 // A rule with no Enforcement line reads as enforced and is not, which is how
 // half of these got broken in the first place.

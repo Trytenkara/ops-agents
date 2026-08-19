@@ -32,7 +32,6 @@ import {
 
 // A "reply" from a mailer-daemon isn't the supplier — it's a delivery failure.
 // Detect it so we never draft a reply to the daemon and can restart outreach.
-const CONTACT_GUARD_CHANNEL = () => process.env.SLACK_CONTACT_GUARD_CHANNEL_ID ?? "C0B5M1QCE9E";
 
 // A mailbox that is full, or a server that is briefly refusing mail, is not a
 // dead address: retiring it there would throw away a good contact we would then
@@ -194,7 +193,7 @@ export async function handleInboundReply(
     if (!ref && (data?.length ?? 0) > 1) {
       await postAgentAlert(
         `:rotating_light: Inbound reply matched drafts from more than one client (draft ${msg.in_reply_to_draft_id}). Sent to triage instead of being filed.`,
-        { channel: CONTACT_GUARD_CHANNEL(), severity: "p1", key: `inbound_ambiguous_org:${msg.in_reply_to_draft_id}` }
+        { severity: "p1", key: `inbound_ambiguous_org:${msg.in_reply_to_draft_id}` }
       ).catch(() => {});
     }
   }
@@ -223,7 +222,7 @@ export async function handleInboundReply(
       } else if (owner === null) {
         await postAgentAlert(
           `:rotating_light: Inbound reply landed on a conversation shared by more than one client (thread ${msg.conversation_id}). Sent to triage instead of being filed.`,
-          { channel: CONTACT_GUARD_CHANNEL(), severity: "p1", key: `inbound_shared_thread:${msg.conversation_id}` }
+          { severity: "p1", key: `inbound_shared_thread:${msg.conversation_id}` }
         ).catch(() => {});
       }
     }

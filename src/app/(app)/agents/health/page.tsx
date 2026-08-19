@@ -11,6 +11,8 @@ import { getApiUsage } from "@/lib/api-usage";
 import { formatUsd, UNMETERED_SERVICES } from "@/lib/api-cost-rates";
 import { fetchHunterAccount, isHunterConfigured } from "@/lib/hunter";
 
+import { OPS_CHANNEL_ID } from "@/lib/slack";
+
 export const dynamic = "force-dynamic";
 
 const num = (n: number | null) => (n === null ? "—" : n.toLocaleString());
@@ -45,7 +47,7 @@ export default async function SystemHealthPage() {
     { name: "Supabase (OA DB)", ok: true, note: "connected (this page loaded)" },
     { name: "Hunter.io credits", ok: !!hunter && hunter.remaining > 0, note: hunterNote },
     { name: "Slack bot token", ok: !!process.env.SLACK_BOT_TOKEN, note: process.env.SLACK_BOT_TOKEN ? "configured" : "missing" },
-    { name: "Slack escalation channel", ok: !!process.env.SLACK_ESCALATION_CHANNEL_ID, note: process.env.SLACK_ESCALATION_CHANNEL_ID ?? "unset" },
+    { name: "Slack ops channel", ok: true, note: OPS_CHANNEL_ID() },
     { name: "Service role key", ok: !!process.env.SUPABASE_SERVICE_ROLE_KEY, note: process.env.SUPABASE_SERVICE_ROLE_KEY ? "configured" : "missing" },
   ];
 

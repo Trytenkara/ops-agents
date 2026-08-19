@@ -17,7 +17,6 @@ import { postSlackMessage } from "@/lib/slack";
 
 const TENKARA_ORG_ID = "c372ad33-8ca2-4533-8eec-e01f408f841c";
 const OA_ORG_ID = "bfb42d8c-7435-44ef-a914-91869b1e726b";
-const SLACK_CHANNEL = "C0BATUWBHC7"; // #control-room-feedback
 const STATE_KEY = "california_watch";
 const LEAD_CREATOR_SLUG = "agent-03-lead-creator";
 
@@ -301,7 +300,7 @@ registerAgent({
     // not advanced, so the next run retries it rather than silently swallowing
     // the only notification anyone would have seen.
     for (const msg of outbox) {
-      const res = await postSlackMessage({ channel: SLACK_CHANNEL, text: msg });
+      const res = await postSlackMessage({ text: msg });
       if (!res.ok) throw new Error(`Slack post failed: ${res.error}`);
     }
 

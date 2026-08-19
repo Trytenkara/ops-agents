@@ -397,10 +397,7 @@ select slug, schedule_cron, schedule_tz, training_wheels, status, last_run_at fr
 | `TENKARA_API_TOKEN` | Tenkara Super Agent client + attachments (02, 04, 15, inbound) |
 | `TENKARA_WEBHOOK_SECRET` | `/api/webhooks/tenkara` HMAC-SHA256 verification |
 | `ANTHROPIC_API_KEY` | 03, 05, 06, 09, 12, 13, 15, the inbound webhook, drafters, document/PO/quote extraction, Ops assistant |
-| `SLACK_BOT_TOKEN`, `SLACK_ESCALATION_CHANNEL_ID` | 02, 07, 11, 14, fleet summary, health page |
-| `SLACK_CONTACT_GUARD_CHANNEL_ID` | `draft-staging.ts` (fabricated-contact blocks) |
-| `LEAD_SCANNER_SLACK_CHANNEL_ID` | 11 |
-| `SAM_SLACK_DM_ID` | `safety-alerts.ts` (falls back to `SLACK_ESCALATION_CHANNEL_ID`), fleet summary, 15 |
+| `SLACK_BOT_TOKEN`, `SLACK_OPS_CHANNEL_ID` | Every Slack post in the repo — one channel, no per-agent targets |
 | `HUNTER_API_KEY`, `LEADMAGIC_API_KEY`, `ZOOMINFO_CLIENT_ID`, `ZOOMINFO_CLIENT_SECRET`, `ZOOMINFO_API_BASE`, `GETPROSPECT_API_KEY` | 06 contact waterfall |
 | `HUNTER_MAX_EMAILS_PER_DOMAIN` (default 3) | 06 (Hunter cost knob) |
 | `IMPORTYETI_API_KEY` | 03 (ImportYeti discovery runs in-process; inert without it) |

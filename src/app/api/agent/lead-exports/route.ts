@@ -12,7 +12,6 @@ const schema = z.object({
   supplier_id: z.string().optional(),
   csv_payload: z.string(),
   send_to_slack: z.boolean().default(false),
-  andrew_channel: z.string().optional(),  // optional Slack channel override for the export handoff (legacy field name kept for back-compat)
 });
 
 export async function POST(request: NextRequest) {
@@ -37,9 +36,8 @@ export async function POST(request: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   let slack_ts: string | undefined;
-  if (parsed.data.send_to_slack && parsed.data.andrew_channel) {
+  if (parsed.data.send_to_slack) {
     const slackRes = await postSlackMessage({
-      channel: parsed.data.andrew_channel,
       text: `Lead Scanner export for *${parsed.data.supplier_name ?? "supplier"}*: please upload to the catalog. CSV stored at export ${row.id}.`,
     });
     if (slackRes.ok) {

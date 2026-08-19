@@ -161,28 +161,11 @@ stamped in the database, so an operator moved to the email desk keeps showing
 as the owner of open calls indefinitely. A sibling surface handles this
 correctly.
 
-**Owed:** the agent path uses the correct notification builder; case rows
-included in owner reassignment.
-
-## P1 — Slack posts default to a direct message channel
-
-Breaks COMM-06. No path in the repository can post as the human: every sender
-uses the bot token, and no user token exists anywhere. That risk is entirely
-outside the codebase.
-
-The channel rule is not held. Five hardcoded targets are correct and three are
-not. Seven more are configurable. The significant one: the default target for
-every send that omits a channel is a direct message, not the feedback channel,
-and that default carries the escalation nudge, the urgent escalation endpoint,
-the generic agent notification endpoint, the watchdog digest, the weekly quote
-summary, the fleet alert digest and the daily summary. Two paths also fall a
-direct message to Sam back to that same shared channel on misconfiguration.
-
-One endpoint takes an arbitrary channel from the request body with no
-allowlist, so any authenticated caller can post the bot anywhere.
-
-**Owed:** one send helper with an allowlist of the feedback channel plus the
-sanctioned failure destination; remove the caller-controlled target.
+**Owed:** case rows included in owner reassignment. The notification half is
+closed differently than written: as of 2026-08-19 nothing an agent raises posts
+live, so the agent call path queueing into the digest is now the intended
+behaviour, and the digest line names the caller. The email operator's name is
+still only in the body, which the digest does not render.
 
 ## P2 — Guessed contacts can be synthesised at a directory
 

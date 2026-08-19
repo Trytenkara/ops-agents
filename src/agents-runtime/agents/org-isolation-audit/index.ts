@@ -20,7 +20,6 @@ import { orgScopedKey } from "@/lib/org-isolation";
 // decision about whose it is, and a repair loop that guesses would hide the
 // fault it is supposed to report.
 
-const FEEDBACK_CHANNEL = () => process.env.SLACK_FEEDBACK_CHANNEL_ID ?? "C0BATUWBHC7";
 // Older material is history, not news. The contamination we cleaned on
 // 2026-08-18 must not re-alert every night.
 const LOOKBACK_DAYS = 14;
@@ -184,7 +183,6 @@ registerAgent({
       `:rotating_light: *Cross-client data found* (last ${LOOKBACK_DAYS}d)\n${lines.join("\n")}\n` +
         `Nothing was changed automatically: each of these needs a human to say whose it is.`,
       {
-        channel: FEEDBACK_CHANNEL(),
         severity: "p1",
         title: "Org isolation audit",
         key: `org_isolation_audit:${findings.map((f) => `${f.check}=${f.count}`).join(",")}`,

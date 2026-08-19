@@ -4,7 +4,6 @@ import { getSession } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { postSlackMessage, deepLink } from "@/lib/slack";
 
-const FEEDBACK_CHANNEL_ID = "C0BATUWBHC7";
 
 function slackSafe(value: string): string {
   return value.replace(/```/g, "''' ").replace(/[<>]/g, "").trim();
@@ -60,7 +59,7 @@ export async function POST(request: NextRequest) {
     .filter(Boolean)
     .join("\n");
 
-  const slack = await postSlackMessage({ channel: FEEDBACK_CHANNEL_ID, text });
+  const slack = await postSlackMessage({ text });
   if (slack.ok && slack.ts) {
     await admin.from("issue_reports").update({ slack_message_ts: slack.ts }).eq("id", reportId);
   }

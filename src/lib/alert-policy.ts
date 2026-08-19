@@ -3,13 +3,17 @@
 //
 // Severity:
 //   p1  Someone has to act now (send path, money, data loss, an agent down).
-//       Posts live to the channel, may @-mention.
+//       Queued like p2, but leads the digest and keeps its @-mentions.
 //   p2  A human is needed eventually (drafts held, stale escalations, expiring
-//       quotes). Never posts live; queued and rolled into the 18:00 fleet digest
-//       as one line per group.
+//       quotes). Queued and rolled into the 18:00 fleet digest as one line per
+//       group.
 //   p3  For the record (duplicate material names, flagged spellings). Recorded
 //       here and nowhere else in Slack. Every p3 caller already writes a case or
 //       flag row, so nothing is lost.
+//
+// Nothing an agent raises posts live any more: every severity waits for the
+// 18:00 digest, in one channel. Only an operator pressing a button in the
+// Control Room, and the fail-open path below, still post on the spot.
 //
 // Dedupe: alert_key identifies the CONDITION, not the occurrence. Use
 // "blocked_draft:<supplier_id>", not a draft id, or every retry looks new. Same
@@ -29,22 +33,19 @@ export interface AlertPolicyOptions {
   severity: AlertSeverity;
   // Say the same thing again only after this long. Defaults below.
   ttlMinutes?: number;
-  channel?: string;
   mentionUserIds?: string[];
   // Digest heading this alert groups under, e.g. "Drafts held for review".
   // Defaults to the portion of the key before the first colon.
   digestGroup?: string;
   // One-line form for the digest. Defaults to the first line of the text.
   title?: string;
-  // Slack blocks for p1 only. Ignored for p2/p3, which render as digest lines.
-  blocks?: any[];
 }
 
 export type AlertOutcome = "posted" | "queued" | "recorded" | "suppressed";
 
 const DEFAULT_TTL_MINUTES: Record<AlertSeverity, number> = {
   // Long enough that a failing agent does not re-announce every 20-minute run,
-  // short enough that a still-broken thing resurfaces the same day.
+  // short enough that a still-broken thing resurfaces in the next day's digest.
   p1: 240,
   // The digest runs daily, so a persistent condition is re-listed once a day.
   p2: 1440,
@@ -71,7 +72,14 @@ export async function dispatchAlert(text: string, opts: AlertPolicyOptions): Pro
   const ttlMs = (opts.ttlMinutes ?? DEFAULT_TTL_MINUTES[opts.severity]) * 60_000;
   const now = new Date();
   const digestGroup = opts.digestGroup ?? opts.key.split(":")[0];
-  const title = opts.title ?? text.split("\n")[0];
+  const rawTitle = opts.title ?? text.split("\n")[0];
+  // A p1 no longer posts on its own, so its mentions have to ride the digest line
+  // or nobody is pinged at all.
+  const mentions = [...new Set((opts.mentionUserIds ?? []).filter(Boolean))];
+  const title =
+    opts.severity === "p1" && mentions.length
+      ? `${mentions.map((id) => `<@${id}>`).join(" ")} ${rawTitle}`
+      : rawTitle;
 
   let admin: ReturnType<typeof createAdminClient>;
   try {
@@ -117,13 +125,12 @@ export async function dispatchAlert(text: string, opts: AlertPolicyOptions): Pro
     content_hash: hash,
     title: title.slice(0, 400),
     body: text.slice(0, 4000),
-    channel: opts.channel ?? null,
     digest_group: digestGroup,
     last_seen_at: now.toISOString(),
     suppressed_count: 0,
-    queued: opts.severity === "p2",
-    // p2 is stamped by the digest drain, not here.
-    last_notified_at: opts.severity === "p2" ? null : now.toISOString(),
+    queued: opts.severity !== "p3",
+    // p1/p2 are stamped by the digest drain, not here.
+    last_notified_at: opts.severity === "p3" ? now.toISOString() : null,
   };
 
   const { error: writeErr } = await admin.from("slack_alert_log").upsert(row, { onConflict: "alert_key" });
@@ -133,18 +140,16 @@ export async function dispatchAlert(text: string, opts: AlertPolicyOptions): Pro
     return "posted";
   }
 
-  if (opts.severity === "p1") {
-    const ts = await postLive(text, opts);
-    if (ts) await admin.from("slack_alert_log").update({ slack_ts: ts }).eq("alert_key", opts.key);
-    return "posted";
-  }
-  return opts.severity === "p2" ? "queued" : "recorded";
+  return opts.severity === "p3" ? "recorded" : "queued";
 }
 
+// Only reached when the ledger itself is unreachable. A dropped alert is worse
+// than an unbatched one, so it goes out immediately rather than waiting for a
+// digest that has no row to read.
 async function postLive(text: string, opts: AlertPolicyOptions): Promise<string | null> {
   const ids = [...new Set((opts.mentionUserIds ?? []).filter(Boolean))];
   const body = ids.length ? `${ids.map((id) => `<@${id}>`).join(" ")} ${text}` : text;
-  const res = await postSlackMessage({ channel: opts.channel, text: body, blocks: opts.blocks });
+  const res = await postSlackMessage({ text: body });
   return res.ts ?? null;
 }
 
@@ -223,8 +228,6 @@ export interface DigestSection {
 }
 
 export interface QueuedAlertDigest {
-  // null means the caller's default ops channel.
-  channel: string | null;
   sections: DigestSection[];
   // Only the alerts actually named in this digest. Anything past the per-group
   // cap stays queued and leads tomorrow's digest (rows are read oldest-first),
@@ -238,8 +241,8 @@ export interface QueuedAlertDigest {
 // always counted out loud and carried to the next digest, never dropped.
 const DIGEST_GROUP_LIMIT = 15;
 
-// Read the queued p2 alerts, grouped by destination channel and then by digest
-// group. Does NOT mark anything; the caller posts first and then calls
+// Read the queued alerts, grouped by digest group. Does NOT mark anything; the
+// caller posts first and then calls
 // markAlertsNotified with the keys it actually rendered, so a failed Slack post
 // leaves them queued rather than losing them.
 export async function readQueuedAlerts(): Promise<QueuedAlertDigest[]> {
@@ -252,8 +255,9 @@ export async function readQueuedAlerts(): Promise<QueuedAlertDigest[]> {
 
   const { data, error } = await admin
     .from("slack_alert_log")
-    .select("alert_key, digest_group, title, suppressed_count, first_seen_at, channel")
+    .select("alert_key, severity, digest_group, title, suppressed_count, first_seen_at")
     .eq("queued", true)
+    .order("severity", { ascending: true })
     .order("first_seen_at", { ascending: true });
 
   if (error || !data?.length) {
@@ -261,39 +265,37 @@ export async function readQueuedAlerts(): Promise<QueuedAlertDigest[]> {
     return [];
   }
 
-  const byChannel = new Map<string | null, any[]>();
+  const byGroup = new Map<string, any[]>();
   for (const r of data as any[]) {
-    const ch = (r.channel as string | null) ?? null;
-    if (!byChannel.has(ch)) byChannel.set(ch, []);
-    byChannel.get(ch)!.push(r);
+    const group = (r.digest_group as string | null) ?? "Other";
+    if (!byGroup.has(group)) byGroup.set(group, []);
+    byGroup.get(group)!.push(r);
   }
 
-  const digests: QueuedAlertDigest[] = [];
-  for (const [channel, rows] of byChannel) {
-    const byGroup = new Map<string, any[]>();
-    for (const r of rows) {
-      const group = (r.digest_group as string | null) ?? "Other";
-      if (!byGroup.has(group)) byGroup.set(group, []);
-      byGroup.get(group)!.push(r);
-    }
-    const sections: DigestSection[] = [];
-    const keys: string[] = [];
-    let deferred = 0;
-    for (const [group, all] of [...byGroup.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-      const shown = all.slice(0, DIGEST_GROUP_LIMIT);
-      const over = all.length - shown.length;
-      deferred += over;
-      keys.push(...shown.map((r) => r.alert_key as string));
-      const lines = shown.map((r) => {
-        const repeats = r.suppressed_count > 0 ? ` _(seen ${r.suppressed_count + 1}x)_` : "";
-        return `${r.title ?? r.alert_key}${repeats}`;
-      });
-      if (over) lines.push(`…and ${over} more, carried to the next digest`);
-      sections.push({ group: `${group} (${all.length})`, lines });
-    }
-    digests.push({ channel, sections, keys, named: keys.length, deferred });
+  // p1 groups lead the digest; the rest is alphabetical so the shape is stable
+  // day to day.
+  const isUrgent = (rows: any[]) => rows.some((r) => r.severity === "p1");
+  const sections: DigestSection[] = [];
+  const keys: string[] = [];
+  let deferred = 0;
+  const ordered = [...byGroup.entries()].sort(([a, ra], [b, rb]) => {
+    const ua = isUrgent(ra) ? 0 : 1;
+    const ub = isUrgent(rb) ? 0 : 1;
+    return ua !== ub ? ua - ub : a.localeCompare(b);
+  });
+  for (const [group, all] of ordered) {
+    const shown = all.slice(0, DIGEST_GROUP_LIMIT);
+    const over = all.length - shown.length;
+    deferred += over;
+    keys.push(...shown.map((r) => r.alert_key as string));
+    const lines = shown.map((r) => {
+      const repeats = r.suppressed_count > 0 ? ` _(seen ${r.suppressed_count + 1}x)_` : "";
+      return `${r.title ?? r.alert_key}${repeats}`;
+    });
+    if (over) lines.push(`…and ${over} more, carried to the next digest`);
+    sections.push({ group: `${isUrgent(all) ? ":rotating_light: " : ""}${group} (${all.length})`, lines });
   }
-  return digests;
+  return [{ sections, keys, named: keys.length, deferred }];
 }
 
 export async function markAlertsNotified(keys: string[]): Promise<void> {
