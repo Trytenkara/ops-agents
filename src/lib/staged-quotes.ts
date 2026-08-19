@@ -89,19 +89,38 @@ function echoKey(r: {
   // Echoes are rarely byte-identical: suppliers' own product lines pick up
   // "(Product Code 300902)" style suffixes between sends, so compare on the
   // material name with parentheticals and punctuation stripped.
-  const material = (r.material_name ?? "")
-    .toLowerCase()
-    .replace(/\([^)]*\)/g, " ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
   return [
     r.source_conversation_id,
-    material,
+    materialKey(r.material_name),
     r.price ?? "",
     (r.currency ?? "").trim().toUpperCase(),
     (r.unit_of_measurement ?? "").trim().toLowerCase(),
     r.case_size ?? "",
   ].join("|");
+}
+
+function materialKey(name: string | null): string {
+  return (name ?? "")
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+// A row with no price is not a quote, it is a note that a price exists somewhere
+// ("we can drop the price a bit at 8+ drums"). The echo key cannot catch a
+// repeat of one, because the two mentions rarely agree on the basis: the same
+// Makesy discount arrived once as 3,352 lb and once as 8 drums, so it read as
+// two different lines and the supplier appeared three times in review with one
+// real price between them.
+//
+// So a thread holds at most one priceless line per material, and if the thread
+// already holds a real price for that material the note goes onto that row
+// instead of beside it. Nothing is discarded: the sentence the supplier wrote is
+// what ops needs, and it is more use attached to the price it qualifies.
+function pricelessKey(conversationId: string | null, materialName: string | null): string | null {
+  if (!conversationId) return null;
+  return `${conversationId}|${materialKey(materialName)}`;
 }
 
 export async function insertStagedQuotes(
@@ -131,15 +150,25 @@ export async function insertStagedQuotes(
     new Set(rows.map((r) => r.sourceConversationId).filter((x): x is string => !!x))
   );
   const existingEchoKeys = new Set<string>();
+  // What the thread already holds without a price, and what it holds with one:
+  // a second priceless mention of the same material is noise, and the first one
+  // belongs on the priced row when there is one.
+  const pricelessSeen = new Set<string>();
+  const pricedRowByKey = new Map<string, { id: string; extraction_notes: string | null }>();
   if (conversationIds.length) {
     const { data } = await admin
       .from("staged_quotes")
-      .select("source_conversation_id, material_name, price, currency, unit_of_measurement, case_size")
+      .select("id, source_conversation_id, material_name, price, currency, unit_of_measurement, case_size, extraction_notes, created_at")
       .in("source_conversation_id", conversationIds)
-      .not("status", "eq", "dismissed");
+      .not("status", "eq", "dismissed")
+      .order("created_at");
     for (const r of (data ?? []) as any[]) {
       const k = echoKey(r);
       if (k) existingEchoKeys.add(k);
+      const pk = pricelessKey(r.source_conversation_id, r.material_name);
+      if (!pk) continue;
+      if (r.price == null) pricelessSeen.add(pk);
+      else if (!pricedRowByKey.has(pk)) pricedRowByKey.set(pk, { id: r.id, extraction_notes: r.extraction_notes ?? null });
     }
   }
 
@@ -270,6 +299,25 @@ export async function insertStagedQuotes(
       result.skippedDuplicates++;
       continue;
     }
+    const priceless = price == null ? pricelessKey(r.sourceConversationId ?? null, r.materialName ?? null) : null;
+    if (priceless) {
+      if (pricelessSeen.has(priceless)) {
+        result.skippedDuplicates++;
+        continue;
+      }
+      const priced = pricedRowByKey.get(priceless);
+      const note = (r.extractionNotes ?? "").trim();
+      if (priced) {
+        if (note && !(priced.extraction_notes ?? "").includes(note)) {
+          const merged = [priced.extraction_notes, `Also on this thread: ${note}`].filter(Boolean).join(" ");
+          await admin.from("staged_quotes").update({ extraction_notes: merged }).eq("id", priced.id);
+          priced.extraction_notes = merged;
+        }
+        result.skippedDuplicates++;
+        continue;
+      }
+      pricelessSeen.add(priceless);
+    }
     if (approvedSet.has(approvedKey(r.orgId, r.supplierName ?? null, r.materialName ?? null))) {
       result.skippedDuplicates++;
       continue;
@@ -313,7 +361,11 @@ export async function insertStagedQuotes(
       // may later restate `price` and overwrite this with 'fx_refresh', which is
       // the point: it distinguishes a number the supplier stands behind from one
       // we recomputed for them.
-      price_source: r.source ?? "supplier_quote",
+      // Named writer, not the intake channel: the column only accepts
+      // supplier_quote / fx_refresh / operator, and writing "email_body" here
+      // made the whole insert fail its check constraint, so every quote captured
+      // from a reply body or an attachment was silently dropped.
+      price_source: "supplier_quote",
       price_source_at: new Date().toISOString(),
       price_change_source: quotedBefore.has(approvedKey(r.orgId, r.supplierName ?? null, r.materialName ?? null)) ? "supplier" : "none",
       // At insert the quote has not drifted yet, so the supplier-only price is
@@ -344,6 +396,7 @@ export async function insertStagedQuotes(
       status: "pending_review",
     });
     if (error) {
+      if (process.env.STAGED_QUOTE_DEBUG) console.error("[staged_quotes insert]", error.message);
       result.errors++;
       continue;
     }
