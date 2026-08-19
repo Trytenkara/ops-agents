@@ -112,6 +112,9 @@ Audited 2026-08-19. Totals: Audit 1, Guard 23, Honour 43, None 2, Partial 15, Re
 | `DATA-02` | A foreign price is published only through one conversion | Guard — `fx/no-direct-convertToUsd`. |
 | `DATA-04` | Agents may never invent a contact detail in an outgoing body | Guard — `src/lib/contact-guard.ts`, `contacts/staging-must-guard-fabrication`. |
 | `DATA-09` | Aliases never add a qualifier the input lacked | Guard — `GRADE_WORDS` in `src/lib/material-aliases.ts`. |
+| `PRICING-01` | Shipping costs are numeric, never static text | Guard — `src/lib/browserbase-pull.ts` `captureShippingCost()` enforces numeric extraction; `src/lib/shipping-estimation.ts` validates per-tier estimates. |
+| `PRICING-02` | Shipping is per-tier when pack size affects cost | Guard — `src/lib/shipping-estimation.ts` `estimatePerTierShipping()` validates estimates are proportional to weight/volume deltas. |
+| `PRICING-03` | Shipping extraction is opt-in per org | Guard — `src/agents-runtime/agents/browserbase-escalation/index.ts` wraps shipping in try/catch, never propagates failure. |
 | `DISC-03` | Aliases never re-specify (see DATA-09) | Guard — see DATA-09. |
 | `DISC-06` | Duplicate suppliers have one definition | Guard — `src/lib/lead-dupe-guard.ts`. |
 | `OUT-05` | No draft into an existing thread may ignore what was already said | Guard — `src/lib/thread-context.ts`, `src/lib/thread-tailor.ts`, `copy/staging-must-tailor-to-thread`. |
@@ -126,7 +129,9 @@ Audited 2026-08-19. Totals: Audit 1, Guard 23, Honour 43, None 2, Partial 15, Re
 | `SHIP-03` | A red build is silent, so build before you push | Guard — pre-push hook, on machines that ran `npm install`. |
 | `SHIP-04` | Rules are checked before the build | Guard. |
 | `OUT-11` | A rejected draft is not redrafted | Guard — `isDraftSuppressed` in `stageDraft` + Agent 02. |
-| `OUT-12` | A supplier the client denied is never written to | Guard — `isDraftSuppressed` reads Tenkara `suppliers.approval`. |
+| `OUT-12` | "denied" in Tenkara is a validation state, not do-not-contact | Honour. |
+| `PRICING-04` | Shipping extraction is audited per run | Honour. Owed guard: daily health job checking shipping capture rate against threshold. See `OUTSTANDING.md`. |
+| `PRICING-05` | Shipping is never fabricated or hallucinated | Honour. |
 
 ## Retired (1)
 

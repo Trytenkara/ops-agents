@@ -92,12 +92,13 @@ and a reply to a message the supplier has just sent us.
 **Enforcement:** Guard — `src/lib/draft-suppression.ts` `isDraftSuppressed`,
 called by `stageDraft` and by Agent 02, which stages its own draft directly.
 
-## OUT-12 — A supplier the client denied is never written to
+## OUT-12 — "denied" in Tenkara does not mean "do not contact"
 
-Suppliers are approved or denied in Tenkara. A denial there is final and
-outranks everything else, including a reply from that supplier. Nothing in the
-fleet may source, draft or send to them.
+`suppliers.approval = 'denied'` is an ops validation state meaning the supplier
+record is not validated yet, and the notes on it frequently ask for exactly the
+opposite of silence: confirm EXW with them, check the supplier email for a
+contact, ask whether they ship outside the EU. Do not build a do-not-contact
+list out of it. A real do-not-contact list is the exclusion list on the lead.
 
-**Enforcement:** Guard — `isDraftSuppressed` reads `suppliers.approval` from
-Tenkara. The lookup fails open: an unreachable read-only database must not stop
-ops getting a draft.
+**Enforcement:** Honour. Recorded because a guard was built on the wrong
+reading of this column on 2026-08-19 and removed the same day.

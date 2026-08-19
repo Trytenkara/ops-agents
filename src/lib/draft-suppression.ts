@@ -40,33 +40,6 @@ const OPERATOR_SUPPRESSIBLE_KINDS = new Set([
 
 const norm = (v: unknown) => String(v ?? "").trim().toLowerCase();
 
-// Tenkara is where a client actually denies a supplier, and nothing on our side
-// read that verdict, so the fleet kept sourcing and drafting to suppliers the
-// client had already rejected. Cached per process: the set changes rarely and
-// this is consulted on every draft.
-const DENIED_TTL_MS = 5 * 60 * 1000;
-let deniedCache: { at: number; ids: Set<string> } | null = null;
-
-async function deniedSupplierIds(): Promise<Set<string>> {
-  const now = nowMs();
-  if (deniedCache && now - deniedCache.at < DENIED_TTL_MS) return deniedCache.ids;
-  try {
-    const { tenkaraQuery } = await import("@/lib/tenkara-readonly");
-    const rows = (await tenkaraQuery(`select id from suppliers where approval = 'denied'`)) as { id: string }[];
-    deniedCache = { at: now, ids: new Set(rows.map((r) => r.id)) };
-  } catch (e) {
-    // Fail open. A read-only database we cannot reach must never stop ops
-    // getting a draft; the worst case is the status quo before this existed.
-    console.warn(`[draft-suppression] denied-supplier lookup failed: ${(e as any)?.message ?? e}`);
-    deniedCache = { at: now, ids: deniedCache?.ids ?? new Set() };
-  }
-  return deniedCache.ids;
-}
-
-function nowMs(): number {
-  return new Date().getTime();
-}
-
 export interface SuppressionQuery {
   orgId: string | null;
   supplierId?: string | null;
@@ -90,13 +63,6 @@ export async function isDraftSuppressed(
   admin: SupabaseClient<any, any, any>,
   q: SuppressionQuery
 ): Promise<SuppressionVerdict> {
-  // A denial in the email app outranks everything else, including the kind of
-  // draft: if the client rejected the supplier, we do not write to them at all,
-  // not even to answer a reply.
-  if (q.supplierId && (await deniedSupplierIds()).has(q.supplierId)) {
-    return { suppressed: true, reason: "supplier_denied_in_email_app" };
-  }
-
   const kind = norm(q.kind);
   const to = norm(q.toAddress);
   if (!q.orgId || !kind || !to) return { suppressed: false };
