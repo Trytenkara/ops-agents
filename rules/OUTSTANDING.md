@@ -266,6 +266,24 @@ that silently stops working.
 marketplace_pull.status='pulled'`, alert if ratio drops below threshold;
 `check-rules` id `shipping/health-must-monitor-extraction-rate`.
 
+## P2 — A discard on a revalidation draft can be answered but not acted on
+
+Partial break of OUT-15. The escalation is raised for every operator discard,
+but the two actions that keep a supplier alive (enter a working address, or
+remove the bad one) both write a lead, and a revalidation draft is composed off
+a quote with no lead row behind it. Measured 2026-08-19: of 44 open discard
+escalations, 23 are actionable and 21 are not, so those 21 can only be closed
+with a note. Closing with a note leaves the address suppressed, which is the
+silent kill OUT-15 exists to prevent.
+
+The remove-address action also depends on the enriched-no-email sweep, which is
+itself a workaround recorded under PERS-05 (conflict E). If that sweep stops,
+this action retires the address and nothing goes looking for a new one.
+
+**Owed:** a lead for the supplier behind a revalidation draft, or a second
+resolver that retires the address on the supplier profile when no lead exists;
+`outreach/discard-escalation-must-be-actionable`.
+
 ## The full enforcement debt
 
 Sorted 2026-08-19. Every rule whose Enforcement line says "owed" appears here;
