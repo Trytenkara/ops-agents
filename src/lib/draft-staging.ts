@@ -4,7 +4,7 @@ import { bodyToHtml, sanitizeDraft } from "@/lib/email-style";
 import { lintDraft, type Finding } from "@/agents-runtime/agents/outreach-qa/lint";
 import { approvedContactsFor } from "@/lib/contact-guard";
 import { postAgentAlert } from "@/lib/slack-alert";
-import { resolveSupplierIdByName as resolveTenkaraSupplierId } from "@/lib/tenkara-supplier-linker";
+import { scopedSupplierId } from "@/lib/tenkara-supplier-linker";
 import { orgScopedExternalId } from "@/lib/org-isolation";
 import { loadThreadContext } from "@/lib/thread-context";
 import { tailorToThread, needsTailorRetry } from "@/lib/thread-tailor";
@@ -212,11 +212,14 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
   // name-only, so the pointer was written with a null id and the reply had
   // nothing to merge onto. Resolve the name against Tenkara's supplier table at
   // staging time. Best-effort: a miss keeps the previous null behaviour.
-  let supplierId = input.supplierId ?? null;
-  if (!supplierId) {
+  //
+  // An id the caller already holds is checked, not trusted: quote rows carry the
+  // supplier id of whoever quoted the material, which is not always this client.
+  let supplierId: string | null = null;
+  {
     const name = input.supplierCompany ?? (callerMeta.supplier_name as string | undefined) ?? null;
     try {
-      supplierId = await resolveTenkaraSupplierId(admin, orgId, name);
+      supplierId = await scopedSupplierId(admin, orgId, input.supplierId ?? null, name);
     } catch {
       supplierId = null;
     }

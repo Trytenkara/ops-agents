@@ -90,6 +90,23 @@ For Agent 20 this means both `$1 = any(organization_ids)` and
 
 **Enforcement:** Guard — `orgs/duplicate-guard-requires-exclusive-supplier`.
 
+## ORG-10 — A supplier id is checked against its owners before it is stored
+
+Scoping the name lookup (ORG-06) was half the fault. An id already in hand was
+still trusted, and a quote row carries the supplier id resolved for whoever
+quoted the material, not necessarily the client being drafted for. Hours after
+the name lookup was scoped, Agent 02 copied a quote's id straight onto a
+California Chemicals thread, which then pointed at a supplier record California
+Chemicals does not own.
+
+Before a supplier id is written onto a client's row, check that the client is in
+that supplier's `organization_ids`. If it is not, resolve the client's own record
+of the same company by name, and store null when they have none. Never store an
+id because the caller supplied one.
+
+**Enforcement:** Guard — `orgs/supplier-id-written-must-be-scoped`, plus the
+shared resolver `scopedSupplierId` in `src/lib/tenkara-supplier-linker.ts`.
+
 ## ORG-07 — Unaudited edge
 
 The inbox application is not in this repository, so the uniqueness scope of the

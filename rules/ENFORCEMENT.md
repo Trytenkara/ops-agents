@@ -4,15 +4,15 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-98 rules. 41 are actually enforced, 32 owe a check or a job,
+94 rules. 38 are actually enforced, 31 owe a check or a job,
 19 are human judgement that nothing could ever check.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 40 |
+| **Guard** | A shared module or build check makes it impossible. | 37 |
 | **Audit** | A scheduled job reports the break after the fact. | 1 |
 | **Check owed** | A build check is possible and is not built yet. | 26 |
-| **Audit owed** | No build check can see it; a scheduled job can. Not built. | 6 |
+| **Audit owed** | No build check can see it; a scheduled job can. Not built. | 5 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 19 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
 | **None** | Outside this repository. Cannot be checked here. | 2 |
@@ -21,7 +21,7 @@ source of truth and this is only a view of them.
 Anything "owed" is also listed in `OUTSTANDING.md`; the build refuses
 otherwise, so a gap cannot go quiet.
 
-## Guard (40)
+## Guard (37)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -40,10 +40,6 @@ otherwise, so a gap cannot go quiet.
 | `DATA-02` | A foreign price is published only through one conversion | Guard — `fx/no-direct-convertToUsd`. |
 | `DATA-04` | Agents may never invent a contact detail in an outgoing body | Guard — `src/lib/contact-guard.ts`, |
 | `DATA-09` | Aliases never add a qualifier the input lacked | Guard — `GRADE_WORDS` in `src/lib/material-aliases.ts`. |
-| `PRICING-01` | Shipping costs are numeric, never static text | Guard — `src/lib/browserbase-pull.ts` `captureShippingCost()` enforces numeric extraction; `src/lib/shipping-estimation.ts` validates that estimates scale by weight/volume. |
-| `PRICING-02` | Shipping is per-tier when pack size affects cost | Guard — `src/lib/shipping-estimation.ts` `estimatePerTierShipping()` validates that estimates are proportional to weight/volume deltas. |
-| `PRICING-03` | Shipping extraction is opt-in per org | Guard — `src/agents-runtime/agents/browserbase-escalation/index.ts` wraps shipping capture in try/catch and never propagates its failure. Shipping failures are logged in `shipping_cost_failed_reason` for audit. |
-| `PRICING-05` | Shipping is never fabricated or hallucinated | Guard — `src/lib/browserbase-pull.ts` `extractShippingCost()` returns null if extraction fails; `captureShippingCost()` never fabricates a value. |
 | `PERS-01` | Only a structural verdict is terminal | Guard — `src/lib/retry-verdict.ts` `classifyFailure`. Owed: |
 | `PERS-06` | No hidden caps on a worklist | Guard for the accidental cut — `src/lib/supabase-paging.ts` |
 | `DISC-01` | Search the trade's name, not ours | Guard — shared resolver, threaded into all three sources. |
@@ -51,7 +47,7 @@ otherwise, so a gap cannot go quiet.
 | `DISC-06` | Duplicate suppliers have one definition | Guard — `src/lib/lead-dupe-guard.ts`. |
 | `OUT-05` | No draft into an existing thread may ignore what was already said | Guard — `src/lib/thread-context.ts`, |
 | `OUT-06` | Internal notes never reach a supplier | Guard — `src/lib/internal-notes.ts` `stripInternalNotes` |
-| `OUT-14` | Never invite a supplier to end the conversation | Guard — `CONCESSION_STRIPS` in `src/lib/email-style.ts`, run |
+| `OUT-14` | Never offer to stop contacting a supplier | Guard — `CONCESSION_STRIPS` in `src/lib/email-style.ts`, run |
 | `OUT-07` | Copy bans are applied at staging (see COMM-08) | Guard — `copy/staging-must-sanitize`. |
 | `OUT-11` | A rejected draft is not redrafted | Guard — `src/lib/draft-suppression.ts` `isDraftSuppressed`, |
 | `OUT-13` | Do-not-contact has two authors, and one gate | Guard — `src/lib/do-not-contact.ts` `isDoNotContact`, called |
@@ -61,6 +57,7 @@ otherwise, so a gap cannot go quiet.
 | `ORG-04` | An ambiguous inbound reply goes to triage, not to a guess | Guard — `soleOrgOwner`. |
 | `ORG-08` | Membership in `organization_ids` tests the whole set, never a fixed slot | Guard — `orgs/no-fixed-index-org-membership`. |
 | `ORG-09` | A supplier shared across clients never suppresses a client-owned supplier | Guard — `orgs/duplicate-guard-requires-exclusive-supplier`. |
+| `ORG-10` | A supplier id is checked against its owners before it is stored | Guard — `orgs/supplier-id-written-must-be-scoped`, plus the |
 | `UI-01` | Never ship a native OS dropdown | Guard — `ui/no-native-select`. |
 | `UI-09` | A one-click write needs a way back | Guard — `src/lib/call-undo.ts` `undoLastAttemptPatch`, surfaced |
 | `SHIP-03` | A red build is silent, so build before you push | Guard — pre-push hook, on machines that ran `npm install`. |
@@ -103,12 +100,11 @@ otherwise, so a gap cannot go quiet.
 | `SHIP-02` | Never stage everything | Check owed — a pre-commit hook that refuses paths outside |
 | `SHIP-07` | Deploy and schema move together | Check owed — `ship/migration-must-accompany-schema-read`. |
 
-## Audit owed (6)
+## Audit owed (5)
 
 | Rule | | Enforcement |
 |---|---|---|
 | `DATA-08` | A dealbreaker grade is a hard specification | Audit owed — a daily check that a client with a stated |
-| `PRICING-04` | Shipping extraction is audited per run | Audit owed — daily health job checking `(leads where |
 | `PERS-07` | A withheld price is a job, not an outcome | Audit owed — a daily count of withheld prices with no |
 | `DISC-08` | A source's own paging must advance | Audit owed — a daily check that every paged source's cursor |
 | `OUT-09` | Stalled conversations get chased | Audit owed — a daily report of conversations past their |

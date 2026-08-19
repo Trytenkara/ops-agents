@@ -14,6 +14,7 @@ import { getOrgAssignmentContext, orgAutoKey, spreadOwnerId } from "@/lib/operat
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import { mirrorDraftAssignee, threadCcContacts } from "@/lib/draft-staging";
 import { orgScopedExternalId } from "@/lib/org-isolation";
+import { scopedSupplierId } from "@/lib/tenkara-supplier-linker";
 
 // Now runs daily (was weekly), so a quote that's expiring stays "overdue" for
 // days. Debounce: don't re-draft a quote we already drafted within this window,
@@ -400,6 +401,10 @@ registerAgent({
           metadata: { outreach_mode: r.mode, ghost_brand: r.ghostBrand ?? null },
         });
         const debounceSince = new Date(Date.now() - REDRAFT_DEBOUNCE_DAYS * 24 * 3600 * 1000).toISOString();
+        // A quote's supplier id belongs to whoever quoted the material, which is
+        // not always this client. Writing it unchecked put another client's
+        // supplier record on the thread.
+        const ownSupplierId = await scopedSupplierId(admin, oaOrg?.id ?? null, r.group.supplier_id, r.group.supplier_name);
         for (const row of r.group.rows) {
           // Debounce: skip if we drafted this quote within the window (any status),
           // so the daily sweep doesn't re-draft the same expiring quote each day.
@@ -413,7 +418,7 @@ registerAgent({
             draft_id: r.draftId,
             agent_id: tackleAgentId,
             org_id: oaOrg?.id ?? null,
-            supplier_id: row.supplier_id,
+            supplier_id: ownSupplierId,
             material_id: row.material_id,
             quote_id: row.quote_id,
             subject: r.subject ?? null,

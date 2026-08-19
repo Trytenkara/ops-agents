@@ -3,6 +3,7 @@ import { z } from "zod";
 import { authenticateAgent, unauthorized } from "@/lib/agent-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getOrgAssignmentContext, recordOwnerId } from "@/lib/operator-assignment";
+import { scopedSupplierId } from "@/lib/tenkara-supplier-linker";
 
 const postSchema = z.object({
   email_client: z.literal("rod_app").default("rod_app"),
@@ -50,8 +51,19 @@ export async function POST(request: NextRequest) {
     const { data } = await admin.from("orgs").select("id").eq("slug", parsed.data.org_slug).maybeSingle();
     orgRow = data;
   }
+  // The caller hands us a supplier id, and a caller drafting for one client can
+  // hold an id belonging to another: that is how another client's supplier record
+  // reached a live thread. Null until a client is known, because "whose supplier
+  // is this" has no answer without one.
+  let supplierId: string | null = null;
   if (orgRow) {
     org_id = orgRow.id;
+    supplierId = await scopedSupplierId(
+      admin,
+      org_id,
+      parsed.data.supplier_id ?? null,
+      (parsed.data.metadata as any)?.supplier_name ?? null
+    ).catch(() => null);
     // Route on the supplier where the caller sent one, so an externally-staged
     // draft lands on the same operator as the rest of that supplier's thread.
     // Without a supplier the draft still gets an owner, spread on its thread id.
@@ -63,7 +75,7 @@ export async function POST(request: NextRequest) {
       // no supplier row was stamped one operator and rendered as another.
       assigned_operator = recordOwnerId(assignCtx, {
         id: parsed.data.thread_id,
-        supplier_id: parsed.data.supplier_id,
+        supplier_id: supplierId,
         metadata: parsed.data.metadata,
       });
     }
@@ -98,7 +110,7 @@ export async function POST(request: NextRequest) {
       agent_run_id: parsed.data.agent_run_id ?? null,
       agent_id: agent.id,
       org_id,
-      supplier_id: parsed.data.supplier_id ?? null,
+      supplier_id: supplierId,
       material_id: parsed.data.material_id ?? null,
       quote_id: primaryQuoteId,
       subject: parsed.data.subject ?? null,

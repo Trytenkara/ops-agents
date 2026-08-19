@@ -278,6 +278,32 @@ for (const f of files) {
   }
 }
 
+// ORG-10. Scoping the name lookup was half the fault. An id already in hand was
+// still trusted, and a quote's supplier id belongs to whoever quoted the
+// material, so Agent 02 wrote another client's supplier record onto a live
+// thread hours after the name lookup was scoped. Scoped to draft_references,
+// the pointer a client's thread carries, because that is where the harm is
+// proven: it names the supplier record ownership, quotes and profiles hang off.
+// insert/update/upsert only, a select that filters on supplier_id stores nothing.
+for (const f of files) {
+  if (f.path.endsWith("src/lib/tenkara-supplier-linker.ts")) continue;
+  for (const m of f.text.matchAll(/from\(["']draft_references["']\)\s*\.\s*(?:insert|update|upsert)\(([\s\S]{0,900})/g)) {
+    const w = m[1].match(/\bsupplier_id:\s*([A-Za-z_$][\w$?.]*)/);
+    if (!w) continue;
+    const src = w[1];
+    // Locals the linker already answered for. Anything else is a raw row field.
+    if (/^(supplierId|ownSupplierId|scopedId)$/.test(src)) continue;
+    if (!src.includes(".")) continue;
+    violations.push({
+      rule: "orgs/supplier-id-written-must-be-scoped",
+      why: "a supplier id taken off a quote or lead row belongs to whoever created that row, not necessarily the client being drafted for, and one stored unchecked put another client's supplier record on a California Chemicals thread hours after the name lookup was scoped",
+      fix: "resolve it through scopedSupplierId(admin, orgId, supplierId, name) from @/lib/tenkara-supplier-linker",
+      where: f.path,
+      line: `draft_references written with supplier_id: ${src}`,
+    });
+  }
+}
+
 // ORG-08. `organization_ids` is the set of every client that owns a shared row.
 // Indexing a fixed slot (`organization_ids[1]`) only matches rows where that
 // client sorts first, so a supplier shared with a second client is invisible to
