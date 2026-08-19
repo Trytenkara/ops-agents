@@ -26,7 +26,10 @@ export async function POST(request: NextRequest) {
     .from("lead_scanner_exports")
     .insert({
       supplier_name: parsed.data.supplier_name ?? null,
-      supplier_id: parsed.data.supplier_id ?? null,
+      // ORG-10: this queue carries no client, and "whose supplier is this" has
+      // no answer without one, so the caller's id cannot be checked and is not
+      // stored. The name is the honest identifier here.
+      supplier_id: null,
       csv_payload: parsed.data.csv_payload,
       status: parsed.data.send_to_slack ? "sent" : "queued",
       generated_by_agent: agent.id,

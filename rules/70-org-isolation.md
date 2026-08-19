@@ -92,6 +92,12 @@ For Agent 20 this means both `$1 = any(organization_ids)` and
 
 ## ORG-10 — A supplier id is checked against its owners before it is stored
 
+A supplier id is only ever stored on a client's row after that client is
+confirmed to be in the supplier's `organization_ids`. If it is not, resolve the
+client's own record of the same company by name; if they have none, store null.
+Where there is no client to scope against, store null. An id is never stored
+because the caller supplied one, or because it was already on a row we read.
+
 Scoping the name lookup (ORG-06) was half the fault. An id already in hand was
 still trusted, and a quote row carries the supplier id resolved for whoever
 quoted the material, not necessarily the client being drafted for. Hours after
@@ -99,13 +105,14 @@ the name lookup was scoped, Agent 02 copied a quote's id straight onto a
 California Chemicals thread, which then pointed at a supplier record California
 Chemicals does not own.
 
-Before a supplier id is written onto a client's row, check that the client is in
-that supplier's `organization_ids`. If it is not, resolve the client's own record
-of the same company by name, and store null when they have none. Never store an
-id because the caller supplied one.
+A supplier id arrives two ways, and both are the same fault: copied off a row we
+are reading (a quote, a lead), or posted to an agent API by a caller that may be
+working for a different client. Neither is evidence of ownership.
 
-**Enforcement:** Guard — `orgs/supplier-id-written-must-be-scoped`, plus the
-shared resolver `scopedSupplierId` in `src/lib/tenkara-supplier-linker.ts`.
+**Enforcement:** Guard — the shared resolver `scopedSupplierId` in
+`src/lib/tenkara-supplier-linker.ts`, and `orgs/supplier-id-written-must-be-scoped`,
+which fails the build on both arrival paths: a `draft_references` write taking an
+id off a row, and any agent API route storing an id off the request body.
 
 ## ORG-07 — Unaudited edge
 

@@ -4,12 +4,12 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-94 rules. 38 are actually enforced, 31 owe a check or a job,
+95 rules. 39 are actually enforced, 31 owe a check or a job,
 19 are human judgement that nothing could ever check.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 37 |
+| **Guard** | A shared module or build check makes it impossible. | 38 |
 | **Audit** | A scheduled job reports the break after the fact. | 1 |
 | **Check owed** | A build check is possible and is not built yet. | 26 |
 | **Audit owed** | No build check can see it; a scheduled job can. Not built. | 5 |
@@ -21,7 +21,7 @@ source of truth and this is only a view of them.
 Anything "owed" is also listed in `OUTSTANDING.md`; the build refuses
 otherwise, so a gap cannot go quiet.
 
-## Guard (37)
+## Guard (38)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -40,6 +40,7 @@ otherwise, so a gap cannot go quiet.
 | `DATA-02` | A foreign price is published only through one conversion | Guard — `fx/no-direct-convertToUsd`. |
 | `DATA-04` | Agents may never invent a contact detail in an outgoing body | Guard — `src/lib/contact-guard.ts`, |
 | `DATA-09` | Aliases never add a qualifier the input lacked | Guard — `GRADE_WORDS` in `src/lib/material-aliases.ts`. |
+| `DATA-10` | A write that fails is never silent | Guard — unconditional `console.error` on insert failure in |
 | `PERS-01` | Only a structural verdict is terminal | Guard — `src/lib/retry-verdict.ts` `classifyFailure`. Owed: |
 | `PERS-06` | No hidden caps on a worklist | Guard for the accidental cut — `src/lib/supabase-paging.ts` |
 | `DISC-01` | Search the trade's name, not ours | Guard — shared resolver, threaded into all three sources. |
@@ -57,7 +58,7 @@ otherwise, so a gap cannot go quiet.
 | `ORG-04` | An ambiguous inbound reply goes to triage, not to a guess | Guard — `soleOrgOwner`. |
 | `ORG-08` | Membership in `organization_ids` tests the whole set, never a fixed slot | Guard — `orgs/no-fixed-index-org-membership`. |
 | `ORG-09` | A supplier shared across clients never suppresses a client-owned supplier | Guard — `orgs/duplicate-guard-requires-exclusive-supplier`. |
-| `ORG-10` | A supplier id is checked against its owners before it is stored | Guard — `orgs/supplier-id-written-must-be-scoped`, plus the |
+| `ORG-10` | A supplier id is checked against its owners before it is stored | Guard — the shared resolver `scopedSupplierId` in |
 | `UI-01` | Never ship a native OS dropdown | Guard — `ui/no-native-select`. |
 | `UI-09` | A one-click write needs a way back | Guard — `src/lib/call-undo.ts` `undoLastAttemptPatch`, surfaced |
 | `SHIP-03` | A red build is silent, so build before you push | Guard — pre-push hook, on machines that ran `npm install`. |

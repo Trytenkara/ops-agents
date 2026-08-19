@@ -281,12 +281,18 @@ for (const f of files) {
 // ORG-10. Scoping the name lookup was half the fault. An id already in hand was
 // still trusted, and a quote's supplier id belongs to whoever quoted the
 // material, so Agent 02 wrote another client's supplier record onto a live
-// thread hours after the name lookup was scoped. Scoped to draft_references,
-// the pointer a client's thread carries, because that is where the harm is
-// proven: it names the supplier record ownership, quotes and profiles hang off.
-// insert/update/upsert only, a select that filters on supplier_id stores nothing.
+// thread hours after the name lookup was scoped.
+//
+// Two halves of one class, because a supplier id arrives two ways:
+//   (a) copied off a row we are reading (a quote, a lead),
+//   (b) handed to us over the wire by an agent.
+// Both are checked before storage; neither is trusted for being present.
 for (const f of files) {
   if (f.path.endsWith("src/lib/tenkara-supplier-linker.ts")) continue;
+
+  // (a) draft_references is the pointer a client's thread carries: it names the
+  // supplier record ownership, quotes and profiles hang off. insert/update/upsert
+  // only, a select that filters on supplier_id stores nothing.
   for (const m of f.text.matchAll(/from\(["']draft_references["']\)\s*\.\s*(?:insert|update|upsert)\(([\s\S]{0,900})/g)) {
     const w = m[1].match(/\bsupplier_id:\s*([A-Za-z_$][\w$?.]*)/);
     if (!w) continue;
@@ -300,6 +306,20 @@ for (const f of files) {
       fix: "resolve it through scopedSupplierId(admin, orgId, supplierId, name) from @/lib/tenkara-supplier-linker",
       where: f.path,
       line: `draft_references written with supplier_id: ${src}`,
+    });
+  }
+
+  // (b) an id posted to an agent API is a claim by the caller, not a fact. The
+  // caller is another agent that may be working for a different client, so it is
+  // checked in the route before it reaches any table.
+  if (!f.path.includes("src/app/api/")) continue;
+  for (const m of f.text.matchAll(/\bsupplier_id:\s*(parsed\.data\.supplier_id|body\.supplier_id|input\.supplier_id)/g)) {
+    violations.push({
+      rule: "orgs/supplier-id-written-must-be-scoped",
+      why: "an agent posting to this route can be working for a different client than the one being written to, so an id off the request body is a claim and not a fact",
+      fix: "resolve it through scopedSupplierId(admin, orgId, supplierId, name) from @/lib/tenkara-supplier-linker, and store null where the route has no client to scope against",
+      where: f.path,
+      line: `request-body supplier id stored unchecked: ${m[1]}`,
     });
   }
 }

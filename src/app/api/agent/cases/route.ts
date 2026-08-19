@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { authenticateAgent, unauthorized } from "@/lib/agent-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { scopedSupplierId } from "@/lib/tenkara-supplier-linker";
 
 const caseSchema = z.object({
   org_slug: z.string(),
@@ -25,12 +26,20 @@ export async function POST(request: NextRequest) {
   const { data: org } = await admin.from("orgs").select("id").eq("slug", parsed.data.org_slug).maybeSingle();
   if (!org) return NextResponse.json({ error: "org_not_found" }, { status: 404 });
 
+  // ORG-10: the caller's id may belong to another client.
+  const supplierId = await scopedSupplierId(
+    admin,
+    org.id,
+    parsed.data.supplier_id ?? null,
+    (parsed.data.metadata as any)?.supplier_name ?? null
+  ).catch(() => null);
+
   const { data, error } = await admin
     .from("cases")
     .insert({
       org_id: org.id,
       type: parsed.data.type,
-      supplier_id: parsed.data.supplier_id ?? null,
+      supplier_id: supplierId,
       material_id: parsed.data.material_id ?? null,
       originating_thread_id: parsed.data.originating_thread_id ?? null,
       classification_confidence: parsed.data.classification_confidence ?? null,
