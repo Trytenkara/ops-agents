@@ -10,8 +10,16 @@ If a price cannot be read, store null plus the reason WHY. Never estimate from
 a similar product, a previous listing, or a range. The price basis (per kg, per
 drum, per case) is read from the page too, never derived.
 
+The guard below holds the NUMBER and not the BASIS. `publishablePrice` tests
+finite, positive, under ten million, and the currency invariant; it cannot see
+that a figure was multiplied out of a pack weight or that a per-tonne price was
+labelled per kg. On the supplier-email path both went through it stamped
+`confidence: high` (see DATA-14). Treat the basis half of this rule as
+unenforced until `price/capture-must-carry-source-text` is built.
+
 **Enforcement:** Guard — `src/lib/price-publish.ts` `publishablePrice` /
-`publishableTiers` at every price writer, `price/writer-must-gate`.
+`publishableTiers` at every price writer, `price/writer-must-gate`. Covers the
+amount only; the basis is owed under DATA-14.
 
 ## DATA-02 — A foreign price is published only through one conversion
 
@@ -135,3 +143,96 @@ neither is negotiated blind, and nothing about the split changes.
 **Enforcement:** Guard — `findSupplierDupeSuspicions` and
 `findCrossLaneVersions` in `src/lib/supplier-dupe-suspicion.ts`, rendered on the
 per-client Suppliers tab. Both return labels only; neither writes.
+
+## DATA-13 — An operator's correction re-anchors a price, it does not freeze it
+
+When an operator corrects a price, their number becomes the anchor everything
+downstream works from: it is stored as the capture-time figure, converted back
+into the supplier's currency, and marked as operator-set. The daily currency
+refresh keeps restating it at today's rate, because a frozen price goes stale.
+What it may never do is keep recalculating from the supplier-currency figure the
+operator just contradicted, which silently reverted their edit the same night.
+
+A correction is also the only reliable signal that an extraction was wrong, and
+the same misread usually hit every other quote from that message. Those rows go
+back to review naming what changed. They are never rewritten: a price only moves
+when a human moves it. A later quote from the same supplier for the same
+material still lands as its own row, carrying a note that an operator already
+ruled on this price.
+
+**Enforcement:** Guard — `updateStagedQuote` in
+`src/app/actions/staged-quotes.ts` re-anchors and flags siblings;
+`operatorSet` in `src/lib/staged-quotes.ts` notes the later quote.
+
+## DATA-14 — A captured price carries the words it was read from
+
+Every staged price stores the verbatim fragment of the supplier's own message
+it came from, and both the amount and its unit must be present in that
+fragment. A number that cannot be traced back to the supplier's words was
+computed, not captured, and a computed number is withheld under DATA-01.
+
+This is the positive form of "do not do arithmetic on a quote". The prompt
+already forbids DIVIDING a price by a pack size; it said nothing about
+multiplying, so Katonah's "Drums are 518lbs at 1.1975/lb" was stored as
+620.5410 USD/lb — the unit price times the drum weight, roughly 518x the real
+figure, stamped `confidence: high`. Four further rows carried per-tonne prices
+(`usd1280/mt`) labelled per kg, also `high`. No blocklist would have caught
+either; requiring the source text catches both, and every future variant,
+because a fabricated figure cannot produce a fragment containing itself.
+
+The same fragment is what lets anyone audit the table without re-reading the
+mailbox. Reconciling 49 rows for one client against the original threads took a
+full session precisely because no row said where its number came from.
+
+**Enforcement:** Check owed — `price/capture-must-carry-source-text`: every
+writer of a priced row supplies the source fragment, and the stored amount and
+unit both appear in it.
+
+## DATA-15 — Extraction records what it did not take
+
+Every inbound supplier message gets a durable record of how many price points
+it contained and how many were staged, and a shortfall raises. Counting only
+the rows we wrote measures the extractor with itself.
+
+A zero-row alarm is not enough. `quote_capture_silent` (DATA-10) fires when a
+run stages nothing at all, which catches an outage and nothing smaller. The
+common failure is partial: Foodchem sent three prices in one thread — 1.49,
+then a revision to 1.53 FOB and 1.81 CIF — and one was staged, so the message
+looked like a clean capture and the client's live figure was the superseded
+one. Reroot quoted two materials and one was kept. Separately, three suppliers
+whose entire quote was a plain `usd1300/mt` produced no row and no trace, so
+nothing anywhere recorded that we had read their reply and taken nothing from
+it.
+
+The count is the alarm, not the presence of a row. A miss must leave a mark, or
+the miss rate is unknowable and no later fix can be shown to have worked.
+
+**Enforcement:** Audit owed — per-message capture reconciliation: a second
+narrow read of each inbound message counts the price points present, the
+difference against rows staged is persisted per message, and a daily job
+surfaces shortfalls. Per META-07 the second read is a model read, never a
+price regex.
+
+## DATA-16 — Every rung of a tiered quote is its own row
+
+A supplier's price ladder is captured rung by rung and rungs are never merged.
+Two rungs are distinguished by their basis — the quantity the price applies to
+— so a rung whose basis could not be read must be held for review, never folded
+into a sibling that happens to share its amount.
+
+Currently sound and recorded to keep it that way: ladders survive today (one
+client holds intact ladders of four, four and three rungs, matching the source
+emails, with zero collisions fleet-wide). The exposure is structural rather
+than live. The extractor is instructed to null `case_size` whenever the basis
+is ambiguous, and `case_size` is part of the conversation echo key in
+`insertStagedQuotes`, so two rungs that both lose their basis become
+indistinguishable and the second is dropped as an echo. Five priced rows
+fleet-wide carry a null basis today.
+
+A price band or outlier check must also compare a rung against other suppliers'
+quotes for the same material, never against its own siblings: a ladder is
+supposed to span a range, and treating that spread as an anomaly would flag
+every correctly captured ladder.
+
+**Enforcement:** Check owed — `price/tier-rungs-never-collapse`: a priceless or
+basis-less rung may not be deduped against a priced sibling on amount alone.

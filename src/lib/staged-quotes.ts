@@ -188,6 +188,24 @@ export async function insertStagedQuotes(
     }
   }
 
+  // Supplier+material combos where an operator has already set the price by
+  // hand. A later quote from the supplier is a real new number and still gets
+  // its own row, but it must not read as the first word on that price: someone
+  // already ruled on this once, and whoever picks the new row up needs to know
+  // they are second-guessing a decision, not filling a blank.
+  const operatorSet = new Set<string>();
+  if (orgIds.length) {
+    const { data } = await admin
+      .from("staged_quotes")
+      .select("org_id, supplier_name, material_name")
+      .in("org_id", orgIds)
+      .eq("price_source", "operator")
+      .neq("status", "dismissed");
+    for (const r of (data ?? []) as any[]) {
+      operatorSet.add(approvedKey(r.org_id, r.supplier_name, r.material_name));
+    }
+  }
+
   // Whether we already hold a price from this supplier for this material. A
   // first quote is not a change, so it gets 'none'; anything after it is the
   // supplier stating a new number, which is 'supplier' by definition (the FX
@@ -338,6 +356,12 @@ export async function insertStagedQuotes(
     if (approvedSet.has(approvedKey(r.orgId, r.supplierName ?? null, r.materialName ?? null))) {
       result.skippedDuplicates++;
       continue;
+    }
+    if (operatorSet.has(approvedKey(r.orgId, r.supplierName ?? null, r.materialName ?? null))) {
+      extractionNotes = [
+        "An operator set the price on this supplier and material by hand before. This quote lands beside that one rather than replacing it; check what they decided before approving.",
+        extractionNotes,
+      ].filter(Boolean).join(" ");
     }
     // Best-effort: auto-fill outer case dimensions for the freight calc at
     // insert time. Never blocks staging — a failure just leaves the columns null

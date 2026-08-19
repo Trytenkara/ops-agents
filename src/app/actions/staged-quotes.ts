@@ -186,18 +186,80 @@ export async function updateStagedQuote(
     const t = (v ?? "").trim();
     return t === "" ? null : t;
   };
-  const { error } = await admin
+  const { data: before } = await admin
     .from("staged_quotes")
-    .update({
-      supplier_name: str(edit.supplier_name),
-      material_name: str(edit.material_name),
-      price: num(edit.price),
-      case_size: num(edit.case_size),
-      unit_of_measurement: str(edit.unit_of_measurement),
-      currency: str(edit.currency) ?? "USD",
-    })
-    .eq("id", stagedId);
+    .select("price, currency, native_price, native_currency, fx_rate, source_message_id, material_name, supplier_name")
+    .eq("id", stagedId)
+    .maybeSingle();
+
+  const newPrice = num(edit.price);
+  // Blank means the operator does not know the currency, exactly as it does at
+  // capture. Defaulting it to USD here was the one place that bug survived,
+  // and it is the worst place for it: a human deliberately clearing the field
+  // and getting a dollar sign written back for them (DATA-11).
+  const newCurrency = str(edit.currency);
+
+  const patch: Record<string, unknown> = {
+    supplier_name: str(edit.supplier_name),
+    material_name: str(edit.material_name),
+    price: newPrice,
+    case_size: num(edit.case_size),
+    unit_of_measurement: str(edit.unit_of_measurement),
+    currency: newCurrency,
+  };
+
+  // An operator correcting a price does NOT freeze it. The daily FX refresh
+  // restates a foreign quote at today's rate, and that must keep happening or
+  // the number goes stale. What it must not do is keep recalculating from the
+  // supplier-currency figure the operator just contradicted, which silently
+  // reverted their edit the same night. So re-anchor: put their number back
+  // into the supplier's currency and let the refresh work from there.
+  const priceChanged = before && newPrice != null && newPrice !== Number(before.price);
+  if (priceChanged) {
+    patch.price_source = "operator";
+    patch.price_source_at = new Date().toISOString();
+    patch.captured_price = newPrice;
+    const rate = Number(before!.fx_rate);
+    if (before!.native_currency && before!.native_currency !== "USD") {
+      if (newCurrency && newCurrency === before!.native_currency) {
+        // Never converted (no rate was reachable): the figure on the row is
+        // already in the supplier's currency.
+        patch.native_price = newPrice;
+      } else if (Number.isFinite(rate) && rate > 0) {
+        patch.native_price = Number((newPrice / rate).toFixed(6));
+        patch.captured_fx_rate = rate;
+      }
+    }
+  }
+
+  const { error } = await admin.from("staged_quotes").update(patch).eq("id", stagedId);
   if (error) return { ok: false, error: error.message };
+
+  // A corrected price is the only reliable signal we get that an extraction was
+  // wrong, and the same misread almost always hit every other quote pulled from
+  // the same email or attachment. Those rows go back to review saying what the
+  // operator changed. Nothing is rewritten for them: a price only ever moves
+  // when a human moves it.
+  if (priceChanged && before?.source_message_id) {
+    const { data: siblings } = await admin
+      .from("staged_quotes")
+      .select("id, extraction_notes")
+      .eq("source_message_id", before.source_message_id)
+      .eq("status", "pending_review")
+      .neq("id", stagedId);
+    const note = `An operator corrected the price on "${before.material_name ?? "another quote"}" from this same message (${before.price ?? "blank"} to ${newPrice}). Re-read this one against the original before approving; the same misreading may apply.`;
+    for (const sib of siblings ?? []) {
+      if ((sib.extraction_notes ?? "").includes("An operator corrected the price on")) continue;
+      await admin
+        .from("staged_quotes")
+        .update({
+          confidence: "needs_review",
+          extraction_notes: [sib.extraction_notes, note].filter(Boolean).join(" "),
+        })
+        .eq("id", sib.id);
+    }
+  }
+
   revalidatePath(PATH);
   return { ok: true };
 }
