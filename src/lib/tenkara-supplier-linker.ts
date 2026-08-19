@@ -1,18 +1,26 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { tenkaraQuery } from "@/lib/tenkara-readonly";
 
-// Fuzzy match a supplier name against Tenkara's suppliers table and return
-// the supplier ID if found. Used at discovery time to link name-only suppliers
-// from external sources (ImportYeti, SourceReady, Scout) to their Tenkara IDs
-// so quotes can be exported with supplier_id populated.
+// Match a supplier name against the suppliers THIS CLIENT has in Tenkara, and
+// return that supplier's id. Used at discovery and at first draft, so a lead
+// carries the client's own supplier record rather than a name alone.
 //
-// Algorithm:
-// 1. Exact match (case-insensitive) on supplier name
-// 2. If not found, try normalized name (strip punctuation, handle "Inc" variants)
-// 3. Return supplier_id if matched, null otherwise
+// The client is not optional. Tenkara holds one suppliers table for every
+// client, names collide constantly (1,555 normalized names cover 3,302 rows,
+// and 1,554 of those groups span more than one client), and this function used
+// to match on name across the whole table and take the first row it saw. That
+// labelled 907 of 3,141 conversations with another client's supplier record:
+// same company name, wrong client. Ownership, quotes and profiles all hang off
+// that record, so the mislabel spreads.
+//
+// A client that has no record of the company resolves to null, which is the
+// honest answer and leaves the lead name-only. Guessing at the nearest row is
+// what produced the 907.
 
-interface TenkaraSupppler {
+interface TenkaraSupplierRow {
   id: string;
   name: string;
+  organization_ids: string[] | null;
 }
 
 const normName = (s: string | null | undefined): string => {
@@ -25,50 +33,72 @@ const normName = (s: string | null | undefined): string => {
     .trim();
 };
 
-// Cache of Tenkara suppliers to avoid repeated queries. Keyed by normalized name.
-let _supplierCache: Map<string, string | null> | null = null;
+// `${tenkaraOrgId}|${normalizedName}` → supplier id. Keying by client is what
+// makes a cross-client match impossible rather than merely discouraged.
+let _supplierCache: Map<string, string> | null = null;
+// OA org id → Tenkara organization id. Callers hold the OA id, so resolving it
+// here keeps the client argument to the one id every caller already has.
+const _orgIdCache = new Map<string, string | null>();
 
-async function loadSupplierCache(): Promise<Map<string, string | null>> {
+function scopedKey(tenkaraOrgId: string, name: string): string {
+  return `${tenkaraOrgId}|${name}`;
+}
+
+async function loadSupplierCache(): Promise<Map<string, string>> {
   if (_supplierCache) return _supplierCache;
-
-  const cache = new Map<string, string | null>();
+  const cache = new Map<string, string>();
   try {
-    const suppliers = await tenkaraQuery<TenkaraSupppler>(
-      `SELECT id, name FROM public.suppliers ORDER BY name`
+    const suppliers = await tenkaraQuery<TenkaraSupplierRow>(
+      `SELECT id, name, organization_ids FROM public.suppliers ORDER BY name`
     );
     for (const s of suppliers) {
-      const key = normName(s.name);
-      if (key && !cache.has(key)) {
-        cache.set(key, s.id);
+      const name = normName(s.name);
+      if (!name) continue;
+      // A supplier with no client owns no lead. Skipping it is deliberate: it
+      // cannot be matched to anyone, so caching it under a blank client would
+      // reintroduce the unscoped lookup.
+      for (const org of s.organization_ids ?? []) {
+        if (!org) continue;
+        const key = scopedKey(String(org), name);
+        if (!cache.has(key)) cache.set(key, s.id);
       }
     }
     _supplierCache = cache;
   } catch (e) {
-    // If Tenkara query fails, return empty cache rather than blocking discovery
+    // A Tenkara outage must not block discovery. An empty cache resolves every
+    // name to null, which is the same as not knowing the id yet.
     console.error("Failed to load Tenkara supplier cache:", e);
     _supplierCache = new Map();
   }
   return _supplierCache;
 }
 
-export async function resolveSupplierIdByName(
-  supplierName: string | null | undefined
-): Promise<string | null> {
-  if (!supplierName) return null;
-
-  const cache = await loadSupplierCache();
-  const key = normName(supplierName);
-  if (!key) return null;
-
-  // Exact match on normalized name
-  const cached = cache.get(key);
-  if (cached !== undefined) return cached;
-
-  // No match found
-  return null;
+async function tenkaraOrgIdFor(admin: SupabaseClient, orgId: string): Promise<string | null> {
+  if (_orgIdCache.has(orgId)) return _orgIdCache.get(orgId) ?? null;
+  const { data } = await admin.from("orgs").select("tenkara_org_id").eq("id", orgId).maybeSingle();
+  const tenkaraOrgId = (data?.tenkara_org_id as string | null) ?? null;
+  _orgIdCache.set(orgId, tenkaraOrgId);
+  return tenkaraOrgId;
 }
 
-// Clear cache — use sparingly, e.g. if Tenkara schema changes
+export async function resolveSupplierIdByName(
+  admin: SupabaseClient,
+  orgId: string | null | undefined,
+  supplierName: string | null | undefined
+): Promise<string | null> {
+  if (!orgId || !supplierName) return null;
+  const name = normName(supplierName);
+  if (!name) return null;
+  // A client we cannot place in Tenkara has no supplier list to match against.
+  // Falling back to a fleet-wide match here would be the original bug.
+  const tenkaraOrgId = await tenkaraOrgIdFor(admin, orgId);
+  if (!tenkaraOrgId) return null;
+  const cache = await loadSupplierCache();
+  return cache.get(scopedKey(tenkaraOrgId, name)) ?? null;
+}
+
+// Clear caches — use sparingly, e.g. if Tenkara schema changes.
 export function clearSupplierCache() {
   _supplierCache = null;
+  _orgIdCache.clear();
 }

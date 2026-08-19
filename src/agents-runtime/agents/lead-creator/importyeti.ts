@@ -289,7 +289,7 @@ export async function runImportYetiDiscovery(
     rows.push({
       org_id: req.oaOrgId,
       supplier_name: name,
-      supplier_id: await resolveSupplierIdByName(name),
+      supplier_id: await resolveSupplierIdByName(admin, req.oaOrgId, name),
       material_name: req.materialName,
       material_id: req.materialId,
       stage: "raw" as const,

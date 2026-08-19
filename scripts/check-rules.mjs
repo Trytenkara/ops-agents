@@ -241,6 +241,34 @@ for (const f of files) {
   }
 }
 
+// 10. Tenkara keeps ONE suppliers table for every client, and `organization_ids`
+// says whose each row is. A query that reads it without naming a client can
+// return another client's supplier: the name-keyed linker did exactly that and
+// labelled 907 of 3,141 conversations with the wrong client's supplier record.
+// The linker itself now takes the client as a required argument, which the type
+// checker enforces; this rule stops the next raw query being written unscoped.
+// The invariant is not "never read that table", it is: you may FETCH a supplier
+// you have already identified, and you may not SEARCH for one across clients.
+// Fetching by id is safe, the id names one row. Searching by name is what
+// crossed clients, so a read that is not keyed on a supplier id has to say
+// whose suppliers it wants.
+for (const f of files) {
+  if (f.path.endsWith("src/lib/tenkara-supplier-linker.ts")) continue;
+  if (/organization_ids/.test(f.text)) continue;
+  for (const m of f.text.matchAll(/public\.suppliers([\s\S]{0,160})/g)) {
+    const tail = m[1];
+    // `join public.suppliers s on s.id = q.supplier_id`, `where id = $1`.
+    if (/\bon\s+\w*\.?id\s*=|\bwhere\s+id\s*=/i.test(tail)) continue;
+    violations.push({
+      rule: "orgs/supplier-query-must-scope-to-client",
+      why: "Tenkara's suppliers table is shared between clients, so searching it by name can return another client's supplier (this labelled 907 conversations and filled profiles with the wrong client's contact)",
+      fix: "filter on organization_ids, or resolve through resolveSupplierIdByName(admin, orgId, name) from @/lib/tenkara-supplier-linker",
+      where: f.path,
+      line: "public.suppliers searched with no client scope",
+    });
+  }
+}
+
 if (!violations.length) {
   console.log(`check-rules: ${files.length} files, no violations.`);
   process.exit(0);

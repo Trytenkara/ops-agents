@@ -57,6 +57,16 @@ of any of these, delete it and import the shared one.
   clients), `orgScopedKey` for any supplier/email grouping map, and
   `foreignOrgRows` before folding a set of leads into one draft. Never build an
   `external_id` or a supplier group key by hand.
+- `src/lib/tenkara-supplier-linker.ts` `resolveSupplierIdByName(admin, orgId, name)`
+  — which supplier record a name belongs to. Tenkara keeps ONE suppliers table
+  for every client and `organization_ids` says whose each row is. This used to
+  match on name across the whole table and take the first row, which labelled
+  907 of 3,141 conversations with another client's supplier record, and the
+  profile filler used the same fleet-wide name map to copy another client's
+  contact person, phone and payment terms into a profile. The client argument is
+  required, and a client with no record of the company resolves to null rather
+  than to the nearest row. You may FETCH a supplier by id; you may not SEARCH by
+  name without saying whose suppliers you want.
 - `src/lib/org-priority.ts` — who drains a shared capped queue first. Real
   clients before internal test orgs. Never hand-roll an `is_internal` sort.
 - `src/lib/operator-assignment.ts` `recordOwnerId` — who owns one open draft or
@@ -120,8 +130,9 @@ and the contact-fabrication guard, `sanitizeDraft` keeping the internal-note
 strip, `stageDraft` keeping the thread tailor, every Supabase client keeping the truncation
 guard, every price writer going through the publish gate, `stageDraft` keeping
 the org scoping on `external_id`, every direct `createTenkaraConversation`
-caller scoping its key too, and no second copy of the open-record owner
-derivation. Add a check when you add a shared guard. Reach for an
+caller scoping its key too, no second copy of the open-record owner
+derivation, and no name-keyed read of Tenkara's shared suppliers table without a
+client scope. Add a check when you add a shared guard. Reach for an
 exemption only when you have first ruled out moving the logic into the shared
 module, since an exemption list decays the same way a blocklist does.
 

@@ -175,7 +175,7 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
   if (!supplierId) {
     const name = input.supplierCompany ?? (callerMeta.supplier_name as string | undefined) ?? null;
     try {
-      supplierId = await resolveTenkaraSupplierId(name);
+      supplierId = await resolveTenkaraSupplierId(admin, orgId, name);
     } catch {
       supplierId = null;
     }

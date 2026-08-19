@@ -54,6 +54,7 @@ interface TenkaraSupplier {
   ddp_minimum_limit: string | number | null;
   ddp_maximum_limit: string | number | null;
   accessorial_charges: any;
+  organization_ids: string[] | null;
 }
 
 let supplierCache: { rows: TenkaraSupplier[]; at: number } | null = null;
@@ -64,7 +65,8 @@ async function loadTenkaraSuppliers(): Promise<TenkaraSupplier[]> {
   const rows = await tenkaraQuery<TenkaraSupplier>(
     `SELECT id, name, poc_name, poc_email, poc_phone, address, city, state, zip,
             shipping_terms, shipping_email, billing_email, payment_terms,
-            ddp_minimum_limit, ddp_maximum_limit, accessorial_charges
+            ddp_minimum_limit, ddp_maximum_limit, accessorial_charges,
+            organization_ids
      FROM public.suppliers`
   );
   supplierCache = { rows, at: Date.now() };
@@ -189,7 +191,14 @@ export async function fillProfilesFromKnownSources(
     tenkaraByName = new Map();
     for (const r of rows) {
       const k = norm(r.name);
-      if (k && !tenkaraByName.has(k)) tenkaraByName.set(k, r);
+      if (!k || tenkaraByName.has(k)) continue;
+      // Only this client's suppliers may be reached by name. Tenkara keeps one
+      // suppliers table for everyone and names collide constantly, so a
+      // fleet-wide name map filled a client's profile with another client's
+      // contact person, phone and payment terms.
+      if (!tenkaraOrgId) continue;
+      if (!(r.organization_ids ?? []).map(String).includes(tenkaraOrgId)) continue;
+      tenkaraByName.set(k, r);
     }
   } catch {
     // Tenkara unreachable: still fill from leads and replies.
