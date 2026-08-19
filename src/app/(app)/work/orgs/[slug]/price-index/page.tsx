@@ -286,7 +286,11 @@ export default async function OrgPriceIndexPage({
     if (!directOnFileMap.has(k)) directOnFileMap.set(k, s); // newest-first, first wins
     else if (!previousDirectMap.has(k)) previousDirectMap.set(k, s); // second-newest = on-file baseline
   }
+  // Row id → the staged quote it came from, so the owner pass below can read the
+  // supplier id without widening the row type the table renders.
+  const stagedByRowId = new Map<string, any>();
   const directOnFile: DirectPriceRow[] = Array.from(directOnFileMap.entries()).map(([k, s]: [string, any]) => {
+    stagedByRowId.set(s.id, s);
     const previous = previousDirectMap.get(k);
     // Two independent measures, not an additive split (see stagedQuoteDelta):
     // supplier Δ is this quote vs the supplier's previous one at a common rate,
@@ -294,6 +298,8 @@ export default async function OrgPriceIndexPage({
     const split = stagedQuoteDelta(s, previous);
     return {
       id: s.id,
+    // Filled in below, once the org's operator assignment context exists.
+    owner: null as string | null,
     supplierName: s.supplier_name ?? null,
     materialName: s.material_name ? correctMaterialSpelling(s.material_name) : null,
     tier: stagedPackLabel(s),
@@ -393,6 +399,34 @@ export default async function OrgPriceIndexPage({
     if (idKey) supplierOperators[idKey] = name;
     // Quotes staged before their supplier was linked carry only a name.
     if (nameLookupKey) supplierOperators[nameLookupKey] = name;
+  }
+
+  // Who owns each direct price on file. Resolved on the supplier's shared key,
+  // so a supplier reads the same here as on Leads, Suppliers and Quote
+  // Validation rather than hashing this row's own id into a different operator.
+  for (const r of directOnFile) {
+    const staged = stagedByRowId.get(r.id);
+    const sname = r.supplierName?.trim() || null;
+    const sid = staged?.supplier_id ?? null;
+    if (!sid && !sname) continue;
+    const cached =
+      (sid ? supplierOperators[`id:${sid}`] : undefined) ??
+      (sname ? supplierOperators[`name:${sname.toLowerCase()}`] : undefined);
+    if (cached) {
+      r.owner = cached;
+      continue;
+    }
+    const hint =
+      (sid ? (supplierTypes[`id:${sid}`] as MarketKind | undefined) : undefined) ??
+      (sname ? (supplierTypes[`name:${sname.toLowerCase()}`] as MarketKind | undefined) : undefined) ??
+      null;
+    const opId = resolveOperatorId(
+      assignmentCtx,
+      orgAutoKey(assignmentCtx, { supplierId: sid, supplierName: sname, leadId: r.id }),
+      hint,
+      sname
+    );
+    r.owner = (opId ? operatorNameById.get(opId) : null) ?? null;
   }
 
   const marketplaceDims = await loadMarketplaceCaseDims(admin);

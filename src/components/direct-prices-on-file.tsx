@@ -42,6 +42,10 @@ export type DirectPriceRow = {
   supplierPriceChangedAt: string | null;
   createdAt: string | null;
   caseDims: string | null;
+  // The operator who owns this supplier for this client. Same derivation as the
+  // Leads, Suppliers and Quote Validation tabs, so one supplier reads the same
+  // everywhere; a price with no owner named is a price nobody is chasing.
+  owner: string | null;
 };
 
 function fmtPrice(r: DirectPriceRow, previous = false): string {
@@ -65,8 +69,8 @@ function directPctChange(r: DirectPriceRow): number | null {
 // prices, not only re-quotes in flight.
 export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slug: string }) {
   const { filtered, controls } = useListFilter(rows, {
-    searchText: (r) => `${r.supplierName ?? ""} ${r.materialName ?? ""}`,
-    searchPlaceholder: "supplier or material…",
+    searchText: (r) => `${r.supplierName ?? ""} ${r.materialName ?? ""} ${r.owner ?? ""}`,
+    searchPlaceholder: "supplier, material or owner…",
     sorts: [
       { value: "supplier", label: "Supplier (A–Z)", compare: byString((r: DirectPriceRow) => r.supplierName) },
       { value: "material", label: "Material (A–Z)", compare: byString((r: DirectPriceRow) => r.materialName) },
@@ -77,6 +81,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
 
   const csvRows = filtered.map((r) => [
     r.supplierName ?? "",
+    r.owner ?? "",
     r.materialName ?? "",
     r.tier ?? "",
     fmtPrice(r, true),
@@ -101,6 +106,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
           filename={filenameFor(slug, "direct-prices-on-file")}
           headers={[
             "Supplier",
+            "Ops owner",
             "Material",
             "Tier / pack",
             "On file",
@@ -123,6 +129,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
         <TableHeader>
           <TableRow>
             <TableHead>Supplier</TableHead>
+            <TableHead title="The operator who owns this supplier for this client.">Ops owner</TableHead>
             <TableHead>Material</TableHead>
             <TableHead title="Which quantity break or pack this price is for. Each rung is priced and tracked separately.">Tier / pack</TableHead>
             <TableHead className="text-right" title="Previous captured direct price for this supplier × material × tier">On file</TableHead>
@@ -145,6 +152,13 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
           {filtered.map((r) => (
             <TableRow key={r.id}>
               <TableCell className="font-medium">{r.supplierName ?? "—"}</TableCell>
+              <TableCell className="text-xs">
+                {r.owner ? (
+                  <Badge variant="secondary">{r.owner}</Badge>
+                ) : (
+                  <span className="text-muted-foreground">Unassigned</span>
+                )}
+              </TableCell>
               <TableCell>{r.materialName ?? "—"}</TableCell>
               <TableCell className="text-xs">
                 {r.tier ? (
