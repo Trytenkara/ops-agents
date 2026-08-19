@@ -97,16 +97,27 @@ export async function raiseDiscardReviewCase(
   // client's own lead for that supplier; without it the case can only be
   // answered, never acted on.
   let leadId = (meta.lead_id as string | undefined) ?? null;
-  if (!leadId && ref.supplier_id) {
-    const { data: lead } = await admin
+  let lead: { id: string; status: string | null; drop_reason: string | null } | null = null;
+  if (leadId) {
+    const { data } = await admin.from("leads_in_flight").select("id, status, drop_reason").eq("id", leadId).maybeSingle();
+    lead = (data as any) ?? null;
+  } else if (ref.supplier_id) {
+    const { data } = await admin
       .from("leads_in_flight")
-      .select("id")
+      .select("id, status, drop_reason")
       .eq("org_id", ref.org_id)
       .eq("supplier_id", ref.supplier_id)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
+    lead = (data as any) ?? null;
     leadId = lead?.id ?? null;
+  }
+
+  // The lead already says why (a dealbreaker grade, a closed company, a dupe).
+  // Asking again would put a decided supplier back in front of an operator.
+  if (lead && lead.status !== "active" && lead.drop_reason) {
+    return { raised: false, reason: "lead_already_decided" };
   }
 
   const supplierLabel = (meta.supplier_name as string | undefined) ?? "this supplier";
