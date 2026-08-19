@@ -34,6 +34,15 @@ import {
 // Detect it so we never draft a reply to the daemon and can restart outreach.
 const CONTACT_GUARD_CHANNEL = () => process.env.SLACK_CONTACT_GUARD_CHANNEL_ID ?? "C0B5M1QCE9E";
 
+// A mailbox that is full, or a server that is briefly refusing mail, is not a
+// dead address: retiring it there would throw away a good contact we would then
+// have to rediscover. Only a permanent failure means nobody is behind it.
+function isPermanentBounce(subject: string | null, body: string | null): boolean {
+  const t = `${subject ?? ""} ${body ?? ""}`.toLowerCase();
+  if (/(mailbox|inbox|quota).{0,20}(full|exceeded)|over quota|temporar|try again later|delayed|will retry|greylist|4\.\d\.\d/.test(t)) return false;
+  return /address not found|no such (user|address|mailbox)|user unknown|recipient.{0,20}(not found|does not exist|rejected)|mailbox (unavailable|does not exist)|does not exist|permanent(ly)? (failed|failure)|5\.\d\.\d/.test(t);
+}
+
 function isBounce(senderAddr: string | null, subject: string | null): boolean {
   const a = (senderAddr ?? "").toLowerCase();
   const s = (subject ?? "").toLowerCase();
@@ -347,7 +356,7 @@ export async function handleInboundReply(
       .from("draft_references")
       .update({
         status: "superseded",
-        metadata: { ...refMeta, flow_status: "bounced", bounced: { at: new Date().toISOString(), from: from.address, needs_new_email: true } },
+        metadata: { ...refMeta, flow_status: "bounced", bounced: { at: new Date().toISOString(), from: from.address, needs_new_email: true, permanent: isPermanentBounce(msg.subject ?? null, msg.body_text ?? null) } },
       })
       .eq("id", ref.id);
     // One line per supplier in the daily digest. A bounce needs a working email
@@ -369,12 +378,17 @@ export async function handleInboundReply(
     // retiring it there the same dead address stays the lead's contact and gets
     // picked straight back up by the next outreach pass, so the supplier bounces
     // forever. Retire it on every active lead in this client that carries it.
+    //
+    // A permanently dead mailbox is dead for every client that writes to it, so
+    // that case is retired fleet-wide rather than leaving the next client to
+    // rediscover the same bounce. A temporary failure (mailbox full, greylisted)
+    // retires nothing: the address is still good.
     const bouncedAddress = String(refMeta.supplier_contact_email ?? "").trim().toLowerCase();
-    if (bouncedAddress && ref.org_id) {
+    const permanent = isPermanentBounce(msg.subject ?? null, msg.body_text ?? null);
+    if (bouncedAddress && ref.org_id && permanent) {
       const { data: carrying } = await admin
         .from("leads_in_flight")
         .select("id, payload")
-        .eq("org_id", ref.org_id)
         .eq("status", "active")
         .eq("payload->>supplier_contact_email", bouncedAddress)
         .limit(500);
