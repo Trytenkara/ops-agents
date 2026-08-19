@@ -2,6 +2,8 @@
 
 ## OUT-01 — Nothing auto-sends (see AUTO-06)
 
+**Enforcement:** Honour — see AUTO-06.
+
 ## OUT-02 — Marketplace storefronts get drafted, on a different channel
 
 Both direct suppliers and marketplace or aggregator storefronts are drafted.
@@ -15,6 +17,8 @@ page that sells nothing, not to a storefront with a real seller behind it.
 **Enforcement:** Honour.
 
 ## OUT-03 — Never guess a contact on a platform host (see DATA-05)
+
+**Enforcement:** Honour — see DATA-05.
 
 ## OUT-04 — One email per supplier, one thread
 

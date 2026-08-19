@@ -56,3 +56,5 @@ An empty or test-only view tells you nothing about whether the design works.
 ## UI-08 — RETIRED: the CSV export sweep
 
 Closed. Do not reopen or resurface it.
+
+**Enforcement:** Retired 2026-08-19.

@@ -22,6 +22,7 @@ lost. Anything in here is versioned, reviewed, and travels with the code.
 | `70-org-isolation.md` | One client's data may never appear under another's name |
 | `80-control-room.md` | Product and UI rules |
 | `90-shipping.md` | Git, build gates, deploy, how an update reaches production |
+| `ENFORCEMENT.md` | Every rule and whether anything actually stops it being broken |
 | `OUTSTANDING.md` | Rules with no machine guard yet, and who owes what |
 | `CONFLICTS.md` | Rules that contradict each other, and the ruling |
 
@@ -34,6 +35,10 @@ exists (usually an incident), and an **Enforcement** line that is one of:
 - **Audit:** a job that detects the break after the fact and reports it.
 - **Honour:** nothing stops it. Every honour rule must also appear in
   `OUTSTANDING.md` with what the guard would be.
+
+The Enforcement line is mandatory: `check-rules` fails the build if a rule in
+this folder does not have one. `ENFORCEMENT.md` is the ledger of all of them,
+and is where you look to see how much of this folder is real.
 
 Ids are permanent. If a rule is retired, mark it RETIRED in place with the
 date and the reason; never reuse or renumber.

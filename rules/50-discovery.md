@@ -22,7 +22,11 @@ discards the very rows the alias search just won.
 
 ## DISC-03 — Aliases never re-specify (see DATA-09)
 
+**Enforcement:** Guard — see DATA-09.
+
 ## DISC-04 — Zero is not empty (see PERS-03)
+
+**Enforcement:** Honour — see PERS-03.
 
 ## DISC-05 — A platform is never the supplier
 

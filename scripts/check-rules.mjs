@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Machine enforcement for the standing rules in /CLAUDE.md.
+// Machine enforcement for the standing rules in /rules.
 //
 // A rule that is only written down is a convention: it holds until someone who
 // has not read it adds a call site. Each rule below is one that has already
@@ -269,6 +269,29 @@ for (const f of files) {
   }
 }
 
+// Every rule in rules/ must declare whether anything actually enforces it.
+// A rule with no Enforcement line reads as enforced and is not, which is how
+// half of these got broken in the first place.
+{
+  const dir = join(ROOT, "rules");
+  for (const name of readdirSync(dir)) {
+    if (!/^\d+.*\.md$/.test(name)) continue;
+    const text = readFileSync(join(dir, name), "utf8");
+    for (const section of text.split(/\n(?=## )/)) {
+      const head = section.match(/^## ([A-Z]+-\d+) — (.+)/);
+      if (!head) continue;
+      if (/^\*\*Enforcement:\*\* \S/m.test(section)) continue;
+      violations.push({
+        rule: "rules/every-rule-declares-enforcement",
+        why: "a rule with no Enforcement line looks enforced and is not, so nobody knows it needs a guard",
+        fix: "add a line '**Enforcement:** Guard — <module or check-rules id>' or 'Audit — <job>' or 'Honour.', and if it is Honour add it to rules/OUTSTANDING.md",
+        where: `rules/${name}`,
+        line: `${head[1]} — ${head[2]}`,
+      });
+    }
+  }
+}
+
 if (!violations.length) {
   console.log(`check-rules: ${files.length} files, no violations.`);
   process.exit(0);
@@ -287,6 +310,6 @@ for (const [rule, list] of byRule) {
   for (const v of list) console.error(`      ${v.where}  ${v.line}`);
   console.error("");
 }
-console.error("These are standing rules from /CLAUDE.md. Fix the call site, or move");
+console.error("These are standing rules from /rules. Fix the call site, or move");
 console.error("the logic into the shared module the rule points at.\n");
 process.exit(1);

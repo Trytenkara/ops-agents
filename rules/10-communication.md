@@ -61,6 +61,9 @@ accepts the bot token. See `OUTSTANDING.md`.
 Routine agent output goes to `#control-room-feedback` (`C0BATUWBHC7`) only, as
 one consolidated post per day. No other channel, no per-event chatter.
 
+**Enforcement:** Honour. See COMM-07 and `OUTSTANDING.md`; the default
+Slack destination is currently a direct message, not the feedback channel.
+
 ## COMM-07 — Failures are the exception to COMM-06
 
 A genuine failure (agents down, a run producing nothing, a client-visible

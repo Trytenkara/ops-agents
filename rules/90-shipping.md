@@ -8,6 +8,8 @@ pair of eyes by default, so the gates below are the whole safety system.
 No feature-branch and pull-request dance unless asked for. A push to `main` is
 a production deploy and is treated as one.
 
+**Enforcement:** Honour.
+
 ## SHIP-02 — Never stage everything
 
 Never `git add -A` or `git add .`. Stage explicit paths. This checkout is
