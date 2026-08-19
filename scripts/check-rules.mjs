@@ -114,6 +114,15 @@ forbid({
       line: "stripInternalNotes call missing",
     });
   }
+  if (style && !/CONCESSION_STRIPS/.test(style.text)) {
+    violations.push({
+      rule: "copy/sanitize-must-strip-concessions",
+      why: "a chase told a live supplier \"if the timing isn't right, just say the word and I'll stop chasing\"",
+      fix: "restore the CONCESSION_STRIPS pass in clean()",
+      where: "src/lib/email-style.ts",
+      line: "CONCESSION_STRIPS missing",
+    });
+  }
   const chokepoint = files.find((f) => f.path.endsWith("src/lib/draft-staging.ts"));
   if (chokepoint && !/tailorToThread\(/.test(chokepoint.text)) {
     violations.push({

@@ -62,6 +62,24 @@ all.
 **Enforcement:** Guard — `src/lib/internal-notes.ts` `stripInternalNotes`
 inside `sanitizeDraft`, `copy/sanitize-must-strip-internal-notes`.
 
+## OUT-14 — Never invite a supplier to end the conversation
+
+No draft offers the supplier an exit, and none apologises for having been sent.
+"If the timing isn't right, just say the word and I'll stop chasing" was live in
+the stalled-thread chase; "No worries if this isn't something you can help with"
+was in a few-shot example the revalidation drafter was learning from. We are the
+buyer, with money, asking a seller for a price. Handing them a scripted no is
+not politeness, it is a lost supplier, and it is what reads as apologetic in a
+chase that is otherwise fine.
+
+This is about the WORDING, not the cadence. The follow-up schedule is OUT-09 and
+is deliberately unchanged.
+
+**Enforcement:** Guard — `CONCESSION_STRIPS` in `src/lib/email-style.ts`, run
+inside `sanitizeDraft` at the staging chokepoint so it covers model-written copy
+as well as templates, plus rule 5 of the `src/lib/thread-tailor.ts` prompt;
+`copy/sanitize-must-strip-concessions`.
+
 ## OUT-07 — Copy bans are applied at staging (see COMM-08)
 
 **Enforcement:** Guard — `copy/staging-must-sanitize`.

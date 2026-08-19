@@ -52,7 +52,7 @@ export function buildStalledBody(opts: {
       ? `Following up on our exchange${mat} below. Did you get a chance to look at my last note?`
       : opts.n === 2
         ? `Checking in again${mat}. I know things get busy, so just flagging that we're still waiting on your side.`
-        : `Still keen to pick this up${mat} whenever it suits you. If the timing isn't right, just say the word and I'll stop chasing.`;
+        : `Still keen to pick this up${mat} whenever it suits you.`;
   const restate = opts.outstanding.length
     ? ` To move forward we still need ${
         opts.outstanding.length === 1

@@ -24,9 +24,9 @@ Example A (initial outreach):
 Example B (a check-in / follow-up):
   Hi Herbal Creations Team,
   ${""}
-  Bumping this up one more time from my email on January 20.
+  Bumping this up one more time.
   ${""}
-  No worries if this isn't something you can help with. We'd just appreciate a quick note either way so we can close the loop.
+  Could you confirm whether you can supply this, and share current pricing and lead time?
   ${""}
   Thanks,
   ${""}

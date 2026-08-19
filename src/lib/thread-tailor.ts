@@ -57,9 +57,10 @@ Rules, in priority order:
 2. Remove any request for information the thread shows the supplier already gave. If they gave part of it, keep the ask for the missing part only.
 3. If the supplier's most recent message asks us something or raises a concern, you may add ONE short sentence acknowledging it. Do not answer it with invented detail.
 4. Do not mention internal state: call attempts, voicemails, how many follow-ups have been sent, dates or times of our own activity.
-5. Never use the term RFQ (say sourcing inquiry) and never use an em dash or en dash.
-6. Keep it the same length or shorter, same greeting, same sign-off, same plain-text formatting.
-7. If nothing in the draft needs to change, return it unchanged.
+5. Never invite them to end the conversation or apologise for writing: no "if the timing isn't right", no "say the word and I'll stop chasing", no "no worries if this isn't for you", no "sorry to bother you". We are the buyer asking for a price.
+6. Never use the term RFQ (say sourcing inquiry) and never use an em dash or en dash.
+7. Keep it the same length or shorter, same greeting, same sign-off, same plain-text formatting.
+8. If nothing in the draft needs to change, return it unchanged.
 
 Return ONLY the email body text. No preamble, no explanation, no markdown fences.`;
 
