@@ -78,3 +78,19 @@ drain first every run. Internal test orgs get leftover capacity only.
 
 **Enforcement:** Guard — `src/lib/org-priority.ts`,
 `queues/no-inline-org-priority`.
+
+## AUTO-10 — Near-duplicate supplier names reach one operator
+
+Two spellings of one company ("Manoj Plastic" and "Manoj Plastics", "Elm Kimya
+A.S." and "Elm Kimya A.Ş.") are one supplier to that supplier, so they are owned
+by one operator within a client. Exact name matches already collapse; near
+matches did not, and were split across two operators.
+
+Grouping applies from the next sourcing exercise onward. A name whose rows
+predate the cutoff keeps the owner it has: retrospective grouping would move
+suppliers a client's operators are already working, which ops asked us not to
+do.
+
+**Enforcement:** Guard — `src/lib/operator-assignment.ts`
+`mergeSimilarNameKeys`, applied inside `getOrgLeadIndex` so every surface that
+resolves an owner shares one key map.

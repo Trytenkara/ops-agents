@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { leadMarketKind, type MarketKind } from "@/lib/lead-market";
 import { selectAllPaged } from "@/lib/supabase-paging";
+import { isSameCompanyName } from "@/lib/fuzzy";
 
 // Sticky-random operator assignment. A supplier is always owned by the SAME
 // operator within an org (so the supplier sees one point of contact), but
@@ -212,9 +213,49 @@ function strongerKey(current: string | undefined, candidate: string): string {
   return candidate < current ? candidate : current;
 }
 
+// A supplier whose name is a near-miss of one we already source ("Manoj Plastic"
+// and "Manoj Plastics", "Elm Kimya A.S." and "Elm Kimya A.Ş.") is one company as
+// far as the supplier is concerned, so it must reach one operator. Exact name
+// matches already collapse through nameKey; these do not, and eight of them were
+// split across two operators for one client alone.
+//
+// Only a name key whose rows are ALL newer than this date is merged onto an
+// established sibling. Merging retrospectively would move suppliers a client's
+// operators are already working, which ops asked us not to do: this applies from
+// the next sourcing exercise onward.
+const SIMILAR_NAME_GROUPING_FROM = "2026-08-19T00:00:00.000Z";
+
+export function mergeSimilarNameKeys(keys: Map<string, string>, firstSeen: Map<string, string>): void {
+  const established: string[] = [];
+  const fresh: string[] = [];
+  for (const nk of keys.keys()) {
+    const seen = firstSeen.get(nk);
+    if (seen && seen >= SIMILAR_NAME_GROUPING_FROM) fresh.push(nk);
+    else established.push(nk);
+  }
+  if (!fresh.length || !established.length) return;
+  const display = (nk: string) => nk.slice("name:".length);
+  for (const nk of fresh) {
+    // Oldest established sibling wins, so two new variants of the same existing
+    // supplier land on the same operator rather than on each other.
+    let best: string | null = null;
+    let bestSeen: string | null = null;
+    for (const other of established) {
+      if (!isSameCompanyName(display(nk), display(other))) continue;
+      const seen = firstSeen.get(other) ?? "";
+      if (best === null || seen < (bestSeen ?? "")) { best = other; bestSeen = seen; }
+    }
+    const target = best ? keys.get(best) : undefined;
+    if (target) keys.set(nk, target);
+  }
+}
+
 export async function getOrgLeadIndex(admin: SupabaseClient, orgId: string): Promise<OrgLeadIndex> {
   const types = new Map<string, MarketKind>();
   const keys = new Map<string, string>();
+  // Earliest row we have for each supplier name, so the similar-name merge can
+  // tell a supplier we have been working from one that just arrived.
+  const firstSeen = new Map<string, string>();
 
   // The scanner's per-lead call, keyed by whatever the spread will be keyed by.
   const leads = await selectAllPaged<{
@@ -223,10 +264,11 @@ export async function getOrgLeadIndex(admin: SupabaseClient, orgId: string): Pro
     supplier_name: string | null;
     site_type: string | null;
     email: string | null;
+    created_at: string | null;
   }>((from, to) =>
     admin
       .from("leads_in_flight")
-      .select("id, supplier_id, supplier_name, site_type:payload->>site_type, email:payload->>supplier_contact_email")
+      .select("id, supplier_id, supplier_name, created_at, site_type:payload->>site_type, email:payload->>supplier_contact_email")
       .eq("org_id", orgId)
       .eq("status", "active")
       .order("id")
@@ -235,6 +277,8 @@ export async function getOrgLeadIndex(admin: SupabaseClient, orgId: string): Pro
   for (const l of leads) {
     if (l.supplier_name) {
       const nk = nameKey(l.supplier_name);
+      const seen = l.created_at ?? "";
+      if (seen && (!firstSeen.has(nk) || seen < firstSeen.get(nk)!)) firstSeen.set(nk, seen);
       keys.set(
         nk,
         strongerKey(
@@ -256,10 +300,11 @@ export async function getOrgLeadIndex(admin: SupabaseClient, orgId: string): Pro
     supplier_name: string | null;
     supplier_type: string | null;
     poc_email: string | null;
+    created_at: string | null;
   }>((from, to) =>
     admin
       .from("supplier_profiles")
-      .select("supplier_id, supplier_name, supplier_type, poc_email")
+      .select("supplier_id, supplier_name, supplier_type, poc_email, created_at")
       .eq("org_id", orgId)
       .order("id")
       .range(from, to)
@@ -267,6 +312,8 @@ export async function getOrgLeadIndex(admin: SupabaseClient, orgId: string): Pro
   for (const r of profiles) {
     if (r.supplier_name) {
       const nk = nameKey(r.supplier_name);
+      const seen = r.created_at ?? "";
+      if (seen && (!firstSeen.has(nk) || seen < firstSeen.get(nk)!)) firstSeen.set(nk, seen);
       keys.set(
         nk,
         strongerKey(
@@ -280,6 +327,8 @@ export async function getOrgLeadIndex(admin: SupabaseClient, orgId: string): Pro
     if (r.supplier_id) types.set(r.supplier_id, kind);
     if (r.supplier_name) types.set(nameKey(r.supplier_name), kind);
   }
+
+  mergeSimilarNameKeys(keys, firstSeen);
 
   return { types, keys };
 }

@@ -34,6 +34,7 @@ otherwise, so a gap cannot go quiet.
 | `AUTO-02` | Decide alone: volume of change | Guard — `src/lib/requirements-recheck.ts` `recheckOrgLeads`. |
 | `AUTO-07` | Owner of an open record is derived, never trusted | Guard — `src/lib/operator-assignment.ts` `recordOwnerId`, |
 | `AUTO-09` | Real clients before internal test orgs | Guard — `src/lib/org-priority.ts`, |
+| `AUTO-10` | Near-duplicate supplier names reach one operator | Guard. `src/lib/operator-assignment.ts` `mergeSimilarNameKeys` in `getOrgLeadIndex`. |
 | `DATA-01` | Never fabricate, approximate or infer a price | Guard — `src/lib/price-publish.ts` `publishablePrice` / |
 | `DATA-02` | A foreign price is published only through one conversion | Guard — `fx/no-direct-convertToUsd`. |
 | `DATA-04` | Agents may never invent a contact detail in an outgoing body | Guard — `src/lib/contact-guard.ts`, |
