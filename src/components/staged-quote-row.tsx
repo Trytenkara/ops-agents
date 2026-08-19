@@ -92,7 +92,25 @@ export function StagedQuoteRow({
           <span className="text-muted-foreground text-xs">—</span>
         )}
       </TableCell>
-      <TableCell className="text-right align-top">{fmtMoney(r.price, r.currency)}</TableCell>
+      {/* A withheld price must say why on the row. The reason was being written
+          to the record and never rendered, so a deliberate blank (no currency
+          stated, no rate reachable, an unusable figure) was indistinguishable
+          from an extraction that simply found nothing, and nobody could act on
+          it. Full text on hover, first clause always visible. */}
+      <TableCell className="text-right align-top">
+        {r.price == null && r.extraction_notes ? (
+          <span className="flex flex-col items-end gap-0.5">
+            <span className="cursor-help text-muted-foreground underline decoration-dotted underline-offset-4" title={r.extraction_notes}>
+              withheld
+            </span>
+            <span className="max-w-[16rem] text-right text-[10px] leading-tight text-amber-700 dark:text-amber-500">
+              {r.extraction_notes.split(". ")[0]}
+            </span>
+          </span>
+        ) : (
+          fmtMoney(r.price, r.currency)
+        )}
+      </TableCell>
       <TableCell className="text-right align-top">{fmt(r.case_size)}</TableCell>
       <TableCell className="align-top">{r.unit_of_measurement ?? "—"}</TableCell>
       {/* A blank per-unit price is a deliberate outcome, not missing data: the

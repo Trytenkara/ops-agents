@@ -304,6 +304,7 @@ export default async function OrgPriceIndexPage({
     materialName: s.material_name ? correctMaterialSpelling(s.material_name) : null,
     tier: stagedPackLabel(s),
     price: s.price != null ? Number(s.price) : null,
+    priceNote: s.price == null ? s.extraction_notes ?? null : null,
     unitPrice: s.unit_price != null ? Number(s.unit_price) : null,
     previousPrice: previous?.price != null ? Number(previous.price) : null,
     previousUnitPrice: previous?.unit_price != null ? Number(previous.unit_price) : null,

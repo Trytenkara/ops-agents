@@ -17,6 +17,9 @@ export type DirectPriceRow = {
   // duplicates.
   tier: string | null;
   price: number | null;
+  // Why this row carries no price. A withheld price is a deliberate outcome
+  // with a reason attached, and a bare dash reads as "we never asked".
+  priceNote: string | null;
   unitPrice: number | null;
   unitOfMeasurement: string | null;
   currency: string | null;
@@ -85,7 +88,7 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
     r.materialName ?? "",
     r.tier ?? "",
     fmtPrice(r, true),
-    fmtPrice(r),
+    fmtPrice(r) || (r.price == null && r.priceNote ? `withheld: ${r.priceNote}` : ""),
     fmtSupplierChanged(r.supplierPriceChangedAt),
     fmtListedPrice(r.listedPrice),
     r.listedCurrency ?? "",
@@ -170,7 +173,16 @@ export function DirectPricesOnFile({ rows, slug }: { rows: DirectPriceRow[]; slu
               <TableCell className="text-right tabular-nums text-muted-foreground">{fmtPrice(r, true) || "—"}</TableCell>
               <TableCell className="text-right tabular-nums">
                 <div className="flex flex-col items-end gap-0.5">
-                  <span className="font-medium text-foreground">{fmtPrice(r) || "—"}</span>
+                  {r.price == null && r.priceNote ? (
+                    <span
+                      className="cursor-help font-medium text-amber-700 underline decoration-dotted underline-offset-4 dark:text-amber-500"
+                      title={r.priceNote}
+                    >
+                      withheld
+                    </span>
+                  ) : (
+                    <span className="font-medium text-foreground">{fmtPrice(r) || "—"}</span>
+                  )}
                   {r.status && r.status !== "approved" && (
                     <Badge variant="secondary" title="Captured from a supplier reply — review under Materials.">
                       {r.status === "pending_review" ? "pending review" : r.status}

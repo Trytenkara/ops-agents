@@ -71,3 +71,16 @@ Judgement for other one-click controls.
 Closed. Do not reopen or resurface it.
 
 **Enforcement:** Retired 2026-08-19.
+
+## UI-10 — A withheld value shows its reason where it renders
+
+When the pipeline deliberately declines to store a value, the surface that
+renders it must say so and say why, in the cell itself, not only in the record
+behind it. An empty cell reads as "nobody has done this yet" and gets ignored;
+"withheld: no currency stated" is a task. The reason travels with the value
+into exports too.
+
+**Enforcement:** Guard — the withheld-price cells in
+`src/components/staged-quote-row.tsx` and
+`src/components/direct-prices-on-file.tsx` (`priceNote`), which render the
+capture reason and carry it into the CSV. Judgement for other withheld fields.
