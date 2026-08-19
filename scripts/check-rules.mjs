@@ -283,6 +283,19 @@ forbid({
   test: (line) => /organization_ids\s*\[\s*\d+\s*\]/.test(line),
 });
 
+{
+  const duplicateGuard = files.find((f) => f.path.endsWith("src/agents-runtime/agents/duplicate-guard/index.ts"));
+  if (!duplicateGuard || !/where\s+\$1\s*=\s*any\(organization_ids\)\s+and\s+cardinality\(organization_ids\)\s*=\s*1/i.test(duplicateGuard.text)) {
+    violations.push({
+      rule: "orgs/duplicate-guard-requires-exclusive-supplier",
+      why: "suppliers are unique per client; a legacy row shared across clients cannot suppress creation of either client's independent supplier row",
+      fix: "Agent 20 must require both org membership and cardinality(organization_ids) = 1 when loading duplicate targets",
+      where: duplicateGuard?.path ?? "src/agents-runtime/agents/duplicate-guard/index.ts",
+      line: "duplicate supplier query does not require exclusive org ownership",
+    });
+  }
+}
+
 forbid({
   rule: "comm/one-slack-channel",
   why: "COMM-06: everything the fleet says goes to one channel. When each caller picked its own, agent output landed in four channels plus two DMs and nobody could tell what had already been read",

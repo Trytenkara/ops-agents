@@ -96,7 +96,7 @@ Audited 2026-08-19. Totals: Audit 1, Guard 23, Honour 43, None 2, Partial 15, Re
 |---|---|---|
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 
-## Guard (24)
+## Guard (25)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -125,6 +125,7 @@ Audited 2026-08-19. Totals: Audit 1, Guard 23, Honour 43, None 2, Partial 15, Re
 | `ORG-03` | Shared natural keys carry the organisation in the database too | Guard — `orgs/upsert-conflict-key-must-include-org` plus the schema migrations. |
 | `ORG-04` | An ambiguous inbound reply goes to triage, not to a guess | Guard — `soleOrgOwner`. |
 | `ORG-08` | Membership in `organization_ids` tests the whole set, never a fixed slot | Guard — `orgs/no-fixed-index-org-membership`. |
+| `ORG-09` | A supplier shared across clients never suppresses a client-owned supplier | Guard — `orgs/duplicate-guard-requires-exclusive-supplier`. |
 | `UI-01` | Never ship a native OS dropdown | Guard — `ui/no-native-select`. |
 | `SHIP-03` | A red build is silent, so build before you push | Guard — pre-push hook, on machines that ran `npm install`. |
 | `SHIP-04` | Rules are checked before the build | Guard. |

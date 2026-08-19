@@ -112,6 +112,7 @@ registerAgent({
           `select id, name, website, coalesce(is_marketplace, false) as is_marketplace
              from suppliers
             where $1 = any(organization_ids)
+              and cardinality(organization_ids) = 1
             limit ${SUPPLIER_SCAN_LIMIT}`,
           [org.tenkara_org_id]
         );

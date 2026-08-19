@@ -77,6 +77,19 @@ in TypeScript. A positional index is never a membership test.
 
 **Enforcement:** Guard — `orgs/no-fixed-index-org-membership`.
 
+## ORG-09 — A supplier shared across clients never suppresses a client-owned supplier
+
+Suppliers are qualified and contacted independently for each client. A legacy
+supplier row whose `organization_ids` contains more than one client is therefore
+not evidence that the supplier already exists for either client's independent
+pipeline. Duplicate prevention may compare a lead only with supplier rows whose
+organisation set is exactly that lead's client.
+
+For Agent 20 this means both `$1 = any(organization_ids)` and
+`cardinality(organization_ids) = 1`. Membership alone is not ownership.
+
+**Enforcement:** Guard — `orgs/duplicate-guard-requires-exclusive-supplier`.
+
 ## ORG-07 — Unaudited edge
 
 The inbox application is not in this repository, so the uniqueness scope of the
