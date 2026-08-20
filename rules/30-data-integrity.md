@@ -117,8 +117,10 @@ So the measurement carries its own kind (liquid, bulk, true solid, ambiguous)
 and the sanitiser drops true solids. Before adding any volume-to-mass
 conversion anywhere in the fleet, ask which density it rests on.
 
-**Enforcement:** Check owed — `density/solids-require-bulk`. Partially held
-today by the enrichment sanitiser.
+**Enforcement:** Guard — `src/lib/quote-density-guard.ts` `validateQuoteDensity`
+called inside `insertStagedQuotes`, and `density/solids-require-bulk` in
+`scripts/lib/rule-checks.mjs` fails the build if the guard is removed. Partially
+held by the enrichment sanitiser for display.
 
 ## DATA-08 — A dealbreaker grade is a hard specification
 

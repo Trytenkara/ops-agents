@@ -466,7 +466,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | AUTO-08 | `assignment/call-owner-must-be-call-operator` |
 | DATA-05 | `contacts/guessed-combo-requires-own-domain-and-flag` |
 | DATA-06 | `contacts/confidence-derived-from-source` — see the P0 above |
-| DATA-07 | `density/solids-require-bulk` |
 | PERS-02 | `queues/flag-must-not-exit-queue` |
 | PERS-03 | `discovery/zero-must-not-be-terminal` — see the P1 above |
 | PERS-04 | `retry/bound-must-be-declared` |

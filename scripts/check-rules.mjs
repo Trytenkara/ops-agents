@@ -17,7 +17,7 @@
 // the workspace repo's pre-commit hook is what runs it.
 
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
-import { join, relative, dirname } from "node:path";
+import { join, relative, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runChecks } from "./lib/rule-checks.mjs";
 import { selfTest } from "./lib/rule-self-test.mjs";
@@ -43,6 +43,7 @@ const files = walk(join(ROOT, "src")).map((p) => read(p, ROOT));
 
 // Skills are Python and plain JS as well as TypeScript, and their SKILL.md is
 // where an agent is told which channel to watch, so markdown is code here too.
+let only = null;
 const alsoAt = process.argv.indexOf("--also");
 if (alsoAt !== -1) {
   const dir = process.argv[alsoAt + 1];
@@ -51,13 +52,19 @@ if (alsoAt !== -1) {
     process.exit(1);
   }
   files.push(...walk(dir, /\.(ts|tsx|js|mjs|cjs|py|sh|md)$/).map((p) => read(p, dirname(dir))));
+  // The second corpus still needs this repository in the file list — several
+  // checks read a module here to decide whether a rule holds. But when the
+  // caller is the other repository's commit hook, only its own files are its
+  // business: this repo's uncommitted work in progress is not that commit's
+  // fault, and blocking on it teaches people to reach for --no-verify.
+  if (process.argv.includes("--also-only")) only = `${basename(dir)}/`;
 }
 
 if (process.argv.includes("--self-test")) {
   process.exit(selfTest(files, RULES) ? 0 : 1);
 }
 
-const violations = runChecks(files, RULES);
+const violations = runChecks(files, RULES).filter((v) => !only || v.where.startsWith(only));
 
 if (!violations.length) {
   console.log(`check-rules: ${files.length} files, no violations.`);

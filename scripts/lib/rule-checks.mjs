@@ -795,5 +795,38 @@ export function runChecks(files, rulesDir) {
   }
 
 
+  // DATA-07: Volume-based quotes require density for $/lb conversion.
+  // Check that insertStagedQuotes calls validateQuoteDensity.
+  const sq = files.find((f) => f.path === "src/lib/staged-quotes.ts");
+  if (sq && !sq.text.includes("validateQuoteDensity")) {
+    violations.push({
+      rule: "DATA-07",
+      message: "insertStagedQuotes must call validateQuoteDensity to enforce density requirement",
+      fix: "import { validateQuoteDensity } from '@/lib/quote-density-guard' and call it in the quote processing loop",
+      where: "src/lib/staged-quotes.ts",
+      line: "insertStagedQuotes function",
+    });
+  }
+
+  // DATA-07: quote-density-guard must exist and export the guard functions.
+  const guard = files.find((f) => f.path === "src/lib/quote-density-guard.ts");
+  if (guard && (!guard.text.includes("export function validateQuoteDensity") || !guard.text.includes("export function assertQuoteDensity"))) {
+    violations.push({
+      rule: "DATA-07",
+      message: "quote-density-guard must export both validateQuoteDensity and assertQuoteDensity",
+      fix: "ensure both functions are exported",
+      where: "src/lib/quote-density-guard.ts",
+      line: "exports",
+    });
+  } else if (!guard) {
+    violations.push({
+      rule: "DATA-07",
+      message: "quote-density-guard.ts does not exist",
+      fix: "create src/lib/quote-density-guard.ts with validateQuoteDensity and assertQuoteDensity exports",
+      where: "src/lib/quote-density-guard.ts",
+      line: "file anchor",
+    });
+  }
+
   return violations;
 }

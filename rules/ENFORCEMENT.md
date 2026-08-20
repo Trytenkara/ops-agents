@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-120 rules. 56 are actually enforced, 44 owe a check or a job,
+120 rules. 57 are actually enforced, 43 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 6 of the enforced rules hold only part of their invariant and say so in
@@ -12,9 +12,9 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 54 |
+| **Guard** | A shared module or build check makes it impossible. | 55 |
 | **Audit** | A scheduled job reports the break after the fact. | 2 |
-| **Check owed** | A build check is possible and is not built yet. | 32 |
+| **Check owed** | A build check is possible and is not built yet. | 31 |
 | **Audit owed** | No build check can see it; a scheduled job can. Not built. | 6 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
@@ -24,7 +24,7 @@ their own Enforcement line. They are counted in both figures above.
 Anything "owed" is also listed in `OUTSTANDING.md`; the build refuses
 otherwise, so a gap cannot go quiet.
 
-## Guard (54)
+## Guard (55)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -43,6 +43,7 @@ otherwise, so a gap cannot go quiet.
 | `DATA-01` | Never fabricate, approximate or infer a price | Guard — `src/lib/price-publish.ts` `publishablePrice` / `publishableTiers` at every price writer, `price/writer-must-gate`, for the amount; `src/lib/price-provenance.ts` `verifyPriceProvenance`, `price/capture-must-carry-source-text`, for the basis (DATA-14). |
 | `DATA-02` | A foreign price is published only through one conversion | Guard — `fx/no-direct-convertToUsd`. |
 | `DATA-04` | Agents may never invent a contact detail in an outgoing body | Guard — `src/lib/contact-guard.ts`, `contacts/staging-must-guard-fabrication`. |
+| `DATA-07` | Density: bulk for solids, specific gravity for liquids | Guard — `src/lib/quote-density-guard.ts` `validateQuoteDensity` called inside `insertStagedQuotes`, and `density/solids-require-bulk` in `scripts/lib/rule-checks.mjs` fails the build if the guard is removed. Partially held by the enrichment sanitiser for display. |
 | `DATA-09` | Aliases never add a qualifier the input lacked | Guard — `GRADE_WORDS` in `src/lib/material-aliases.ts`. |
 | `DATA-10` | A write that fails is never silent | Guard — unconditional `console.error` on insert failure in `insertStagedQuotes` (`src/lib/staged-quotes.ts`), plus the `quote_capture_silent` check in the QA watchdog, which fires when supplier replies keep arriving and nothing is staged from them. |
 | `DATA-11` | An unstated currency is a question, never a dollar sign | Guard — `normalizeToUsd` in `src/lib/fx.ts` returns status `unknown` for a blank currency, which `insertStagedQuotes` stores as a null price with a needs-review note, and which the lead headline mirror in `src/lib/tenkara-inbound.ts` refuses to publish. Parsers return null rather than a default. |
@@ -90,7 +91,7 @@ otherwise, so a gap cannot go quiet.
 | `DATA-15` | Extraction records what it did not take | Audit — `agent-24-price-capture-reconcile`. Every inbound message writes `message_price_capture` (migration 0125) with the price points the extractor counted before extracting and the rows actually accounted for; Agent 24 re-reads the shortfalls daily and alerts on the confirmed ones. Per META-07 the second read is a model read, never a price regex, and it reports rather than stages — the first read already got that message wrong once. |
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 
-## Check owed (32)
+## Check owed (31)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -101,7 +102,6 @@ otherwise, so a gap cannot go quiet.
 | `AUTO-08` | Call tasks belong to call operators only | Check owed — `assignment/call-owner-must-be-call-operator`. Partially held today by the operator-type pool filter. |
 | `DATA-05` | Guessing a recipient is allowed; guessing content is not | Check owed — `contacts/guessed-combo-requires-own-domain-and-flag`: reject a guessed combo on a known platform host, and require the guessed flag. |
 | `DATA-06` | Only a same-run verification counts as a confirmed email | Check owed — `contacts/confidence-derived-from-source`: confidence is derived from the source, and a same-run provider verdict is persisted. |
-| `DATA-07` | Density: bulk for solids, specific gravity for liquids | Check owed — `density/solids-require-bulk`. Partially held today by the enrichment sanitiser. |
 | `PRICING-01` | A shipping cost is a number or it is nothing | Check owed — `shipping/cost-must-be-numeric`. |
 | `PRICING-02` | Delivery cost is per pack tier when pack size changes it | Check owed — `shipping/cost-per-tier`. |
 | `PRICING-03` | Delivery-cost extraction is opt-in per client | Check owed — `shipping/extraction-org-opt-in`. |

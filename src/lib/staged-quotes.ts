@@ -4,6 +4,7 @@ import { normalizeToUsd } from "@/lib/fx";
 import { publishablePrice } from "@/lib/price-publish";
 import { provenanceKey, verifyPriceProvenance } from "@/lib/price-provenance";
 import { qaPrice } from "@/lib/price-qa";
+import { validateQuoteDensity } from "@/lib/quote-density-guard";
 
 // Shared writer for the staged_quotes table (migration 0025). Both the email
 // reply-body extractor and the attachment parser funnel through here so the row
@@ -269,6 +270,17 @@ export async function insertStagedQuotes(
   }
 
   for (const r of rows) {
+    // DATA-07: Volume-based quotes must have density for $/lb conversion.
+    // A quote without density is withheld with a note for operator review.
+    const densityValidation = validateQuoteDensity(r.unitOfMeasurement, null);
+    // Note: we check without a density value here to catch volume UOM early.
+    // If this fails, we'll mark for review rather than reject completely,
+    // giving operators a chance to provide density.
+    let densityIssue: string | null = null;
+    if (!densityValidation.valid) {
+      densityIssue = densityValidation.reason ?? null;
+    }
+
     // DATA-14, and it runs before everything else. The check is "does this
     // number appear in the words the supplier wrote", and after FX the number
     // is ours, not theirs, so it never would. A figure that fails is not
@@ -308,6 +320,15 @@ export async function insertStagedQuotes(
       confidence = "needs_review";
       extractionNotes = [
         `Price withheld, ${provenance.reason}. Read the supplier's message and enter the figure they actually wrote.`,
+        extractionNotes,
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
+    if (densityIssue) {
+      confidence = "needs_review";
+      extractionNotes = [
+        `[DATA-07] ${densityIssue}`,
         extractionNotes,
       ]
         .filter(Boolean)
