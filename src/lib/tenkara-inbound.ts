@@ -835,6 +835,7 @@ export async function handleInboundReply(
           if (
             !verifyPriceProvenance({
               price: c.q.price,
+              caseSize: c.q.case_size,
               unitOfMeasurement: c.q.unit_of_measurement,
               sourceText: c.q.price_source_text,
             }).ok

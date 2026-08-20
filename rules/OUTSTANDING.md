@@ -89,21 +89,26 @@ reconciling them against `staged_quotes`, because the table could not be
 checked against itself.
 
 **The forward half is fixed, same day.** DATA-14, DATA-15 and DATA-16 now hold
-guards and an audit: a price whose amount and unit do not both appear in the
+guards and an audit: a price that does not reconcile arithmetically against the
 supplier's own words is withheld rather than stored, `confidence` is derived
-from `price-qa` instead of self-reported, and every inbound message records
-what it stated against what was staged so a miss leaves a mark. What follows is
-the residue that fix does not touch, because it is forward-only.
+from `price-qa` instead of self-reported, and every inbound message records what
+it stated against what was staged so a miss leaves a mark. What follows is the
+residue that fix does not touch, because it is forward-only.
 
-Against 54 price points the suppliers actually sent, the table holds 48
-distinct rows (plus one duplicate). Of those 48, five are wrong and all five
-are stamped `confidence: high`:
+**Correction, 2026-08-20.** The first pass through these rows was itself wrong
+and this section said so for a day. It read `price` as a per-unit figure when
+`price` is the price of a CASE and `unit_price` is the derived per-unit column,
+so four rows quoting `usd####/mt` against a 1000 kg case — Jiangsu Yny 2900,
+Shandong Andy 1335, Henan Chemger 1280 — and Katonah's 620.5410 against a 518 lb
+drum were reported as defects when all four are correct. Katonah is off by
+0.04%, the supplier's own rounding. Re-verified against the source emails.
 
-- Katonah: the email says "Drums are 518lbs at 1.1975/lb"; the row says
-  620.5410 USD/lb. The extractor multiplied the unit price by the drum weight
-  and stored the product as a unit price. That number was never quoted.
-- Four rows (Jiangsu Yny 2900, Shandong Andy 1335, Henan Chemger 1280, Yujiang
-  1015) hold per-tonne prices labelled per kg. All arrived as `usd####/mt`.
+Against 54 price points the suppliers actually sent, the table holds 48 distinct
+rows (plus one duplicate). **One is wrong:** Yujiang, row
+`5bee93d0-0876-4a22-ab21-4b5e447dd118`. The email says "EXW price: USD1015/MT;
+Packing: 180KGS/Drum"; the row stores 1015 against a 180 kg case, so the
+material reads $5.64/kg instead of $1.015/kg. The basis was read off the packing
+line. Stamped `confidence: medium`, `status: pending_review`.
 
 Six price points produced no row at all, and no record that anything was read:
 Shandong Depu (usd1300/mt), Sinochem Nanjing (USD1450/MT) and Hefei TNJ
@@ -111,20 +116,28 @@ Shandong Depu (usd1300/mt), Sinochem Nanjing (USD1450/MT) and Hefei TNJ
 was dropped, leaving the superseded 1.49 as the client's live figure; Reroot's
 second material was dropped.
 
-Every one of those rows is still in the table as found, and every one of them
-still reads `confidence: high` to an operator. The new gate runs at capture
-time, so it cannot reach a row captured before it existed: nothing re-reads
-history, and no stored row carries the source fragment the guard needs, so the
-bad rows cannot even be identified in bulk by the same test that would now stop
-them. Scope beyond this one client is unmeasured — the same read has not been
-run for the rest of the fleet, and the per-message ledger only starts counting
-from messages that arrive after 2026-08-19.
+The misses are not an extractor fault. `inbound_message_ledger` marks those
+suppliers `recorded_unmatched`: the replies never reached extraction at all.
+`unmatched_inbound_events` holds 85 unmatched inbound replies in the 30 days to
+2026-08-20 — 38 California Chemicals, 8 for org
+`96552a6f-75cd-44c3-8557-d2ef19bfbdf8`, 39 with a null org. Of 33 distinct
+unmatched CalChem conversations, 11 contain a price. That is the live cause of
+missing prices and it is still running.
 
-**Owed:** a re-extract path, since none exists and the capture-time fix leaves
-every existing row exactly as it is; correcting the five known-bad California
-Chemicals rows and staging the six missed price points; and the same
-reconciliation run fleet-wide to size the residue, which is the only way to
-learn whether this client was unusual or typical.
+The wrong row is still in the table as found. The new gate runs at capture time,
+so it cannot reach a row captured before it existed: nothing re-reads history,
+and no stored row carries the source fragment the guard needs, so a bad row
+cannot be identified in bulk by the same test that would now stop it. Scope
+beyond this one client is unmeasured — the same read has not been run for the
+rest of the fleet, and the per-message ledger only starts counting from messages
+that arrive after 2026-08-19.
+
+**Owed:** the root cause of the 85 unmatched inbound replies, and a replay so
+the six missed price points arrive through the normal path; a re-extract path,
+since none exists and the capture-time fix leaves every existing row exactly as
+it is; correcting the Yujiang row; and the same reconciliation run fleet-wide to
+size the residue, which is the only way to learn whether this client was unusual
+or typical.
 
 ## P1 — The em dash and RFQ check matches nothing
 

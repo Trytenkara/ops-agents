@@ -15,7 +15,7 @@ positive, under ten million, and the currency invariant; it cannot see that a
 figure was multiplied out of a pack weight or that a per-tonne price was
 labelled per kg. On the supplier-email path both went through it stamped
 `confidence: high`. The basis half is now held separately by DATA-14: a staged
-price whose amount and unit do not both appear in the supplier's own words is
+price that does not reconcile arithmetically against the supplier's own words is
 withheld before it reaches this gate.
 
 **Enforcement:** Guard — `src/lib/price-publish.ts` `publishablePrice` /
@@ -169,22 +169,33 @@ ruled on this price.
 ## DATA-14 — A captured price carries the words it was read from
 
 Every staged price stores the verbatim fragment of the supplier's own message
-it came from, and both the amount and its unit must be present in that
-fragment. A number that cannot be traced back to the supplier's words was
-computed, not captured, and a computed number is withheld under DATA-01.
+it came from, and the row has to reconcile against it: `price / case_size`,
+converted, must equal a rate the fragment states. A number that does not
+reconcile was computed, not captured, and a computed number is withheld under
+DATA-01.
 
 This is the positive form of "do not do arithmetic on a quote". The prompt
-already forbids DIVIDING a price by a pack size; it said nothing about
-multiplying, so Katonah's "Drums are 518lbs at 1.1975/lb" was stored as
-620.5410 USD/lb — the unit price times the drum weight, roughly 518x the real
-figure, stamped `confidence: high`. Four further rows carried per-tonne prices
-(`usd1280/mt`) labelled per kg, also `high`. No blocklist would have caught
-either; requiring the source text catches both, and every future variant,
-because a fabricated figure cannot produce a fragment containing itself.
+already forbids DIVIDING a price by a pack size; it said nothing about reading
+the basis off the wrong line, so Yujiang's "EXW price: USD1015/MT; Packing:
+180KGS/Drum" was stored as 1015 against a 180 kg case — $5.64/kg for a material
+quoted at $1.015/kg, 5.6x too expensive, stamped `confidence: high`. No
+blocklist would have caught it. The arithmetic does, and catches every future
+variant, because a wrong basis cannot reproduce the supplier's own rate.
+
+Check the arithmetic, never the wording. The first version of this guard
+compared the unit WORD and required the stored amount to appear literally in the
+fragment. Both premises were wrong for this schema, where `price` is the price
+of a CASE: three correct rows quoting "USD 1,280/MT" against a 1000 kg case were
+rejected for saying kg where the supplier said MT — the same offer in different
+words — and a correctly derived case price (518 lb at 1.1975/lb is 620.31) is a
+number the supplier never wrote. A guard that withholds correct prices trains
+operators to override it.
 
 The same fragment is what lets anyone audit the table without re-reading the
 mailbox. Reconciling 49 rows for one client against the original threads took a
-full session precisely because no row said where its number came from.
+full session precisely because no row said where its number came from — and the
+first pass through them was itself wrong, reading case prices as per-unit
+prices, which is how four correct rows came to be reported as defects.
 
 **Enforcement:** Guard — `price/capture-must-carry-source-text`:
 `verifyPriceProvenance` in `src/lib/price-provenance.ts` is applied by

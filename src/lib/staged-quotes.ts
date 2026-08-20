@@ -282,6 +282,7 @@ export async function insertStagedQuotes(
     // note, which is what an operator needs to fix it in seconds.
     const provenance = verifyPriceProvenance({
       price: r.price,
+      caseSize: r.caseSize,
       unitOfMeasurement: r.unitOfMeasurement,
       sourceText: r.priceSourceText,
     });
