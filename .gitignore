@@ -13,3 +13,8 @@ tsconfig.tsbuildinfo
 # Coredumps (a 2.4GB one was committed by accident)
 core
 core.*
+
+# Scratch query runners. One got committed by accident; they are one-off
+# diagnostics whose findings belong in rules/OUTSTANDING.md, not in the repo.
+q.mjs
+scripts/q-*.mts
