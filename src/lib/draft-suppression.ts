@@ -27,6 +27,7 @@ const SYSTEM_DISCARD_REASONS = new Set([
   "contact_email_removed",
   "lead_dropped",
   "superseded_by_newer_draft",
+  "triage_resolved",
 ]);
 
 /** Kinds we compose on our own initiative, so a rejection means "stop". */

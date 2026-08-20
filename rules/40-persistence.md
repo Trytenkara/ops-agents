@@ -78,3 +78,39 @@ written and never surfaced is a silent failure wearing a reason code.
 **Enforcement:** Audit owed — a daily count of withheld prices with no
 surface, plus the surface itself on the client's own tab (see
 `80-control-room.md`). See `OUTSTANDING.md`.
+
+## PERS-08 — The record of a failure is never proof of success
+
+Parking something for triage produces artefacts: a case, a clarification draft,
+a ledger row. None of them are the work. An idempotency check that cannot tell
+the two apart turns one miss into a permanent one, because every later attempt
+sees the artefact, calls the job done, and stops — including the attempt made
+after the original bug was fixed.
+
+The inbound router did exactly this. It skipped any message that already had a
+draft naming it, and the clarification draft the router itself stages on a
+parked message names it. So the ORG-11 casualties stayed parked after ORG-11
+was fixed: the replay matched the supplier correctly and then returned
+"deduped" against the evidence of the very failure it had just repaired. Four
+California Chemicals threads were replayed on 2026-08-20 and produced nothing
+for this reason.
+
+Where a check asks "have we already handled this", it must name the artefacts
+that mean handled, never assume anything present means handled. And it must not
+fail open: a `maybeSingle` read of a set that can hold two rows returns neither,
+which is the opposite answer.
+
+The artefacts also have to be retired once the message is answered, or they
+outlive the failure they describe. The clarification draft is the dangerous
+half: it is review-only, it sits in the operator's queue, and sending it asks a
+supplier who they are on a thread we have just replied to properly. One went out
+to Reroot on 2026-08-18 that way. Retiring it is local bookkeeping and must stay
+that way — Tenkara holds one draft slot per conversation, so the reply has
+already overwritten the clarification in the email app, and deleting the draft
+there would delete the reply.
+
+**Enforcement:** Guard — the reply-drafted check in `src/lib/tenkara-inbound.ts`
+excludes `unmatched_inbound_clarification` and `retireUnmatchedTriage` closes
+the case and the draft on a successful match;
+`replies/idempotency-must-exclude-triage-artefacts` fails the build if the check
+stops distinguishing them or the retirement is dropped.

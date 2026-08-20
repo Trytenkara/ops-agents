@@ -423,6 +423,43 @@ for (const f of files) {
   }
 }
 
+// PERS-08. The clarification draft staged on a parked message names that
+// message, so an idempotency check keyed on the name alone reads the record of
+// a failure as proof the work was done, and no later attempt can ever undo it.
+// The check has to exclude the triage artefact, and has to read the set rather
+// than maybeSingle, which returns nothing when a message carries both.
+{
+  const router = files.find((f) => f.path.endsWith("src/lib/tenkara-inbound.ts"));
+  // The check itself: from the lookup key to the early return it guards.
+  const idempotency = router?.text.match(/in_reply_to_message_id[\s\S]{0,800}?deduped:\s*true/)?.[0];
+  const distinguishes = idempotency?.includes("unmatched_inbound_clarification");
+  const failsOpen = /maybeSingle\(\)/.test(idempotency ?? "");
+  if (!distinguishes || failsOpen) {
+    violations.push({
+      rule: "replies/idempotency-must-exclude-triage-artefacts",
+      why: !distinguishes
+        ? "the clarification draft staged on a parked reply names the message it failed to match, so counting it as a prior reply makes one miss permanent — the fixed router replays the message and returns deduped against its own failure"
+        : "maybeSingle returns nothing when a message carries both a real reply and a clarification draft, so the duplicate check fails open and the supplier is answered twice",
+      fix: "read the matching draft_references as a list and ignore rows whose metadata.draft_kind is unmatched_inbound_clarification",
+      where: router?.path ?? "src/lib/tenkara-inbound.ts",
+      line: !distinguishes
+        ? "reply-drafted check does not exclude unmatched_inbound_clarification"
+        : "reply-drafted check uses maybeSingle on a set that can hold two rows",
+    });
+  }
+  // The other half: an answered message must not leave its triage artefacts
+  // behind. The clarification draft is review-only and still sendable.
+  if (router && !/await retireUnmatchedTriage\(/.test(router.text)) {
+    violations.push({
+      rule: "replies/idempotency-must-exclude-triage-artefacts",
+      why: "the open case and the review-only 'who are you?' draft outlive the failure they describe, and an operator can still send the draft on a thread we have just answered properly",
+      fix: "call retireUnmatchedTriage on the successful-draft path in handleInboundReply",
+      where: router.path,
+      line: "a matched reply does not retire the triage case and clarification draft",
+    });
+  }
+}
+
 // ORG-08. `organization_ids` is the set of every client that owns a shared row.
 // Indexing a fixed slot (`organization_ids[1]`) only matches rows where that
 // client sorts first, so a supplier shared with a second client is invisible to

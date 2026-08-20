@@ -335,12 +335,24 @@ export async function handleInboundReply(
   if (!ref) return await recordUnmatchedInbound(admin, msg, inboundOrg);
 
   // 2. Idempotency: if we already drafted a reply for this inbound message, no-op.
-  const { data: dupe } = await admin
+  //
+  // A clarification draft is not a reply. It is the artefact of failing to match
+  // this very message, and counting it here made that failure permanent: once a
+  // message had been parked, the router could never reconsider it, because the
+  // evidence of the miss read as evidence of success. That is what kept every
+  // ORG-11 casualty parked after the router itself was fixed. Only a draft that
+  // actually answers the supplier proves the message was handled (PERS-08).
+  //
+  // Read the list, not maybeSingle: a message can carry both artefacts, and
+  // maybeSingle returns nothing at all on two rows, which fails the check open.
+  const { data: priorDrafts } = await admin
     .from("draft_references")
-    .select("id")
+    .select("id, metadata")
     .eq("email_client", "rod_app")
-    .eq("metadata->>in_reply_to_message_id", msg.message_id)
-    .maybeSingle();
+    .eq("metadata->>in_reply_to_message_id", msg.message_id);
+  const dupe = (priorDrafts ?? []).find(
+    (d: any) => (d.metadata ?? {}).draft_kind !== "unmatched_inbound_clarification"
+  );
   if (dupe) return { status: 200, body: { deduped: true, draft_ref_id: dupe.id } };
 
   const refMeta = (ref.metadata ?? {}) as Record<string, any>;
@@ -1331,7 +1343,15 @@ export async function handleInboundReply(
     })
     .eq("id", ref.id);
 
-  return { status: 200, body: { drafted: true, draft_ref_id: staged.draftRefId, draft_id: staged.draftId, quotes_staged: quotesStaged, introduced_materials: introducedMaterialIds.length, domain_match_fallback: domainMatchFallback || undefined, exact_address_match: exactAddressMatch || undefined, alias_address_match: aliasAddressMatch || undefined } };
+  // 9. This message may have been parked for triage before. Answering it makes
+  //    the case and the "who are you?" draft wrong, and a wrong draft an
+  //    operator can still send is worse than a wrong case (PERS-08).
+  const retired = await retireUnmatchedTriage(admin, {
+    conversationId: msg.conversation_id,
+    messageId: msg.message_id,
+  });
+
+  return { status: 200, body: { drafted: true, draft_ref_id: staged.draftRefId, draft_id: staged.draftId, quotes_staged: quotesStaged, introduced_materials: introducedMaterialIds.length, domain_match_fallback: domainMatchFallback || undefined, exact_address_match: exactAddressMatch || undefined, alias_address_match: aliasAddressMatch || undefined, triage_retired: retired.casesClosed + retired.draftsRetired || undefined } };
 }
 
 async function recordUnmatchedInbound(
@@ -1528,4 +1548,58 @@ async function recordUnmatchedInbound(
   });
 
   return { status: 200, body: { recorded_unmatched: true, org_id: inboundOrg.orgId, case_id: caseId, draft_ref_id: draftRefId } };
+}
+
+/**
+ * Retires the artefacts a parked reply left behind, once that same message has
+ * been matched and answered. The open triage case is resolved and the
+ * review-only clarification draft — the one asking the sender who they are — is
+ * discarded, because an operator can still send it, on a thread we have just
+ * replied to properly (PERS-08).
+ *
+ * Local bookkeeping only, deliberately. Tenkara holds ONE draft slot per
+ * conversation, so the reply staged a moment ago has already overwritten the
+ * clarification in the email app: on three of the four threads replayed on
+ * 2026-08-20 the reply carries the clarification's own draft id. Calling the
+ * delete API here would delete the reply now occupying that slot.
+ */
+export async function retireUnmatchedTriage(
+  admin: Admin,
+  args: { conversationId: string; messageId: string }
+): Promise<{ casesClosed: number; draftsRetired: number }> {
+  const { data: closed } = await admin
+    .from("cases")
+    .update({
+      status: "resolved",
+      resolved_at: new Date().toISOString(),
+      resolution_note:
+        "Matched and answered automatically. The reply was parked by the agreement test counting an unlinked supplier id as a second supplier (ORG-11).",
+    })
+    .eq("type", "unmatched_inbound")
+    .eq("status", "open")
+    .eq("metadata->>message_id", args.messageId)
+    .select("id");
+
+  // Only ones still awaiting review. A sent clarification is history: the
+  // supplier already received it and nothing here can take it back.
+  const { data: stale } = await admin
+    .from("draft_references")
+    .select("id, metadata")
+    .eq("metadata->>unmatched_event_key", `${args.conversationId}:${args.messageId}`)
+    .eq("status", "staged");
+  let draftsRetired = 0;
+  for (const row of (stale ?? []) as any[]) {
+    const { error } = await admin
+      .from("draft_references")
+      .update({
+        status: "discarded",
+        // A system reason, so this never suppresses the address or asks an
+        // operator why it happened (OUT-15).
+        metadata: { ...(row.metadata ?? {}), discarded_reason: "triage_resolved" },
+      })
+      .eq("id", row.id);
+    if (!error) draftsRetired++;
+  }
+
+  return { casesClosed: closed?.length ?? 0, draftsRetired };
 }
