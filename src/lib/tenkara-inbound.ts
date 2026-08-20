@@ -7,6 +7,7 @@ import { stageReferredSuppliers } from "@/lib/referred-suppliers";
 import { extractQuotesFromReplyText, type ExtractedQuote, type ReplyQuoteExtraction } from "@/lib/reply-quote-extract";
 import { insertStagedQuotes, type StagedQuoteInput, type StagedQuoteSource } from "@/lib/staged-quotes";
 import { normalizeToUsd } from "@/lib/fx";
+import { verifyPriceProvenance } from "@/lib/price-provenance";
 import { classifyDocType, insertSupplierDocuments, type SupplierDocumentInput } from "@/lib/supplier-documents";
 import { syncDocRequirementsMet } from "@/lib/document-requirements";
 import { extractDocumentFields, isDocExtractableExt } from "@/lib/document-extract";
@@ -631,8 +632,17 @@ export async function handleInboundReply(
   // photographed price sheets). Best-effort: extraction must never block the
   // reply draft.
   let quotesStaged = 0;
+  // Price points this message produced that are ACCOUNTED FOR: newly stored plus
+  // the ones dedup recognised as already stored. The reconciliation ledger has to
+  // use this rather than the insert count, or a webhook retry — where everything
+  // dedups and nothing inserts — would report every price in the message as
+  // missed.
+  let quotesAccountedFor = 0;
   let bodyExtraction: ReplyQuoteExtraction = {
     quotes: [],
+    // Null, not 0: this is the value before the read has happened, and it must
+    // not be able to claim the message held no prices.
+    pricePointsPresent: null,
     details: {
       material_name: null, case_size: null, unit_of_measurement: null, case_type: null,
       case_length: null, case_width: null, case_height: null, dimensions_unit: null, case_weight: null,
@@ -777,6 +787,7 @@ export async function handleInboundReply(
         materialId: ref.material_id,
         materialName: q.material_name ?? leadRow?.material_name ?? null,
         price: q.price,
+        priceSourceText: q.price_source_text ?? null,
         caseSize: q.case_size,
         unitPriceGapReason: q.unit_price_gap_reason ?? null,
         unitOfMeasurement: q.unit_of_measurement,
@@ -795,6 +806,7 @@ export async function handleInboundReply(
       }));
       const res = await insertStagedQuotes(admin, staged);
       quotesStaged = res.inserted;
+      quotesAccountedFor = res.inserted + res.skippedDuplicates;
 
       // Mirror the freshest captured price/grade onto the lead so the Leads tab
       // shows the returned quote, not just a "supplier replied" marker. Lowest
@@ -816,6 +828,18 @@ export async function handleInboundReply(
         }> = [];
         for (const c of captured) {
           if (c.q.price == null) continue;
+          // Same gate as the staged-quotes writer, because this is a second
+          // publish path: the headline lands on the Leads tab without passing
+          // through insertStagedQuotes, so a figure withheld from review would
+          // otherwise still be shown to the client here (DATA-14).
+          if (
+            !verifyPriceProvenance({
+              price: c.q.price,
+              unitOfMeasurement: c.q.unit_of_measurement,
+              sourceText: c.q.price_source_text,
+            }).ok
+          )
+            continue;
           const norm = await normalizeToUsd(c.q.currency);
           // This is the headline number on the lead, read as dollars everywhere
           // it renders. A quote we could not put in dollars, either because no
@@ -859,6 +883,29 @@ export async function handleInboundReply(
           await admin.from("leads_in_flight").update({ payload }).eq("id", leadId);
         }
       }
+    }
+
+    // DATA-15. Written for EVERY message we read, including the ones we read as
+    // priceless — that case is the whole point. A miss used to leave nothing
+    // behind at all, so there was no denominator and the extractor was graded on
+    // its own output; three suppliers who quoted a price were simply absent.
+    // Best-effort like the rest of this block: it must never cost us a reply.
+    try {
+      await admin.from("message_price_capture").upsert(
+        {
+          message_id: msg.message_id,
+          conversation_id: msg.conversation_id,
+          org_id: ref.org_id,
+          supplier_name: leadRow?.supplier_name ?? from.name ?? null,
+          price_points_present: bodyExtraction.pricePointsPresent,
+          quotes_extracted: captured.length,
+          rows_staged: quotesAccountedFor,
+          received_at: msg.received_at ?? new Date().toISOString(),
+        },
+        { onConflict: "message_id" }
+      );
+    } catch {
+      /* the ledger is evidence, never a gate */
     }
 
     const d = bodyExtraction.details;

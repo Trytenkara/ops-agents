@@ -10,16 +10,18 @@ If a price cannot be read, store null plus the reason WHY. Never estimate from
 a similar product, a previous listing, or a range. The price basis (per kg, per
 drum, per case) is read from the page too, never derived.
 
-The guard below holds the NUMBER and not the BASIS. `publishablePrice` tests
-finite, positive, under ten million, and the currency invariant; it cannot see
-that a figure was multiplied out of a pack weight or that a per-tonne price was
+`publishablePrice` holds the NUMBER and not the BASIS. It tests finite,
+positive, under ten million, and the currency invariant; it cannot see that a
+figure was multiplied out of a pack weight or that a per-tonne price was
 labelled per kg. On the supplier-email path both went through it stamped
-`confidence: high` (see DATA-14). Treat the basis half of this rule as
-unenforced until `price/capture-must-carry-source-text` is built.
+`confidence: high`. The basis half is now held separately by DATA-14: a staged
+price whose amount and unit do not both appear in the supplier's own words is
+withheld before it reaches this gate.
 
 **Enforcement:** Guard — `src/lib/price-publish.ts` `publishablePrice` /
-`publishableTiers` at every price writer, `price/writer-must-gate`. Covers the
-amount only; the basis is owed under DATA-14.
+`publishableTiers` at every price writer, `price/writer-must-gate`, for the
+amount; `src/lib/price-provenance.ts` `verifyPriceProvenance`,
+`price/capture-must-carry-source-text`, for the basis (DATA-14).
 
 ## DATA-02 — A foreign price is published only through one conversion
 
@@ -184,9 +186,13 @@ The same fragment is what lets anyone audit the table without re-reading the
 mailbox. Reconciling 49 rows for one client against the original threads took a
 full session precisely because no row said where its number came from.
 
-**Enforcement:** Check owed — `price/capture-must-carry-source-text`: every
-writer of a priced row supplies the source fragment, and the stored amount and
-unit both appear in it.
+**Enforcement:** Guard — `price/capture-must-carry-source-text`:
+`verifyPriceProvenance` in `src/lib/price-provenance.ts` is applied by
+`insertStagedQuotes` before the publish gate and again on the lead-headline
+mirror in `src/lib/tenkara-inbound.ts`; a price it cannot trace is stored as
+null with the reason and `needs_review`. The check also holds the two
+extractors to asking for the fragment, and holds `staged_quotes` to a
+`price_source_text` column (migration 0124).
 
 ## DATA-15 — Extraction records what it did not take
 
@@ -207,11 +213,12 @@ it.
 The count is the alarm, not the presence of a row. A miss must leave a mark, or
 the miss rate is unknowable and no later fix can be shown to have worked.
 
-**Enforcement:** Audit owed — per-message capture reconciliation: a second
-narrow read of each inbound message counts the price points present, the
-difference against rows staged is persisted per message, and a daily job
-surfaces shortfalls. Per META-07 the second read is a model read, never a
-price regex.
+**Enforcement:** Audit — `agent-24-price-capture-reconcile`. Every inbound
+message writes `message_price_capture` (migration 0125) with the price points
+the extractor counted before extracting and the rows actually accounted for;
+Agent 24 re-reads the shortfalls daily and alerts on the confirmed ones. Per
+META-07 the second read is a model read, never a price regex, and it reports
+rather than stages — the first read already got that message wrong once.
 
 ## DATA-16 — Every rung of a tiered quote is its own row
 
@@ -234,5 +241,8 @@ quotes for the same material, never against its own siblings: a ladder is
 supposed to span a range, and treating that spread as an anomaly would flag
 every correctly captured ladder.
 
-**Enforcement:** Check owed — `price/tier-rungs-never-collapse`: a priceless or
-basis-less rung may not be deduped against a priced sibling on amount alone.
+**Enforcement:** Guard — `price/tier-rungs-never-collapse`: `dupKey`, `echoKey`
+and `pricelessKey` in `src/lib/staged-quotes.ts` fall back to
+`provenanceKey(price_source_text)` when there is no basis to tell two rungs
+apart, so rungs separate on the words they were read from. The check holds all
+three keys to it.

@@ -2,6 +2,8 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 import { computeCaseDimensions } from "@/lib/case-dimensions";
 import { normalizeToUsd } from "@/lib/fx";
 import { publishablePrice } from "@/lib/price-publish";
+import { provenanceKey, verifyPriceProvenance } from "@/lib/price-provenance";
+import { qaPrice } from "@/lib/price-qa";
 
 // Shared writer for the staged_quotes table (migration 0025). Both the email
 // reply-body extractor and the attachment parser funnel through here so the row
@@ -25,6 +27,11 @@ export interface StagedQuoteInput {
   materialId?: string | null;
   materialName?: string | null;
   price: number | null;
+  // The supplier's own words this price was read out of, verbatim (DATA-14).
+  // Checked against `price` and `unitOfMeasurement` before the price is stored:
+  // a figure that does not appear in the words it supposedly came from was
+  // computed, not read, and is withheld.
+  priceSourceText?: string | null;
   caseSize: number | null;
   unitPriceGapReason?: string | null;
   unitOfMeasurement: string | null;
@@ -52,17 +59,26 @@ function approvedKey(orgId: string | null, supplierName: string | null, material
   return [orgId ?? "", (supplierName ?? "").trim().toLowerCase(), (materialName ?? "").trim().toLowerCase()].join("|");
 }
 
+// Catches a webhook retry re-processing a message we already read. It must not
+// also catch a second rung of the same ladder, so it carries the basis and, when
+// there is no basis, the words the price was read from (DATA-16). A retry
+// re-extracts the same message and produces the same values, so it still
+// collides; "1-5 MT USD 1,300 / 6+ MT USD 1,300 incl. samples" no longer does.
 function dupKey(r: {
   source_message_id: string | null;
   source_attachment_name: string | null;
   material_name: string | null;
   price: number | null;
+  case_size: number | null;
+  price_source_text?: string | null;
 }): string {
   return [
     r.source_message_id ?? "",
     r.source_attachment_name ?? "",
     (r.material_name ?? "").trim().toLowerCase(),
     r.price ?? "",
+    r.case_size ?? "",
+    r.case_size == null ? provenanceKey(r.price_source_text) : "",
   ].join("|");
 }
 
@@ -77,6 +93,15 @@ function dupKey(r: {
 // Fwd where the quoted body is the only copy of the price. Keep extracting
 // everything, then drop lines identical to what the thread already holds. A
 // differing price/basis is new information and still lands as its own row.
+//
+// DATA-16: the key must not fuse two rungs of one ladder. Normally case_size
+// tells them apart, but a ladder whose thresholds we could not read ("1-5 MT
+// USD 1,300; 6-20 MT USD 1,300 with free samples") lands as several rows at one
+// price and a null case_size, and every rung after the first would be discarded
+// as an echo of the first. When there is no basis to separate them, the words
+// each was read from do it instead. Scoped to the null-case_size case on
+// purpose: where a basis exists, echo detection stays exactly as strong as it
+// was, and the fragment cannot weaken it.
 function echoKey(r: {
   source_conversation_id: string | null;
   material_name: string | null;
@@ -84,6 +109,7 @@ function echoKey(r: {
   currency: string | null;
   unit_of_measurement: string | null;
   case_size: number | null;
+  price_source_text?: string | null;
 }): string | null {
   if (!r.source_conversation_id) return null;
   // Echoes are rarely byte-identical: suppliers' own product lines pick up
@@ -96,6 +122,7 @@ function echoKey(r: {
     (r.currency ?? "").trim().toUpperCase(),
     (r.unit_of_measurement ?? "").trim().toLowerCase(),
     r.case_size ?? "",
+    r.case_size == null ? provenanceKey(r.price_source_text) : "",
   ].join("|");
 }
 
@@ -118,9 +145,28 @@ function materialKey(name: string | null): string {
 // already holds a real price for that material the note goes onto that row
 // instead of beside it. Nothing is discarded: the sentence the supplier wrote is
 // what ops needs, and it is more use attached to the price it qualifies.
-function pricelessKey(conversationId: string | null, materialName: string | null): string | null {
+//
+// One exception, and it is the reason `sourceTextKey` exists. A row can also
+// reach here holding no price because a gate WITHHELD one — a tiered quote
+// whose rungs all failed provenance is four withheld prices, not four notes,
+// and collapsing them to one would hide three rungs from the operator who has
+// to go and confirm them. Those rows are told apart by the words they were read
+// from. A row that never had a number passes an empty key and behaves exactly
+// as before, which keeps the Makesy case fixed: two wordings of one discount
+// are still one note.
+function pricelessKey(
+  conversationId: string | null,
+  materialName: string | null,
+  sourceTextKey: string
+): string | null {
   if (!conversationId) return null;
-  return `${conversationId}|${materialKey(materialName)}`;
+  return `${conversationId}|${materialKey(materialName)}|${sourceTextKey}`;
+}
+
+// A stored row with no price but with the words a price was read from is a
+// withheld price, not a note. Nothing else writes price_source_text.
+function withheldKeyOf(r: { price: number | null; price_source_text?: string | null }): string {
+  return r.price == null ? provenanceKey(r.price_source_text) : "";
 }
 
 export async function insertStagedQuotes(
@@ -138,7 +184,7 @@ export async function insertStagedQuotes(
   if (messageIds.length) {
     const { data } = await admin
       .from("staged_quotes")
-      .select("source_message_id, source_attachment_name, material_name, price")
+      .select("source_message_id, source_attachment_name, material_name, price, case_size, price_source_text")
       .in("source_message_id", messageIds);
     for (const r of (data ?? []) as any[]) existingKeys.add(dupKey(r));
   }
@@ -158,14 +204,14 @@ export async function insertStagedQuotes(
   if (conversationIds.length) {
     const { data } = await admin
       .from("staged_quotes")
-      .select("id, source_conversation_id, material_name, price, currency, unit_of_measurement, case_size, extraction_notes, created_at")
+      .select("id, source_conversation_id, material_name, price, price_source_text, currency, unit_of_measurement, case_size, extraction_notes, created_at")
       .in("source_conversation_id", conversationIds)
       .not("status", "eq", "dismissed")
       .order("created_at");
     for (const r of (data ?? []) as any[]) {
       const k = echoKey(r);
       if (k) existingEchoKeys.add(k);
-      const pk = pricelessKey(r.source_conversation_id, r.material_name);
+      const pk = pricelessKey(r.source_conversation_id, r.material_name, withheldKeyOf(r));
       if (!pk) continue;
       if (r.price == null) pricelessSeen.add(pk);
       else if (!pricedRowByKey.has(pk)) pricedRowByKey.set(pk, { id: r.id, extraction_notes: r.extraction_notes ?? null });
@@ -223,6 +269,29 @@ export async function insertStagedQuotes(
   }
 
   for (const r of rows) {
+    // DATA-14, and it runs before everything else. The check is "does this
+    // number appear in the words the supplier wrote", and after FX the number
+    // is ours, not theirs, so it never would. A figure that fails is not
+    // converted, not stored and not counted as a price: Katonah's 620.5410
+    // USD/lb was a unit price multiplied by a drum weight and every gate we had
+    // waved it through, because 620.54 is a perfectly ordinary number.
+    //
+    // Dropped, never corrected. We know it is wrong; we do not know what the
+    // right one is, and a repaired figure is still one we invented (DATA-01).
+    // What the supplier actually wrote survives in price_source_text and in the
+    // note, which is what an operator needs to fix it in seconds.
+    const provenance = verifyPriceProvenance({
+      price: r.price,
+      unitOfMeasurement: r.unitOfMeasurement,
+      sourceText: r.priceSourceText,
+    });
+    // Everything below reads statedPrice, so an unverifiable figure travels as
+    // "no price" rather than being caught again at each downstream gate. It is
+    // deliberately not written to native_price either: that column means "the
+    // amount as the supplier stated it", and this is exactly an amount they
+    // did not state.
+    const statedPrice = provenance.ok ? r.price : null;
+
     // Currency safety net, same policy as the marketplace pull: convert a listed
     // foreign price to USD before it is stored (unit_price is a generated column,
     // so it follows price automatically), and when no rate is reachable, keep the
@@ -230,10 +299,19 @@ export async function insertStagedQuotes(
     // foreign figure sit in the table as USD. Runs before dedup so the dup key is
     // computed on the value we actually store.
     const norm = await normalizeToUsd(r.currency);
-    let price = r.price;
+    let price = statedPrice;
     let currency = norm.currency;
     let confidence: StagedQuoteConfidence = r.confidence ?? "needs_review";
     let extractionNotes = r.extractionNotes ?? null;
+    if (!provenance.ok) {
+      confidence = "needs_review";
+      extractionNotes = [
+        `Price withheld, ${provenance.reason}. Read the supplier's message and enter the figure they actually wrote.`,
+        extractionNotes,
+      ]
+        .filter(Boolean)
+        .join(" ");
+    }
     // Structured counterparts of the prose note below. The note stays (operators
     // read it during review), but a delta cannot be computed from a sentence, so
     // the same facts are stored as columns.
@@ -241,24 +319,24 @@ export async function insertStagedQuotes(
     let nativeCurrency: string | null = null;
     let fxRate: number | null = null;
     let fxRateAt: string | null = null;
-    if (norm.status === "converted" && r.price != null) {
-      price = norm.convert(r.price);
-      nativePrice = r.price;
+    if (norm.status === "converted" && statedPrice != null) {
+      price = norm.convert(statedPrice);
+      nativePrice = statedPrice;
       nativeCurrency = (r.currency ?? "").trim().toUpperCase();
       fxRate = norm.rate;
       fxRateAt = new Date().toISOString();
-      extractionNotes = [`${norm.note} (was ${(r.currency ?? "").trim().toUpperCase()} ${r.price}, stored USD ${price}).`, extractionNotes]
+      extractionNotes = [`${norm.note} (was ${(r.currency ?? "").trim().toUpperCase()} ${statedPrice}, stored USD ${price}).`, extractionNotes]
         .filter(Boolean)
         .join(" ");
-    } else if (norm.status === "usd" && r.price != null) {
+    } else if (norm.status === "usd" && statedPrice != null) {
       // Stamp USD quotes too, so a null native_currency means "unknown", never
       // "was dollars". Same reason as the marketplace pull: the delta split must
       // not be able to mistake an unrecorded currency for a confirmed one.
-      nativePrice = r.price;
+      nativePrice = statedPrice;
       nativeCurrency = "USD";
       fxRate = 1;
       fxRateAt = new Date().toISOString();
-    } else if (norm.status === "unknown" && r.price != null) {
+    } else if (norm.status === "unknown" && statedPrice != null) {
       // No currency anywhere on the quote. The number is kept where an operator
       // can see it and confirm it, but it is not stored as a price, because a
       // stored price is a published price and we would be publishing a guess.
@@ -270,7 +348,7 @@ export async function insertStagedQuotes(
       currency = "";  // stored as null: unknown, not dollars
       confidence = "needs_review";
       extractionNotes = [
-        `Supplier stated ${r.price} with no currency. Confirm the currency with the supplier before approving; withheld rather than assumed to be USD.`,
+        `Supplier stated ${statedPrice} with no currency. Confirm the currency with the supplier before approving; withheld rather than assumed to be USD.`,
         extractionNotes,
       ]
         .filter(Boolean)
@@ -302,6 +380,43 @@ export async function insertStagedQuotes(
       }
     }
 
+    // The extractor grades its own work, and a fabricated figure is exactly the
+    // kind it grades well: all five wrong prices in the CalChem audit were
+    // stored 'high', including the one that was 518x the real number. A verdict
+    // the same read produced cannot corroborate that read, so from here the
+    // model's grade is a CEILING and nothing more — evidence can lower it, and
+    // never raise it.
+    {
+      const qa = qaPrice({
+        material_name: r.materialName,
+        price,
+        case_size: r.caseSize,
+        unit_of_measurement: r.unitOfMeasurement,
+        // A quote that arrived by email has no listing to cite; the thread is
+        // its citation. Without this every supplier quote reads as a defect.
+        citation_required: false,
+      });
+      const errors = qa.flags.filter((f) => f.severity === "error");
+      if (errors.length) {
+        confidence = "needs_review";
+        extractionNotes = [errors.map((f) => f.message).join(" "), extractionNotes].filter(Boolean).join(" ");
+      } else if (confidence === "high" && price != null && (r.caseSize == null || !r.priceSourceText)) {
+        // "High" has to mean something a reader can rely on: we know the number
+        // is the supplier's own words and we know what quantity it covers.
+        // Missing either, the row is still perfectly good — it just is not
+        // certain, and it must not outrank a row that is.
+        confidence = "medium";
+        extractionNotes = [
+          r.caseSize == null
+            ? "Confidence lowered: the supplier did not state what quantity this price covers."
+            : "Confidence lowered: the price was captured without the supplier's own wording to check it against.",
+          extractionNotes,
+        ]
+          .filter(Boolean)
+          .join(" ");
+      }
+    }
+
     // unit_price is generated from price / case_size, so a null case_size is how
     // an unknown price basis reaches the UI as a blank cell. Guarantee the blank
     // always carries a why: the extractor supplies one when it recognises the
@@ -317,6 +432,8 @@ export async function insertStagedQuotes(
       source_attachment_name: r.sourceAttachmentName ?? null,
       material_name: r.materialName ?? null,
       price,
+      case_size: r.caseSize,
+      price_source_text: r.priceSourceText ?? null,
     });
     if (existingKeys.has(key)) {
       result.skippedDuplicates++;
@@ -329,12 +446,20 @@ export async function insertStagedQuotes(
       currency,
       unit_of_measurement: r.unitOfMeasurement ?? null,
       case_size: r.caseSize,
+      price_source_text: r.priceSourceText ?? null,
     });
     if (echo && existingEchoKeys.has(echo)) {
       result.skippedDuplicates++;
       continue;
     }
-    const priceless = price == null ? pricelessKey(r.sourceConversationId ?? null, r.materialName ?? null) : null;
+    const priceless =
+      price == null
+        ? pricelessKey(
+            r.sourceConversationId ?? null,
+            r.materialName ?? null,
+            withheldKeyOf({ price, price_source_text: r.priceSourceText ?? null })
+          )
+        : null;
     if (priceless) {
       if (pricelessSeen.has(priceless)) {
         result.skippedDuplicates++;
@@ -388,6 +513,10 @@ export async function insertStagedQuotes(
       material_id: r.materialId ?? null,
       material_name: r.materialName ?? null,
       price,
+      // Kept even when the price was withheld: it is the evidence an operator
+      // reads to enter the right number, and the only thing that tells one rung
+      // of an unreadable ladder from another.
+      price_source_text: r.priceSourceText ?? null,
       native_price: nativePrice,
       native_currency: nativeCurrency,
       fx_rate: fxRate,

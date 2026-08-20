@@ -36,6 +36,12 @@ export interface ExtractedQuoteDetails {
 
 export interface ReplyQuoteExtraction {
   quotes: ExtractedQuote[];
+  // How many distinct price points the message states, counted before any were
+  // turned into quote lines (DATA-15). This is the denominator: without it a
+  // missed price leaves no trace and the extractor is graded on its own output.
+  // Deliberately a count, not a flag — Foodchem stated three prices and we took
+  // one, and "did this message have a price" answers yes to that.
+  pricePointsPresent: number | null;
   details: ExtractedQuoteDetails;
   declined: boolean;
   // Whether the supplier said they can ship to the US, when they said either way.
@@ -64,6 +70,10 @@ export interface ExtractedQuote {
   supplier_name: string | null;
   material_name: string | null;
   price: number | null; // per-case price, currency-stripped
+  // The supplier's own words this price was read out of (DATA-14). Verified
+  // against the number and unit before the price can be published; a price
+  // whose fragment does not contain it was computed, not read.
+  price_source_text: string | null;
   case_size: number | null; // quantity the supplier stated the price covers; null when unstated
   unit_price_gap_reason: string | null; // why case_size (and so unit_price) is null
   unit_of_measurement: string | null;
@@ -86,6 +96,7 @@ Only extract facts the supplier ACTUALLY STATES in the text. Most replies won't 
 
 Return ONLY a JSON object (no prose):
 {
+  "price_points_present": 0,  // count FIRST, before extracting: how many distinct price points this message states
   "declined": false,
   "ships_to_us": null,
   "ships_to_us_evidence": null,
@@ -119,6 +130,7 @@ Return ONLY a JSON object (no prose):
       "supplier_name": "string or null (the supplier/company)",
       "material_name": "string (the material/product the price is for)",
       "price": 99.99,                 // numeric, currency symbols stripped; price for one case/unit as stated
+      "price_source_text": "USD 99.99/kg FOB Ningbo",  // REQUIRED with any price: the supplier's own words, copied exactly
       "case_size": 25,                // quantity the supplier says the price covers; null if they never said
       "unit_price_gap_reason": null,  // why case_size is null, in one sentence; null when case_size is set
       "unit_of_measurement": "kg",    // the unit case_size is in (kg, lb, L, each, ...)
@@ -148,7 +160,9 @@ Return ONLY a JSON object (no prose):
 }
 
 Rules:
+- price_points_present: before you extract anything, read the message and count how many distinct price points it states. Count EVERY rung of EVERY ladder and every pack size separately (a 4-tier table is 4), count a revised price and the price it revises as 2, and count a price stated only in quoted history. Count it even when you cannot tell what quantity it covers or what currency it is in — the question is how many the SUPPLIER stated, not how many you were able to use. This is checked against how many rows we store, and a shortfall sends the message back for a second read, so do not round it down to match your own quotes array and do not report 0 because the prices looked unusable.
 - price must be numeric or null. Strip currency symbols and codes, commas.
+- price_source_text is MANDATORY whenever price is not null: copy the supplier's own words that state this price, exactly as written, including the number, its currency and its unit ("usd1280/mt FOB Qingdao", "Drums are 518lbs at 1.1975/lb"). One short fragment, not the whole email, and not your summary of it. It is checked: the number you report and the unit you report must both appear in the fragment, and a quote whose fragment does not contain them is withheld from the client as unverifiable. Two consequences to be deliberate about. NEVER do arithmetic on a supplier's figure — not division by a pack size, and not multiplication by one either ("518lbs at 1.1975/lb" is a price of 1.1975, never 620.54). And report the unit THE SUPPLIER WROTE AGAINST THE NUMBER: "usd1280/mt" is per tonne, so unit_of_measurement is "MT" and never "kg", even when a kg figure appears elsewhere in the same sentence as a packing detail.
 - currency: the ISO 4217 code the price is stated in ("USD", "EUR", "GBP", "INR", "CNY", ...). Infer from the symbol/locale (€→EUR, £→GBP, ₹ or "Rs"/"Rs."→INR, ¥→CNY or JPY by supplier, $→USD unless clearly CAD/AUD/etc.). We convert to USD ourselves — report the currency AS STATED, do NOT convert. CURRENCY IS HIGH-STAKES: a price reported in the wrong currency gets published as a wildly wrong USD number (₹149 shown as $149 is ~85x too high). Do NOT default to USD just because there is no symbol — many suppliers (Indian, Chinese, Pakistani, etc.) quote in domestic currency. If you cannot positively confirm the currency, return null (better a blank than a wrong currency) and note the ambiguity.
 - grade: only populate if the supplier EXPLICITLY names a grade/spec for the material (e.g. "USP", "EP", "Food grade", "Industrial", "SCI 80"). NEVER infer or guess a "typical" grade — if they don't state one, return null.
 - incoterm: the delivery term the supplier attaches to THIS price, as a bare Incoterms code in caps (EXW, FOB, FCA, CFR, CIF, CIP, DAP, DDP, ...). Put the named place in incoterm_location ("FOB Shanghai" is incoterm "FOB", incoterm_location "Shanghai"; "ex factory"/"ex works" is EXW; "CIF by sea" is CIF with a null location). Both null when the supplier states no term. NEVER infer a term from the supplier's country, the price level, or a shipping sentence that names no term: two prices on different terms are not the same price, and an assumed EXW on a CIF quote understates landed cost.
@@ -208,7 +222,10 @@ const EMPTY_DETAILS: ExtractedQuoteDetails = {
 const str = (v: any): string | null => (typeof v === "string" ? v.trim() || null : null);
 
 function extractJson(text: string): ReplyQuoteExtraction {
-  const empty = (): ReplyQuoteExtraction => ({ quotes: [], details: { ...EMPTY_DETAILS }, declined: false, shipsToUs: null, shipsToUsEvidence: null, referrals: [] });
+  // pricePointsPresent stays null, never 0, when we could not read the model's
+  // answer. Null means "we do not know how many prices this message held", and a
+  // zero would assert the opposite — which is the exact claim a miss makes.
+  const empty = (): ReplyQuoteExtraction => ({ quotes: [], pricePointsPresent: null, details: { ...EMPTY_DETAILS }, declined: false, shipsToUs: null, shipsToUsEvidence: null, referrals: [] });
   const start = text.indexOf("{");
   const end = text.lastIndexOf("}");
   if (start === -1 || end === -1 || end <= start) return empty();
@@ -220,12 +237,18 @@ function extractJson(text: string): ReplyQuoteExtraction {
             .filter((q: any) => q && (q.price != null || q.material_name))
             .map((q: any) => ({
               ...q,
+              price_source_text:
+                typeof q.price_source_text === "string" ? q.price_source_text.trim() || null : null,
               unit_price_gap_reason:
                 typeof q.unit_price_gap_reason === "string" ? q.unit_price_gap_reason.trim() || null : null,
               incoterm: typeof q.incoterm === "string" ? q.incoterm.trim().toUpperCase() || null : null,
               incoterm_location: typeof q.incoterm_location === "string" ? q.incoterm_location.trim() || null : null,
             }))
         : [],
+      pricePointsPresent:
+        Number.isFinite(Number(parsed?.price_points_present)) && Number(parsed.price_points_present) >= 0
+          ? Math.round(Number(parsed.price_points_present))
+          : null,
       details: { ...EMPTY_DETAILS, ...(parsed?.details && typeof parsed.details === "object" ? parsed.details : {}) },
       declined: parsed?.declined === true,
       shipsToUs: parsed?.ships_to_us === "yes" || parsed?.ships_to_us === "no" ? parsed.ships_to_us : null,
@@ -251,7 +274,8 @@ function extractJson(text: string): ReplyQuoteExtraction {
 
 export async function extractQuotesFromReplyText(body: string | null | undefined): Promise<ReplyQuoteExtraction> {
   const text = (body ?? "").trim();
-  if (text.length < 12) return { quotes: [], details: { ...EMPTY_DETAILS }, declined: false, shipsToUs: null, shipsToUsEvidence: null, referrals: [] };
+  // A body this short holds nothing, so zero prices is a fact here, not a guess.
+  if (text.length < 12) return { quotes: [], pricePointsPresent: 0, details: { ...EMPTY_DETAILS }, declined: false, shipsToUs: null, shipsToUsEvidence: null, referrals: [] };
   const res = await anthropic().messages.create({
     model: MODEL,
     max_tokens: 2000,

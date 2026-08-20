@@ -225,6 +225,69 @@ for (const f of [
   }
 }
 
+// DATA-14. The publish gate above holds the NUMBER. It cannot hold the BASIS:
+// it tests finite, positive, under ten million and the currency invariant, and
+// every one of those passed on Katonah's 620.5410 USD/lb, which was a unit price
+// multiplied by a drum weight and roughly 518x the real figure. Four more rows
+// held per-tonne prices labelled per kg. Nothing anywhere compared a stored
+// price against the words it came from, so every path that captures one now
+// verifies it does appear in them.
+for (const f of [
+  "src/lib/staged-quotes.ts",
+  "src/lib/tenkara-inbound.ts",
+]) {
+  const mod = files.find((x) => x.path.endsWith(f));
+  if (mod && !/verifyPriceProvenance\(/.test(mod.text)) {
+    violations.push({
+      rule: "price/capture-must-carry-source-text",
+      why: "a price that does not appear in the supplier's own words was computed rather than read, and no other gate can see that: 620.5410 USD/lb is a perfectly plausible number",
+      fix: "check it with verifyPriceProvenance from @/lib/price-provenance and withhold the price when it fails, never repair it",
+      where: f,
+      line: "price provenance check missing",
+    });
+  }
+}
+
+// The two extractors are the other half: a fragment can only be verified if it
+// was asked for. Both prompts must demand it alongside the price.
+for (const f of ["src/lib/reply-quote-extract.ts", "src/lib/attachment-parser.ts"]) {
+  const mod = files.find((x) => x.path.endsWith(f));
+  if (mod && !/price_source_text is MANDATORY/.test(mod.text)) {
+    violations.push({
+      rule: "price/capture-must-carry-source-text",
+      why: "the writer withholds any price it cannot trace, so an extractor that stops asking for the supplier's wording silently withholds every price it captures",
+      fix: "keep the 'price_source_text is MANDATORY whenever price is not null' rule in this extractor's system prompt",
+      where: f,
+      line: "extractor prompt no longer requires price_source_text",
+    });
+  }
+}
+
+// DATA-16. A tiered quote is several prices, and every rung is its own row. The
+// dedup keys decide that, and each of them is a tuple that can fuse two rungs:
+// two rungs at one amount whose thresholds we could not read differ only in the
+// words they were read from. Silent, and shaped exactly like dedup working.
+{
+  const w = files.find((x) => x.path.endsWith("src/lib/staged-quotes.ts"));
+  if (w) {
+    for (const key of ["dupKey", "echoKey", "pricelessKey"]) {
+      // A fixed window rather than a brace match: these signatures are typed
+      // object literals, so the first `\n}` is the end of the parameter type,
+      // not the end of the function.
+      const body = w.text.match(new RegExp(`function ${key}\\([\\s\\S]{0,1200}`));
+      if (body && !/provenanceKey|sourceTextKey/.test(body[0])) {
+        violations.push({
+          rule: "price/tier-rungs-never-collapse",
+          why: "two rungs of one ladder can agree on material, price, currency and unit; without the words each was read from they collapse into one row and the rest of the ladder is dropped as a duplicate",
+          fix: "include provenanceKey(price_source_text) in the key when there is no case_size to tell the rungs apart",
+          where: "src/lib/staged-quotes.ts",
+          line: `${key} cannot tell two rungs of one ladder apart`,
+        });
+      }
+    }
+  }
+}
+
 // 9. The owner of an open draft or case is derived on every read, and the
 // Tenkara inbox is kept in step by pushing that same answer. Three surfaces had
 // hand-copied the key-building, which is precisely how Control Room and the

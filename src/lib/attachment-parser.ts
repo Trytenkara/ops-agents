@@ -16,6 +16,10 @@ export interface ExtractedQuote {
   supplier_name: string | null;
   material_name: string | null;
   price: number | null; // per-case price, currency-stripped
+  // The document's own words this price was read out of (DATA-14). Verified
+  // against the number and unit before the price can be published; a price
+  // whose fragment does not contain it was computed, not read.
+  price_source_text: string | null;
   case_size: number | null; // quantity the document stated the price covers; null when unstated
   unit_price_gap_reason: string | null; // why case_size (and so unit_price) is null
   unit_of_measurement: string | null;
@@ -43,6 +47,7 @@ Return ONLY a JSON object (no prose):
       "supplier_name": "string or null (the supplier/company issuing the quote)",
       "material_name": "string (the material/product name)",
       "price": 99.99,                 // numeric, currency symbols stripped; the price for one case/unit as listed
+      "price_source_text": "USD 99.99/kg FOB Ningbo",  // REQUIRED with any price: the document's own words, copied exactly
       "case_size": 25,                // quantity the document says the price covers; null if it never says
       "unit_price_gap_reason": null,  // why case_size is null, in one sentence; null when case_size is set
       "unit_of_measurement": "kg",    // the unit case_size is in (kg, lb, L, each, ...)
@@ -63,6 +68,7 @@ Return ONLY a JSON object (no prose):
 
 Rules:
 - price must be numeric or null. Strip currency symbols and codes, commas.
+- price_source_text is MANDATORY whenever price is not null: copy the document's own words that state this price, exactly as written, including the number, its currency and its unit ("usd1280/mt FOB Qingdao", "Drums are 518lbs at 1.1975/lb"). For a table row, copy the row's cells as one short line ("Sodium Lauryl Sulfate | 25 kg bag | USD 1.24/kg"). One short fragment, not the whole document, and not your summary of it. It is checked: the number you report and the unit you report must both appear in the fragment, and a quote whose fragment does not contain them is withheld from the client as unverifiable. Two consequences to be deliberate about. NEVER do arithmetic on a listed figure — not division by a pack size, and not multiplication by one either ("518lbs at 1.1975/lb" is a price of 1.1975, never 620.54). And report the unit WRITTEN AGAINST THE NUMBER: "usd1280/mt" is per tonne, so unit_of_measurement is "MT" and never "kg", even when a kg figure appears on the same line as a packing detail.
 - currency: the ISO 4217 code the price is listed in ("USD", "EUR", "GBP", "INR", "CNY", ...). Infer from the symbol/locale (€→EUR, £→GBP, ₹ or "Rs"/"Rs."→INR, ¥→CNY or JPY by supplier, $→USD unless clearly CAD/AUD/etc.). We convert to USD ourselves — report the currency AS LISTED, do NOT convert. CURRENCY IS HIGH-STAKES: a price reported in the wrong currency gets published as a wildly wrong USD number (₹149 shown as $149 is ~85x too high). Do NOT default to USD just because there is no symbol — many suppliers (Indian, Chinese, Pakistani, etc.) list domestic-currency prices. If you cannot positively confirm the currency, return null (better a blank than a wrong currency) and note the ambiguity.
 - incoterm: the delivery term attached to THIS price, as a bare Incoterms code in caps (EXW, FOB, FCA, CFR, CIF, CIP, DAP, DDP, ...). Put the named place in incoterm_location ("FOB Shanghai" is incoterm "FOB", incoterm_location "Shanghai"; "ex factory"/"ex works" is EXW; "CIF by sea" is CIF with a null location). Both null when no term is stated. NEVER infer a term from the supplier's country, the price level, or a shipping line that names no term: two prices on different terms are not the same price, and an assumed EXW on a CIF quote understates landed cost.
 - grade: only populate if the document EXPLICITLY names a grade/spec for the material (e.g. "USP", "EP", "Food grade", "Industrial", "SCI 80"). NEVER infer or guess a "typical" grade — if it isn't stated, return null.
@@ -259,6 +265,7 @@ export async function parseAttachmentBytes(
         supplier_name: q.supplier_name ?? null,
         material_name: q.material_name ?? null,
         price: typeof q.price === "number" ? q.price : q.price == null ? null : Number(q.price) || null,
+        price_source_text: typeof q.price_source_text === "string" ? q.price_source_text.trim() || null : null,
         case_size: typeof q.case_size === "number" ? q.case_size : q.case_size == null ? null : Number(q.case_size) || null,
         unit_price_gap_reason: typeof q.unit_price_gap_reason === "string" ? q.unit_price_gap_reason.trim() || null : null,
         unit_of_measurement: q.unit_of_measurement ?? null,
