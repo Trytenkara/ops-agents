@@ -66,6 +66,64 @@ export function runChecks(files, rulesDir) {
     return line.replace(/\/\*.*?\*\//g, "").replace(/(^|[^:])\/\/.*$/, "$1");
   };
 
+  // Python and shell say the same thing with `#`, and Python's docstring is a
+  // triple-quoted string used as prose — the same trap in a syntax the JS
+  // stripper cannot see. A skill's module docstring said "downstream
+  // convertToUsd handles conversion" and was read as a call to it.
+  const stripPython = (text) => {
+    let fence = null;
+    return text.split("\n").map((raw) => {
+      let out = "";
+      let i = 0;
+      while (i < raw.length) {
+        if (fence) {
+          const end = raw.indexOf(fence, i);
+          if (end === -1) break;
+          i = end + 3;
+          fence = null;
+        } else {
+          const m = /"""|'''/.exec(raw.slice(i));
+          if (!m) {
+            out += raw.slice(i);
+            break;
+          }
+          out += raw.slice(i, i + m.index);
+          fence = m[0];
+          i += m.index + 3;
+        }
+      }
+      // A `#` inside a string literal is stripped too. That can only lose a
+      // hit on that one line; reading a comment as code invents one.
+      return out.replace(/#.*$/, "");
+    });
+  };
+
+  const stripped = new Map();
+  const codeLines = (f) => {
+    let lines = stripped.get(f.path);
+    if (!lines) {
+      lines = /\.(py|sh)$/.test(f.path)
+        ? stripPython(f.text)
+        : f.text.split("\n").map(uncommented);
+      stripped.set(f.path, lines);
+    }
+    return lines;
+  };
+
+  // The skills in /workspace/.claude/skills are a second repository, older than
+  // these checks, and they hand-roll lists this repo keeps in one module. They
+  // cannot import a TypeScript module, so the real fix is a shared data file
+  // both languages read; that is owed work, not something to do behind a build
+  // gate. These exact sites are grandfathered so the gate can be switched on
+  // today and every NEW break fails. A ratchet, not an exemption: nothing is
+  // added to this list. See rules/OUTSTANDING.md, the skills-corpus section.
+  const GRANDFATHERED = new Set([
+    "contacts/no-inline-mailbox-list@skills/contact-finder-agent/backfill.py",
+    "contacts/no-inline-mailbox-list@skills/detect-supplier-dupes/detect.mjs",
+    "contacts/no-inline-mailbox-list@skills/importyeti-resolve-contacts/resolve.py",
+    "queues/no-inline-org-priority@skills/contact-finder-agent/bulk_backfill_workflow.js",
+  ]);
+
   /**
    * @param {object} o
    * @param {string[]} [o.allow]  paths this rule does not apply to
@@ -77,8 +135,10 @@ export function runChecks(files, rulesDir) {
     for (const f of files) {
       if (scope && !scope.includes(f.path)) continue;
       if (allow.some((a) => f.path.endsWith(a))) continue;
+      if (GRANDFATHERED.has(`${rule}@${f.path}`)) continue;
+      const lines = codeLines(f);
       f.text.split("\n").forEach((raw, i) => {
-        const line = uncommented(raw);
+        const line = lines[i];
         if (!line.trim()) return;
         if (exempt.some((re) => re.test(line))) return;
         if (test(normalize ? normalize(line) : line, f)) {
@@ -656,7 +716,12 @@ export function runChecks(files, rulesDir) {
     test: (line) =>
       /postSlackMessage\(\s*\{[^}]*\bchannel\s*:/.test(line) ||
       /\bchannel\s*:\s*(process\.env\.[A-Z_]*(CHANNEL|SLACK|DM)[A-Z_]*|["'`]C0[A-Z0-9]{8,}|["'`]D0[A-Z0-9]{8,})/.test(line) ||
-      /process\.env\.(SLACK_ESCALATION_CHANNEL_ID|SLACK_FEEDBACK_CHANNEL_ID|SLACK_CONTACT_GUARD_CHANNEL_ID|SOURCING_HEALTH_SLACK_CHANNEL|EXPIRY_CHANNEL_ID|LEAD_SCANNER_SLACK_CHANNEL_ID|SAM_SLACK_DM_ID)\b/.test(line),
+      /process\.env\.(SLACK_ESCALATION_CHANNEL_ID|SLACK_FEEDBACK_CHANNEL_ID|SLACK_CONTACT_GUARD_CHANNEL_ID|SOURCING_HEALTH_SLACK_CHANNEL|EXPIRY_CHANNEL_ID|LEAD_SCANNER_SLACK_CHANNEL_ID|SAM_SLACK_DM_ID)\b/.test(line) ||
+      // Any Slack id at all that is not the one channel. The clauses above look
+      // for the shapes code uses, and missed the shape prose uses: a SKILL.md
+      // told an agent to watch and reply in #control-room-feedback by bare id,
+      // months after COMM-06 retired it. Instructions are a call site.
+      /\b(?!C0B5M1QCE9E\b)(?:C0[A-Z0-9]{8,}|D0[A-Z0-9]{8,})\b/.test(line),
     allow: ["src/lib/slack.ts"],
   });
 

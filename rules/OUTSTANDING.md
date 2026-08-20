@@ -388,7 +388,7 @@ and the quotes tab shows the two versions as two cards. Backfill on production
 2026-08-20: 7,952 marketplace, 106 direct, 0 unknown. No contaminated row was
 ever found; this was an open door, closed before a fire.
 
-## P2 — A guard only binds the repository, and the skills are not in it
+## Closed 2026-08-20 — a guard only bound the repository, and the skills were not in it
 
 Breaks COMM-06, and the same shape as Conflict K. `comm/one-slack-channel` is
 classified `Guard` and works: it fails the build on a channel passed to
@@ -414,19 +414,35 @@ judgement was needed: the rule had already ruled on them. All four now resolve
 `report-issue-triage/SKILL.md` also told the agent to watch and reply in the
 retired channel and now cites rule ids instead.
 
-The instance is fixed; the class is not. Nothing stops the next skill doing it
-again, and this generalises past Slack — any guard whose subject can exist
-outside `src/` has the same blind spot. A build check cannot close it, because
-the skills directory does not exist on the deploy host. It belongs to SHIP-08,
-the weekly rules review, which already has to sweep memory and skills for
-normative text: it should also run the line-scanner checks over
-`/workspace/.claude/skills/` and report any hit.
+**The class is now closed.** `check-rules.mjs --also DIR` takes a second corpus,
+and the skills repository runs it on every commit from `.githooks/pre-commit`.
+It cannot be a build step: the Vercel deploy host has no skills directory, so a
+check there would find nothing and report success, which is this bug again. The
+corpus is Python, plain JS and markdown as well as TypeScript — a `SKILL.md` is
+where an agent is told which channel to watch, so instructions are a call site.
 
-Until then, treat `ENFORCEMENT.md` as answering "is it guarded in this
-repository", not "is it guarded".
+Two things had to change for the checks to survive contact with it. The comment
+stripper only understood JavaScript, so a Python docstring saying "downstream
+`convertToUsd` handles conversion" read as a call to it. And
+`comm/one-slack-channel` only recognised the shapes code uses (`channel:`,
+named env vars), so a bare id in prose — the very way `report-issue-triage`
+pointed at the retired channel — went straight past it; it now rejects any
+Slack id that is not `C0B5M1QCE9E`. Proven by breaking it: a retired id added
+to a skill fails the commit.
 
-**Owed:** SHIP-08 runs the existing checks over the skills directory as a second
-corpus, and `ENFORCEMENT.md` states the corpus a Guard binds.
+**Still owed.** Four pre-existing sites are grandfathered by name in
+`rule-checks.mjs`, not waived — three skills hand-roll a mailbox-domain list
+(`contacts/no-inline-mailbox-list`) and one hand-rolls org priority
+(`queues/no-inline-org-priority`). They break META-04 for real: the canonical
+lists are TypeScript modules a Python skill cannot import, so the fix is a
+shared data file both languages read, and doing that behind a build gate would
+have meant editing four running skills to turn the gate on. It is a ratchet, so
+every new break fails; nothing may be added to that list. The same cross-
+language duplication is why four skills each hardcode `C0B5M1QCE9E` rather than
+resolving it from one place.
+
+`ENFORCEMENT.md` still does not state which corpus a Guard binds, so "Guard"
+continues to read as "guarded everywhere". That belongs with the index work.
 
 ## The full enforcement debt
 
@@ -491,10 +507,8 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 
 ## Open decisions
 
-One. `CONFLICTS.md` M: does COMM-05 admit an exception when Sam explicitly says
-to post a specific message as him? The rule says never; a memory note written
-after the 2026-07-09 incident says yes for that one message. Until it is ruled
-the rule wins and the agent stages a draft he sends himself.
+None open.
 
-`CONFLICTS.md` K (scope of the em dash ban) and L (the dealbreaker grade rule)
-were both ruled on 2026-08-20.
+`CONFLICTS.md` K (scope of the em dash ban), L (the dealbreaker grade rule) and
+M (whether COMM-05 admits an explicit "post this as me") were all ruled on
+2026-08-20. M was ruled no: COMM-05 is absolute.

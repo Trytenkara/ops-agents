@@ -147,7 +147,7 @@ grade set.** That is the client's specification to state, and an unflagged
 material is a legitimate answer. What was owed here was evidence, and it is now
 recorded.
 
-## M — Never speak as the human vs. an explicit instruction to post as them — OPEN
+## M — Never speak as the human vs. an explicit instruction to post as them — RULED
 
 COMM-05 is absolute: anything an agent sends goes out as the bot or is staged as
 a draft, never through the connected account that posts in Sam's voice.
@@ -162,7 +162,12 @@ The two readings differ on one case only: Sam says, in as many words, post this
 as me. Under the rule the answer is still no, and the agent stages a draft he
 sends himself. Under the note the answer is yes.
 
-**Needs Sam's ruling.** Until then the rule wins, because the failure mode of
-guessing wrong is a message in his voice he did not write. The note is kept in
-memory solely to hold the incident until this is settled; nothing else in the
-memory folder now states a rule.
+**Ruled by Sam on 2026-08-20: no.** Asked directly whether an agent should post
+as him when he says to, the answer was "NO". COMM-05 is absolute and admits no
+per-message exception. Even a plain "send this as me" is answered with a draft
+he sends himself.
+
+The reasoning is the asymmetry, not the inconvenience: a draft costs him one
+click, and a message in his name he did not write cannot be taken back. So the
+softer memory note is wrong and has been deleted; there is no longer any store
+that records an exception. Nothing in the memory folder states a rule now.

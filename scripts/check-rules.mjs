@@ -7,8 +7,16 @@
 //
 //   node scripts/check-rules.mjs              check this working tree
 //   node scripts/check-rules.mjs --self-test  check that the checks work
+//   node scripts/check-rules.mjs --also DIR   check a second corpus too
+//
+// `--also` exists because a rule binds the fleet, not this repository. The
+// agent skills are a separate repo on the container, they post to Slack and
+// query the same tables, and four of them were found breaking COMM-06 a day
+// after it was written — while ENFORCEMENT.md reported it as enforced. The
+// deploy host has no skills directory, so this cannot run inside `next build`;
+// the workspace repo's pre-commit hook is what runs it.
 
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join, relative, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runChecks } from "./lib/rule-checks.mjs";
@@ -17,21 +25,33 @@ import { selfTest } from "./lib/rule-self-test.mjs";
 const ROOT = process.cwd();
 const RULES = join(dirname(fileURLToPath(import.meta.url)), "..", "rules");
 
-function walk(dir) {
+function walk(dir, keep = /\.(ts|tsx)$/) {
   const out = [];
   for (const name of readdirSync(dir)) {
-    if (name === "node_modules" || name === ".next") continue;
+    if (name === "node_modules" || name === ".next" || name === ".git") continue;
+    if (name === "__pycache__" || name === ".venv") continue;
     const p = join(dir, name);
-    if (statSync(p).isDirectory()) out.push(...walk(p));
-    else if (/\.(ts|tsx)$/.test(p)) out.push(p);
+    if (statSync(p).isDirectory()) out.push(...walk(p, keep));
+    else if (keep.test(p)) out.push(p);
   }
   return out;
 }
 
-const files = walk(join(ROOT, "src")).map((p) => ({
-  path: relative(ROOT, p),
-  text: readFileSync(p, "utf8"),
-}));
+const read = (p, base) => ({ path: relative(base, p), text: readFileSync(p, "utf8") });
+
+const files = walk(join(ROOT, "src")).map((p) => read(p, ROOT));
+
+// Skills are Python and plain JS as well as TypeScript, and their SKILL.md is
+// where an agent is told which channel to watch, so markdown is code here too.
+const alsoAt = process.argv.indexOf("--also");
+if (alsoAt !== -1) {
+  const dir = process.argv[alsoAt + 1];
+  if (!dir || !existsSync(dir)) {
+    console.error(`check-rules: --also needs a directory that exists (got ${dir ?? "nothing"})`);
+    process.exit(1);
+  }
+  files.push(...walk(dir, /\.(ts|tsx|js|mjs|cjs|py|sh|md)$/).map((p) => read(p, dirname(dir))));
+}
 
 if (process.argv.includes("--self-test")) {
   process.exit(selfTest(files, RULES) ? 0 : 1);

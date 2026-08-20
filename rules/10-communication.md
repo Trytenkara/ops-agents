@@ -54,6 +54,11 @@ The connected Slack account can post as Sam. It never does. Anything an agent
 sends goes out as the `tenkara_agents` bot, or is staged as a draft for a human
 to send. This includes failure alerts and direct messages.
 
+It admits no exception, including an explicit instruction. Sam ruled on
+2026-08-20 that even "post this as me" is answered with a draft he sends
+himself: the click costs him nothing and a message in his name he did not write
+cannot be withdrawn. See `CONFLICTS.md` M.
+
 **Enforcement:** Check owed — `comm/one-slack-sender`: a single send helper
 that accepts only the bot token, and no user token anywhere.
 
@@ -69,11 +74,12 @@ failures, plus five other configurable targets). Sam asked for one channel and
 for the p1 exception to go with it.
 
 **Enforcement:** Guard — `comm/one-slack-channel` in
-`scripts/lib/rule-checks.mjs` rejects any channel argument, any hardcoded
-`C0…`/`D0…` id and any of the retired channel env vars, everywhere except
-`src/lib/slack.ts`. It binds this repository only: the agent skills post to
-Slack too and live outside it, where four were found breaking this rule on
-2026-08-20. See `OUTSTANDING.md`.
+`scripts/lib/rule-checks.mjs` rejects any channel argument, any of the retired
+channel env vars, and any Slack id that is not `C0B5M1QCE9E`, everywhere except
+`src/lib/slack.ts`. It runs over this repository in `npm run build` and over
+`/workspace/.claude/skills` in that repo's pre-commit hook, because the skills
+post to Slack too and four of them were found breaking this rule on 2026-08-20
+while the ledger reported it enforced.
 
 ## COMM-07 — Everything an agent raises waits for the daily post
 
