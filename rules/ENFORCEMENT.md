@@ -4,12 +4,12 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-111 rules. 49 are actually enforced, 36 owe a check or a job,
+112 rules. 50 are actually enforced, 36 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 47 |
+| **Guard** | A shared module or build check makes it impossible. | 48 |
 | **Audit** | A scheduled job reports the break after the fact. | 2 |
 | **Check owed** | A build check is possible and is not built yet. | 30 |
 | **Audit owed** | No build check can see it; a scheduled job can. Not built. | 6 |
@@ -21,7 +21,7 @@ source of truth and this is only a view of them.
 Anything "owed" is also listed in `OUTSTANDING.md`; the build refuses
 otherwise, so a gap cannot go quiet.
 
-## Guard (47)
+## Guard (48)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -66,6 +66,7 @@ otherwise, so a gap cannot go quiet.
 | `ORG-08` | Membership in `organization_ids` tests the whole set, never a fixed slot | Guard — `orgs/no-fixed-index-org-membership`. |
 | `ORG-09` | A supplier shared across clients never suppresses a client-owned supplier | Guard — `orgs/duplicate-guard-requires-exclusive-supplier`. |
 | `ORG-10` | A supplier id is checked against its owners before it is stored | Guard — the shared resolver `scopedSupplierId` in |
+| `ORG-11` | Unknown is not ambiguous | Guard — `soleReplyTarget` in `src/lib/org-isolation.ts`, |
 | `SUP-01` | Suppliers are unique per client | Guard — `orgs/duplicate-guard-requires-exclusive-supplier` |
 | `UI-01` | Never ship a native OS dropdown | Guard — `ui/no-native-select`. |
 | `UI-09` | A one-click write needs a way back | Guard — `src/lib/call-undo.ts` `undoLastAttemptPatch`, surfaced |

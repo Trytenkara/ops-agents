@@ -59,3 +59,56 @@ export function soleOrgOwner<T extends { org_id: string | null }>(rows: T[] | nu
   if (owners.size !== 1) return null;
   return [...owners][0];
 }
+
+export interface ReplyTargetRow {
+  org_id: string | null;
+  supplier_id: string | null;
+  material_id: string | null;
+}
+
+/**
+ * Which supplier and material do these candidate rows point at, if they agree?
+ *
+ * Use ONLY where the conversation itself establishes who is talking — a thread
+ * id or a draft id. Rows grouped by something weaker (a sender's domain) can
+ * hold two genuinely different counterparties, and the null tolerance below
+ * would merge them; those callers stay strict.
+ *
+ * A NULL IS UNKNOWN, NOT A DISTINCT TARGET. Two rows conflict only when they
+ * name different non-null values. Keying on `supplier_id ?? ""` instead treats
+ * "we have not linked this supplier yet" as a second supplier, and half of all
+ * cold outreach is written before the link exists (1,935 of 3,890 rows on
+ * 2026-08-20): the cold_outbound row says `null:material`, the follow-up on the
+ * same thread says `supplier:material`, the set has two members, and the reply
+ * is refused as ambiguous. Every one of the 43 conversations that missed in the
+ * 30 days to 2026-08-20 failed exactly here — including six California
+ * Chemicals suppliers whose prices simply never arrived. The triage draft that
+ * refusal then stages carries two nulls of its own, so under the old test the
+ * thread could never match again.
+ *
+ * Returns null when the rows disagree, so the caller triages rather than
+ * guessing. Returns the row to file against with the agreed ids overlaid, since
+ * the row carrying the freshest context is not always the one that names them.
+ */
+export function soleReplyTarget<T extends ReplyTargetRow>(
+  rows: T[] | null | undefined
+): { ref: T; supplierId: string; materialId: string } | null {
+  const candidates = rows ?? [];
+  if (!candidates.length) return null;
+  if (soleOrgOwner(candidates) === null) return null;
+
+  const suppliers = new Set(candidates.map((r) => r.supplier_id).filter(Boolean) as string[]);
+  const materials = new Set(candidates.map((r) => r.material_id).filter(Boolean) as string[]);
+  if (suppliers.size !== 1 || materials.size !== 1) return null;
+
+  const supplierId = [...suppliers][0];
+  const materialId = [...materials][0];
+  // Callers order most-recent-first. Prefer a row that names both ids, because
+  // its metadata (contact address, subject, operator) describes the outreach
+  // rather than a triage artefact.
+  const ref =
+    candidates.find((r) => r.supplier_id && r.material_id) ??
+    candidates.find((r) => r.supplier_id || r.material_id) ??
+    candidates[0];
+  return { ref, supplierId, materialId };
+}

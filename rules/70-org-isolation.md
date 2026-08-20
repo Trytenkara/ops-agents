@@ -114,6 +114,34 @@ working for a different client. Neither is evidence of ownership.
 which fails the build on both arrival paths: a `draft_references` write taking an
 id off a row, and any agent API route storing an id off the request body.
 
+## ORG-11 — Unknown is not ambiguous
+
+Where candidate rows are tested for agreement, only the values they actually
+name may disagree. A null means the field was never filled in; counting it as a
+distinct value turns "we have not linked this yet" into "these are two different
+suppliers" and refuses a match that is not in doubt.
+
+ORG-04 sends an ambiguous reply to triage, which is right, and the test for
+ambiguity was keying on `supplier_id ?? ""`. Half of all cold outreach is
+written before the supplier link exists — 1,935 rows of 3,890 on 2026-08-20 —
+so the cold_outbound row on a thread says `null:material` and the follow-up on
+the same thread says `supplier:material`. Two members in the set, refused as
+ambiguous, every time, on a conversation with exactly one counterparty. All 43
+conversations that missed in the 30 days to 2026-08-20 failed here — 37 of them
+resolve cleanly once a null stops counting as a value — and California
+Chemicals suppliers' prices never arrived because of it. The refusal then stages
+a triage draft carrying two nulls of its own, onto the same thread, so the test
+could never pass again.
+
+This is safe only where the grouping already establishes identity: a thread id
+or a draft id is one conversation with one counterparty. A sender's domain is
+not — it is a shared mail host, and an unlinked row behind it may be a different
+company — so the domain and address fallbacks keep the strict test.
+
+**Enforcement:** Guard — `soleReplyTarget` in `src/lib/org-isolation.ts`,
+`orgs/candidate-match-must-not-key-on-null`, which fails the build on a
+`supplier_id ?? ""` or `material_id ?? ""` match key in the inbound router.
+
 ## ORG-07 — Unaudited edge
 
 The inbox application is not in this repository, so the uniqueness scope of the

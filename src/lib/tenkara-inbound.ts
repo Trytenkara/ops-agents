@@ -23,7 +23,7 @@ import { upsertSupplierProfile } from "@/lib/supplier-profiles";
 import { getClientShipTo } from "@/lib/tenkara-client-settings";
 import { resolveMaterialGradeSpecs } from "@/lib/tenkara-names";
 import { isConsumerMailboxDomain } from "@/lib/mailbox-domain";
-import { soleOrgOwner } from "@/lib/org-isolation";
+import { soleOrgOwner, soleReplyTarget } from "@/lib/org-isolation";
 import { retireInPayload } from "@/lib/contact-change";
 import {
   completenessFollowupEnabled,
@@ -209,17 +209,19 @@ export async function handleInboundReply(
     if (error) return { status: 503, body: { error: "thread_match_failed", detail: error.message } };
 
     // A thread can have multiple drafts for different suppliers/materials (e.g. merged threads,
-    // or an operator consolidating conversations). Only accept a thread_id match if it uniquely
-    // identifies exactly ONE supplier+material pair. Otherwise, fall through to stricter matching
-    // (domain, address, or triage).
+    // or an operator consolidating conversations). Only accept a thread_id match if the drafts on
+    // it agree on ONE client, ONE supplier and ONE material. Otherwise, fall through to stricter
+    // matching (domain, address, or triage).
+    //
+    // `soleReplyTarget` reads an unlinked row as unknown rather than as a second
+    // supplier, and overlays the ids the thread does agree on. Comparing
+    // `supplier_id ?? ""` here refused every reply on a thread whose cold
+    // outreach predated the supplier link — the whole unmatched backlog.
     if (threadRefs && threadRefs.length > 0) {
-      const uniqueTargets = new Set(threadRefs.map((r: any) => `${r.supplier_id ?? ""}:${r.material_id ?? ""}`));
-      // Unanimous on the client as well as on supplier+material. A thread that
-      // two clients share (the July/August contamination) must never resolve by
-      // thread id: whoever's draft sorted first would inherit the other's reply.
       const owner = soleOrgOwner(threadRefs as any[]);
-      if (uniqueTargets.size === 1 && owner !== null && threadRefs[0]?.supplier_id && threadRefs[0]?.material_id) {
-        ref = threadRefs[0];
+      const target = soleReplyTarget(threadRefs as any[]);
+      if (target) {
+        ref = { ...target.ref, supplier_id: target.supplierId, material_id: target.materialId };
       } else if (owner === null) {
         await postAgentAlert(
           `:rotating_light: Inbound reply landed on a conversation shared by more than one client (thread ${msg.conversation_id}). Sent to triage instead of being filed.`,
@@ -270,6 +272,11 @@ export async function handleInboundReply(
   // Side-effect: stageDraft below places the reply into the new conversation, so
   // subsequent messages in this new thread WILL match by thread_id automatically —
   // this fix is self-propagating.
+  //
+  // The breadth control here is the consumer-domain exclusion, not the match
+  // key: a company domain is one company, so an unlinked draft behind it is the
+  // same counterparty with a missing id. Same agreement test as the thread
+  // branch (ORG-11).
   let domainMatchFallback = false;
   if (!ref && inboundOrg) {
     const fromAddr = parseFrom(msg.from).address.toLowerCase();
@@ -286,12 +293,10 @@ export async function handleInboundReply(
         .filter("metadata->>supplier_contact_email", "ilike", `%@${senderDomain}`)
         .order("created_at", { ascending: false });
       if (error) return { status: 503, body: { error: "domain_match_failed", detail: error.message } };
-      if (domainRefs && domainRefs.length > 0) {
-        const uniqueTargets = new Set(domainRefs.map((r: any) => `${r.supplier_id ?? ""}:${r.material_id ?? ""}`));
-        if (uniqueTargets.size === 1 && domainRefs[0]?.supplier_id && domainRefs[0]?.material_id) {
-          ref = domainRefs[0];
-          domainMatchFallback = true;
-        }
+      const domainTarget = soleReplyTarget(domainRefs as any[]);
+      if (domainTarget) {
+        ref = { ...domainTarget.ref, supplier_id: domainTarget.supplierId, material_id: domainTarget.materialId };
+        domainMatchFallback = true;
       }
     }
   }
@@ -315,12 +320,10 @@ export async function handleInboundReply(
         .filter("metadata->>supplier_contact_email", "ilike", fromAddr)
         .order("created_at", { ascending: false });
       if (error) return { status: 503, body: { error: "address_match_failed", detail: error.message } };
-      if (addrRefs && addrRefs.length > 0) {
-        const uniqueTargets = new Set(addrRefs.map((r: any) => `${r.supplier_id ?? ""}:${r.material_id ?? ""}`));
-        if (uniqueTargets.size === 1 && addrRefs[0]?.supplier_id && addrRefs[0]?.material_id) {
-          ref = addrRefs[0];
-          exactAddressMatch = true;
-        }
+      const addrTarget = soleReplyTarget(addrRefs as any[]);
+      if (addrTarget) {
+        ref = { ...addrTarget.ref, supplier_id: addrTarget.supplierId, material_id: addrTarget.materialId };
+        exactAddressMatch = true;
       }
     }
   }

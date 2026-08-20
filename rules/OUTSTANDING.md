@@ -119,10 +119,22 @@ second material was dropped.
 The misses are not an extractor fault. `inbound_message_ledger` marks those
 suppliers `recorded_unmatched`: the replies never reached extraction at all.
 `unmatched_inbound_events` holds 85 unmatched inbound replies in the 30 days to
-2026-08-20 — 38 California Chemicals, 8 for org
-`96552a6f-75cd-44c3-8557-d2ef19bfbdf8`, 39 with a null org. Of 33 distinct
-unmatched CalChem conversations, 11 contain a price. That is the live cause of
-missing prices and it is still running.
+2026-08-20 — 46 with a client resolved, across 43 distinct conversations, and 39
+that arrived at an inbox mapped to no client.
+
+**The 46 are diagnosed and fixed forward.** Every one failed the same test: the
+router keyed candidate agreement on `supplier_id ?? ""`, so a thread whose cold
+outreach predated the supplier link held both `null:material` and
+`supplier:material` and was refused as ambiguous. That is ORG-11, now a rule
+with a guard. Replayed against the live table the new test resolves 37 of the
+43. The remaining six name no supplier on any draft — Sinochem Nanjing is one,
+which is why its price is on the missing list — so there is nothing for the
+router to agree about. Those need the supplier link backfilled upstream, not a
+looser router.
+
+The 39 with no client are a different fault and still live: the receiving inbox
+is not mapped to a Control Room client, so there is nothing to file them
+against. That path already alerts p2 per inbox.
 
 The wrong row is still in the table as found. The new gate runs at capture time,
 so it cannot reach a row captured before it existed: nothing re-reads history,
@@ -132,12 +144,14 @@ beyond this one client is unmeasured — the same read has not been run for the
 rest of the fleet, and the per-message ledger only starts counting from messages
 that arrive after 2026-08-19.
 
-**Owed:** the root cause of the 85 unmatched inbound replies, and a replay so
-the six missed price points arrive through the normal path; a re-extract path,
-since none exists and the capture-time fix leaves every existing row exactly as
-it is; correcting the Yujiang row; and the same reconciliation run fleet-wide to
-size the residue, which is the only way to learn whether this client was unusual
-or typical.
+**Owed:** a replay of the 43 unmatched conversations, since ORG-11 only changes
+what happens to the NEXT message on them and nothing re-reads the ones already
+in the dead-letter table — that is how the six missed price points arrive
+through the normal path; mapping the inboxes behind the other 39; a re-extract
+path, since none exists and the capture-time fix leaves every existing row
+exactly as it is; correcting the Yujiang row; and the same reconciliation run
+fleet-wide to size the residue, which is the only way to learn whether this
+client was unusual or typical.
 
 ## P1 — The em dash and RFQ check matches nothing
 

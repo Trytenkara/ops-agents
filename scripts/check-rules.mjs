@@ -387,6 +387,42 @@ for (const f of files) {
   }
 }
 
+// ORG-11. The inbound router decides whether the drafts on a thread agree about
+// who is replying. Keying that test on `supplier_id ?? ""` counts an unlinked
+// row as a second supplier, and half of all cold outreach is written before the
+// link exists — so the cold_outbound row said `null:material`, the follow-up
+// said `supplier:material`, and every reply on the thread was refused as
+// ambiguous. Agreement is tested over the values a row actually names; that
+// lives in `soleReplyTarget`, once.
+{
+  const router = files.find((f) => f.path.endsWith("src/lib/tenkara-inbound.ts"));
+  if (!router || !/\bsoleReplyTarget\s*\(/.test(router.text)) {
+    violations.push({
+      rule: "orgs/candidate-match-must-not-key-on-null",
+      why: "without the shared resolver the router is back to hand-rolling the agreement test, which is where the null-as-a-value bug came from",
+      fix: "resolve the thread's candidates through soleReplyTarget from @/lib/org-isolation",
+      where: router?.path ?? "src/lib/tenkara-inbound.ts",
+      line: "inbound router does not call soleReplyTarget",
+    });
+  }
+  for (const f of files) {
+    if (!f.path.endsWith("src/lib/tenkara-inbound.ts")) continue;
+    for (const line of f.text.split("\n")) {
+      // Prose explaining the bug is allowed to spell it. Only code counts.
+      if (/^\s*(\/\/|\*|\/\*)/.test(line)) continue;
+      const m = line.match(/\b(supplier_id|material_id)\s*\?\?\s*""/);
+      if (!m) continue;
+      violations.push({
+        rule: "orgs/candidate-match-must-not-key-on-null",
+        why: "a null id means the row was never linked, not that it names a different supplier; folding it into a match key refuses replies on threads with exactly one counterparty",
+        fix: "compare only the non-null values the candidates name — soleReplyTarget in @/lib/org-isolation does this",
+        where: f.path,
+        line: `match key treats an unset id as a value: ${m[0]}`,
+      });
+    }
+  }
+}
+
 // ORG-08. `organization_ids` is the set of every client that owns a shared row.
 // Indexing a fixed slot (`organization_ids[1]`) only matches rows where that
 // client sorts first, so a supplier shared with a second client is invisible to
