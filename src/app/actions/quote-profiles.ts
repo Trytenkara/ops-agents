@@ -54,7 +54,9 @@ export async function createQuoteProfile(
   const ctx = await assertCanAct(orgId);
   if ("error" in ctx) return { ok: false, error: ctx.error };
   try {
-    const profile = await insertQuoteProfile(ctx.admin, orgId, fields);
+    // A quote an operator types in is one we were given, never a scraped
+    // listing, so it belongs to the direct relationship.
+    const profile = await insertQuoteProfile(ctx.admin, orgId, { ...fields, lane: "direct" });
     revalidatePath(`/work/orgs`);
     return { ok: true, profileId: profile.id };
   } catch (e: any) {

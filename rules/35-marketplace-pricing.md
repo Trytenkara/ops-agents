@@ -101,4 +101,7 @@ on supplier plus material alone puts both lanes in one bucket and lets one lane
 claim the other's row. A note in a text field is not a lane: it is a label one
 writer happens to set and the other does not.
 
-**Enforcement:** Check owed — `pricing/quote-row-carries-its-lane`.
+**Enforcement:** Guard — `quote_profiles.lane`, not null, no default at the
+call site: `insertQuoteProfile` requires it, `seedQuoteProfilesFromStaged` reads
+and writes `direct` only, `syncQuoteProfilesFromMarketplace` reads and writes
+`marketplace` only, and the quotes tab groups by supplier and lane.

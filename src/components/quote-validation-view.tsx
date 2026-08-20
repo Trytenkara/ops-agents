@@ -12,7 +12,7 @@ import { qaQuoteProfile } from "@/lib/price-qa";
 import type { DensityIndex } from "@/lib/material-density";
 import { ListCsvButton } from "@/components/list-csv-button";
 import { filenameFor } from "@/lib/csv";
-import { quoteCompleteness, type QuoteProfile } from "@/lib/quote-profiles";
+import { quoteCompleteness, type QuoteProfile, type QuoteLane } from "@/lib/quote-profiles";
 import { aggregatorNameOf } from "@/lib/aggregator-hosts";
 import { MARKET_KIND_LABEL, MARKET_KIND_TITLE, MARKET_KIND_VARIANT, type MarketKind } from "@/lib/lead-market";
 import {
@@ -30,6 +30,11 @@ interface SupplierQuoteGroup {
   supplierName: string;
   supplierId: string | null;
   operatorName: string | null;
+  lane: QuoteLane;
+  // The same company is held twice when a marketplace also deals with us by
+  // email, so one card per lane. Set only when both exist, and only then is the
+  // header labelled: otherwise every card grows a badge saying nothing.
+  laneSplit: boolean;
   quotes: QuoteProfile[];
 }
 
@@ -158,13 +163,37 @@ export function QuoteValidationView({
     // A nameless quote gets its own card keyed by its id. Grouping them by the
     // empty name instead merges unrelated suppliers into one card that reads as
     // a single supplier's quotes.
-    const key = q.supplier_id ?? (q.supplier_name.trim() ? q.supplier_name.toLowerCase() : `quote:${q.id}`);
+    // Lane is part of the key. A marketplace we also deal with by email is two
+    // relationships under one name, and merging their quotes into one card is
+    // what let an operator quote direct against a public listing price without
+    // noticing which was which.
+    const supplierPart = q.supplier_id ?? (q.supplier_name.trim() ? q.supplier_name.toLowerCase() : `quote:${q.id}`);
+    const key = `${supplierPart}|${q.lane}`;
     let group = groupMap.get(key);
     if (!group) {
-      group = { key, supplierName: q.supplier_name, supplierId: q.supplier_id, operatorName: operatorFor(q), quotes: [] };
+      group = {
+        key,
+        supplierName: q.supplier_name,
+        supplierId: q.supplier_id,
+        operatorName: operatorFor(q),
+        lane: q.lane,
+        laneSplit: false,
+        quotes: [],
+      };
       groupMap.set(key, group);
     }
     group.quotes.push(q);
+  }
+  // Label the header only where the same supplier really does appear twice.
+  const laneCount = new Map<string, Set<QuoteLane>>();
+  for (const g of groupMap.values()) {
+    const id = g.key.slice(0, g.key.lastIndexOf("|"));
+    const seen = laneCount.get(id) ?? new Set<QuoteLane>();
+    seen.add(g.lane);
+    laneCount.set(id, seen);
+  }
+  for (const g of groupMap.values()) {
+    g.laneSplit = (laneCount.get(g.key.slice(0, g.key.lastIndexOf("|")))?.size ?? 1) > 1;
   }
 
   // Every supplier an operator could add a quote for: the org's roster plus any
@@ -181,7 +210,8 @@ export function QuoteValidationView({
   const supplierList = Array.from(supplierChoices.values()).sort((a, b) => a.name.localeCompare(b.name));
 
   const searchOptions: SearchOption[] = [
-    ...Array.from(groupMap.values()).map((g) => ({ value: g.supplierName, group: "Suppliers" })),
+    // Deduped: a company held in both lanes is two groups but one name.
+    ...[...new Set(Array.from(groupMap.values()).map((g) => g.supplierName))].map((value) => ({ value, group: "Suppliers" })),
     ...profiles.map((q) => ({ value: q.material_name ?? "", group: "Materials" })),
   ];
 
@@ -264,11 +294,13 @@ export function QuoteValidationView({
   const avgCompleteness = totalQuotes > 0
     ? Math.round(profiles.reduce((s, q) => s + quoteCompleteness(q).pct, 0) / totalQuotes)
     : 0;
-  const totalSuppliers = groupMap.size;
+  // Distinct companies, not cards: one company held in both lanes is two cards
+  // but still one supplier, and the header count should not double.
+  const totalSuppliers = laneCount.size;
 
   // CSV export
   const csvHeaders = [
-    "Supplier", "Type", "Operator", "Material", "Price", "Pack / tier", "Case Size", "Units", "Unit Price", "Currency",
+    "Supplier", "Version", "Type", "Operator", "Material", "Price", "Pack / tier", "Case Size", "Units", "Unit Price", "Currency",
     "Case Type", "Case Width", "Case Height", "Case Length", "Case Weight",
     "Density", "Density Unit", "Density Source",
     "Quote Expiry", "Lead Time Days",
@@ -284,7 +316,7 @@ export function QuoteValidationView({
     const qa = qaQuoteProfile(q, densities);
     const docs = docsForQuote(supplierDocs, q);
     return [
-      q.supplier_name, kindOf(q), operatorFor(q) ?? "", q.material_name,
+      q.supplier_name, q.lane, kindOf(q), operatorFor(q) ?? "", q.material_name,
       q.price ?? "", q.pack_size ?? "", q.case_size ?? "", q.unit_of_measurement ?? "", up, q.currency,
       q.case_type ?? "", q.case_width ?? "", q.case_height ?? "", q.case_length ?? "", q.case_weight ?? "",
       q.density ?? "", q.density != null ? (q.density_unit ?? "") : "", q.density_source ?? "",
@@ -388,6 +420,20 @@ export function QuoteValidationView({
                   <span className={`font-serif text-lg font-semibold truncate${g.supplierName.trim() ? "" : " italic text-muted-foreground"}`}>
                     {g.supplierName.trim() || "Unknown supplier"}
                   </span>
+                  {/* Only when this company is genuinely held both ways, so the
+                      two cards do not read as an accidental duplicate. */}
+                  {g.laneSplit && (
+                    <Badge
+                      variant="outline"
+                      title={
+                        g.lane === "marketplace"
+                          ? "Prices read off this company's public product pages. The same company also quotes us directly; that is the other card."
+                          : "Prices this company quoted us, by email or entered by an operator. The same company also sells on a marketplace; that is the other card."
+                      }
+                    >
+                      {g.lane === "marketplace" ? "marketplace version" : "direct version"}
+                    </Badge>
+                  )}
                   {kinds.map((k) => (
                     <Badge key={k} variant={MARKET_KIND_VARIANT[k]} title={MARKET_KIND_TITLE[k]}>
                       {k === "aggregator" && aggregators.length === 1

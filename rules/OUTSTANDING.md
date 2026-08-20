@@ -332,29 +332,18 @@ uncommitted work at the time.
 `src/agents-runtime/agents/browserbase-escalation/index.ts`, and a check that
 holds every price-tier writer to it: `price/tiers-must-respect-operator-edit`.
 
-## P2 — The quotes table has no lane, so a website price can claim a direct row
+## Closed 2026-08-20 — the quotes table now carries a lane
 
-Breaks PRICING-08. `quote_profiles` keys a supplier's prices on supplier plus
-material, with no lane, while PRICING-07 deliberately gives the direct version
-of a marketplace supplier the same name and id. The marketplace filler
-(`syncQuoteProfilesFromMarketplace`) therefore adopts any row without a pack
-label, writes the listing's pack, link and source onto it, and forces its
-currency to USD unconditionally, which also breaks DATA-11. The email seeder is
-guarded in the other direction, but only by a text note on the row, not by a
-lane.
+Was: `quote_profiles` keyed a supplier's prices on supplier plus material with
+no lane, while PRICING-07 deliberately gives the direct version of a marketplace
+supplier the same name and id, so either writer could adopt the other's row.
 
-Measured 2026-08-19 on California Chemicals: 1,776 quote rows, 104
-supplier-and-material combinations holding both a website row and a
-non-website row, and 47 unlabelled rows with no pack size that the filler is
-free to claim. SaponIQ has 8 more. No contaminated row was found yet: of the
-147 rows that look adopted, none belong to a supplier who has ever emailed a
-price for that material, and every row across all clients is currently USD.
-This is an open door, not a fire.
-
-**Owed:** a lane column on the quote row, written at insert by both seeders and
-required by every writer; `pricing/quote-row-carries-its-lane`. Until then the
-filler must be narrowed to rows it labelled itself, and its unconditional
-currency write removed.
+Fixed by migration `0126_quote_profiles_lane.sql`: `lane` is not null, both
+seeders read and write only their own lane, `insertQuoteProfile` refuses a row
+that does not name one, the filler's unconditional USD write is gone (DATA-11),
+and the quotes tab shows the two versions as two cards. Backfill on production
+2026-08-20: 7,952 marketplace, 106 direct, 0 unknown. No contaminated row was
+ever found; this was an open door, closed before a fire.
 
 ## The full enforcement debt
 
@@ -379,7 +368,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | DATA-05 | `contacts/guessed-combo-requires-own-domain-and-flag` |
 | DATA-06 | `contacts/confidence-derived-from-source` — see the P0 above |
 | DATA-07 | `density/solids-require-bulk` |
-| PRICING-08 | `pricing/quote-row-carries-its-lane` — see the P2 above |
 | PERS-02 | `queues/flag-must-not-exit-queue` |
 | PERS-03 | `discovery/zero-must-not-be-terminal` — see the P1 above |
 | PERS-04 | `retry/bound-must-be-declared` |

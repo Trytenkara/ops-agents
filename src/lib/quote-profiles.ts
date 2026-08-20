@@ -3,6 +3,10 @@ import { resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
 import { selectAllPaged } from "@/lib/supabase-paging";
 import { stagedPackLabel } from "@/lib/staged-pack-label";
 
+// "marketplace" = read off a public product page. "direct" = quoted to us, by
+// email or by an operator.
+export type QuoteLane = "marketplace" | "direct";
+
 export interface QuoteProfile {
   id: string;
   org_id: string;
@@ -17,6 +21,11 @@ export interface QuoteProfile {
   // supplier's price ladder this quote is, and survives a pack string case_size
   // can't parse.
   pack_size: string | null;
+  // Which relationship quoted this. The same company can be held twice, once as
+  // a marketplace we scrape and once as a direct supplier who emails us, under
+  // the same name and id — so without this a listing price and a negotiated
+  // price share one bucket and either writer can adopt the other's row.
+  lane: QuoteLane;
   currency: string;
   case_type: string | null;
   case_width: number | null;
@@ -75,7 +84,7 @@ export interface QuoteProfile {
 
 const PROFILE_COLUMNS = `
   id, org_id, supplier_id, supplier_name, material_id, material_name,
-  price, case_size, unit_of_measurement, pack_size, currency,
+  price, case_size, unit_of_measurement, pack_size, lane, currency,
   case_type, case_width, case_height, case_length, case_dimensions_unit, case_weight,
   quote_expiry, lead_time_days,
   min_inventory, min_inventory_unit, max_inventory, max_inventory_unit,
@@ -140,10 +149,13 @@ export async function updateQuoteProfile(
   return data as QuoteProfile;
 }
 
+// lane is required, never defaulted: a row whose relationship we cannot name is
+// the row that gets adopted by the wrong writer later. Every caller knows which
+// lane it is writing, so every caller says so.
 export async function insertQuoteProfile(
   admin: SupabaseClient,
   orgId: string,
-  fields: QuoteProfileSeed
+  fields: QuoteProfileSeed & { lane: QuoteLane }
 ): Promise<QuoteProfile> {
   const { data, error } = await admin
     .from("quote_profiles")
@@ -186,13 +198,14 @@ export async function seedQuoteProfilesFromStaged(
   // alone and collide with every other nameless quote for it — the second
   // supplier's quote would be swallowed as an update to the first. Nameless
   // quotes are excluded from the index and always insert.
-  // Marketplace listing rows are excluded outright: a reply-driven quote belongs
-  // on a negotiated rung, never on a public listing price this supplier never
-  // quoted us.
+  // Marketplace rows are excluded outright: a reply-driven quote belongs on a
+  // negotiated rung, never on a public listing price this supplier never quoted
+  // us. This reads the row's own lane, not a text prefix in its notes — the
+  // prefix missed every listing row written before the label existed.
   const byIdentity = new Map<string, QuoteProfile[]>();
   for (const p of existing) {
     if (!p.supplier_name?.trim()) continue;
-    if ((p.purchasing_notes ?? "").startsWith(LISTING_NOTE_PREFIX)) continue;
+    if (p.lane !== "direct") continue;
     const key = `${p.supplier_name.toLowerCase()}|${(p.material_name ?? "").toLowerCase()}`;
     const bucket = byIdentity.get(key);
     if (bucket) bucket.push(p);
@@ -258,6 +271,7 @@ export async function seedQuoteProfilesFromStaged(
         material_id: s.material_id ?? null,
         material_name: s.material_name ?? "",
         ...seedCore,
+        lane: "direct",
         pack_size: pack,
         currency: s.currency ?? "USD",
         case_type: s.case_type ?? null,
@@ -431,6 +445,11 @@ export async function syncQuoteProfilesFromMarketplace(
       : `name:${(value.supplier_name ?? "").trim().toLowerCase()}|${(value.material_name ?? "").trim().toLowerCase()}`;
   const byIdentity = new Map<string, QuoteProfile[]>();
   for (const p of existing) {
+    // The mirror of the seeder's fence. This writer had none, so on a company
+    // held both ways it could adopt the direct relationship's negotiated row —
+    // the packless-row adoption below made that easy — and restate a public
+    // listing price as the quote we were given.
+    if (p.lane !== "marketplace") continue;
     const key = identityKey(p);
     const bucket = byIdentity.get(key);
     if (bucket) bucket.push(p);
@@ -492,6 +511,7 @@ export async function syncQuoteProfilesFromMarketplace(
             material_id: l.material_id ?? null,
             material_name: l.material_name ?? "",
             price: tier.price,
+            lane: "marketplace",
             currency: "USD",
             ...listed,
             purchasing_notes: `${LISTING_NOTE_PREFIX}${tier.pack ? ` (${tier.pack})` : ""}`,
@@ -518,8 +538,10 @@ export async function syncQuoteProfilesFromMarketplace(
       // is never clobbered — even the price, which used to be refreshed outright. The
       // live price index reads leads_in_flight.payload, not this record, so freezing
       // the quote's price here does not stale the index.
+      // Currency is deliberately NOT written. This used to stamp USD on the row
+      // unconditionally, which is the one field it was willing to overwrite, and
+      // it did so without reading the price the currency belonged to.
       if (isBlank(target.price)) patch.price = tier.price;
-      if (String(target.currency ?? "").toUpperCase() !== "USD") patch.currency = "USD";
       for (const [field, next] of Object.entries(listed) as [keyof typeof listed, any][]) {
         if (next == null) continue;
         if (!isBlank((target as any)[field])) continue;
@@ -529,7 +551,7 @@ export async function syncQuoteProfilesFromMarketplace(
       // Auto-promote: when the agent has everything it can source (core complete) and
       // this pass had no fresh blank to fill, the quote has converged — flip it to
       // pending_review so operators get the "agents are done, ready for review" signal.
-      const noNewFills = !Object.keys(patch).some((k) => k !== "currency");
+      const noNewFills = !Object.keys(patch).length;
       const willBeCore = coreComplete({
         price: patch.price ?? target.price,
         case_size: patch.case_size ?? target.case_size,

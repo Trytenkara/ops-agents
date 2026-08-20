@@ -4,14 +4,14 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-116 rules. 53 are actually enforced, 37 owe a check or a job,
+116 rules. 54 are actually enforced, 36 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 51 |
+| **Guard** | A shared module or build check makes it impossible. | 52 |
 | **Audit** | A scheduled job reports the break after the fact. | 2 |
-| **Check owed** | A build check is possible and is not built yet. | 31 |
+| **Check owed** | A build check is possible and is not built yet. | 30 |
 | **Audit owed** | No build check can see it; a scheduled job can. Not built. | 6 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
@@ -21,7 +21,7 @@ source of truth and this is only a view of them.
 Anything "owed" is also listed in `OUTSTANDING.md`; the build refuses
 otherwise, so a gap cannot go quiet.
 
-## Guard (51)
+## Guard (52)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -48,6 +48,7 @@ otherwise, so a gap cannot go quiet.
 | `DATA-16` | Every rung of a tiered quote is its own row | Guard — `price/tier-rungs-never-collapse`: `dupKey`, `echoKey` |
 | `DATA-17` | A later source fills a blank, it does not overwrite a checked value | Guard — `applySupplierStatedDetails` in |
 | `PRICING-07` | A marketplace that deals by email becomes a second, direct supplier | Guard — `splitDirectLeadFromMarketplace` in |
+| `PRICING-08` | A price row belongs to one lane and no writer may cross | Guard — `quote_profiles.lane`, not null, no default at the |
 | `PERS-01` | Only a structural verdict is terminal | Guard — `src/lib/retry-verdict.ts` `classifyFailure`. Owed: |
 | `PERS-06` | No hidden caps on a worklist | Guard for the accidental cut — `src/lib/supabase-paging.ts` |
 | `PERS-08` | The record of a failure is never proof of success | Guard — the reply-drafted check in `src/lib/tenkara-inbound.ts` |
@@ -84,7 +85,7 @@ otherwise, so a gap cannot go quiet.
 | `DATA-15` | Extraction records what it did not take | Audit — `agent-24-price-capture-reconcile`. Every inbound |
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 
-## Check owed (31)
+## Check owed (30)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -100,7 +101,6 @@ otherwise, so a gap cannot go quiet.
 | `PRICING-02` | Delivery cost is per pack tier when pack size changes it | Check owed — `shipping/cost-per-tier`. |
 | `PRICING-03` | Delivery-cost extraction is opt-in per client | Check owed — `shipping/extraction-org-opt-in`. |
 | `PRICING-05` | A delivery cost is never fabricated | Check owed — `shipping/no-fabricated-costs`. |
-| `PRICING-08` | A price row belongs to one lane and no writer may cross | Check owed — `pricing/quote-row-carries-its-lane`. |
 | `PERS-02` | "Needs a human" is a display flag, never a queue exit | Check owed — `queues/flag-must-not-exit-queue`. |
 | `PERS-03` | A zero-result pass is never "this market is empty" | Check owed — `discovery/zero-must-not-be-terminal`, over |
 | `PERS-04` | Retry limits are a spend control, and must be named | Check owed — `retry/bound-must-be-declared`: a bounded |
