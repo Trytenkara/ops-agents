@@ -315,6 +315,23 @@ this action retires the address and nothing goes looking for a new one.
 resolver that retires the address on the supplier profile when no lead exists;
 `outreach/discard-escalation-must-be-actionable`.
 
+## P2 — The Tier B scrape can overwrite an operator's price ladder
+
+Breaks DATA-13 and DATA-17. `lead-price-pull.ts` refuses to rewrite tiers a
+person entered (`operatorEdited = !!payload.price_tiers_updated_by`). Agent 19,
+the Browserbase escalation that reads the pages Agent 05 cannot, writes
+`price_tiers` and `marketplace_pull` on any successful scrape with no such
+check, so the scrape would replace the operator's ladder.
+
+Measured 2026-08-20 across the non-internal clients: 0 leads carry
+`price_tiers_updated_by`, so nothing has been overwritten yet. It is a hole, not
+an incident. Left unfixed only because that file held another session's
+uncommitted work at the time.
+
+**Owed:** the `operatorEdited` guard in
+`src/agents-runtime/agents/browserbase-escalation/index.ts`, and a check that
+holds every price-tier writer to it: `price/tiers-must-respect-operator-edit`.
+
 ## P2 — The quotes table has no lane, so a website price can claim a direct row
 
 Breaks PRICING-08. `quote_profiles` keys a supplier's prices on supplier plus
