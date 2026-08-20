@@ -70,12 +70,18 @@ A lead with no channel stays in the retry queue permanently. A lead promoted
 past raw that has a website but still no email must also keep being retried; a
 promotion must never be the thing that ends the search.
 
-**Enforcement:** Check owed — `outreach/contactless-must-park-not-drop`. A
-scheduled sweep compensates today, which is a workaround under META-03 and
-is named in `OUTSTANDING.md`. This used to name OUT-02's check. They are not
-the same break: OUT-02 is a storefront that was never given a channel, PERS-05
-is a direct supplier actively set to `dropped` so the re-queue cannot see it.
-Sharing one id meant guarding either one would report both as held.
+"Retry queue" is not a figure of speech: `requeue_parked_contact_leads` selects
+on `status = 'active' and stage = 'enriched'`. Setting the lead to `dropped` is
+therefore not a label, it is removal from the only path that tries again. Park
+it — active, at `enriched`, stamped `outreach_parked_at` so it does not sit in
+front of an operator.
+
+**Enforcement:** Guard — `outreach/contactless-must-park-not-drop`. A scheduled
+sweep still compensates, which is a workaround under META-03 and is named in
+`OUTSTANDING.md`. This used to name OUT-02's check. They are not the same break:
+OUT-02 is a storefront that was never given a channel, PERS-05 is a direct
+supplier actively set to `dropped` so the re-queue cannot see it. Sharing one id
+meant guarding either one would report both as held.
 
 ## PERS-06 — No hidden caps on a worklist
 

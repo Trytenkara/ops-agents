@@ -315,9 +315,11 @@ registerAgent({
     // Per-org switch (orgStatuses loaded above at the fetch): outreach only acts
     // for orgs whose sourcing_status is 'active'. The fetch already excludes
     // paused orgs; this is a belt-and-suspenders guard in the candidate loop.
-    let filteredNoContact = 0; // non-marketplace, no cold-emailable contact → filtered out
+    let parkedNoContact = 0; // non-marketplace, no cold-emailable contact → parked for the re-queue, never dropped
     let marketplacePricingLeft = 0; // marketplace, no email → left active for price-pull
-    const marketplaceParkIds: string[] = []; // of those, the ones not yet parked out of the fetch window
+    // Every lead with no cold-emailable address, marketplace or direct, parked
+    // out of the fetch window in one bulk stamp below.
+    const contactlessParkIds: string[] = [];
     let droppedNoOrg = 0;
     let droppedSkipClient = 0;
     let droppedPausedOrg = 0;
@@ -423,42 +425,44 @@ registerAgent({
         continue;
       }
 
-      // No cold-emailable address. Marketplaces stay in the pipeline so price-pull
-      // (Agent 05 / browserbase) can quote them; if pricing can't be pulled the
-      // lead is flagged there, never filtered. Everything else is filtered out as
-      // "no contact recovered" — we no longer open manual-outreach cases here.
+      // No cold-emailable address. Both kinds stay in the pipeline: a marketplace
+      // so Agent 05 price-pull can quote it, a direct supplier so the contact
+      // re-queue can keep looking for an address. Neither is dropped.
+      //
+      // The direct half used to be set to `status: 'dropped'`, and that is PERS-05:
+      // `requeue_parked_contact_leads` — the one path that tries again — selects on
+      // `status = 'active' and stage = 'enriched'`, so dropping put the lead
+      // permanently outside the only thing that would have rescued it. Nothing read
+      // `no_contact_recovered` to revive it either; the only reader in the repo is a
+      // UI label. Measured 2026-08-20: 3,208 leads dropped that way, 2,325 of them
+      // on paying clients (California Chemicals 1,589, SaponIQ 733), and 3,195 would
+      // qualify for the re-queue this minute if they were still active.
+      //
+      // Parking is what "no contact yet" actually means: still ours, still retried,
+      // just not in front of an operator. The park keeps them out of the outreach
+      // fetch window so they cannot starve actionable leads, and the
+      // `clear_outreach_park_on_contact_change` trigger un-parks any lead that gains
+      // an address.
       if (!hasEmail) {
         const isMarketplace = marketplaceFor(lead, payload, channelUrl);
-        if (isMarketplace) {
-          marketplacePricingLeft++;
-          // Stays active at stage='enriched' for Agent 05 price-pull — but park it
-          // out of the outreach fetch window so it stops starving the actionable
-          // leads behind it. Un-parked automatically if it ever gains an email.
-          // Also mark for contact resolution so a scheduled sweep can attempt to
-          // find/guess the marketplace seller's contact info.
-          marketplaceParkIds.push(lead.id);
-          const { error: escalateError } = await admin
-            .from("leads_in_flight")
-            .update({
-              payload: {
-                ...payload,
-                needs_contact_resolution: true,
-                contact_resolution_attempted_at: payload.contact_resolution_attempted_at ?? null
-              }
-            })
-            .eq("id", lead.id)
-            .eq("status", "active")
-            .is("outreach_parked_at", null);
-          if (escalateError) {
-            await ctx.log(`Failed to mark lead ${lead.id} for contact resolution: ${escalateError.message}`, { level: "warn", step: "escalate" });
-          }
-          continue;
-        }
-        await admin
+        if (isMarketplace) marketplacePricingLeft++;
+        else parkedNoContact++;
+        contactlessParkIds.push(lead.id);
+        const { error: escalateError } = await admin
           .from("leads_in_flight")
-          .update({ status: "dropped", drop_reason: "no_contact_recovered", payload: { ...payload, drop_reason: "no_contact_recovered" } })
-          .eq("id", lead.id);
-        filteredNoContact++;
+          .update({
+            payload: {
+              ...payload,
+              needs_contact_resolution: true,
+              contact_resolution_attempted_at: payload.contact_resolution_attempted_at ?? null
+            }
+          })
+          .eq("id", lead.id)
+          .eq("status", "active")
+          .is("outreach_parked_at", null);
+        if (escalateError) {
+          await ctx.log(`Failed to mark lead ${lead.id} for contact resolution: ${escalateError.message}`, { level: "warn", step: "escalate" });
+        }
         continue;
       }
 
@@ -542,15 +546,15 @@ registerAgent({
       });
     }
 
-    // Park the marketplace leads seen this run out of the fetch window. One bulk
+    // Park the contactless leads seen this run out of the fetch window. One bulk
     // stamp, before the no-candidates early return below — during the initial
     // drain that return is the common path, and skipping the stamp there would
     // leave the window blocked forever.
     let parkedThisRun = 0;
     // Chunked: an `in.()` filter is a URL query param, and the whole window's
     // worth of uuids in one call runs close to the request-line limit.
-    for (let i = 0; i < marketplaceParkIds.length; i += 50) {
-      const chunk = marketplaceParkIds.slice(i, i + 50);
+    for (let i = 0; i < contactlessParkIds.length; i += 50) {
+      const chunk = contactlessParkIds.slice(i, i + 50);
       const { error: parkError, count } = await admin
         .from("leads_in_flight")
         .update({ outreach_parked_at: new Date().toISOString() }, { count: "exact" })
@@ -566,14 +570,14 @@ registerAgent({
 
     const emailCount = candidates.filter((c) => c.channel === "email").length;
     await ctx.log(
-      `Filtered: ${candidates.length} actionable (${emailCount} email) · filtered out ${filteredNoContact} (no contact recovered), left ${marketplacePricingLeft} marketplace for price-pull, ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${droppedPausedOrg ? `, ${droppedPausedOrg} (org not active)` : ""}${heldForSpelling ? ` · held ${heldForSpelling} (pending spelling review)` : ""}${heldForMissingName ? ` · held ${heldForMissingName} (missing material name)` : ""}${heldPhasedCarry ? ` · skipped ${heldPhasedCarry} (held for follow-up)` : ""}${heldForMarketplaceReview ? ` · held ${heldForMarketplaceReview} (marketplace outreach review)` : ""}`,
+      `Filtered: ${candidates.length} actionable (${emailCount} email) · parked ${parkedNoContact} (no contact yet, re-queued), left ${marketplacePricingLeft} marketplace for price-pull, ${droppedNoOrg} (no org map), ${droppedSkipClient} (unclassified client)${droppedPausedOrg ? `, ${droppedPausedOrg} (org not active)` : ""}${heldForSpelling ? ` · held ${heldForSpelling} (pending spelling review)` : ""}${heldForMissingName ? ` · held ${heldForMissingName} (missing material name)` : ""}${heldPhasedCarry ? ` · skipped ${heldPhasedCarry} (held for follow-up)` : ""}${heldForMarketplaceReview ? ` · held ${heldForMarketplaceReview} (marketplace outreach review)` : ""}`,
       { step: "filter" }
     );
 
     if (candidates.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
-      ctx.setSummary(`No actionable leads after filters (no_contact=${filteredNoContact}, marketplace_pricing=${marketplacePricingLeft}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${droppedPausedOrg ? `, paused_org=${droppedPausedOrg}` : ""}${heldForSpelling ? `, held_spelling=${heldForSpelling}` : ""}${heldForMissingName ? `, held_missing_name=${heldForMissingName}` : ""})${parkedThisRun ? ` · parked ${parkedThisRun} marketplace out of the outreach window` : ""}.`);
+      ctx.setSummary(`No actionable leads after filters (parked_no_contact=${parkedNoContact}, marketplace_pricing=${marketplacePricingLeft}, no_org=${droppedNoOrg}, skip_client=${droppedSkipClient}${droppedPausedOrg ? `, paused_org=${droppedPausedOrg}` : ""}${heldForSpelling ? `, held_spelling=${heldForSpelling}` : ""}${heldForMissingName ? `, held_missing_name=${heldForMissingName}` : ""})${parkedThisRun ? ` · parked ${parkedThisRun} contactless out of the outreach window` : ""}.`);
       return;
     }
 
@@ -1026,10 +1030,10 @@ registerAgent({
         (priorRelSkipped ? ` · skipped ${priorRelSkipped} existing-relationship` : "") +
         (equipmentSkipped ? ` · skipped ${equipmentSkipped} equipment-supplier` : "") +
         (marketplacePricingLeft ? ` · left ${marketplacePricingLeft} marketplace for price-pull` : "") +
-        (parkedThisRun ? ` · parked ${parkedThisRun} marketplace out of the outreach window` : "") +
+        (parkedThisRun ? ` · parked ${parkedThisRun} contactless out of the outreach window` : "") +
         (budgetStopped ? ` · ${budgetStopped} supplier${budgetStopped === 1 ? "" : "s"} deferred (run budget)` : "") +
-        (filteredNoContact || droppedNoOrg || droppedSkipClient
-          ? ` · filtered ${filteredNoContact + droppedNoOrg + droppedSkipClient} pre-outreach`
+        (droppedNoOrg || droppedSkipClient
+          ? ` · filtered ${droppedNoOrg + droppedSkipClient} pre-outreach`
           : "")
     );
   },

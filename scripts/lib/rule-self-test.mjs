@@ -460,6 +460,35 @@ const MUTATIONS = [
     label: "the enrichment agent this rule is anchored to is gone",
     mutate: drop("src/agents-runtime/agents/data-enrichment/enrich.ts"),
   },
+
+  // PERS-05. The first two are the code as it shipped for three weeks.
+  {
+    expect: "outreach/contactless-must-park-not-drop",
+    label: "a contactless lead is dropped again",
+    mutate: fixture(
+      "src/agents-runtime/agents/outreach/retire.ts",
+      `await admin.from("leads_in_flight").update({ status: "dropped", drop_reason: "no_contact_recovered" }).eq("id", id);\n`,
+    ),
+  },
+  {
+    expect: "outreach/contactless-must-park-not-drop",
+    label: "the no-contact branch stops parking the lead",
+    mutate: rename(
+      "src/agents-runtime/agents/outreach/index.ts",
+      "contactlessParkIds.push(lead.id);",
+      "noop(lead.id);",
+    ),
+  },
+  {
+    expect: "outreach/contactless-must-park-not-drop",
+    label: "the branch this rule reads is renamed out from under it",
+    mutate: rename("src/agents-runtime/agents/outreach/index.ts", "if (!hasEmail) {", "if (!hasAnyEmail) {"),
+  },
+  {
+    expect: "outreach/contactless-must-park-not-drop",
+    label: "the outreach agent is deleted outright",
+    mutate: drop("src/agents-runtime/agents/outreach/index.ts"),
+  },
 ];
 
 // The checks over rules/ itself read from disk, so they mutate a copy.

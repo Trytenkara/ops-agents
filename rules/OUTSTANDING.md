@@ -75,8 +75,23 @@ Also: leads untouched for 14 days are dropped (a case is opened, so it is a
 handoff), and leads dropped as a duplicate open case get no case opened at all
 — a silent exit with no artifact.
 
-**Owed:** stop dropping; park as active so the re-queue can see it. Then the
-scheduled skill sweep can be retired (META-03).
+**Measured 2026-08-20.** 3,208 leads carry `drop_reason = 'no_contact_recovered'`.
+2,325 of them belong to paying clients (California Chemicals 1,589, SaponIQ 733,
+Vita Organica 3); the rest are Tenkara Internal. 3,195 would qualify for
+`requeue_parked_contact_leads` this minute if they were still active. The only
+reader of that drop reason anywhere in the repo is a UI label.
+
+**Half fixed 2026-08-20.** The outreach agent now parks a contactless direct
+supplier exactly the way it already parked a marketplace: active, at
+`stage='enriched'`, stamped `outreach_parked_at`, flagged
+`needs_contact_resolution`. Held by `outreach/contactless-must-park-not-drop`,
+four mutations behind it. This is forward-only.
+
+**Still owed:** the 3,208 already dropped are still outside the re-queue and
+reviving them is a bulk write to production lead state, so it needs a decision
+rather than a deploy. The 14-day untouched drop and the duplicate-open-case
+drop are untouched. The scheduled skill sweep can be retired (META-03) only once
+the backfill has run.
 
 ## P0 — "Verified" contact confidence is stamped on unverified addresses
 
@@ -504,7 +519,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | PERS-02 | `queues/flag-must-not-exit-queue` |
 | PERS-03 | `discovery/zero-must-not-be-terminal` — see the P1 above |
 | PERS-04 | `retry/bound-must-be-declared` |
-| PERS-05 | `outreach/contactless-must-park-not-drop` — see the P0 above |
 | PERS-06 | `reads/limit-must-report-remainder` — see the P1 above |
 | PERS-10 | `fetch/blocked-must-not-read-as-empty` — a non-2xx may not reach a content parser; the same shape as the P0 storefront drop above |
 | DISC-05 | `discovery/platform-is-never-manufacturer` |

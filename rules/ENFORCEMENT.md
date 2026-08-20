@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-120 rules. 62 are actually enforced, 37 owe a check or a job,
+120 rules. 63 are actually enforced, 36 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 5 of the enforced rules hold only part of their invariant and say so in
@@ -12,9 +12,9 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 59 |
+| **Guard** | A shared module or build check makes it impossible. | 60 |
 | **Audit** | A scheduled job reports the break after the fact. | 3 |
-| **Check owed** | A build check is possible and is not built yet. | 27 |
+| **Check owed** | A build check is possible and is not built yet. | 26 |
 | **Audit owed** | No build check can see it; a scheduled job can. Not built. | 5 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
@@ -32,7 +32,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (59)
+## Guard (60)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -64,6 +64,7 @@ this ledger read as enforced.
 | `PRICING-07` | A marketplace that deals by email becomes a second, direct supplier | Guard — `splitDirectLeadFromMarketplace` in `src/lib/marketplace-direct-split.ts`, which refuses a platform address, refuses a lead already split, and reuses an existing direct sibling instead of stacking a second one. |
 | `PRICING-08` | A price row belongs to one lane and no writer may cross | Guard — `quote_profiles.lane`, not null, no default at the call site: `insertQuoteProfile` requires it, `seedQuoteProfilesFromStaged` reads and writes `direct` only, `syncQuoteProfilesFromMarketplace` reads and writes `marketplace` only, and the quotes tab groups by supplier and lane. |
 | `PERS-01` | Only a structural verdict is terminal | Guard — `src/lib/retry-verdict.ts` `classifyFailure`. Check owed — `retry/verdict-must-use-shared-classifier`: only three call sites use it and two hand-rolled classifiers remain. See `OUTSTANDING.md`. |
+| `PERS-05` | Never give up on a lead with no contact | Guard — `outreach/contactless-must-park-not-drop`. A scheduled sweep still compensates, which is a workaround under META-03 and is named in `OUTSTANDING.md`. This used to name OUT-02's check. They are not the same break: OUT-02 is a storefront that was never given a channel, PERS-05 is a direct supplier actively set to `dropped` so the re-queue cannot see it. Sharing one id meant guarding either one would report both as held. |
 | `PERS-06` | No hidden caps on a worklist | Guard for the accidental cut — `src/lib/supabase-paging.ts` `selectAllPaged` and `src/lib/supabase/truncation-guard.ts`, `reads/client-must-guard-truncation`. Check owed — `reads/limit-must-report-remainder` for deliberate windows. |
 | `PERS-08` | The record of a failure is never proof of success | Guard — the reply-drafted check in `src/lib/tenkara-inbound.ts` excludes `unmatched_inbound_clarification` and `retireUnmatchedTriage` closes the case and the draft on a successful match; `replies/idempotency-must-exclude-triage-artefacts` fails the build if the check stops distinguishing them or the retirement is dropped. |
 | `PERS-09` | A paced job stops itself and says where it stopped | Guard — `deadlineAt` on `syncOrgThreadOwners` (`src/lib/sync-thread-owners.ts`), threaded into both push loops, with `unpushed` in the run summary and the re-assert cursor rewound to the last thread actually pushed; `INTERACTIVE_SYNC_BUDGET_MS` at the server-action call sites. Check owed for the class — `runs/paced-loop-must-carry-deadline`, so a new per-item push loop with no deadline fails the build. See `OUTSTANDING.md`. |
@@ -104,7 +105,7 @@ this ledger read as enforced.
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
-## Check owed (27)
+## Check owed (26)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -121,7 +122,6 @@ this ledger read as enforced.
 | `PERS-02` | "Needs a human" is a display flag, never a queue exit | Check owed — `queues/flag-must-not-exit-queue`. |
 | `PERS-03` | A zero-result pass is never "this market is empty" | Check owed — `discovery/zero-must-not-be-terminal`, over one shared dry-pass helper. Honoured per source today. See `OUTSTANDING.md`. |
 | `PERS-04` | Retry limits are a spend control, and must be named | Check owed — `retry/bound-must-be-declared`: a bounded retry must name its bound here and in the run summary. |
-| `PERS-05` | Never give up on a lead with no contact | Check owed — `outreach/contactless-must-park-not-drop`. A scheduled sweep compensates today, which is a workaround under META-03 and is named in `OUTSTANDING.md`. This used to name OUT-02's check. They are not the same break: OUT-02 is a storefront that was never given a channel, PERS-05 is a direct supplier actively set to `dropped` so the re-queue cannot see it. Sharing one id meant guarding either one would report both as held. |
 | `PERS-10` | Blocked is not empty | Check owed — `fetch/blocked-must-not-read-as-empty`: a non-2xx response may not reach a content parser, and the blocked reason is stored. See `OUTSTANDING.md`. |
 | `DISC-05` | A platform is never the supplier | Check owed — `discovery/platform-is-never-manufacturer`. |
 | `DISC-09` | A self-supplied material is not sourced | Check owed — `discovery/self-supplied-gate-must-fail-closed`: the gates are fail-open today. |

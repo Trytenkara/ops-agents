@@ -1119,5 +1119,66 @@ export function runChecks(files, rulesDir) {
     }
   }
 
+  // PERS-05. A lead with no contact is not a lead we have finished with. The
+  // re-queue that keeps looking (`requeue_parked_contact_leads`) selects on
+  // `status = 'active' and stage = 'enriched'`, so setting the lead to `dropped`
+  // is not a status change, it is a deletion from the only path that would have
+  // rescued it. Measured 2026-08-20: 3,208 leads dropped as
+  // `no_contact_recovered`, 2,325 of them on paying clients, and 3,195 that
+  // would qualify for the re-queue this minute if they were still active.
+  //
+  // Nothing read the drop reason to revive them. The only reader in the repo is
+  // a UI label, which is why the label is the one place the string is allowed.
+  {
+    const rule = "outreach/contactless-must-park-not-drop";
+
+    forbid({
+      rule,
+      why: "a lead dropped for having no contact leaves the re-queue's `status = active` window and is never tried again",
+      fix: "park it instead: stamp outreach_parked_at and leave it active at stage='enriched' so requeue_parked_contact_leads can see it",
+      // The Control Room still has to render the 3,208 rows already carrying
+      // this reason. Reading it is fine; writing it is the break.
+      allow: ["src/components/lead-rich-row.tsx"],
+      test: (l) => /no_contact_recovered/.test(l),
+    });
+
+    const outreach = anchor("src/agents-runtime/agents/outreach/index.ts", {
+      rule,
+      why: "this is the one place a lead with no cold-emailable address is routed",
+      fix: "restore src/agents-runtime/agents/outreach/index.ts",
+    });
+    if (outreach) {
+      const branch = /if\s*\(!hasEmail\)\s*\{([\s\S]{0,2000}?)\n      \}/.exec(codeLines(outreach).join("\n"));
+      if (!branch) {
+        violations.push({
+          rule,
+          why: "the no-contact branch is what this rule is about, and it cannot be found to check",
+          fix: "keep the routing for a lead with no cold-emailable address in a single `if (!hasEmail)` block",
+          where: outreach.path,
+          line: "no `if (!hasEmail)` branch found",
+        });
+      } else {
+        if (!/ParkIds\.push\(/.test(branch[1])) {
+          violations.push({
+            rule,
+            why: "without the park stamp the lead sits in the outreach fetch window forever, starving actionable leads behind it",
+            fix: "push the lead id onto contactlessParkIds so the bulk park below stamps it",
+            where: outreach.path,
+            line: "the no-contact branch does not park the lead",
+          });
+        }
+        if (/["']dropped["']/.test(branch[1])) {
+          violations.push({
+            rule,
+            why: "dropping is what put 3,208 leads outside the re-queue; having no contact yet is not a verdict",
+            fix: "park the lead instead of setting status to dropped",
+            where: outreach.path,
+            line: "the no-contact branch still drops the lead",
+          });
+        }
+      }
+    }
+  }
+
   return violations;
 }
