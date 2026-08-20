@@ -39,7 +39,7 @@ as protected and none of them protected:
 
 | Begins with | Means |
 |---|---|
-| `Guard — <module or check-rules id>` | Built. A check or shared module makes the break impossible. |
+| `Guard — <module or check-rules id>` | Built, **and proved to fire**. A check or shared module makes the break impossible. |
 | `Audit — <job>` | Built. A scheduled job reports the break afterwards. |
 | `Check owed — <check-rules id>` | A build check is possible and is not built yet. |
 | `Audit owed — <job>` | No build check can see it; a scheduled job can. Not built. |
@@ -48,12 +48,25 @@ as protected and none of them protected:
 | `Retired <date>` | No longer applies. |
 | `See <RULE-ID>.` | Restates a rule enforced elsewhere. |
 
-Two things follow from that, both enforced by `check-rules`:
+Three things follow from that, all enforced by `check-rules`:
 
 - A rule that does not use the vocabulary fails the build.
 - Anything **owed** must also be named in `OUTSTANDING.md`, so a debt cannot
   go quiet. Clearing it means building the thing, or reclassifying the rule as
-  `Judgement` and saying why nothing could ever check it.
+  `Judgement` and saying why nothing could ever check it. A rule may hold half
+  its invariant and owe the rest — write both, in the vocabulary
+  (`Guard — <this>. Check owed — <that>.`), and it counts as a debt.
+- Writing a check is not enough to claim `Guard`. `npm run check:rules:self-test`
+  breaks the codebase on purpose, once per check, and demands the check report
+  it. A check that stays silent under its own mutation is **inert**, and an
+  inert check is worse than none: it is a green build that says the rule holds.
+  `COMM-08` was published as a `Guard` while its pattern matched zero of the
+  1,083 lines it was written to catch.
+
+  So a new `Guard` needs a matching mutation in `scripts/lib/rule-self-test.mjs`,
+  and the self-test runs ahead of `next build` so an inert guard fails the
+  deploy. If a check cannot be made to fire, say so: `Check owed`, plus an
+  `OUTSTANDING.md` entry. Deleting the mutation is not a fix.
 
 Reach for `Judgement` last. It is the honest answer for "keep replies short"
 and the wrong answer for anything a script could look at.

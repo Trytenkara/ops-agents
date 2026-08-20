@@ -9,9 +9,9 @@ are all repairable and all get retried with backoff, forever.
 
 Cap the SPEND, never the number of attempts.
 
-**Enforcement:** Guard — `src/lib/retry-verdict.ts` `classifyFailure`. Owed:
-only three call sites use it and two hand-rolled classifiers remain. See
-`OUTSTANDING.md`.
+**Enforcement:** Guard — `src/lib/retry-verdict.ts` `classifyFailure`.
+Check owed — `retry/verdict-must-use-shared-classifier`: only three call sites
+use it and two hand-rolled classifiers remain. See `OUTSTANDING.md`.
 
 ## PERS-02 — "Needs a human" is a display flag, never a queue exit
 

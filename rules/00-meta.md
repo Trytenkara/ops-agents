@@ -84,3 +84,21 @@ A broad `grep -vi` over a log eats the line that explains the failure. Print
 error bodies in full while diagnosing.
 
 **Enforcement:** Judgement.
+
+## META-09 — A guard is not a guard until a deliberate break makes it fire
+
+Writing the check is the easy half. A check that matches nothing produces the
+same green build as a check that finds nothing wrong, and the ledger reports
+both as `Guard`. `COMM-08` was published as enforced while its pattern matched
+zero of the 1,083 lines it was written to catch; `copy/sanitize-must-strip-concessions`
+tested for a bare identifier, so renaming the constant left the check matching
+and a comment naming it would have satisfied the check on its own.
+
+So every `Guard` owes a mutation in `scripts/lib/rule-self-test.mjs` that
+breaks the codebase on purpose and expects that check's id back. Assert the
+symbol is *used*, on a word boundary and outside comments — not merely present.
+A check that cannot be made to fire is downgraded to `Check owed` and listed in
+`OUTSTANDING.md`. Deleting the mutation to get a green build is the break.
+
+**Enforcement:** Guard — `npm run check:rules:self-test`, which runs ahead of
+`next build`, so an inert guard fails the deploy.

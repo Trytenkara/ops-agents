@@ -88,6 +88,19 @@ export function isOwed(bucketName) {
   return BUCKETS.some((b) => b.name === bucketName && b.owed);
 }
 
+/**
+ * True when the rule owes work, whether or not that is how it opens.
+ *
+ * The opening word alone is not the answer. A rule may hold one half of its
+ * invariant with a real guard and admit the other half is not built:
+ * "Guard for the invariants that have a check-rules id. Check owed — extending
+ * coverage to the rest." Reading only the first word files that as fully
+ * enforced and the debt is never listed anywhere.
+ */
+export function owesWork(enforcement, bucketName) {
+  return isOwed(bucketName) || /\b(?:Check|Audit) owed\b/.test(enforcement);
+}
+
 /** Human-readable list of the accepted openings, for the failure message. */
 export function vocabularyHint() {
   return [
