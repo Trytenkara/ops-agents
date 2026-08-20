@@ -1062,7 +1062,11 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         .update({
           payload: withRepairedUrl({
             ...(l.payload ?? {}),
-            ...(aggregatorName ? { site_type: "A" } : {}),
+            // Same exception as the main write below: a lead that already
+            // captured the seller's own email stays direct. The listing still
+            // sits on an aggregator host, so without this an inconclusive
+            // recheck flips it back to "A", and the profile type follows.
+            ...(aggregatorName && !l.payload?.aggregator_direct_contact ? { site_type: "A" } : {}),
             marketplace_pull: deferPull,
           }),
         })

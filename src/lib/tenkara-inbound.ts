@@ -19,7 +19,7 @@ import { postAgentAlert } from "@/lib/slack-alert";
 import { parseTaggedRecipient } from "@/lib/inquiry-reply-tag";
 import { isAggregatorEmail } from "@/agents-runtime/agents/data-enrichment/enrich";
 import { splitDirectLeadFromMarketplace, isMarketplaceLeadPayload } from "@/lib/marketplace-direct-split";
-import { upsertSupplierProfile } from "@/lib/supplier-profiles";
+import { applySupplierStatedDetails, upsertSupplierProfile } from "@/lib/supplier-profiles";
 import { getClientShipTo } from "@/lib/tenkara-client-settings";
 import { resolveMaterialGradeSpecs } from "@/lib/tenkara-names";
 import { isConsumerMailboxDomain } from "@/lib/mailbox-domain";
@@ -1032,8 +1032,12 @@ export async function handleInboundReply(
         ref.supplier_id,
         replySupplierName ?? ref.supplier_id!,
       );
-      const { error: profileUpdateError } = await admin.from("supplier_profiles").update(profilePatch).eq("id", profile.id);
-      if (profileUpdateError) throw profileUpdateError;
+      // Fill-only past review: see applySupplierStatedDetails. A reply must not
+      // overwrite a contact a person already checked.
+      await applySupplierStatedDetails(admin, profile, profilePatch, {
+        orgId: ref.org_id,
+        messageId: msg.message_id ?? null,
+      });
     }
   } catch {
     // Reply drafting proceeds even when quote/profile persistence fails.

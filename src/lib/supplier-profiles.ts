@@ -168,6 +168,79 @@ export async function upsertSupplierProfile(
   return data as SupplierProfile;
 }
 
+/**
+ * What a supplier told us about itself in a reply, written onto its profile.
+ *
+ * A reply is a good source for a blank field and a bad reason to erase a filled
+ * one. Every other agent writer already knows that: the fill pass writes only
+ * into empty columns, and both it and the web fill stop entirely once a profile
+ * has left `draft`, because past that point a person has looked at it. The reply
+ * handler was the exception and wrote all eight contact, shipping and billing
+ * columns unconditionally, so one address mentioned in passing ("cc my colleague
+ * on the invoice") replaced the address ops had entered. 5,199 profiles across
+ * the paying clients are reviewed and hold a contact email, which is exactly the
+ * set that was exposed.
+ *
+ * So: fill a blank always, and replace a value only while the profile is still a
+ * draft. A replacement we decline is not dropped silently, it is recorded, and
+ * the supplier's own words stay in the thread either way.
+ */
+export async function applySupplierStatedDetails(
+  admin: SupabaseClient,
+  profile: SupplierProfile,
+  stated: Record<string, any>,
+  ctx: { orgId: string | null; messageId?: string | null }
+): Promise<{ written: string[]; declined: string[] }> {
+  const isBlank = (v: any) => v === null || v === undefined || v === "";
+  const editable = profile.approval_status === "draft";
+  const patch: Record<string, any> = {};
+  const sources: Record<string, string> = {};
+  const written: string[] = [];
+  const declined: { field: string; kept: any; stated: any }[] = [];
+
+  for (const [field, value] of Object.entries(stated)) {
+    if (isBlank(value)) continue;
+    const current = (profile as any)[field];
+    if (isBlank(current)) {
+      patch[field] = value;
+      sources[field] = "supplier_reply";
+      written.push(field);
+    } else if (String(current).trim() === String(value).trim()) {
+      continue;
+    } else if (editable) {
+      patch[field] = value;
+      sources[field] = "supplier_reply";
+      written.push(field);
+    } else {
+      declined.push({ field, kept: current, stated: value });
+    }
+  }
+
+  if (Object.keys(patch).length) {
+    const { error } = await admin
+      .from("supplier_profiles")
+      .update({ ...patch, field_sources: { ...(profile.field_sources ?? {}), ...sources } })
+      .eq("id", profile.id);
+    if (error) throw error;
+  }
+  if (declined.length) {
+    await admin
+      .from("audit_log")
+      .insert({
+        actor_user_id: null,
+        action: "profile.supplier_stated_declined",
+        target_table: "supplier_profiles",
+        target_id: profile.id,
+        diff: { org_id: ctx.orgId, message_id: ctx.messageId ?? null, declined },
+      })
+      .then(
+        () => {},
+        () => {}
+      );
+  }
+  return { written, declined: declined.map((d) => d.field) };
+}
+
 export type SupplierProfileUpdate = Partial<
   Omit<SupplierProfile, "id" | "org_id" | "generated_notes" | "created_at" | "updated_at">
 >;
