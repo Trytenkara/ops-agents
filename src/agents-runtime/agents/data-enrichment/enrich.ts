@@ -1062,9 +1062,25 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // own domain. Resolving it BEFORE the probe is what matters — once the domain
   // is set, the entire existing crawl / extract / provider cascade below runs on
   // it unchanged, so this adds a resolution step rather than a second pipeline.
+  // A listing URL sitting in `supplier_website` is not a website we can write
+  // to, and reading it as one hid this resolver from the population it was
+  // built for. Measured 2026-08-20: of 309 storefront leads parked out of
+  // outreach with no contact, 235 carried a `supplier_website` and 204 of those
+  // were an aggregator host — alibaba.com, made-in-china.com, indiamart.com.
+  // Every one of them failed `!website`, so their own domain was never looked
+  // for; the free crawl ran against the platform instead, and any address it
+  // found was correctly stripped as a platform address (DATA-05). They cycled
+  // through the re-queue every seven days and could not move.
+  //
+  // The prose-contact test went with it. It was a proxy for "storefront-only",
+  // and a lead with no contact field at all is more storefront-only than one
+  // that at least says "via IndiaMART inquiry", so it excluded the worse case.
+  // What actually decides this is below: no own domain to work from, and a
+  // listing to work from instead.
+  const ownDomainWebsite = website && !isAggregatorDomain(hostOf(website)) ? website : null;
   const priorStorefront = (payload.enrichment?.storefront_resolution as StorefrontResolution | null) ?? null;
   let storefront: StorefrontResolution | null = priorStorefront;
-  if (!website && sourceUrl && (isContactPath(scoutEmail) || isContactPath(scoutPhone))) {
+  if (!ownDomainWebsite && sourceUrl) {
     // Retried forever, but on a backoff curve rather than every pass: a supplier
     // that has no own site today is not a permanent verdict, while re-running
     // the identical search daily just re-buys the same answer. Carrying the

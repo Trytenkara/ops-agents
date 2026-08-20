@@ -636,7 +636,15 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     // Nothing readable on it. The platform is not a company, so the row can
     // never become a lead no matter what the page turned out to be. (Lead-source
     // directories keep their own terminal branch below, which says so precisely.)
-    if (platformAsSupplier && !noCheckout) {
+    // ...but only if the page was actually read. A 5xx, a read that ran out of
+    // tokens, or no JSON back leaves `sellers` empty for a reason that says
+    // nothing about the page, and this branch is reached before the retry logic
+    // below that already knows the difference (`infraFailure`). Retiring on it
+    // is the failure-is-not-a-verdict shape: the row is terminal forever because
+    // an API was briefly down. No row has died this way yet — measured
+    // 2026-08-20, all 83 `aggregator_index_page` retirements name a real page —
+    // so this closes it before it happens rather than after.
+    if (platformAsSupplier && !noCheckout && result.infra_failure !== true) {
       await admin
         .from("leads_in_flight")
         .update({

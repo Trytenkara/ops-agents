@@ -1058,5 +1058,66 @@ export function runChecks(files, rulesDir) {
     }
   }
 
+  // OUT-02. A marketplace storefront is a supplier we found; it is not a
+  // supplier we may quietly stop talking to. Both halves of this are the same
+  // shape — an absence read as a verdict — and both were live:
+  //
+  //   * the storefront resolver, the one module whose job is finding a seller's
+  //     own domain, was gated on `!website`. Measured 2026-08-20: 309 storefront
+  //     leads parked out of outreach with no contact, 0 ever attempted, 235 of
+  //     them carrying a `supplier_website` and 204 of those an aggregator host.
+  //     Having a listing URL counted as having a website, so the resolver never
+  //     ran on the exact population it was written for.
+  //   * the umbrella-row retirement fired when zero sellers were readable, which
+  //     is also what a 5xx or a token-exhausted read looks like.
+  //
+  // Neither is a rule a reader can hold in their head while editing a 900-line
+  // agent, which is why they are checks.
+  {
+    const rule = "outreach/no-terminal-drop-without-channel";
+
+    const enrich = anchor("src/agents-runtime/agents/data-enrichment/enrich.ts", {
+      rule,
+      why: "this is where a storefront lead gets its own domain resolved, which is the only way it ever becomes contactable",
+      fix: "restore src/agents-runtime/agents/data-enrichment/enrich.ts",
+    });
+    if (enrich) {
+      const text = codeLines(enrich).join("\n");
+      if (!/ownDomainWebsite\s*=[^;\n]*isAggregatorDomain\(/.test(text)) {
+        violations.push({
+          rule,
+          why: "an aggregator listing URL in supplier_website is not a website, and counting it as one hides every storefront lead from the resolver",
+          fix: "keep the own-domain test (`website && !isAggregatorDomain(hostOf(website))`) as what decides whether the resolver runs",
+          where: enrich.path,
+          line: "the storefront gate does not exclude aggregator hosts",
+        });
+      }
+      if (!/if\s*\(!ownDomainWebsite\b[\s\S]{0,800}?resolveStorefrontSupplier\(/.test(text)) {
+        violations.push({
+          rule,
+          why: "the resolver has to be reached by the leads that have no own domain; gated on anything else it runs for the wrong population",
+          fix: "call resolveStorefrontSupplier under `if (!ownDomainWebsite && sourceUrl)`",
+          where: enrich.path,
+          line: "resolveStorefrontSupplier is not gated on the absence of an own domain",
+        });
+      }
+    }
+
+    const pull = anchor("src/agents-runtime/agents/marketplace-validation/lead-price-pull.ts", {
+      rule,
+      why: "this is the only place a marketplace lead is retired as a platform index page",
+      fix: "restore src/agents-runtime/agents/marketplace-validation/lead-price-pull.ts",
+    });
+    if (pull && !/platformAsSupplier\s*&&[^)]*infra_failure/.test(codeLines(pull).join("\n"))) {
+      violations.push({
+        rule,
+        why: "a page that could not be read tells us nothing about the page, and retiring on it makes a brief outage a permanent verdict",
+        fix: "add `&& result.infra_failure !== true` to the platformAsSupplier retirement, the way the retry path below already distinguishes it",
+        where: pull.path,
+        line: "the index-page retirement can fire on an unread page",
+      });
+    }
+  }
+
   return violations;
 }

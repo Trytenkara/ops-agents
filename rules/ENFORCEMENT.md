@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-120 rules. 61 are actually enforced, 38 owe a check or a job,
+120 rules. 62 are actually enforced, 37 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 5 of the enforced rules hold only part of their invariant and say so in
@@ -12,9 +12,9 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 58 |
+| **Guard** | A shared module or build check makes it impossible. | 59 |
 | **Audit** | A scheduled job reports the break after the fact. | 3 |
-| **Check owed** | A build check is possible and is not built yet. | 28 |
+| **Check owed** | A build check is possible and is not built yet. | 27 |
 | **Audit owed** | No build check can see it; a scheduled job can. Not built. | 5 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
@@ -32,7 +32,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (58)
+## Guard (59)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -73,6 +73,7 @@ this ledger read as enforced.
 | `DISC-06` | Duplicate suppliers have one definition | Guard — `src/lib/lead-dupe-guard.ts`. |
 | `DISC-07` | Same name, different grade, is not a duplicate | Guard — `materials/never-merge-on-name-alone`. It asserts the grade test runs in the same loop as the name match, so a pair cannot reach the candidate list on the name alone, and that nothing outside `src/lib/material-merge-flags.ts` writes `material_merge_flags` (META-04). |
 | `DISC-10` | Checkout decides what a marketplace is | Guard — the price read downgrades any marketplace-labelled page with no checkout at the single read chokepoint (`marketplace_checkout` downgrade in `lead-price-pull.ts`), and the scout prompt applies the same test at classification time. |
+| `OUT-02` | Marketplace storefronts get drafted, on a different channel | Guard — `outreach/no-terminal-drop-without-channel`. The aggregator inquiry channel itself is still owed; see `OUTSTANDING.md`. |
 | `OUT-05` | No draft into an existing thread may ignore what was already said | Guard — `src/lib/thread-context.ts`, `src/lib/thread-tailor.ts`, `copy/staging-must-tailor-to-thread`. |
 | `OUT-06` | Internal notes never reach a supplier | Guard — `src/lib/internal-notes.ts` `stripInternalNotes` inside `sanitizeDraft`, `copy/sanitize-must-strip-internal-notes`. |
 | `OUT-14` | Never offer to stop contacting a supplier | Guard — `CONCESSION_STRIPS` in `src/lib/email-style.ts`, run inside `sanitizeDraft` at the staging chokepoint so it covers model-written copy as well as templates, plus rule 5 of the `src/lib/thread-tailor.ts` prompt; `copy/sanitize-must-strip-concessions`. |
@@ -103,7 +104,7 @@ this ledger read as enforced.
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
-## Check owed (28)
+## Check owed (27)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -120,11 +121,10 @@ this ledger read as enforced.
 | `PERS-02` | "Needs a human" is a display flag, never a queue exit | Check owed — `queues/flag-must-not-exit-queue`. |
 | `PERS-03` | A zero-result pass is never "this market is empty" | Check owed — `discovery/zero-must-not-be-terminal`, over one shared dry-pass helper. Honoured per source today. See `OUTSTANDING.md`. |
 | `PERS-04` | Retry limits are a spend control, and must be named | Check owed — `retry/bound-must-be-declared`: a bounded retry must name its bound here and in the run summary. |
-| `PERS-05` | Never give up on a lead with no contact | Check owed — `outreach/no-terminal-drop-without-channel`. A scheduled sweep compensates today, which is a workaround under META-03 and is named in `OUTSTANDING.md`. |
+| `PERS-05` | Never give up on a lead with no contact | Check owed — `outreach/contactless-must-park-not-drop`. A scheduled sweep compensates today, which is a workaround under META-03 and is named in `OUTSTANDING.md`. This used to name OUT-02's check. They are not the same break: OUT-02 is a storefront that was never given a channel, PERS-05 is a direct supplier actively set to `dropped` so the re-queue cannot see it. Sharing one id meant guarding either one would report both as held. |
 | `PERS-10` | Blocked is not empty | Check owed — `fetch/blocked-must-not-read-as-empty`: a non-2xx response may not reach a content parser, and the blocked reason is stored. See `OUTSTANDING.md`. |
 | `DISC-05` | A platform is never the supplier | Check owed — `discovery/platform-is-never-manufacturer`. |
 | `DISC-09` | A self-supplied material is not sourced | Check owed — `discovery/self-supplied-gate-must-fail-closed`: the gates are fail-open today. |
-| `OUT-02` | Marketplace storefronts get drafted, on a different channel | Check owed — `outreach/no-terminal-drop-without-channel`. See `OUTSTANDING.md`. |
 | `OUT-04` | One email per supplier, one thread | Check owed — `outreach/one-thread-per-supplier`. |
 | `OUT-08` | Supplier asks are staggered | Check owed — `outreach/asks-must-be-staged`. |
 | `OUT-10` | A cancelled outreach must release its alias | Check owed — `outreach/cancel-must-release-alias`. |

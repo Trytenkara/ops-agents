@@ -36,9 +36,25 @@ drop.
 Real effect: on the order of a thousand storefront suppliers get a price row
 and are never contacted, and the run summary logs it as intentional routing.
 
-**Owed:** the aggregator inquiry channel wired into outreach; a reader for
-`needs_contact_resolution`; the name heuristic replaced by a page read;
-`check-rules` id `outreach/no-terminal-drop-without-channel`.
+**Measured 2026-08-20.** 309 leads parked with `needs_contact_resolution` since
+2026-08-08, zero ever attempted, 275 of them on paying clients (California
+Chemicals 143, SaponIQ 132). 235 carried a `supplier_website`; 204 of those were
+an aggregator host. That is the root cause and it is not the missing channel:
+the storefront resolver, the module written to find a seller's own domain, was
+gated on `!website`, so a listing URL in `supplier_website` read as "we already
+have their site". The free crawl then ran against the platform and every address
+it found was correctly stripped as a platform address (DATA-05). The re-queue
+cycled them every seven days and they could not move.
+
+**Fixed 2026-08-20.** The gate is now the absence of an *own* domain
+(`website && !isAggregatorDomain(hostOf(website))`), so the resolver reaches the
+population it was built for; and the index-page retirement no longer fires on an
+`infra_failure`, which was latent — all 83 existing retirements name a real
+page. Both are held by `outreach/no-terminal-drop-without-channel`.
+
+**Still owed:** the aggregator inquiry channel wired into outreach, for the
+storefronts whose own domain genuinely does not exist; a reader for
+`needs_contact_resolution`; the name heuristic replaced by a page read.
 
 ## P0 — Direct suppliers with no email are dropped, defeating the retry queue
 
@@ -481,12 +497,11 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | PERS-02 | `queues/flag-must-not-exit-queue` |
 | PERS-03 | `discovery/zero-must-not-be-terminal` — see the P1 above |
 | PERS-04 | `retry/bound-must-be-declared` |
-| PERS-05 | `outreach/no-terminal-drop-without-channel` — see the P0 above |
+| PERS-05 | `outreach/contactless-must-park-not-drop` — see the P0 above |
 | PERS-06 | `reads/limit-must-report-remainder` — see the P1 above |
 | PERS-10 | `fetch/blocked-must-not-read-as-empty` — a non-2xx may not reach a content parser; the same shape as the P0 storefront drop above |
 | DISC-05 | `discovery/platform-is-never-manufacturer` |
 | DISC-09 | `discovery/self-supplied-gate-must-fail-closed` — gates are fail-open today |
-| OUT-02 | `outreach/no-terminal-drop-without-channel` — see the P0 above |
 | OUT-04 | `outreach/one-thread-per-supplier` |
 | OUT-08 | `outreach/asks-must-be-staged` |
 | OUT-10 | `outreach/cancel-must-release-alias` |

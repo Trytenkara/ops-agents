@@ -425,6 +425,41 @@ const MUTATIONS = [
       `await admin.from("user_roles").delete().eq("user_id", userId);\n`,
     ),
   },
+
+  // OUT-02. Both of these are the state the code was actually in, so each
+  // mutation is a revert rather than an invention.
+  {
+    expect: "outreach/no-terminal-drop-without-channel",
+    label: "a listing URL counts as having a website again",
+    mutate: rename(
+      "src/agents-runtime/agents/data-enrichment/enrich.ts",
+      "const ownDomainWebsite = website && !isAggregatorDomain(hostOf(website)) ? website : null;",
+      "const ownDomainWebsite = website;",
+    ),
+  },
+  {
+    expect: "outreach/no-terminal-drop-without-channel",
+    label: "the resolver is gated on something other than the missing own domain",
+    mutate: rename(
+      "src/agents-runtime/agents/data-enrichment/enrich.ts",
+      "if (!ownDomainWebsite && sourceUrl) {",
+      "if (isContactPath(scoutEmail) && sourceUrl) {",
+    ),
+  },
+  {
+    expect: "outreach/no-terminal-drop-without-channel",
+    label: "an unread page can retire the row again",
+    mutate: rename(
+      "src/agents-runtime/agents/marketplace-validation/lead-price-pull.ts",
+      "if (platformAsSupplier && !noCheckout && result.infra_failure !== true) {",
+      "if (platformAsSupplier && !noCheckout) {",
+    ),
+  },
+  {
+    expect: "outreach/no-terminal-drop-without-channel",
+    label: "the enrichment agent this rule is anchored to is gone",
+    mutate: drop("src/agents-runtime/agents/data-enrichment/enrich.ts"),
+  },
 ];
 
 // The checks over rules/ itself read from disk, so they mutate a copy.

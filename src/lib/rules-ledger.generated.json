@@ -453,8 +453,8 @@
     {
       "id": "OUT-02",
       "title": "Marketplace storefronts get drafted, on a different channel",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "OUT-03",

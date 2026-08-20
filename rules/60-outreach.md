@@ -12,10 +12,18 @@ gets a bulk-pricing inquiry through the aggregator path, a direct supplier gets
 an email to a person.
 
 "Directory host" as a terminal verdict applies to a search-results or listing
-page that sells nothing, not to a storefront with a real seller behind it.
+page that sells nothing, not to a storefront with a real seller behind it. A
+page that could not be read is not a page that sells nothing.
 
-**Enforcement:** Check owed — `outreach/no-terminal-drop-without-channel`.
-See `OUTSTANDING.md`.
+A listing URL is not the seller's website. Treating one as a website is how
+this rule was broken without anyone excluding anything on purpose: measured
+2026-08-20, 309 storefront leads sat parked out of outreach with no contact and
+none had ever been attempted, because 204 of them "had a website" that was
+alibaba.com, made-in-china.com or indiamart.com. The storefront resolver, built
+to find the seller's own domain, skipped every one of them.
+
+**Enforcement:** Guard — `outreach/no-terminal-drop-without-channel`. The
+aggregator inquiry channel itself is still owed; see `OUTSTANDING.md`.
 
 ## OUT-03 — Never guess a contact on a platform host (see DATA-05)
 

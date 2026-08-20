@@ -70,9 +70,12 @@ A lead with no channel stays in the retry queue permanently. A lead promoted
 past raw that has a website but still no email must also keep being retried; a
 promotion must never be the thing that ends the search.
 
-**Enforcement:** Check owed — `outreach/no-terminal-drop-without-channel`. A
+**Enforcement:** Check owed — `outreach/contactless-must-park-not-drop`. A
 scheduled sweep compensates today, which is a workaround under META-03 and
-is named in `OUTSTANDING.md`.
+is named in `OUTSTANDING.md`. This used to name OUT-02's check. They are not
+the same break: OUT-02 is a storefront that was never given a channel, PERS-05
+is a direct supplier actively set to `dropped` so the re-queue cannot see it.
+Sharing one id meant guarding either one would report both as held.
 
 ## PERS-06 — No hidden caps on a worklist
 
