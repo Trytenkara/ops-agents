@@ -3,7 +3,7 @@ import { getSession, hasAnyRole, type AppRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ASSIGNABLE_OPERATOR_ROLES } from "@/lib/operator-assignment";
 import { reassignIneligibleOwners } from "@/lib/reassign-owners";
-import { syncOrgThreadOwners } from "@/lib/sync-thread-owners";
+import { INTERACTIVE_SYNC_BUDGET_MS, syncOrgThreadOwners } from "@/lib/sync-thread-owners";
 
 interface Result<T = void> { ok: boolean; error?: string; data?: T }
 
@@ -49,7 +49,9 @@ async function syncThreadsAcrossOrgs(
       (r: any) => r.org_id as string
     );
   for (const orgId of orgs) {
-    await syncOrgThreadOwners(admin, orgId).catch(() => null);
+    await syncOrgThreadOwners(admin, orgId, {
+      deadlineAt: Date.now() + INTERACTIVE_SYNC_BUDGET_MS,
+    }).catch(() => null);
   }
 }
 

@@ -42,6 +42,13 @@ const REASSERT_PER_ORG = 25;
 // Pushing to Tenkara is seconds per thread, not milliseconds, so an unbounded
 // sweep hits the function ceiling and reports nothing at all (it did, twice).
 // Stop starting clients past this and let tomorrow's run continue the walk.
+//
+// The deadline is also handed DOWN into each client's sweep. Checking it only
+// between clients bounds the number of clients, not the work, so one client
+// with a thousand threads to push (45 a minute, so twenty-two minutes) still
+// overran and got killed: a killed run records "function timed out" with no
+// counts, so the pushes it did make were invisible and the walk could not
+// resume. 9 minutes leaves the 800s function ceiling several minutes of room.
 const DEADLINE_MS = 9 * 60 * 1000;
 const CURSOR_KEY = (orgId: string) => `reassert_cursor:${orgId}`;
 
@@ -75,6 +82,7 @@ registerAgent({
     let reasserted = 0;
     let mirrorsFailed = 0;
     let gone = 0;
+    let unpushed = 0;
     let failedOrgs = 0;
     let skippedOrgs = 0;
     const drifted: string[] = [];
@@ -95,6 +103,7 @@ registerAgent({
           .maybeSingle();
         const r = await syncOrgThreadOwners(admin, org.id, {
           reassert: { limit: REASSERT_PER_ORG, after: (state?.value as any)?.cursor ?? null },
+          deadlineAt: startedAt + DEADLINE_MS,
         });
         await admin
           .from("agent_state")
@@ -107,6 +116,7 @@ registerAgent({
         reasserted += r.reasserted;
         mirrorsFailed += r.mirrorsFailed;
         gone += r.gone;
+        unpushed += r.unpushed;
         if (r.moved > 0) {
           drifted.push(`${label} ${r.moved}${r.mirrorsFailed ? ` (${r.mirrorsFailed} not accepted)` : ""}`);
           await ctx.log(`${label}: ${r.moved} of ${r.examined} open threads re-pointed`, {
@@ -123,8 +133,8 @@ registerAgent({
     }
 
     ctx.setItemsProcessed(moved);
-    ctx.setMetadata({ orgs: orgs.length, examined, moved, reasserted, gone, mirrorsFailed, failedOrgs, skippedOrgs });
-    ctx.setStatus(failedOrgs || mirrorsFailed || skippedOrgs ? "partial" : "success");
+    ctx.setMetadata({ orgs: orgs.length, examined, moved, reasserted, gone, unpushed, mirrorsFailed, failedOrgs, skippedOrgs });
+    ctx.setStatus(failedOrgs || mirrorsFailed || skippedOrgs || unpushed ? "partial" : "success");
     ctx.setSummary(
       (moved === 0
         ? `Inbox owners match Control Room across ${orgs.length - skippedOrgs} clients (${examined} open threads checked)`
@@ -134,6 +144,10 @@ registerAgent({
         // is not mistaken for a Tenkara problem, and so a jump in it is visible.
         (gone ? ` · ${gone} no longer exist in the inbox` : "") +
         (mirrorsFailed ? ` · ${mirrorsFailed} the inbox did not accept` : "") +
+        // Ran out of time rather than out of work: the next run resumes from the
+        // saved cursor. Named so a growing number is visible as the inbox falling
+        // behind, which is when REASSERT_PER_ORG or the schedule needs revisiting.
+        (unpushed ? ` · ${unpushed} left for the next run (time)` : "") +
         (failedOrgs ? ` · ${failedOrgs} clients could not be checked` : "") +
         (skippedOrgs ? ` · ${skippedOrgs} clients left for the next run (time)` : "") +
         ".",

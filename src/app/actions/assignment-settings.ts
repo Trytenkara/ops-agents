@@ -3,7 +3,7 @@ import { revalidatePath } from "next/cache";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { freezeDerivedOwners } from "@/lib/freeze-assignments";
-import { syncOrgThreadOwners } from "@/lib/sync-thread-owners";
+import { INTERACTIVE_SYNC_BUDGET_MS, syncOrgThreadOwners } from "@/lib/sync-thread-owners";
 import { ALL_SUPPLIER_TYPES, type AssignmentMode, type OperatorType } from "@/lib/operator-assignment";
 import type { MarketKind } from "@/lib/lead-market";
 
@@ -80,7 +80,9 @@ export async function setOrgAssignmentSettings(input: {
   // Mode and lane scope are both inputs to the derived owner, so this edit moved
   // threads too. Same reason as a lane edit: Control Room re-derives, the inbox
   // does not.
-  const sync = await syncOrgThreadOwners(admin, input.orgId).catch(() => null);
+  const sync = await syncOrgThreadOwners(admin, input.orgId, {
+    deadlineAt: Date.now() + INTERACTIVE_SYNC_BUDGET_MS,
+  }).catch(() => null);
   if (input.orgSlug) revalidatePath(`/work/orgs/${input.orgSlug}`);
   return { ok: true, frozen, threadsMoved: sync?.moved, mirrorsFailed: sync?.mirrorsFailed };
 }
@@ -133,7 +135,9 @@ export async function setOperatorWork(input: {
   // threads. Control Room re-derives on the next render either way; the email app
   // only knows what it was last told, and left alone it keeps showing the previous
   // operator indefinitely.
-  const sync = await syncOrgThreadOwners(admin, input.orgId).catch(() => null);
+  const sync = await syncOrgThreadOwners(admin, input.orgId, {
+    deadlineAt: Date.now() + INTERACTIVE_SYNC_BUDGET_MS,
+  }).catch(() => null);
   if (input.orgSlug) revalidatePath(`/work/orgs/${input.orgSlug}`);
   return { ok: true, threadsMoved: sync?.moved, mirrorsFailed: sync?.mirrorsFailed };
 }
@@ -167,7 +171,9 @@ export async function setOperatorAutoAssignable(input: {
   });
   // Same as a lane edit: taking someone out of the auto loop redistributes their
   // derived book, and the email app has to be told.
-  const sync = await syncOrgThreadOwners(admin, input.orgId).catch(() => null);
+  const sync = await syncOrgThreadOwners(admin, input.orgId, {
+    deadlineAt: Date.now() + INTERACTIVE_SYNC_BUDGET_MS,
+  }).catch(() => null);
   if (input.orgSlug) revalidatePath(`/work/orgs/${input.orgSlug}`);
   return { ok: true, threadsMoved: sync?.moved, mirrorsFailed: sync?.mirrorsFailed };
 }

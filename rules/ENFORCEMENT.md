@@ -4,12 +4,12 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-116 rules. 54 are actually enforced, 36 owe a check or a job,
+117 rules. 55 are actually enforced, 36 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 52 |
+| **Guard** | A shared module or build check makes it impossible. | 53 |
 | **Audit** | A scheduled job reports the break after the fact. | 2 |
 | **Check owed** | A build check is possible and is not built yet. | 30 |
 | **Audit owed** | No build check can see it; a scheduled job can. Not built. | 6 |
@@ -21,7 +21,7 @@ source of truth and this is only a view of them.
 Anything "owed" is also listed in `OUTSTANDING.md`; the build refuses
 otherwise, so a gap cannot go quiet.
 
-## Guard (52)
+## Guard (53)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -52,6 +52,7 @@ otherwise, so a gap cannot go quiet.
 | `PERS-01` | Only a structural verdict is terminal | Guard — `src/lib/retry-verdict.ts` `classifyFailure`. Owed: |
 | `PERS-06` | No hidden caps on a worklist | Guard for the accidental cut — `src/lib/supabase-paging.ts` |
 | `PERS-08` | The record of a failure is never proof of success | Guard — the reply-drafted check in `src/lib/tenkara-inbound.ts` |
+| `PERS-09` | A paced job stops itself and says where it stopped | Guard — `deadlineAt` on `syncOrgThreadOwners` |
 | `DISC-01` | Search the trade's name, not ours | Guard — shared resolver, threaded into all three sources. |
 | `DISC-03` | Aliases never re-specify (see DATA-09) | Guard — see DATA-09. |
 | `DISC-06` | Duplicate suppliers have one definition | Guard — `src/lib/lead-dupe-guard.ts`. |

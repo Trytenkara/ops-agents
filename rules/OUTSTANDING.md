@@ -249,6 +249,18 @@ all, so several well-known directories will get five synthesised addresses.
 
 **Owed:** delete the private list, import the shared one (META-04).
 
+## P2 — Nothing stops a paced loop from outrunning its function
+
+Breaks PERS-09. The thread owner sync now carries a `deadlineAt` through both
+of its push loops, but nothing prevents the next per-item loop over a rate
+limited API from being written without one, and that failure is invisible by
+construction: the run is killed, so it reports no counts and no cursor. Other
+loops that push or fetch one item at a time (the outreach sender, the price
+pull, the Tier B escalation) each have their own ad hoc bound or none.
+
+**Owed:** `check-rules` id `runs/paced-loop-must-carry-deadline`, plus one
+shared deadline helper the loops take instead of each inventing a bound.
+
 ## P2 — Two hand-rolled retry classifiers remain
 
 Breaks PERS-01 and META-04. The shared classifier is referenced in three places

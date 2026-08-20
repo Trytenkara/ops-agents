@@ -90,13 +90,24 @@ async function pushOwner(threadId: string, email: string, attempts = 3): Promise
   return "failed";
 }
 
-async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+// Returns the items that were never started, so a sweep that runs out of time
+// can report the remainder instead of the caller inferring it.
+async function mapLimit<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+  stop?: () => boolean
+): Promise<T[]> {
   let next = 0;
   await Promise.all(
     Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (next < items.length) await fn(items[next++]);
+      while (next < items.length) {
+        if (stop?.()) return;
+        await fn(items[next++]);
+      }
     })
   );
+  return items.slice(next);
 }
 
 export interface ThreadOwnerSyncOptions {
@@ -110,6 +121,15 @@ export interface ThreadOwnerSyncOptions {
   // that hole: the push is idempotent, so a thread that is already right costs one
   // call and changes nothing.
   reassert?: { limit: number; after?: string | null };
+  // Epoch ms after which no further push is STARTED. Pushing is paced at 45
+  // writes a minute, so the time a sweep takes is set by the inbox, not by us:
+  // a client with a thousand open threads is twenty minutes of pushing however
+  // fast the code is. Without this the sweep simply ran until the platform
+  // killed the function, and a killed run records "function timed out" with no
+  // counts at all, so the work it DID do was invisible and the next run had no
+  // idea where to resume (2026-08-20: 16 minutes, no summary, nothing learned).
+  // Stopping ourselves turns that into a partial run with a cursor.
+  deadlineAt?: number;
 }
 
 export interface ThreadOwnerSyncResult {
@@ -126,7 +146,18 @@ export interface ThreadOwnerSyncResult {
   // Threads the inbox will never accept (404 gone, 403 not ours, 422 unknown
   // assignee). Kept apart from mirrorsFailed so a real outage still stands out.
   gone: number;
+  // Pushes the deadline cut off. Non-zero means the inbox is behind on purpose
+  // and the next run continues from `cursor`; it is not a failure.
+  unpushed: number;
 }
+
+// What a sync started by a person in the UI is allowed to spend before it hands
+// the rest to the nightly walk. A lane edit can move a thousand threads, which
+// is twenty-two minutes of pushing at the inbox's rate: far past any server
+// action's ceiling, so without a budget the edit appears to hang and then fails
+// with the save already committed. Control Room is correct the moment the stamps
+// are written, and those are not paced; only the inbox mirror is.
+export const INTERACTIVE_SYNC_BUDGET_MS = 45_000;
 
 export async function syncOrgThreadOwners(
   admin: SupabaseClient,
@@ -140,7 +171,9 @@ export async function syncOrgThreadOwners(
     cursor: opts.reassert?.after ?? null,
     mirrorsFailed: 0,
     gone: 0,
+    unpushed: 0,
   };
+  const outOfTime = () => opts.deadlineAt != null && Date.now() >= opts.deadlineAt;
   const ctx = await getOrgAssignmentContext(admin, orgId);
 
   const drafts = await selectAllPaged<{
@@ -203,25 +236,46 @@ export async function syncOrgThreadOwners(
   // Mirror after the local writes, so a Tenkara failure leaves Control Room
   // correct and only the inbox behind. 429s back off rather than being dropped:
   // a swallowed mirror is indistinguishable from "this thread was already right".
-  await mapLimit(moves.filter(pushable), MIRROR_CONCURRENCY, async (m) => {
-    const outcome = await pushOwner(m.threadId!, emailById.get(m.operatorId)!, 4);
-    if (outcome === "gone") result.gone++;
-    else if (outcome === "failed") result.mirrorsFailed++;
-  });
+  const leftOver = await mapLimit(
+    moves.filter(pushable),
+    MIRROR_CONCURRENCY,
+    async (m) => {
+      const outcome = await pushOwner(m.threadId!, emailById.get(m.operatorId)!, 4);
+      if (outcome === "gone") result.gone++;
+      else if (outcome === "failed") result.mirrorsFailed++;
+    },
+    outOfTime
+  );
+  result.unpushed += leftOver.length;
 
-  if (opts.reassert && opts.reassert.limit > 0) {
+  // A move whose push never went out is exactly the hole the re-assert walk
+  // exists to close, and it is now stamped, so it looks settled to every later
+  // run. Spending the remaining time on the rolling walk instead would leave it
+  // waiting for its turn, so stop here and let the next run take it.
+  if (opts.reassert && opts.reassert.limit > 0 && !outOfTime()) {
     const after = opts.reassert.after ?? "";
     const pool = settled.filter((t) => pushable(t) && t.id > after);
     const slice = pool.slice(0, opts.reassert.limit);
     // Wrapping to null when the walk reaches the end, so the next run starts over
     // rather than sitting past the last id and re-asserting nothing forever.
     result.cursor = pool.length > slice.length ? slice[slice.length - 1].id : null;
-    await mapLimit(slice, MIRROR_CONCURRENCY, async (t) => {
-      const outcome = await pushOwner(t.threadId!, emailById.get(t.operatorId)!);
-      if (outcome === "pushed") result.reasserted++;
-      else if (outcome === "gone") result.gone++;
-      else result.mirrorsFailed++;
-    });
+    const unwalked = await mapLimit(
+      slice,
+      MIRROR_CONCURRENCY,
+      async (t) => {
+        const outcome = await pushOwner(t.threadId!, emailById.get(t.operatorId)!);
+        if (outcome === "pushed") result.reasserted++;
+        else if (outcome === "gone") result.gone++;
+        else result.mirrorsFailed++;
+      },
+      outOfTime
+    );
+    result.unpushed += unwalked.length;
+    // Resume where the clock stopped us, not past the threads we never pushed.
+    if (unwalked.length) {
+      const reached = slice.length - unwalked.length;
+      result.cursor = reached > 0 ? slice[reached - 1].id : (opts.reassert.after ?? null);
+    }
   }
 
   return result;

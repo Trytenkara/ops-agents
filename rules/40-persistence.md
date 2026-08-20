@@ -114,3 +114,32 @@ excludes `unmatched_inbound_clarification` and `retireUnmatchedTriage` closes
 the case and the draft on a successful match;
 `replies/idempotency-must-exclude-triage-artefacts` fails the build if the check
 stops distinguishing them or the retirement is dropped.
+
+## PERS-09 — A paced job stops itself and says where it stopped
+
+Any run whose length is set by something outside the code (a rate limit, a
+per-item API call, a queue that grew) must carry a deadline, stop starting work
+when it passes, and report the remainder plus a cursor to resume from. Being
+killed by the platform is not a stopping condition: the run is recorded as
+`function timed out before completion` with no counts at all, so the work it
+DID do is invisible, and the next run has no idea where to pick up.
+
+The thread owner sync learned this twice. Its deadline was checked only between
+clients, which bounds the number of clients and not the work, so one client
+with a thousand open threads to push (paced at 45 assignee writes a minute, so
+twenty-two minutes) overran the function ceiling on 2026-08-20 and reported
+nothing. A bounded run that says "612 left for the next run" is a healthy run.
+A killed one is an outage you cannot measure.
+
+The same deadline belongs on the interactive path, and it should be short
+there. A lane edit re-derives every thread on the client, and the operator is
+waiting on the response; the local writes are what make Control Room correct
+and they are not paced, so the mirror gets a budget and the nightly walk
+finishes it.
+
+**Enforcement:** Guard — `deadlineAt` on `syncOrgThreadOwners`
+(`src/lib/sync-thread-owners.ts`), threaded into both push loops, with
+`unpushed` in the run summary and the re-assert cursor rewound to the last
+thread actually pushed; `INTERACTIVE_SYNC_BUDGET_MS` at the server-action call
+sites. Check owed for the class — `runs/paced-loop-must-carry-deadline`, so a
+new per-item push loop with no deadline fails the build. See `OUTSTANDING.md`.
