@@ -66,3 +66,39 @@ skill exists for manual, interactive runs only. Nothing in the price cascade
 may depend on a machine that is not the deployed fleet.
 
 **Enforcement:** Judgement.
+
+## PRICING-07 — A marketplace that deals by email becomes a second, direct supplier
+
+When a marketplace or aggregator storefront replies from its own address rather
+than the platform's, it has told us two separate things: the listing still
+exists, and the company behind it will deal with us directly. Both are kept.
+The marketplace lead stays exactly as it is, because the price index publishes
+from it, and a second non-marketplace lead is stood up for the same supplier and
+material, with its own quotes and its own comms.
+
+Flipping the original lead in place is forbidden. It destroyed the listing the
+index published from and left the direct relationship carrying marketplace
+provenance, which is the incident this rule comes from.
+
+The two versions are not duplicates and are never merged (DATA-12). They price
+differently, and by the assignment rules they usually carry different operators.
+
+**Enforcement:** Guard — `splitDirectLeadFromMarketplace` in
+`src/lib/marketplace-direct-split.ts`, which refuses a platform address, refuses
+a lead already split, and reuses an existing direct sibling instead of stacking
+a second one.
+
+## PRICING-08 — A price row belongs to one lane and no writer may cross
+
+Every stored price says which lane it came from, and a writer for one lane may
+only touch rows of that lane. A price read off a website may never take over,
+relabel or restate a row that came from a supplier's email, and the reverse is
+equally forbidden.
+
+This is the other half of PRICING-07. The split gives the direct version the
+same supplier name and the same supplier id on purpose, so any store that keys
+on supplier plus material alone puts both lanes in one bucket and lets one lane
+claim the other's row. A note in a text field is not a lane: it is a label one
+writer happens to set and the other does not.
+
+**Enforcement:** Check owed — `pricing/quote-row-carries-its-lane`.
