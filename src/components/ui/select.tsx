@@ -22,6 +22,9 @@ interface SelectProps {
   size?: "sm" | "md";
 }
 
+// Do not wrap this in a <label>: the trigger is a button, so the label's own
+// activation re-fires the click and the menu opens then immediately closes.
+// Use a <div> with a <span> caption instead. (UI-01)
 export function Select({
   value,
   onValueChange,

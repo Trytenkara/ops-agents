@@ -451,5 +451,10 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 
 ## Open decisions
 
-None open. `CONFLICTS.md` K (scope of the em dash ban) and L (the dealbreaker
-grade rule) were both ruled on 2026-08-20.
+One. `CONFLICTS.md` M: does COMM-05 admit an exception when Sam explicitly says
+to post a specific message as him? The rule says never; a memory note written
+after the 2026-07-09 incident says yes for that one message. Until it is ruled
+the rule wins and the agent stages a draft he sends himself.
+
+`CONFLICTS.md` K (scope of the em dash ban) and L (the dealbreaker grade rule)
+were both ruled on 2026-08-20.

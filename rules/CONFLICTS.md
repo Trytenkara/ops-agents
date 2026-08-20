@@ -146,3 +146,23 @@ materials, so they are the same intermittency and not a cross-client leak.
 grade set.** That is the client's specification to state, and an unflagged
 material is a legitimate answer. What was owed here was evidence, and it is now
 recorded.
+
+## M — Never speak as the human vs. an explicit instruction to post as them — OPEN
+
+COMM-05 is absolute: anything an agent sends goes out as the bot or is staged as
+a draft, never through the connected account that posts in Sam's voice.
+
+A memory note written after the original incident records a softer version: do
+not post as the user "unless the user explicitly says to post as them for that
+specific message". The incident behind it was 2026-07-09, when "let her know
+once done" was read as authority to reply in Sam's voice in Mildred's thread.
+Sam objected: "why are you messaging as me", then "just dont do that again".
+
+The two readings differ on one case only: Sam says, in as many words, post this
+as me. Under the rule the answer is still no, and the agent stages a draft he
+sends himself. Under the note the answer is yes.
+
+**Needs Sam's ruling.** Until then the rule wins, because the failure mode of
+guessing wrong is a message in his voice he did not write. The note is kept in
+memory solely to hold the incident until this is settled; nothing else in the
+memory folder now states a rule.
