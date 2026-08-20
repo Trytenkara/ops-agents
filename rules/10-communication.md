@@ -121,4 +121,10 @@ so neither guard sees them. See `OUTSTANDING.md`.
 A crawler that identifies itself as an agent gets blocked or served different
 content, which then reads as a site that cannot be scraped.
 
+Agent 06's enrichment crawl sent `TackleBox-Enrich/1.0`, which EC21 and most
+B2B directories answer with a 403. The fetch is a plain public-page read either
+way, so the announcement bought nothing and cost the page. Fixed 2026-08-05 in
+`4dd2151`, and the rule applies to every fetcher in the fleet, not just the one
+that broke.
+
 **Enforcement:** Check owed — `crawl/no-agent-identifying-user-agent`.

@@ -18,6 +18,26 @@ labelled per kg. On the supplier-email path both went through it stamped
 price that does not reconcile arithmetically against the supplier's own words is
 withheld before it reaches this gate.
 
+Sam, on a Lab Alley lead whose auto-pull wrote tiers of $40 for a "base size"
+and $1,200 for a "4 x 1 Gallon Case" that matched neither the live listing
+("as low as $46.20") nor the agent's own single-price read of $48.51 in the
+same run: "never hallucinate pricing! bad." Prices flow straight into
+client-facing quotes and savings reports, so a fabricated number is worse than
+a blank.
+
+The basis half is the one that keeps getting derived by accident. Only the
+supplier can say what quantity a price covers: a packing line, a drum or bag
+size, an MOQ or a tier threshold is never the divisor. Sam confirmed 2026-08-04
+that a blank per-unit price beats a derived one, and asked that the blank
+explain itself, which is what `staged_quotes.unit_price_gap_reason` carries
+into the review grid and the Quote board. `unit_price` is a generated column,
+so nulling the basis means nulling `case_size`.
+
+Where a price cannot be read with confidence (a JS-gated variant ladder, an
+inquiry-only page, anything ambiguous) the row is classified for review and the
+number stays null. Extraction prompts must say so explicitly: report only a
+number visible on the page, and return empty when unsure.
+
 **Enforcement:** Guard — `src/lib/price-publish.ts` `publishablePrice` /
 `publishableTiers` at every price writer, `price/writer-must-gate`, for the
 amount; `src/lib/price-provenance.ts` `verifyPriceProvenance`,
@@ -79,6 +99,23 @@ Volume to mass conversion uses specific gravity for a liquid and BULK density
 for a solid. True or crystal density is rejected outright; it overstates a
 packed weight badly. A bare crop or commodity name with no form given resolves
 to null with a reason, not to a typical value.
+
+The first density run asked only for "density" and got the true figure for
+every solid: titanium dioxide 4.17 g/ml against a bulk of roughly 0.6 to 1.0,
+citric acid 1.665 against 0.55, microcrystalline cellulose 1.5 against 0.4,
+starch 1.5 against 0.67. Each would have multiplied the contents of a pail by
+three or four and understated the price per kg by the same factor. Every number
+was read off a real SDS, which is what makes this a DATA-01 fabrication anyway:
+reading the wrong quantity correctly is still a made-up price.
+
+The second trap in the same run: a bare crop name is ambiguous between the seed
+and the pressed oil. "Chia" resolved to 0.68 (seed, bulk) and "Flax" to 0.93
+(oil) from identical prompting, a third apart. Those are stored unresolved with
+the reason rather than given a coin-flip value.
+
+So the measurement carries its own kind (liquid, bulk, true solid, ambiguous)
+and the sanitiser drops true solids. Before adding any volume-to-mass
+conversion anywhere in the fleet, ask which density it rests on.
 
 **Enforcement:** Check owed — `density/solids-require-bulk`. Partially held
 today by the enrichment sanitiser.

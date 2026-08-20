@@ -76,12 +76,45 @@ When an extractor misses, the fix is to have a model read the page, not to add
 another regex or another unit special-case. Each new pattern only covers the
 example in front of you and grows a blocklist by another name.
 
+Measured 2026-08-05 on Agent 06: across 8,109 enriched leads that had a website
+and no email, the pattern battery had produced zero names. One EC21 page
+printing `Phone: 86 - 175 - 03221173 / Contact: kevin zhao` resolved as no
+phone and no contact, because the digits are grouped 2-3-8 with no plus and
+"Contact" is not a job title. Sam, on being offered a pattern for it: "no i
+dont want unit fixes - its a fix for the code to do better."
+
+Shipped as `contact-read.ts`, which hands the HTML already in memory to a model
+and is gated to run only when the crawl found no email, no phone and no name.
+The shape generalises: patterns first for the common case, a model read on the
+residue, and the model is told to copy and never infer (DATA-01).
+
 **Enforcement:** Judgement.
 
 ## META-08 — Never filter your own diagnostic output
 
 A broad `grep -vi` over a log eats the line that explains the failure. Print
-error bodies in full while diagnosing.
+error bodies in full while diagnosing. Slice a field only after reading it
+whole at least once.
+
+Three incidents, all the same shape: the display lied and the code was fine.
+
+- 2026-06-12: a filter written to hide a Postgres SSL warning included the word
+  `current`, which silently removed "Could you share your current pricing" from
+  every Agent 15 draft printed. Several deploy-and-rerun cycles went into a
+  missing pricing ask that was never missing.
+- 2026-08-11: diagnosing the SourceReady outage, upstream responses were
+  printed as `txt[:220]`. That clipped `code: CREDITS_EXCEED_LIMIT, message:
+  credits exceed limit` down to `sourceready check`, so a plain quota error
+  read as an opaque server fault. A confident wrong diagnosis was written to
+  memory and reported to Sam, who overturned it with one question.
+- 2026-08-20: `git diff -U0 | grep -E '^[+-][^+-]'` dropped every removed
+  prompt bullet, because `- MATERIAL SCOPE ...` renders as `-- MATERIAL SCOPE`
+  in a diff and matches the exclusion. Caught before shipping, but it is the
+  same rule breaking in the session that was auditing the rules.
+
+The corollary: prefer calling a tool through its real connection over a
+hand-rolled client, because then there is no display layer of yours in between
+to mangle the error.
 
 **Enforcement:** Judgement.
 

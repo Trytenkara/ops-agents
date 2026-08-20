@@ -20,6 +20,19 @@ not to add another entry to a global queue.
 A review surface over read-only external data is a to-do list with buttons that
 do nothing. Act upstream, on the records we own.
 
+Sam, 2026-08-08, on a duplicate-supplier merge screen that had already shipped:
+"i feel like having this on platform data is wrong as we are not touching the
+platform." The screen detected real duplicates, but its confirm-merge button
+could only write a note, because this application is read-only against Tenkara
+by design. It looked like a feature and was a to-do list. Rebuilt as a promote
+gate that parks the lead before Tenkara ever creates the row, which prevents
+the duplicate instead of reporting it.
+
+The test when scoping anything that starts "we should review or clean up X in
+the platform": ask which table the fix writes to. If the answer is a Tenkara
+table, the design is wrong and not just the implementation. Tenkara pulls from
+us every two minutes, so the leverage is always on our side of that pull.
+
 **Enforcement:** Judgement.
 
 ## UI-04 — The Inbox is a triage queue, not an email client
@@ -84,3 +97,19 @@ into exports too.
 `src/components/staged-quote-row.tsx` and
 `src/components/direct-prices-on-file.tsx` (`priceNote`), which render the
 capture reason and carry it into the CSV. Judgement for other withheld fields.
+
+## UI-11 — A placeholder must never look like a value
+
+An input's placeholder is grey prose telling the operator what shape to type.
+It must never be a realistic instance of the data. `placeholder="18.00"` in an
+empty price field reads as a pulled price at a glance, which is the fabricated
+number DATA-01 exists to prevent, arriving through the UI instead of the
+pipeline. Use the unit or the format, not a plausible figure.
+
+Found on the marketplace-pricing card's per-unit field, which renders that
+placeholder whenever the price is null. Null is exactly when the operator most
+needs to see nothing.
+
+**Enforcement:** Check owed — `ui/no-numeric-placeholder-in-value-field`: a
+`placeholder` that parses as a number on an input bound to a stored value.
+See `OUTSTANDING.md`.

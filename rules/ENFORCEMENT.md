@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-118 rules. 56 are actually enforced, 42 owe a check or a job,
+120 rules. 56 are actually enforced, 44 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 6 of the enforced rules hold only part of their invariant and say so in
@@ -14,7 +14,7 @@ their own Enforcement line. They are counted in both figures above.
 |---|---|---|
 | **Guard** | A shared module or build check makes it impossible. | 54 |
 | **Audit** | A scheduled job reports the break after the fact. | 2 |
-| **Check owed** | A build check is possible and is not built yet. | 30 |
+| **Check owed** | A build check is possible and is not built yet. | 32 |
 | **Audit owed** | No build check can see it; a scheduled job can. Not built. | 6 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
@@ -90,7 +90,7 @@ otherwise, so a gap cannot go quiet.
 | `DATA-15` | Extraction records what it did not take | Audit — `agent-24-price-capture-reconcile`. Every inbound message writes `message_price_capture` (migration 0125) with the price points the extractor counted before extracting and the rows actually accounted for; Agent 24 re-reads the shortfalls daily and alerts on the confirmed ones. Per META-07 the second read is a model read, never a price regex, and it reports rather than stages — the first read already got that message wrong once. |
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 
-## Check owed (30)
+## Check owed (32)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -110,6 +110,7 @@ otherwise, so a gap cannot go quiet.
 | `PERS-03` | A zero-result pass is never "this market is empty" | Check owed — `discovery/zero-must-not-be-terminal`, over one shared dry-pass helper. Honoured per source today. See `OUTSTANDING.md`. |
 | `PERS-04` | Retry limits are a spend control, and must be named | Check owed — `retry/bound-must-be-declared`: a bounded retry must name its bound here and in the run summary. |
 | `PERS-05` | Never give up on a lead with no contact | Check owed — `outreach/no-terminal-drop-without-channel`. A scheduled sweep compensates today, which is a workaround under META-03 and is named in `OUTSTANDING.md`. |
+| `PERS-10` | Blocked is not empty | Check owed — `fetch/blocked-must-not-read-as-empty`: a non-2xx response may not reach a content parser, and the blocked reason is stored. See `OUTSTANDING.md`. |
 | `DISC-02` | Aliases must reach the relevance filter too | Check owed — `discovery/relevance-filter-must-accept-aliases`. |
 | `DISC-05` | A platform is never the supplier | Check owed — `discovery/platform-is-never-manufacturer`. |
 | `DISC-07` | Same name, different grade, is not a duplicate | Check owed — `materials/never-merge-on-name-alone`. |
@@ -122,6 +123,7 @@ otherwise, so a gap cannot go quiet.
 | `ORG-06` | Cross-client lookups are scoped at the query, not filtered after | Check owed — `orgs/name-lookup-must-scope-query`, plus an outstanding repair of the records already mislabelled. See `OUTSTANDING.md`. |
 | `UI-02` | Everything lives on the client's own tabs | Check owed — `ui/no-global-review-route`. |
 | `UI-06` | Flagged work needs a home | Check owed — `ui/flagged-set-must-have-a-surface`. See `OUTSTANDING.md`. |
+| `UI-11` | A placeholder must never look like a value | Check owed — `ui/no-numeric-placeholder-in-value-field`: a `placeholder` that parses as a number on an input bound to a stored value. See `OUTSTANDING.md`. |
 | `SHIP-02` | Never stage everything | Check owed — a pre-commit hook that refuses paths outside those explicitly staged. See `OUTSTANDING.md`. |
 | `SHIP-07` | Deploy and schema move together | Check owed — `ship/migration-must-accompany-schema-read`. |
 

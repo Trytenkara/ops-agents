@@ -416,6 +416,7 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | PERS-04 | `retry/bound-must-be-declared` |
 | PERS-05 | `outreach/no-terminal-drop-without-channel` — see the P0 above |
 | PERS-06 | `reads/limit-must-report-remainder` — see the P1 above |
+| PERS-10 | `fetch/blocked-must-not-read-as-empty` — a non-2xx may not reach a content parser; the same shape as the P0 storefront drop above |
 | DISC-01 | `discovery/source-must-use-alias-resolver`, so a NEW source cannot skip it |
 | DISC-02 | `discovery/relevance-filter-must-accept-aliases` |
 | DISC-05 | `discovery/platform-is-never-manufacturer` |
@@ -429,6 +430,7 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | ORG-06 | `orgs/name-lookup-must-scope-query` — see the P2 above |
 | UI-02 | `ui/no-global-review-route` |
 | UI-06 | `ui/flagged-set-must-have-a-surface` — see the P0 above |
+| UI-11 | `ui/no-numeric-placeholder-in-value-field` — live on the marketplace-pricing card's per-unit field |
 | SHIP-02 | pre-commit hook refusing unstaged paths — see the P2 above |
 | SHIP-07 | `ship/migration-must-accompany-schema-read` |
 | PRICING-01 | `shipping/cost-must-be-numeric` |

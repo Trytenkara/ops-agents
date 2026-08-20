@@ -14,6 +14,18 @@ row is relevant. Never pause a run to ask.
 
 A client, material or grade change re-judges existing leads, not only future
 ones. Large change counts are expected. Do not ask permission for the volume.
+Sam confirmed this for client settings updates, newly added materials and
+grade or dealbreaker edits, and on being warned it would move a lot of rows:
+"you will see a large set of changes."
+
+A verdict computed once and frozen rots quietly. The dealbreaker verdict drove
+both the "Meets dealbreakers" badge and the primary lead sort, so a spec added
+on Tuesday left every earlier lead ranked by the answer to the old question.
+
+The design consequence is the important half: keep any judgement written onto a
+lead a pure function of stored evidence, so a re-check is a recompute and not a
+re-enrichment. That is what made this one cheap enough to run fleet-wide. The
+writes are advisory: a re-check never drops or re-stages a lead.
 
 **Enforcement:** Guard — `src/lib/requirements-recheck.ts` `recheckOrgLeads`.
 
@@ -39,6 +51,18 @@ another person's access.
 Never add, remove or re-type an operator, and never change org membership, to
 close a gap or make an assignment work. Report the gap and stop. An oddity
 that conforms to the rules is left alone even if it looks wrong.
+
+Sam, 2026-08-07, after an ownership audit found Tenkara had no call-type
+operator at all, leaving its 12 open calls unowned, and offered both to name
+one and to reconcile 303 legacy lead-level pins: "no dont add until ops adds it
+— as long as everything is according to the rules leave it." Operator
+membership is ops' call, not a data-repair task.
+
+So the report finishes the audit, states the numbers and the cause, names the
+config gap, and stops. Offer the fix; do not perform it. Say explicitly which
+findings violate the rules and which merely follow the rules and look strange.
+This covers org membership, `user_org_assignments`, `operator_type` and lanes.
+It is not about code defects, which are still fixed on sight.
 
 **Enforcement:** Check owed — `orgs/no-operator-membership-writes`: no code
 path inserts, deletes or retypes an operator or an org membership.
@@ -68,13 +92,34 @@ both have context, but only the call operator is ever assigned as owner. With
 no call operator available the task is unassigned; it never falls back to the
 email operator.
 
+The rule arrived in two halves and the first half alone is wrong. Sam reported
+(2026-08-07) call tags landing on the email operator as the assignee, which was
+fixed to call-ops-only; he then clarified the same day that the intent was
+always to tag both for visibility, so the email side knows its supplier is
+being called and the caller knows who to reference. "Tag both, own with one" is
+the durable form, not "tag call-only".
+
+The fix for an unassigned call task is naming a call operator on that client.
+Never reintroduce a fallback to the email pool: the type filter in `poolForWork`
+degrades for email work deliberately and must not for calls.
+
 **Enforcement:** Check owed — `assignment/call-owner-must-be-call-operator`.
 Partially held today by the operator-type pool filter.
 
 ## AUTO-09 — Real clients before internal test orgs
 
 When a shared capped queue serves both, organisations with `is_internal = false`
-drain first every run. Internal test orgs get leftover capacity only.
+drain first every run. Internal test orgs get leftover capacity only, and are
+topped up with the remainder rather than starved entirely.
+
+Sam, 2026-07-27. California Chemicals' marketplace price-pull cards sat on
+"price pull pending" because the pull was one global oldest-first queue, and an
+847-lead discovery flood from Tenkara Internal Sourcing sat ahead of
+California's 52 pending leads. A real client's new material waited behind test
+volume.
+
+`orgs.is_internal` is the only signal: true for Tenkara Internal Sourcing and
+Arlon Preview, false for California Chemicals, SaponIQ and McGinley.
 
 **Enforcement:** Guard — `src/lib/org-priority.ts`,
 `queues/no-inline-org-priority`.

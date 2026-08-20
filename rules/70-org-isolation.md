@@ -161,8 +161,11 @@ only ever compare records that share a client; cross-client matches are
 excluded by definition. A scanner may read across clients to build shared
 guards, but may never cluster across them.
 
-Written after a scan clustered the same company across clients and proposed
-merges that would have leaked one client's sourcing history into another's.
+Sam stated it directly on 2026-08-19, after a scan clustered the same company
+across clients and proposed merges that would have leaked one client's sourcing
+history into another's. Scoping the comparison to shared clients took the naive
+count from about 2,020 clusters to 763: 71% of the matches were cross-client
+and wrong.
 
 **Enforcement:** Guard — `orgs/duplicate-guard-requires-exclusive-supplier`
 covers the online guard; the hand-run scan unions pairs only when their

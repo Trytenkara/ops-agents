@@ -9,6 +9,26 @@ are all repairable and all get retried with backoff, forever.
 
 Cap the SPEND, never the number of attempts.
 
+Sam's standing position, first for contacts and restated on 2026-08-05 when a
+capped one-off requeue was proposed for the marketplace price pull: "but you
+shouldnt give up or time out". The cap had frozen 888 price-pull leads, of
+which only about 73 were genuinely unpullable. 289 were pointed at the wrong
+URL and 89 were our own reader or API failures, so the attempt cap had
+converted our own bugs into a permanent verdict about the supplier.
+
+Three mechanics follow from it and are easy to get wrong:
+
+- Back off on a ladder (a day, three days, a week, a fortnight, monthly cap)
+  rather than counting attempts. Bounded cost, unbounded persistence.
+- A failure that is not a verdict about the page (5xx, overload, timeout, our
+  own reader returning no JSON) must NOT advance the backoff. Nothing was
+  learned, so the next try goes at full speed.
+- Order retries after never-attempted work (`nulls first` on the last-attempt
+  timestamp) so a growing retry pool can never starve fresh discovery.
+
+Each retry persists what it learned, such as a repaired source URL, so
+attempts compound instead of repeating the same failure.
+
 **Enforcement:** Guard — `src/lib/retry-verdict.ts` `classifyFailure`.
 Check owed — `retry/verdict-must-use-shared-classifier`: only three call sites
 use it and two hand-rolled classifiers remain. See `OUTSTANDING.md`.
@@ -63,6 +83,19 @@ say in the run summary what was left behind.
 
 Do not weigh "it might get slow" against completeness and quietly pick the cap.
 Make it complete and raise the cost if it is real (AUTO-03).
+
+Sam, 2026-08-07, after the escalation lists were found showing 1,000 of
+Tenkara's 2,259 open cases with nothing on the page saying so, while the Call
+Tracker read "No calls are due right now" with 12 calls owed: "we need this
+information to be high trust. you cannot be making such decisions to hide
+information or cap info." The failure mode is not slowness. It is that a
+missing escalation looks exactly like a handled one, so the operator trusts an
+empty tab.
+
+Two mechanics that decide whether paging actually works: page over a stable
+total order, because `created_at desc` alone is not one and ties shift between
+pages, and push per-tab filters into the query rather than filtering in JS, or
+surfaces sharing a loader starve each other inside one response.
 
 **Enforcement:** Guard for the accidental cut — `src/lib/supabase-paging.ts`
 `selectAllPaged` and `src/lib/supabase/truncation-guard.ts`,
@@ -143,3 +176,21 @@ finishes it.
 thread actually pushed; `INTERACTIVE_SYNC_BUDGET_MS` at the server-action call
 sites. Check owed for the class — `runs/paced-loop-must-carry-deadline`, so a
 new per-item push loop with no deadline fails the build. See `OUTSTANDING.md`.
+
+## PERS-10 — Blocked is not empty
+
+A 403, 429 or 401 says nothing about what a page contains. It must be recorded
+as blocked, distinctly from "fetched fine, publishes nothing", and it never
+counts toward a terminal verdict. Only the second is evidence about the
+supplier; the first is evidence about us.
+
+Collapsing the two hides our own faults inside the client's data. On 2026-08-05
+Agent 06 parsed 403 bodies like any other page, so 1,751 residual leads had
+every page "fail" with nothing recording that most of them were refusals
+triggered by our own crawler user agent (COMM-09). The same shape produced the
+storefront drop in `OUTSTANDING.md`, which is why this is a rule and not a
+note on one agent.
+
+**Enforcement:** Check owed — `fetch/blocked-must-not-read-as-empty`: a non-2xx
+response may not reach a content parser, and the blocked reason is stored.
+See `OUTSTANDING.md`.
