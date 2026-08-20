@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "prepare": "git config core.hooksPath .githooks || true",
+    "prepare": "node scripts/install-hooks.mjs",
     "dev": "next dev",
     "build": "node scripts/check-rules.mjs --self-test && node scripts/check-rules.mjs && next build",
     "start": "next start",

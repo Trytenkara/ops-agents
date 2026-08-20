@@ -99,6 +99,14 @@ export function renderLedger(rules) {
   out.push("");
   out.push('Anything "owed" is also listed in `OUTSTANDING.md`; the build refuses');
   out.push("otherwise, so a gap cannot go quiet.");
+  out.push("");
+  out.push('**A guard binds a place, not a rule.** "Guard" below means guarded in the');
+  out.push("place that line names, and two places are checked: this repository's `src/**`");
+  out.push("on every build, and `/workspace/.claude/skills/**` on every commit to the");
+  out.push("workspace repository. A rule can be genuinely enforced here and broken in an");
+  out.push("agent skill, a migration or a one-off script. That is not hypothetical: four");
+  out.push("skills went on posting to Slack channels `COMM-06` had retired for a day while");
+  out.push("this ledger read as enforced.");
 
   for (const name of DISPLAY_ORDER) {
     const list = rules.filter((r) => r.bucket === name);

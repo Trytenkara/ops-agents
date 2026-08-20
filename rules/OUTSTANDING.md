@@ -441,8 +441,21 @@ every new break fails; nothing may be added to that list. The same cross-
 language duplication is why four skills each hardcode `C0B5M1QCE9E` rather than
 resolving it from one place.
 
-`ENFORCEMENT.md` still does not state which corpus a Guard binds, so "Guard"
-continues to read as "guarded everywhere". That belongs with the index work.
+Two follow-ons closed with it on the same day.
+
+`ENFORCEMENT.md` now says which places a Guard binds, in a paragraph the
+generator writes above the tables, so "Guard" can no longer be read as "guarded
+everywhere". Naming the place per rule is still index work; the header removes
+the wrong default reading, which is what actually misled.
+
+And the hook that runs the skills check was itself switched on by local machine
+config that no tracked file carried. `scripts/install-hooks.mjs` now installs
+both repositories' hooks from `npm install`, and `check-rules` refuses to pass
+locally while either repository has its hooks unset, so an off switch is loud
+instead of silent. Proven by unsetting it: the build failed and named the
+repository. Residual, small and deliberate: a checkout of the skills repository
+on its own, with no `npm install` of this one, still gets no hooks. The stronger
+version is a server-side check on push, which nothing local can turn off.
 
 ## The full enforcement debt
 

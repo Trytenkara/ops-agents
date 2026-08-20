@@ -21,9 +21,25 @@ import { join, relative, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runChecks } from "./lib/rule-checks.mjs";
 import { selfTest } from "./lib/rule-self-test.mjs";
+import { hookRepos, hooksPathOf } from "./install-hooks.mjs";
 
 const ROOT = process.cwd();
 const RULES = join(dirname(fileURLToPath(import.meta.url)), "..", "rules");
+
+// A hook that is committed but not switched on is worse than no hook: it reads
+// as coverage. `npm install` switches them on, but nothing re-asserted it, so
+// the skills check could be silently off with no way to notice. Every local
+// build says so now. Skipped on the deploy host, which has nothing to commit
+// and where a false failure would stop a deploy for no reason.
+if (!process.env.CI && !process.env.VERCEL) {
+  const off = hookRepos().filter((d) => hooksPathOf(d) !== ".githooks");
+  if (off.length) {
+    console.error("\ncheck-rules: git hooks are not installed, so nothing is checked at commit.\n");
+    for (const d of off) console.error(`  ${d}`);
+    console.error("\nFix: npm run prepare  (or: git -C <dir> config core.hooksPath .githooks)\n");
+    process.exit(1);
+  }
+}
 
 function walk(dir, keep = /\.(ts|tsx)$/) {
   const out = [];

@@ -133,5 +133,13 @@ symbol is *used*, on a word boundary and outside comments — not merely present
 A check that cannot be made to fire is downgraded to `Check owed` and listed in
 `OUTSTANDING.md`. Deleting the mutation to get a green build is the break.
 
+A guard that is switched off is inert in the same way, and harder to see.
+`core.hooksPath` is local machine config, so a committed hook does nothing until
+someone sets it, and a repository with its hooks off is indistinguishable from
+one where every hook passed. The skills repository had no installer at all, and
+its commit hook is the only thing checking the agent skills against these rules.
+
 **Enforcement:** Guard — `npm run check:rules:self-test`, which runs ahead of
-`next build`, so an inert guard fails the deploy.
+`next build`, so an inert guard fails the deploy; and `scripts/install-hooks.mjs`
+installs both repositories' hooks from `npm install`, with `check-rules`
+refusing to pass locally while either has its hooks unset.
