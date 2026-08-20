@@ -16,7 +16,13 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:f
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { runChecks } from "./rule-checks.mjs";
+import { collectRules, renderSnapshot } from "./enforcement-ledger.mjs";
+
+/** Where the runtime snapshot sits relative to a rules folder. */
+const snapshotPath = (rulesDir) => join(rulesDir, "..", "src", "lib", "rules-ledger.generated.json");
 
 // --- corpus mutators -------------------------------------------------------
 
@@ -310,6 +316,17 @@ const RULES_MUTATIONS = [
     },
   },
   {
+    // The same generator writes a second artefact, the snapshot the weekly
+    // review reads at runtime (SHIP-08). A stale one is worse than a stale
+    // ledger: the review would report a rulebook that no longer exists and
+    // read as a clean bill of health.
+    expect: "rules/enforcement-ledger-must-match",
+    label: "someone hand-edits the runtime snapshot",
+    mutate: () => {},
+    mutateSnapshot: (p) =>
+      writeFileSync(p, readFileSync(p, "utf8").replace('"bucket": "Guard"', '"bucket": "Guarded"')),
+  },
+  {
     expect: "rules/every-rule-declares-enforcement",
     label: "a rule states its enforcement outside the vocabulary",
     mutate: (dir) => {
@@ -392,9 +409,16 @@ export function selfTest(files, rulesDir) {
   try {
     for (const m of RULES_MUTATIONS) {
       ran++;
-      const dir = join(tmp, `case-${ran}`);
+      const dir = join(tmp, `case-${ran}`, "rules");
       cpSync(rulesDir, dir, { recursive: true });
       m.mutate(dir);
+      // The case has to mirror the repository, not just the rules folder: the
+      // drift check also compares the runtime snapshot, which lives under a
+      // sibling src/. Written from the mutated rules, so the only thing wrong
+      // in this world is the one thing the mutation broke.
+      mkdirSync(dirname(snapshotPath(dir)), { recursive: true });
+      writeFileSync(snapshotPath(dir), renderSnapshot(collectRules(dir), dir));
+      if (m.mutateSnapshot) m.mutateSnapshot(snapshotPath(dir));
       if (!ids(runChecks(files, dir)).has(m.expect)) inert.push(m);
     }
   } finally {

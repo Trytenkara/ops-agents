@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-120 rules. 57 are actually enforced, 43 owe a check or a job,
+120 rules. 58 are actually enforced, 42 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 6 of the enforced rules hold only part of their invariant and say so in
@@ -13,9 +13,9 @@ their own Enforcement line. They are counted in both figures above.
 | Status | Meaning | Count |
 |---|---|---|
 | **Guard** | A shared module or build check makes it impossible. | 55 |
-| **Audit** | A scheduled job reports the break after the fact. | 2 |
+| **Audit** | A scheduled job reports the break after the fact. | 3 |
 | **Check owed** | A build check is possible and is not built yet. | 31 |
-| **Audit owed** | No build check can see it; a scheduled job can. Not built. | 6 |
+| **Audit owed** | No build check can see it; a scheduled job can. Not built. | 5 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
 | **None** | Outside this repository. Cannot be checked here. | 2 |
@@ -92,12 +92,13 @@ this ledger read as enforced.
 | `SHIP-03` | A red build is silent, so build before you push | Guard — pre-push hook, on machines that ran `npm install`. |
 | `SHIP-04` | Rules are checked before the build | Guard. |
 
-## Audit (2)
+## Audit (3)
 
 | Rule | | Enforcement |
 |---|---|---|
 | `DATA-15` | Extraction records what it did not take | Audit — `agent-24-price-capture-reconcile`. Every inbound message writes `message_price_capture` (migration 0125) with the price points the extractor counted before extracting and the rows actually accounted for; Agent 24 re-reads the shortfalls daily and alerts on the confirmed ones. Per META-07 the second read is a model read, never a price regex, and it reports rather than stages — the first read already got that message wrong once. |
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
+| `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
 ## Check owed (31)
 
@@ -135,7 +136,7 @@ this ledger read as enforced.
 | `SHIP-02` | Never stage everything | Check owed — a pre-commit hook that refuses paths outside those explicitly staged. See `OUTSTANDING.md`. |
 | `SHIP-07` | Deploy and schema move together | Check owed — `ship/migration-must-accompany-schema-read`. |
 
-## Audit owed (6)
+## Audit owed (5)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -144,7 +145,6 @@ this ledger read as enforced.
 | `PERS-07` | A withheld price is a job, not an outcome | Audit owed — a daily count of withheld prices with no surface, plus the surface itself on the client's own tab (see `80-control-room.md`). See `OUTSTANDING.md`. |
 | `DISC-08` | A source's own paging must advance | Audit owed — a daily check that every paged source's cursor advanced, and that the marker written is the marker read. A credit gate once wrote its marker under one key and read it under another, so it never fired and the source re-ran every pass. |
 | `OUT-09` | Stalled conversations get chased | Audit owed — a daily report of conversations past their follow-up cadence with no outbound. |
-| `SHIP-08` | Weekly rules review | Audit owed — a weekly scheduled task that assembles the review. |
 
 ## Judgement (20)
 

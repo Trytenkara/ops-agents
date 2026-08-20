@@ -28,3 +28,4 @@ import "./thread-owner-sync";
 import "./operator-email-outreach";
 import "./org-isolation-audit";
 import "./price-capture-reconcile";
+import "./rules-review";

@@ -128,3 +128,38 @@ export function renderLedger(rules) {
 export function unclassified(rules) {
   return rules.filter((r) => r.bucket === UNCLASSIFIED);
 }
+
+/**
+ * The same state as the ledger, as data, for the weekly review (SHIP-08) to
+ * read at runtime. A serverless function cannot read rules/ off disk — nothing
+ * imports those files, so nothing bundles them — and a review that fetched the
+ * rulebook over the network could report an outage as "no rules changed".
+ *
+ * Deliberately holds no timestamp. It is committed, so any value that moved on
+ * its own would show up as a diff on an unrelated change, and the build check
+ * that compares this against the rule files would fail on a clean tree.
+ */
+export function renderSnapshot(rules, rulesDir) {
+  const heads = (file, re) => {
+    const out = [];
+    for (const line of readFileSync(join(rulesDir, file), "utf8").split("\n")) {
+      const m = line.match(re);
+      if (m) out.push(m[1].trim());
+    }
+    return out;
+  };
+  return (
+    JSON.stringify(
+      {
+        rules: rules.map((r) => ({ id: r.id, title: r.title, bucket: r.bucket, owes: r.owes })),
+        outstanding: heads("OUTSTANDING.md", /^## (.+)/),
+        // The whole heading, because the ruling is written into it: a conflict
+        // reads "— RESOLVED", "— RULED <date>" or "— OPEN", and an OPEN one is
+        // the single thing in the rulebook that is waiting on a person.
+        conflicts: heads("CONFLICTS.md", /^## (.+)/),
+      },
+      null,
+      2
+    ) + "\n"
+  );
+}

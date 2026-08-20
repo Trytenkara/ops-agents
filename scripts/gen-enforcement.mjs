@@ -10,9 +10,11 @@
 import { writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { collectRules, renderLedger, unclassified } from "./lib/enforcement-ledger.mjs";
+import { collectRules, renderLedger, renderSnapshot, unclassified } from "./lib/enforcement-ledger.mjs";
 
-const RULES = join(dirname(fileURLToPath(import.meta.url)), "..", "rules");
+const HERE = dirname(fileURLToPath(import.meta.url));
+const RULES = join(HERE, "..", "rules");
+const SNAPSHOT = join(HERE, "..", "src", "lib", "rules-ledger.generated.json");
 
 const rules = collectRules(RULES);
 
@@ -24,4 +26,5 @@ if (bad.length) {
 }
 
 writeFileSync(join(RULES, "ENFORCEMENT.md"), renderLedger(rules));
-console.log(`gen-enforcement: ${rules.length} rules written to rules/ENFORCEMENT.md`);
+writeFileSync(SNAPSHOT, renderSnapshot(rules, RULES));
+console.log(`gen-enforcement: ${rules.length} rules written to rules/ENFORCEMENT.md and the runtime snapshot`);

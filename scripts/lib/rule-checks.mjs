@@ -17,7 +17,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { UNCLASSIFIED, vocabularyHint } from "./enforcement-vocab.mjs";
-import { collectRules, renderLedger } from "./enforcement-ledger.mjs";
+import { collectRules, renderLedger, renderSnapshot } from "./enforcement-ledger.mjs";
 
 /**
  * @param {Array<{path: string, text: string}>} files the corpus to check
@@ -789,6 +789,21 @@ export function runChecks(files, rulesDir) {
         why: "the ledger states which rules are actually enforced; when it is stale it overstates that, which is the one direction that matters",
         fix: "run `npm run gen:enforcement` and commit the result; never hand-edit rules/ENFORCEMENT.md",
         where: "rules/ENFORCEMENT.md",
+        line: "does not match what gen:enforcement would write from the rule files",
+      });
+    }
+
+    // The same generator also writes the snapshot the weekly review reads at
+    // runtime, and a stale snapshot is worse than a stale ledger: the review
+    // would report last month's rulebook as this week's and read as a clean
+    // bill of health.
+    const snapshot = join(dir, "..", "src", "lib", "rules-ledger.generated.json");
+    if (readFileSync(snapshot, "utf8") !== renderSnapshot(rules, dir)) {
+      violations.push({
+        rule: "rules/enforcement-ledger-must-match",
+        why: "the weekly review reads this snapshot, so when it is stale the review reports a rulebook that no longer exists",
+        fix: "run `npm run gen:enforcement` and commit the result; never hand-edit the snapshot",
+        where: "src/lib/rules-ledger.generated.json",
         line: "does not match what gen:enforcement would write from the rule files",
       });
     }

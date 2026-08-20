@@ -1,0 +1,765 @@
+{
+  "rules": [
+    {
+      "id": "META-01",
+      "title": "Every rule and correction becomes code, permanently",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "META-02",
+      "title": "Prefer a positive invariant over a blocklist",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "META-03",
+      "title": "Never route around a broken shared component",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "META-04",
+      "title": "One shared module per invariant",
+      "bucket": "Guard",
+      "owes": true
+    },
+    {
+      "id": "META-05",
+      "title": "Ad-hoc scripts live in `scripts/` and get deleted",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "META-06",
+      "title": "Always verify current live status; never answer from memory",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "META-07",
+      "title": "Read, do not pattern-match",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "META-08",
+      "title": "Never filter your own diagnostic output",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "META-09",
+      "title": "A guard is not a guard until a deliberate break makes it fire",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "COMM-01",
+      "title": "Keep replies short",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "COMM-02",
+      "title": "Write for a non-developer",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "COMM-03",
+      "title": "Claim only what a command proved",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "COMM-04",
+      "title": "Report the outcome, keep the receipts",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "COMM-05",
+      "title": "Never speak as the human",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "COMM-06",
+      "title": "One channel, one post a day",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "COMM-07",
+      "title": "Everything an agent raises waits for the daily post",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "COMM-08",
+      "title": "Copy bans",
+      "bucket": "Guard",
+      "owes": true
+    },
+    {
+      "id": "COMM-09",
+      "title": "Never announce as a bot in a crawler user agent",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "AUTO-01",
+      "title": "Decide alone: anything reversible inside the pipeline",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "AUTO-02",
+      "title": "Decide alone: volume of change",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "AUTO-03",
+      "title": "Escalate: a real tradeoff, not a guess about one",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "AUTO-04",
+      "title": "Escalate: anything irreversible or outside the pipeline",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "AUTO-05",
+      "title": "Never touch: operator and org membership",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "AUTO-06",
+      "title": "Cold outbound is never auto-sent",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "AUTO-07",
+      "title": "Owner of an open record is derived, never trusted",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "AUTO-08",
+      "title": "Call tasks belong to call operators only",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "AUTO-09",
+      "title": "Real clients before internal test orgs",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "AUTO-10",
+      "title": "Near-duplicate supplier names reach one operator",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "AUTO-11",
+      "title": "The lead names the operator, every other surface follows",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "DATA-01",
+      "title": "Never fabricate, approximate or infer a price",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "DATA-02",
+      "title": "A foreign price is published only through one conversion",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "DATA-03",
+      "title": "FX rates refresh daily, not intraday",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "DATA-04",
+      "title": "Agents may never invent a contact detail in an outgoing body",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "DATA-05",
+      "title": "Guessing a recipient is allowed; guessing content is not",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "DATA-06",
+      "title": "Only a same-run verification counts as a confirmed email",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "DATA-07",
+      "title": "Density: bulk for solids, specific gravity for liquids",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "DATA-08",
+      "title": "A dealbreaker grade is a hard specification",
+      "bucket": "Audit owed",
+      "owes": true
+    },
+    {
+      "id": "DATA-09",
+      "title": "Aliases never add a qualifier the input lacked",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "DATA-10",
+      "title": "A write that fails is never silent",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "DATA-11",
+      "title": "An unstated currency is a question, never a dollar sign",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "DATA-12",
+      "title": "The same company held twice is surfaced, never merged",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "DATA-13",
+      "title": "An operator's correction re-anchors a price, it does not freeze it",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "DATA-14",
+      "title": "A captured price carries the words it was read from",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "DATA-15",
+      "title": "Extraction records what it did not take",
+      "bucket": "Audit",
+      "owes": false
+    },
+    {
+      "id": "DATA-16",
+      "title": "Every rung of a tiered quote is its own row",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "DATA-17",
+      "title": "A later source fills a blank, it does not overwrite a checked value",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "PRICING-01",
+      "title": "A shipping cost is a number or it is nothing",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "PRICING-02",
+      "title": "Delivery cost is per pack tier when pack size changes it",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "PRICING-03",
+      "title": "Delivery-cost extraction is opt-in per client",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "PRICING-04",
+      "title": "Delivery-cost extraction is audited every run",
+      "bucket": "Audit owed",
+      "owes": true
+    },
+    {
+      "id": "PRICING-05",
+      "title": "A delivery cost is never fabricated",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "PRICING-06",
+      "title": "The primary price pull runs on the fleet's own platform",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "PRICING-07",
+      "title": "A marketplace that deals by email becomes a second, direct supplier",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "PRICING-08",
+      "title": "A price row belongs to one lane and no writer may cross",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "PERS-01",
+      "title": "Only a structural verdict is terminal",
+      "bucket": "Guard",
+      "owes": true
+    },
+    {
+      "id": "PERS-02",
+      "title": "\"Needs a human\" is a display flag, never a queue exit",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "PERS-03",
+      "title": "A zero-result pass is never \"this market is empty\"",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "PERS-04",
+      "title": "Retry limits are a spend control, and must be named",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "PERS-05",
+      "title": "Never give up on a lead with no contact",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "PERS-06",
+      "title": "No hidden caps on a worklist",
+      "bucket": "Guard",
+      "owes": true
+    },
+    {
+      "id": "PERS-07",
+      "title": "A withheld price is a job, not an outcome",
+      "bucket": "Audit owed",
+      "owes": true
+    },
+    {
+      "id": "PERS-08",
+      "title": "The record of a failure is never proof of success",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "PERS-09",
+      "title": "A paced job stops itself and says where it stopped",
+      "bucket": "Guard",
+      "owes": true
+    },
+    {
+      "id": "PERS-10",
+      "title": "Blocked is not empty",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "DISC-01",
+      "title": "Search the trade's name, not ours",
+      "bucket": "Guard",
+      "owes": true
+    },
+    {
+      "id": "DISC-02",
+      "title": "Aliases must reach the relevance filter too",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "DISC-03",
+      "title": "Aliases never re-specify (see DATA-09)",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "DISC-04",
+      "title": "Zero is not empty (see PERS-03)",
+      "bucket": "Cross-reference",
+      "owes": false
+    },
+    {
+      "id": "DISC-05",
+      "title": "A platform is never the supplier",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "DISC-06",
+      "title": "Duplicate suppliers have one definition",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "DISC-07",
+      "title": "Same name, different grade, is not a duplicate",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "DISC-08",
+      "title": "A source's own paging must advance",
+      "bucket": "Audit owed",
+      "owes": true
+    },
+    {
+      "id": "DISC-09",
+      "title": "A self-supplied material is not sourced",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "DISC-10",
+      "title": "Checkout decides what a marketplace is",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "OUT-01",
+      "title": "Nothing auto-sends (see AUTO-06)",
+      "bucket": "Cross-reference",
+      "owes": false
+    },
+    {
+      "id": "OUT-02",
+      "title": "Marketplace storefronts get drafted, on a different channel",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "OUT-03",
+      "title": "Never guess a contact on a platform host (see DATA-05)",
+      "bucket": "Cross-reference",
+      "owes": false
+    },
+    {
+      "id": "OUT-04",
+      "title": "One email per supplier, one thread",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "OUT-05",
+      "title": "No draft into an existing thread may ignore what was already said",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "OUT-06",
+      "title": "Internal notes never reach a supplier",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "OUT-14",
+      "title": "Never offer to stop contacting a supplier",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "OUT-07",
+      "title": "Copy bans are applied at staging (see COMM-08)",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "OUT-08",
+      "title": "Supplier asks are staggered",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "OUT-09",
+      "title": "Stalled conversations get chased",
+      "bucket": "Audit owed",
+      "owes": true
+    },
+    {
+      "id": "OUT-10",
+      "title": "A cancelled outreach must release its alias",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "OUT-11",
+      "title": "A rejected draft is not redrafted",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "OUT-12",
+      "title": "\"denied\" in Tenkara does not mean \"do not contact\"",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "OUT-13",
+      "title": "Do-not-contact has two authors, and one gate",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "OUT-15",
+      "title": "A discard has to say why, or it is a silent kill",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "ORG-01",
+      "title": "Every idempotency key is scoped to the organisation",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "ORG-02",
+      "title": "Never fold leads from two clients into one draft",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "ORG-03",
+      "title": "Shared natural keys carry the organisation in the database too",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "ORG-04",
+      "title": "An ambiguous inbound reply goes to triage, not to a guess",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "ORG-05",
+      "title": "The live data is audited every morning",
+      "bucket": "Audit",
+      "owes": false
+    },
+    {
+      "id": "ORG-06",
+      "title": "Cross-client lookups are scoped at the query, not filtered after",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "ORG-08",
+      "title": "Membership in `organization_ids` tests the whole set, never a fixed slot",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "ORG-09",
+      "title": "A supplier shared across clients never suppresses a client-owned supplier",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "ORG-10",
+      "title": "A supplier id is checked against its owners before it is stored",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "ORG-11",
+      "title": "Unknown is not ambiguous",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "ORG-07",
+      "title": "Unaudited edge",
+      "bucket": "None",
+      "owes": false
+    },
+    {
+      "id": "SUP-01",
+      "title": "Suppliers are unique per client",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "UI-01",
+      "title": "Never ship a native OS dropdown",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "UI-02",
+      "title": "Everything lives on the client's own tabs",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "UI-03",
+      "title": "Never build a screen over data this application cannot write to",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "UI-04",
+      "title": "The Inbox is a triage queue, not an email client",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "UI-05",
+      "title": "Clutter is a bug, not a tradeoff",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "UI-06",
+      "title": "Flagged work needs a home",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "UI-07",
+      "title": "Seed a real client before judging a view",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "UI-09",
+      "title": "A one-click write needs a way back",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "UI-08",
+      "title": "RETIRED: the CSV export sweep",
+      "bucket": "Retired",
+      "owes": false
+    },
+    {
+      "id": "UI-10",
+      "title": "A withheld value shows its reason where it renders",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "UI-11",
+      "title": "A placeholder must never look like a value",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "SHIP-01",
+      "title": "Push to `main`",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "SHIP-02",
+      "title": "Never stage everything",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "SHIP-03",
+      "title": "A red build is silent, so build before you push",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "SHIP-04",
+      "title": "Rules are checked before the build",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
+      "id": "SHIP-05",
+      "title": "Confirm what production is actually serving",
+      "bucket": "Judgement",
+      "owes": false
+    },
+    {
+      "id": "SHIP-06",
+      "title": "The deploy gate must not depend on one machine",
+      "bucket": "None",
+      "owes": false
+    },
+    {
+      "id": "SHIP-07",
+      "title": "Deploy and schema move together",
+      "bucket": "Check owed",
+      "owes": true
+    },
+    {
+      "id": "SHIP-08",
+      "title": "Weekly rules review",
+      "bucket": "Audit",
+      "owes": false
+    }
+  ],
+  "outstanding": [
+    "Verified NOT a defect",
+    "P0 — Marketplace storefronts are silently dropped from outreach",
+    "P0 — Direct suppliers with no email are dropped, defeating the retry queue",
+    "P0 — \"Verified\" contact confidence is stamped on unverified addresses",
+    "P0 — Withheld prices are a complete dead end",
+    "P1 — The prices already captured wrong are still live",
+    "P1 — Two draft paths bypass the staging chokepoint",
+    "P1 — Zero results are accepted as an answer in nine places",
+    "P1 — Deliberate caps hide work in eighteen places",
+    "P1 — Call tasks reach nobody",
+    "P1 — The dealbreaker-grade guard arms intermittently, and has never fired",
+    "P2 — Guessed contacts can be synthesised at a directory",
+    "P2 — Nothing stops a paced loop from outrunning its function",
+    "P2 — Two hand-rolled retry classifiers remain",
+    "P2 — Cross-client name lookups",
+    "P2 — No pre-merge build gate",
+    "P2 — Nothing prevents staging everything",
+    "P2 — Shipping extraction success rate is not monitored",
+    "P2 — A discard on a revalidation draft can be answered but not acted on",
+    "P2 — The Tier B scrape can overwrite an operator's price ladder",
+    "Closed 2026-08-20 — the quotes table now carries a lane",
+    "Closed 2026-08-20 — a guard only bound the repository, and the skills were not in it",
+    "The full enforcement debt",
+    "Open decisions"
+  ],
+  "conflicts": [
+    "A — Short replies vs. paste the evidence — RESOLVED",
+    "B — Never post outside the feedback channel vs. DM on failure vs. never speak as Sam — DISSOLVED 2026-08-19",
+    "C — Never fabricate a contact vs. pattern-guessed email addresses — RESOLVED",
+    "D — Cap the spend never the attempts vs. the three-strike discovery requeue — RESOLVED",
+    "E — Never give up vs. leads parked with a website and no email — RESOLVED",
+    "F — Surface everything vs. no global surfaces vs. no clutter vs. no surfaces over read-only data — RESOLVED",
+    "G — \"Needs a human\" is a display flag vs. someone must work the flagged rows — RESOLVED",
+    "H — A platform is never the supplier vs. marketplace storefronts get drafted — RESOLVED",
+    "I — Autonomous discovery vs. the shared alias resolver — RESOLVED",
+    "J — Two definitions of \"no hidden caps\" — RESOLVED",
+    "K — Em dash and RFQ ban: scope — RULED 2026-08-20",
+    "L — The dealbreaker grade rule states its own premise is false — RULED 2026-08-20",
+    "M — Never speak as the human vs. an explicit instruction to post as them — RULED"
+  ]
+}

@@ -77,5 +77,12 @@ Once a week: what rules were added, what checks were added, what is still on
 the outstanding list, and anything where two rules contradicted each other.
 Short, and to Sam.
 
-**Enforcement:** Audit owed — a weekly scheduled task that assembles the
-review.
+The review reports what *moved* since the last one, not the whole book. A
+weekly dump of every rule is ignored by the third week, and the faults worth
+catching are all changes: a guard that quietly became owed, a new rule with no
+check behind it, a conflict left waiting on a ruling.
+
+**Enforcement:** Audit — `agent-25-rules-review`, weekly. It reads a snapshot
+of the rulebook generated at build time, and the build refuses if that snapshot
+has drifted from the rule files, so the review cannot report a rulebook that no
+longer exists.

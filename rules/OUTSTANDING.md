@@ -515,7 +515,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | PERS-07 | daily: withheld prices with no surface — see the P0 above |
 | DISC-08 | daily: every paged source's cursor advanced, and the marker written is the marker read |
 | OUT-09 | daily: conversations past their follow-up cadence with no outbound |
-| SHIP-08 | weekly: the rules review, to Sam |
 
 ## Open decisions
 
