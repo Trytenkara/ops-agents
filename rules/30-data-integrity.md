@@ -257,3 +257,26 @@ and `pricelessKey` in `src/lib/staged-quotes.ts` fall back to
 `provenanceKey(price_source_text)` when there is no basis to tell two rungs
 apart, so rungs separate on the words they were read from. The check holds all
 three keys to it.
+
+## DATA-17 — A later source fills a blank, it does not overwrite a checked value
+
+Several writers describe the same supplier: the website pull, the enrichment
+fill, the web fill, an operator, and the supplier itself in a reply. They do not
+rank equally. A blank is anyone's to fill. A value a person has already looked
+at is not, and the marker for that is the profile leaving `draft`, which is
+exactly what the fill pass and the web fill already stop on.
+
+The inbound reply handler was the exception. It wrote all eight contact,
+shipping and billing columns unconditionally, so an address a supplier mentioned
+in passing replaced the one ops had entered: 5,199 reviewed profiles holding a
+contact email were open to it on 2026-08-20.
+
+A replacement that is declined is recorded, never dropped in silence, and the
+supplier's own words remain in the thread either way. The same asymmetry governs
+the market kind: a lead that captured the seller's own address is direct, and no
+later recheck of the listing may flip it back.
+
+**Enforcement:** Guard — `applySupplierStatedDetails` in
+`src/lib/supplier-profiles.ts`, the only path the reply handler writes a profile
+through; the direct-contact exception is carried by both `site_type` writes in
+`src/agents-runtime/agents/marketplace-validation/lead-price-pull.ts`.
