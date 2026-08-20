@@ -80,7 +80,7 @@ function greeting(contactName: string | null, supplierCompany: string | null | u
 // same draft re-renders to the same subject).
 const SUBJECT_TEMPLATES: ((m: string) => string)[] = [
   (m) => `Sourcing inquiry: ${m}`,
-  (m) => `${m} — pricing and availability?`,
+  (m) => `${m}: pricing and availability?`,
   (m) => `Do you supply ${m}?`,
   (m) => `Quote request: ${m}`,
   (m) => `Looking for a ${m} supplier`,
@@ -156,10 +156,10 @@ function gradeAsk(mats: DraftMaterial[]): string | null {
 
 function gradeNote(m: DraftMaterial): string {
   if (m.requiredGrade && m.requiredGrade.trim()) {
-    return ` (REQUIRED grade, dealbreaker: ${m.requiredGrade.trim()} — ask only for this grade, do not invite alternatives)`;
+    return ` (REQUIRED grade, dealbreaker: ${m.requiredGrade.trim()}, ask only for this grade, do not invite alternatives)`;
   }
   if (m.grade && m.grade.trim()) return ` (target grade: ${m.grade.trim()})`;
-  return " (no target grade — just ask which grades they supply)";
+  return " (no target grade, just ask which grades they supply)";
 }
 
 function pickSubject(input: DraftInput): string {
@@ -276,7 +276,7 @@ function anthropic(): Anthropic {
 
 const SYSTEM = `You write the FIRST cold outreach email (a sourcing inquiry) from a procurement team to a raw-material supplier. An operator reviews it before it sends.
 
-Write it like a human sourcing coordinator wrote it from scratch. Warm, businesslike, concise. Every email must read uniquely — vary the wording, sentence shapes, and structure between emails. Never reuse a fixed template. When multiple orgs reach the same supplier, each email must differ in voice and phrasing so they read as coming from distinct organizations, not a template.
+Write it like a human sourcing coordinator wrote it from scratch. Warm, businesslike, concise. Every email must read uniquely, so vary the wording, sentence shapes, and structure between emails. Never reuse a fixed template. When multiple orgs reach the same supplier, each email must differ in voice and phrasing so they read as coming from distinct organizations, not a template.
 
 STYLE RULES (non-negotiable):
 - Greeting: first name if we know the contact's name ("Hi Dana,"), else "Hi {Company} Team,", else "Hi there,".
@@ -294,7 +294,7 @@ STYLE RULES (non-negotiable):
 WHAT THE EMAIL MUST DO:
 - Say we're sourcing the listed material(s) at {sender org}.
 - Ask whether they supply it/them and request current pricing, estimated lead times, and MOQs.
-- SHIPPING TERMS: note that we can arrange our own freight and prefer EXW (Ex Works) terms, and ask for their EXW price. Keep this to one short, natural sentence folded into the pricing ask — do not turn it into a demand or a separate paragraph.
+- SHIPPING TERMS: note that we can arrange our own freight and prefer EXW (Ex Works) terms, and ask for their EXW price. Keep this to one short, natural sentence folded into the pricing ask, and do not turn it into a demand or a separate paragraph.
 - GRADE: when a "REQUIRED grade" is given for a material, that grade is a client dealbreaker. Name it as what we need and ask them to confirm they can supply it. Do NOT also ask which other grades they carry, do NOT invite an alternative, substitute, or nearby grade, and do NOT ask about a different source or derivation of the material. When only a "target grade" is given, name it as what we're looking for but keep it soft and also ask which grades they carry. When neither is given, just ask which grades they supply. NEVER invent, assume, or expand a grade that wasn't provided.
 - Ask for a product catalog or line card, noting we evaluate suppliers across multiple raw materials.
 - One material: write it inline as a sentence. Two or more: a short intro line, then a clean bullet list (one material per line), then the ask.
@@ -313,10 +313,10 @@ function buildUserMessage(input: DraftInput): string {
   const mats = materialList(input);
   const lines = [
     `Sender org (sign as this): ${senderOrg}`,
-    `Outreach mode: ${input.mode}${input.mode === "ghost" ? " (ghost brand — never name the underlying client)" : ""}`,
+    `Outreach mode: ${input.mode}${input.mode === "ghost" ? " (ghost brand, never name the underlying client)" : ""}`,
     `Supplier company: ${input.supplierCompanyName ?? "(unknown)"}`,
     `Supplier contact name: ${input.supplierContactName ?? "(unknown)"}`,
-    `Marketplace supplier: ${input.isMarketplace ? "yes — ask for bulk/wholesale beyond listed retail" : "no"}`,
+    `Marketplace supplier: ${input.isMarketplace ? "yes, ask for bulk/wholesale beyond listed retail" : "no"}`,
     ...(input.isMarketplace && isNonUsSupplier(input.supplierCountry)
       ? [`Supplier country: ${input.supplierCountry} (outside the US, so offer collection at origin)`]
       : []),
@@ -326,7 +326,7 @@ function buildUserMessage(input: DraftInput): string {
     `Materials we are sourcing (${mats.length}):`,
     ...mats.map((m) => `  - ${labelFor(m)}${gradeNote(m)}`),
     "",
-    "Write the RFQ email.",
+    "Write the sourcing inquiry email.",
   ];
   return lines.join("\n");
 }

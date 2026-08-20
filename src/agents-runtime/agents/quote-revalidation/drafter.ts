@@ -5,7 +5,7 @@ import { sanitizeDraft } from "@/lib/email-style";
 // Every paragraph stands alone with a blank line above and below. No em dashes.
 // Sign-off is always: "Thanks," / blank line / "Procurement Team" / "{Org}".
 
-const STYLE_ANCHOR = `REFERENCE VOICE (real examples from our workflow guide — match this tone exactly):
+const STYLE_ANCHOR = `REFERENCE VOICE (real examples from our workflow guide, match this tone exactly):
 
 Example A (initial outreach):
   Hi The Green Labs,
@@ -88,7 +88,7 @@ export interface PriorContext {
 
 const FOLLOW_UP_BLOCK = `
 
-FOLLOW-UP MODE (this supplier already has an open thread with us — see PRIOR THREAD CONTEXT below):
+FOLLOW-UP MODE (this supplier already has an open thread with us, see PRIOR THREAD CONTEXT below):
 - Write a short follow-up, NOT a fresh cold intro. Do not reintroduce who we are or how we found them.
 - Reference the prior conversation naturally. If they owe us something (open ask), nudge politely; if we owe them, acknowledge briefly.
 - Still ask them to confirm or refresh the quote(s) listed. Keep the whole body under 110 words.

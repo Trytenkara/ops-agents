@@ -393,7 +393,7 @@ function Methodology({ r }: { r: ExpeditedReport }) {
               ? `. The platform identified ${r.prospects_identified} prospective suppliers, validated ${r.suppliers_validated}, and collected ${r.quotes_returned} qualified quotes`
               : ""}
             , normalizing every response on price, minimum order quantity, and product specification. Weeks of manual
-            RFQ work, compressed into a single automated run with zero effort from the {r.client_name} team.
+            sourcing inquiries, compressed into a single automated run with zero effort from the {r.client_name} team.
           </p>
           <p>
             Where an exact specification match was unavailable, the closest comparable grade is included and flagged.

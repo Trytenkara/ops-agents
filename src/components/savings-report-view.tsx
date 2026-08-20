@@ -86,7 +86,7 @@ export function SavingsReportView({
               <div className="flex items-center justify-between gap-4 bg-zinc-50 px-5 py-3">
                 <div className="font-semibold">
                   {l.material_name}
-                  {l.grade ? <span className="font-normal italic text-zinc-500"> — {l.grade}</span> : null}
+                  {l.grade ? <span className="font-normal italic text-zinc-500">, {l.grade}</span> : null}
                 </div>
                 <span className="shrink-0 rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
                   {hasSaving ? `${l.savings_pct.toFixed(2)}% Savings` : "Within Target Range"}
@@ -103,7 +103,7 @@ export function SavingsReportView({
                     <span className="text-sm font-normal text-zinc-500">/{l.unit}</span>
                   </div>
                   {!l.has_client_price && (
-                    <div className="mt-1 text-[11px] text-zinc-500">No client price on file — using market average</div>
+                    <div className="mt-1 text-[11px] text-zinc-500">No client price on file, using market average</div>
                   )}
                 </div>
                 <div className="border-l-2 border-emerald-500/40 bg-white px-5 py-4">

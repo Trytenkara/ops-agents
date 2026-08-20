@@ -90,15 +90,28 @@ One version said page to completion, the other said name the window.
 **Ruling:** PERS-06. Both: page to completion, and where a window is genuinely
 correct, name it where it is visible.
 
-## K — Em dash and RFQ ban: scope — OPEN
+## K — Em dash and RFQ ban: scope — RULED 2026-08-20
 
-The written rule says "any output, ever". The build check covers recognised
+The written rule said "any output, ever". The build check covered recognised
 copy literals in supplier-facing templates only. Internal documents, chat
-replies and model prompts are not covered, and this folder itself would fail a
+replies and model prompts were not covered, and this folder itself would fail a
 literal reading.
 
-**Decision needed:** does the ban bind supplier-facing and client-facing copy
-only, or all output including internal notes? Current behaviour is the former.
+**Ruling (Sam, 2026-08-20):** the ban binds supplier-facing and client-facing
+copy **and the model prompts that generate it**. Prompts are in scope because
+they are upstream of the copy and no runtime sanitiser can reach them.
+
+Out of scope, and deliberately so: internal notes and case resolution notes,
+operator alerts and Slack messages, run logs, Control Room labels an operator
+reads, this rules folder, code comments, and prompts that do not write outbound
+copy (the discovery scout, for one). None of those reach a supplier or a client.
+
+Implemented as the `OUTBOUND_COPY` scope list in
+`scripts/lib/rule-checks.mjs`. A named list rots quietly, so it is held closed
+from both ends: each path is an anchor, so a rename fails the build, and
+`copy/scope-must-cover-every-draft-site` makes any `stageDraft` caller absent
+from the list a violation in its own right. Twenty-eight breaches were live
+when the ruling was applied, including one in a client deliverable.
 
 ## L — The dealbreaker grade rule states its own premise is false — OPEN
 

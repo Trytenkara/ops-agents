@@ -57,12 +57,33 @@ export function runChecks(files, rulesDir) {
       .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
       .join("\n");
 
-  function forbid({ rule, why, fix, test, allow = [] }) {
+  // A comment is prose about the code, not the code. Skipping only lines that
+  // START with `//` left `foo(); // convertToUsd is banned here` reading as a
+  // call to convertToUsd, and left every JSDoc and `{/* ... */}` line in. The
+  // `[^:]` keeps `https://` intact.
+  const uncommented = (line) => {
+    if (/^\s*(?:\{?\/\*|\*)/.test(line)) return "";
+    return line.replace(/\/\*.*?\*\//g, "").replace(/(^|[^:])\/\/.*$/, "$1");
+  };
+
+  /**
+   * @param {object} o
+   * @param {string[]} [o.allow]  paths this rule does not apply to
+   * @param {string[]} [o.scope]  if given, the ONLY paths this rule applies to
+   * @param {RegExp[]} [o.exempt] lines that are not what the rule is about
+   * @param {(l: string) => string} [o.normalize] applied before `test`
+   */
+  function forbid({ rule, why, fix, test, allow = [], scope, exempt = [], normalize }) {
     for (const f of files) {
+      if (scope && !scope.includes(f.path)) continue;
       if (allow.some((a) => f.path.endsWith(a))) continue;
-      f.text.split("\n").forEach((line, i) => {
-        if (line.trimStart().startsWith("//")) return;
-        if (test(line, f)) violations.push({ rule, why, fix, where: `${f.path}:${i + 1}`, line: line.trim().slice(0, 120) });
+      f.text.split("\n").forEach((raw, i) => {
+        const line = uncommented(raw);
+        if (!line.trim()) return;
+        if (exempt.some((re) => re.test(line))) return;
+        if (test(normalize ? normalize(line) : line, f)) {
+          violations.push({ rule, why, fix, where: `${f.path}:${i + 1}`, line: raw.trim().slice(0, 120) });
+        }
       });
     }
   }
@@ -109,14 +130,90 @@ export function runChecks(files, rulesDir) {
   });
 
   // 5. Outbound copy. sanitizeDraft strips these at staging, but a literal in a
-  // prompt or template still teaches the model to produce them.
+  // prompt still teaches the model to produce them, and a client deliverable
+  // that is rendered rather than staged never meets sanitizeDraft at all: the
+  // expedited report has been telling clients about "Weeks of manual RFQ work"
+  // in exactly that gap.
+  //
+  // The old pattern required the line to BEGIN with body/subject/prompt/etc.
+  // Not one line in the repo does, so it matched 0 of 540 candidate lines while
+  // COMM-08 was published as an enforced Guard. That is the case META-09 exists
+  // for, and it is why this check has mutations behind it.
+  //
+  // Scope is a named list rather than the corpus, per the CONFLICTS.md K
+  // ruling: the ban binds supplier- and client-facing copy and the prompts that
+  // generate it, not internal notes, logs or Slack alerts. A named list rots,
+  // so `copy/scope-must-cover-every-draft-site` below makes an unlisted
+  // draft-staging call site the violation instead of a silent gap.
+  const OUTBOUND_COPY = [
+    // supplier-facing bodies, and the prompts that write them
+    "src/agents-runtime/agents/outreach/drafter.ts",
+    "src/agents-runtime/agents/outreach/run-outreach.ts",
+    "src/agents-runtime/agents/quote-revalidation/drafter.ts",
+    "src/agents-runtime/agents/operator-email-outreach/index.ts",
+    "src/agents-runtime/agents/reply-manager/no-reply-followup.ts",
+    "src/agents-runtime/agents/reply-manager/stalled-followup.ts",
+    "src/lib/reply-drafter.ts",
+    "src/lib/thread-tailor.ts",
+    "src/lib/call-followup.ts",
+    "src/lib/draft-staging.ts",
+    "src/lib/tenkara-inbound.ts",
+    "src/app/actions/cases.ts",
+    // client deliverables, which are rendered and never pass sanitizeDraft
+    "src/components/expedited-report-view.tsx",
+    "src/components/savings-report-view.tsx",
+    "src/lib/expedited-report.ts",
+    "src/lib/savings-report.ts",
+  ];
+
+  // A scope list is an anchor list, and skipping a path that is not in the
+  // corpus fails open exactly the way `files.find(...)` did: rename a drafter
+  // and the copy ban quietly stops reading it while the build stays green.
+  for (const path of OUTBOUND_COPY) {
+    anchor(path, {
+      rule: "copy/no-rfq-or-em-dash-in-templates",
+      why: "this file authors outbound copy and the copy ban is scoped to it",
+      fix: "update the path in OUTBOUND_COPY in scripts/lib/rule-checks.mjs",
+    });
+  }
+
   forbid({
     rule: "copy/no-rfq-or-em-dash-in-templates",
     why: "outbound copy says 'sourcing inquiry', and em dashes are banned in all output",
     fix: "rewrite the literal; sanitizeDraft is the runtime backstop, not a licence",
-    allow: ["src/lib/email-style.ts", "src/agents-runtime/agents/browserbase-escalation/index.ts"],
-    test: (l) => /^\s*(?:body|subject|prompt|template|text)\b.*(?:\bRFQ\b|—)/.test(l),
+    scope: OUTBOUND_COPY,
+    // email-style.ts and internal-notes.ts define the ban and quote what they
+    // strip; a file cannot be caught by the rule it implements.
+    allow: ["src/lib/email-style.ts", "src/lib/internal-notes.ts"],
+    exempt: [
+      // Diagnostics, internal notes and operator alerts. `:warning:` and its
+      // siblings are Slack mrkdwn shortcodes and appear nowhere else in src.
+      /\bconsole\.|\blog(?:ger)?\(|\bctx\.log\(|postAgentAlert|postSlackMessage/,
+      /\b(?:resolution_note|internal_note|internalNote|reason)\s*:/,
+      /(?:^|[\s"'`(])!?:[a-z_][a-z0-9_+-]*:\s/,
+      // A line that states the prohibition has to name the thing it forbids.
+      /\b(?:never|do not|don't|avoid|no)\b[^.]{0,40}\b(?:em[- ]dash|en[- ]dash|RFQ)e?s?\b/i,
+    ],
+    // A string holding nothing but an em dash is the null glyph the report
+    // tables render for a missing number, not prose.
+    normalize: (l) => l.replace(/(["'`])\s*—\s*\1/g, "$1$1"),
+    test: (l) => /\bRFQ\b|—/.test(l),
   });
+
+  // The scope list above is only as good as its coverage. Anything that stages
+  // a draft is by definition authoring outbound copy, so an unlisted one is not
+  // "out of scope", it is the list going stale.
+  for (const f of files) {
+    if (OUTBOUND_COPY.includes(f.path)) continue;
+    if (!/\bstageDraft\s*\(/.test(code(f.text))) continue;
+    violations.push({
+      rule: "copy/scope-must-cover-every-draft-site",
+      why: "this file stages a draft, so it authors outbound copy, and the copy ban is not scanning it",
+      fix: "add the path to OUTBOUND_COPY in scripts/lib/rule-checks.mjs",
+      where: f.path,
+      line: "calls stageDraft() but is not in the copy-ban scope",
+    });
+  }
 
   // 6. The staging chokepoint must keep applying the style sanitizer. This is the
   // guard on the guard: if someone removes the call, every drafter silently loses

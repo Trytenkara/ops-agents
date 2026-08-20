@@ -4,10 +4,10 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-118 rules. 56 are actually enforced, 41 owe a check or a job,
+118 rules. 56 are actually enforced, 42 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
-5 of the enforced rules hold only part of their invariant and say so in
+6 of the enforced rules hold only part of their invariant and say so in
 their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
@@ -34,7 +34,7 @@ otherwise, so a gap cannot go quiet.
 | `META-09` | A guard is not a guard until a deliberate break makes it fire | Guard — `npm run check:rules:self-test`, which runs ahead of `next build`, so an inert guard fails the deploy. |
 | `COMM-06` | One channel, one post a day | Guard — `comm/one-slack-channel` in `scripts/check-rules.mjs` rejects any channel argument, any hardcoded `C0…`/`D0…` id and any of the retired channel env vars, everywhere except `src/lib/slack.ts`. |
 | `COMM-07` | Everything an agent raises waits for the daily post | Guard — `dispatchAlert` queues every severity except p3; nothing else in the repo posts an agent alert. Fail-open is deliberate. |
-| `COMM-08` | Copy bans | Guard — `sanitizeDraft` inside `stageDraft`, plus `copy/no-rfq-or-em-dash-in-templates`. The guard covers recognised copy literals only; model prompts, database-sourced copy and concatenated strings can still slip through. See `OUTSTANDING.md`. |
+| `COMM-08` | Copy bans | Guard — `sanitizeDraft` inside `stageDraft` at runtime, and `copy/no-rfq-or-em-dash-in-templates` at build time over a named scope of outbound-copy files, held closed by two companion checks: the scope paths are anchors, so renaming one fails the build rather than silently dropping it, and `copy/scope-must-cover-every-draft-site` makes any `stageDraft` caller missing from that scope a violation. Check owed — `copy/no-direct-draft-create`: two paths still create a draft on the platform without going through `stageDraft`, so neither guard sees them. See `OUTSTANDING.md`. |
 | `AUTO-02` | Decide alone: volume of change | Guard — `src/lib/requirements-recheck.ts` `recheckOrgLeads`. |
 | `AUTO-07` | Owner of an open record is derived, never trusted | Guard — `src/lib/operator-assignment.ts` `recordOwnerId`, `assignment/derive-owner-via-recordOwnerId`. |
 | `AUTO-09` | Real clients before internal test orgs | Guard — `src/lib/org-priority.ts`, `queues/no-inline-org-priority`. |

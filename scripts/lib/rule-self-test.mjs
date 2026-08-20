@@ -56,14 +56,49 @@ const MUTATIONS = [
     expect: "ui/no-native-select",
     mutate: fixture("src/__selftest__/Picker.tsx", `export const P = () => <select name="tier" />;\n`),
   },
+  // The copy ban is scoped to a named list of files, so a fixture in a new
+  // path proves nothing: it would not be scanned either way. These break the
+  // real copy that shipped the breach.
   {
     expect: "copy/no-rfq-or-em-dash-in-templates",
-    mutate: fixture("src/__selftest__/copy.ts", `  subject: "RFQ for propylene glycol",\n`),
+    label: "RFQ back in the client-facing report",
+    mutate: edit("src/components/expedited-report-view.tsx", (t) =>
+      t.replace("Weeks of manual\n            sourcing inquiries", "Weeks of manual\n            RFQ work"),
+    ),
   },
   {
     expect: "copy/no-rfq-or-em-dash-in-templates",
-    label: "em dash in a template literal",
-    mutate: fixture("src/__selftest__/copy-dash.ts", `  body: "Following up — did you get this?",\n`),
+    label: "em dash back in the supplier reply prompt",
+    mutate: edit("src/lib/reply-drafter.ts", (t) =>
+      t.replace("- MATERIAL SCOPE: stay", "- MATERIAL SCOPE — stay"),
+    ),
+  },
+  // Comment stripping has to take the comment and leave the code. Strip too
+  // eagerly and every line carrying a trailing note becomes a blind spot.
+  // reply-drafter.ts:14 already holds an em dash in a comment, so the clean
+  // baseline is the other half of this proof.
+  {
+    expect: "copy/no-rfq-or-em-dash-in-templates",
+    label: "an em dash in real copy on a line that also carries a comment",
+    mutate: edit("src/lib/reply-drafter.ts", (t) =>
+      `const teaser = "Following up — did you get this?"; // chase copy\n${t}`,
+    ),
+  },
+  {
+    expect: "copy/no-rfq-or-em-dash-in-templates",
+    label: "a scoped file is renamed, so the ban silently stops reading it",
+    mutate: (files) =>
+      files.map((f) =>
+        f.path === "src/lib/reply-drafter.ts" ? { ...f, path: "src/lib/reply-drafter-v2.ts" } : f,
+      ),
+  },
+  {
+    expect: "copy/scope-must-cover-every-draft-site",
+    label: "a new draft-staging call site that nobody added to the copy scope",
+    mutate: fixture(
+      "src/agents-runtime/agents/new-outreach/index.ts",
+      `await stageDraft({ body: "hello" });\n`,
+    ),
   },
   {
     expect: "orgs/no-fixed-index-org-membership",
@@ -304,7 +339,10 @@ export function selfTest(files, rulesDir) {
   for (const m of MUTATIONS) {
     ran++;
     const mutated = m.mutate(files);
-    if (mutated.length === files.length && mutated.every((f, i) => f.text === files[i].text)) {
+    // Path counts as well as text: a mutation that renames a file to prove an
+    // anchor fires leaves every byte of content untouched.
+    const unchanged = (f, i) => f.text === files[i].text && f.path === files[i].path;
+    if (mutated.length === files.length && mutated.every(unchanged)) {
       inert.push({ ...m, why: "the mutation changed nothing — the pattern it edits is already gone" });
       continue;
     }

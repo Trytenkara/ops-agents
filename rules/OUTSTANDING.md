@@ -153,26 +153,27 @@ exactly as it is; correcting the Yujiang row; and the same reconciliation run
 fleet-wide to size the residue, which is the only way to learn whether this
 client was unusual or typical.
 
-## P1 — The em dash and RFQ check matches nothing
+## P1 — Two draft paths bypass the staging chokepoint
 
-Breaks COMM-08. The pattern requires the offending line to BEGIN with one of
-five identifiers, is case sensitive, does not match the plural, and reads only
-TypeScript under `src`. It currently flags zero lines while the source tree
-holds 1,083 lines containing an em dash and 70 containing "rfq".
+Breaks COMM-08 and META-03. Two paths create a draft on the platform without
+going through `stageDraft`, so neither `sanitizeDraft` at runtime nor
+`copy/scope-must-cover-every-draft-site` at build time can see them. They are
+safe today only because their own drafters happen to sanitise; the next caller
+that skips it is unguarded.
 
-Of those, roughly thirty reach supplier emails, including a subject-line
-template built with an em dash and a model instruction that literally says
-"Write the RFQ email" 44 lines after the prompt bans the word. Sixteen em
-dashes sit inside the system prompt that writes supplier replies, which is the
-most effective way to make a model produce them. A client-facing report says
-"zero RFQs drafted by your team".
+**Owed:** `copy/no-direct-draft-create`, or better, route both through
+`stageDraft` and delete the second path rather than guarding it.
 
-Two draft paths also bypass the staging chokepoint and call the platform
-directly. They are safe today only because their own drafters happen to
-sanitise; the next caller that skips it is unguarded.
-
-**Owed:** rewrite the check to scan whole file contents including prompts,
-markdown and JSON; add `copy/no-direct-draft-create`.
+*Resolved 2026-08-20 (the rest of this item):* the check itself flagged zero of
+1,083 candidate lines because its pattern required the offending line to BEGIN
+with one of five identifiers. Rescoped per the `CONFLICTS.md` K ruling to a
+named list of outbound-copy files including the model prompts, which surfaced
+28 live breaches: a subject-line template built with an em dash, "Write the RFQ
+email" 44 lines after the prompt banned the word, sixteen em dashes inside the
+system prompt that writes supplier replies, and "Weeks of manual RFQ work" in
+the expedited report, which is a client deliverable that never passes through
+staging at all. All 28 fixed; the guard now has five mutations behind it per
+META-09.
 
 ## P1 — Zero results are accepted as an answer in nine places
 

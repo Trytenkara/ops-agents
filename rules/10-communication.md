@@ -96,12 +96,25 @@ nothing else in the repo posts an agent alert. Fail-open is deliberate.
 ## COMM-08 — Copy bans
 
 Never use the term "RFQ" in email copy; say "sourcing inquiry". Never use an
-em dash in supplier-facing or user-facing output.
+em dash in supplier-facing or client-facing output.
 
-**Enforcement:** Guard — `sanitizeDraft` inside `stageDraft`, plus
-`copy/no-rfq-or-em-dash-in-templates`. The guard covers recognised copy
-literals only; model prompts, database-sourced copy and concatenated strings
-can still slip through. See `OUTSTANDING.md`.
+The ban binds the copy and the prompts that write it. A prompt is the more
+important half: `sanitizeDraft` can strip an em dash out of a body on the way
+past, but nothing strips it out of a system prompt, and sixteen of them sat in
+the instructions that draft every supplier reply, which is the most reliable
+way to make a model produce them. It also cannot help a client deliverable that
+is rendered rather than staged. The expedited report told clients about "Weeks
+of manual RFQ work" for months in exactly that gap, because it never passes
+through staging at all. See `CONFLICTS.md` K for what the ban does not bind.
+
+**Enforcement:** Guard — `sanitizeDraft` inside `stageDraft` at runtime, and
+`copy/no-rfq-or-em-dash-in-templates` at build time over a named scope of
+outbound-copy files, held closed by two companion checks: the scope paths are
+anchors, so renaming one fails the build rather than silently dropping it, and
+`copy/scope-must-cover-every-draft-site` makes any `stageDraft` caller missing
+from that scope a violation. Check owed — `copy/no-direct-draft-create`: two
+paths still create a draft on the platform without going through `stageDraft`,
+so neither guard sees them. See `OUTSTANDING.md`.
 
 ## COMM-09 — Never announce as a bot in a crawler user agent
 
