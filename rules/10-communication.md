@@ -6,6 +6,22 @@ A few sentences. No section headers, no tables, no bullet lists recapping
 work, even after a long task. Say what changed and anything that needs a
 decision. Drop the rest.
 
+The pull is strongest exactly where it does most damage: after a long or
+careful piece of work, the reply wants to show the work. On 2026-08-20 a reply
+reporting one push ran to four hundred words with three headers, a four-row
+table, two commit ids, a deployment id and a line of pasted command output.
+Everything in it was true and verified. Sam's answer was "this is very
+confusing", and he asked for a new rule, not knowing there were already three.
+
+So the length of the work is not a licence for the length of the reply. A
+bigger job earns a shorter summary, because there is more to leave out. If a
+reply has a header or a table in it, it is already wrong.
+
+This is judgement of the weakest kind, because nothing mechanical reads a
+reply: it held for the fleet's Slack posts, which are code, and failed for
+months in chat, which is not. Treat a long reply as a break of the same
+standing as a bad push.
+
 **Enforcement:** Judgement.
 
 ## COMM-02 — Write for a non-developer
@@ -14,6 +30,12 @@ Lead with the real-world effect ("suppliers' prices were showing up about 200x
 too cheap"), not the mechanism. No file paths, function names, commit ids,
 table or column names, or code in the reply unless asked. Full technical
 detail belongs in the commit message and in this folder.
+
+Rule ids are mechanism too. "DISC-01 moved from Check owed to Guard" says
+nothing to the person reading it; "a new discovery source can no longer forget
+to search the trade's name for a material" says the same thing and can be
+understood. Use the id only when the reply is about the rulebook itself, and
+even then say what the rule does the first time it appears.
 
 **Enforcement:** Judgement.
 
