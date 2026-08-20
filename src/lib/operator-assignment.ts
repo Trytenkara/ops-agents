@@ -401,14 +401,24 @@ export function orgAutoKey(
   return leadAutoKey(input);
 }
 
+// The name is asked FIRST, and that is deliberate. Callers hand this whatever
+// identifies the supplier to them, and the owner surfaces hand it the sticky
+// hash key, which is a contact email whenever no supplier_id is on the row. Two
+// unrelated suppliers can share one mailbox (an agent's address, a group inbox),
+// and only leads write an email-keyed entry, from the scanner's first guess. The
+// name entry is the one a validated profile overwrites. Asking the key first
+// therefore let one supplier's guessed kind decide another's lane: Hubei Chuyi
+// classified "direct" everywhere by name, read as "aggregator" off a shared
+// qq.com address, and so the Email Thread Tracker and the Leads tab named
+// different owners for the same supplier.
 export function supplierKind(
   types: Map<string, MarketKind>,
   supplierId: string | null | undefined,
   supplierName?: string | null
 ): MarketKind | null {
   return (
-    (supplierId ? types.get(supplierId) ?? null : null) ??
-    (supplierName ? types.get(nameKey(supplierName)) ?? null : null)
+    (supplierName ? types.get(nameKey(supplierName)) ?? null : null) ??
+    (supplierId ? types.get(supplierId) ?? null : null)
   );
 }
 
