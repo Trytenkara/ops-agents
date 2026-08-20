@@ -52,6 +52,13 @@ population it was built for; and the index-page retirement no longer fires on an
 `infra_failure`, which was latent — all 83 existing retirements name a real
 page. Both are held by `outreach/no-terminal-drop-without-channel`.
 
+Read back from production 40 minutes after the deploy: 15 storefront resolution
+attempts, **9 of which the old gate would have skipped** because they carried an
+alibaba / indiamart / knowde listing URL, and 5 own domains found. The 309
+already parked drain more slowly — the re-queue only takes a lead whose last
+enrichment attempt is over 168 hours old, so 35 were eligible that hour and the
+rest become eligible by 2026-08-27.
+
 **Still owed:** the aggregator inquiry channel wired into outreach, for the
 storefronts whose own domain genuinely does not exist; a reader for
 `needs_contact_resolution`; the name heuristic replaced by a page read.
