@@ -398,6 +398,9 @@ registerAgent({
     let idx = 0;
     let pulled = 0;
     let missed = 0;
+    let shippingAttempted = 0; // leads where we tried to extract shipping
+    let shippingCaptured = 0; // leads where shipping cost was successfully extracted
+    let shippingFailed = 0; // leads where shipping extraction was attempted but failed
     let stoppedForTime = false;
 
     const worker = async () => {
@@ -459,6 +462,18 @@ registerAgent({
             };
           }
 
+          // Track shipping extraction attempt & result
+          // Shipping is only attempted if price was captured and org has an address
+          if (shipToAddress && result.classification === "current_price_found" && result.current_price != null) {
+            shippingAttempted++;
+            if (result.shippingCost != null) {
+              shippingCaptured++;
+            } else {
+              // Extraction was attempted but no numeric cost found
+              shippingFailed++;
+            }
+          }
+
           // Wrap shipping result for writePull
           const shippingResult: ShippingCaptureResult | null = result.shippingCost != null
             ? {
@@ -505,10 +520,22 @@ registerAgent({
 
     const attempted = pulled + missed;
     ctx.setItemsProcessed(attempted);
-    ctx.setMetadata({ attempted, pulled, missed, skippedWalls, eligible: ordered.length, stoppedForTime });
+    ctx.setMetadata({
+      attempted,
+      pulled,
+      missed,
+      skippedWalls,
+      eligible: ordered.length,
+      stoppedForTime,
+      shippingAttempted,
+      shippingCaptured,
+      shippingFailed,
+      shippingRate: shippingAttempted > 0 ? Math.round((shippingCaptured / shippingAttempted) * 100) : null,
+    });
     ctx.setStatus(pulled === 0 && attempted > 0 ? "partial" : "success");
     ctx.setSummary(
       `Browserbase escalation: priced ${pulled}/${attempted} lead(s)` +
+        (shippingAttempted > 0 ? ` · shipping captured for ${shippingCaptured}/${shippingAttempted} (${shippingAttempted > 0 ? Math.round((shippingCaptured / shippingAttempted) * 100) : 0}%)` : "") +
         (skippedWalls ? ` · ${skippedWalls} quote-request walls skipped` : "") +
         (stoppedForTime ? ` · stopped at time budget (${ordered.length - attempted} left for tomorrow)` : ""),
     );
