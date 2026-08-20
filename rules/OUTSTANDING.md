@@ -388,6 +388,46 @@ and the quotes tab shows the two versions as two cards. Backfill on production
 2026-08-20: 7,952 marketplace, 106 direct, 0 unknown. No contaminated row was
 ever found; this was an open door, closed before a fire.
 
+## P2 — A guard only binds the repository, and the skills are not in it
+
+Breaks COMM-06, and the same shape as Conflict K. `comm/one-slack-channel` is
+classified `Guard` and works: it fails the build on a channel passed to
+`postSlackMessage`, and it names six retired channel env vars explicitly. But
+its corpus is this repository, and the agent skills live in
+`/workspace/.claude/skills/`, on an unversioned container volume the build never
+walks. So a rule the ledger reports as enforced was, for the skills, not
+enforced at all — and "Guard" reads as covered.
+
+Four skills post to Slack. All four were breaking it on 2026-08-20, one day
+after COMM-06 retired the other channels:
+
+- `california-chemicals-watchdog` hardcoded `C0BATUWBHC7` (#control-room-feedback)
+- `sourcing-health-watchdog` took a `--slack-channel` argument, which is the
+  invariant itself inverted: a caller may ask for a post, never for a destination
+- `materials-expiry-slack` read `EXPIRY_CHANNEL_ID`, default `C0BCZ5CPAKU` (#ops-sam)
+- `aggregator-inquiry/prepare.mjs` read `SLACK_ESCALATION_CHANNEL_ID`
+
+The last two read env vars named in the guard's own retired list, so no
+judgement was needed: the rule had already ruled on them. All four now resolve
+`SLACK_OPS_CHANNEL_ID` defaulting to `C0B5M1QCE9E`, the same default as
+`postSlackMessage`, and `--slack-channel` became a destination-free `--slack`.
+`report-issue-triage/SKILL.md` also told the agent to watch and reply in the
+retired channel and now cites rule ids instead.
+
+The instance is fixed; the class is not. Nothing stops the next skill doing it
+again, and this generalises past Slack — any guard whose subject can exist
+outside `src/` has the same blind spot. A build check cannot close it, because
+the skills directory does not exist on the deploy host. It belongs to SHIP-08,
+the weekly rules review, which already has to sweep memory and skills for
+normative text: it should also run the line-scanner checks over
+`/workspace/.claude/skills/` and report any hit.
+
+Until then, treat `ENFORCEMENT.md` as answering "is it guarded in this
+repository", not "is it guarded".
+
+**Owed:** SHIP-08 runs the existing checks over the skills directory as a second
+corpus, and `ENFORCEMENT.md` states the corpus a Guard binds.
+
 ## The full enforcement debt
 
 Sorted 2026-08-19. Every rule whose Enforcement line says "owed" appears here;

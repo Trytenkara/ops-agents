@@ -68,9 +68,12 @@ Changed 2026-08-19 (was `#control-room-feedback`, plus a DM to Sam for
 failures, plus five other configurable targets). Sam asked for one channel and
 for the p1 exception to go with it.
 
-**Enforcement:** Guard — `comm/one-slack-channel` in `scripts/check-rules.mjs`
-rejects any channel argument, any hardcoded `C0…`/`D0…` id and any of the
-retired channel env vars, everywhere except `src/lib/slack.ts`.
+**Enforcement:** Guard — `comm/one-slack-channel` in
+`scripts/lib/rule-checks.mjs` rejects any channel argument, any hardcoded
+`C0…`/`D0…` id and any of the retired channel env vars, everywhere except
+`src/lib/slack.ts`. It binds this repository only: the agent skills post to
+Slack too and live outside it, where four were found breaking this rule on
+2026-08-20. See `OUTSTANDING.md`.
 
 ## COMM-07 — Everything an agent raises waits for the daily post
 
