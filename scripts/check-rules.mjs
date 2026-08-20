@@ -11,6 +11,8 @@
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { UNCLASSIFIED, isOwed, vocabularyHint } from "./lib/enforcement-vocab.mjs";
+import { collectRules, renderLedger } from "./lib/enforcement-ledger.mjs";
 
 const ROOT = process.cwd();
 const SRC = join(ROOT, "src");
@@ -28,6 +30,27 @@ function walk(dir) {
 
 const files = walk(SRC).map((p) => ({ path: relative(ROOT, p), text: readFileSync(p, "utf8") }));
 const violations = [];
+
+// Most checks below are anchored to one file: find it, then assert something
+// about its contents. Written as `const m = files.find(...); if (m && ...)`
+// that fails OPEN — rename or move the file and the check stops running, the
+// build stays green, and the rule it protects is silently unenforced. That is
+// the same shape as the bug PERS-08 is about: absence read as success.
+//
+// `anchor` makes the missing file the violation. If a file is legitimately
+// renamed, this check is the thing that tells you a guard moved with it.
+function anchor(pathSuffix, { rule, why, fix }) {
+  const found = files.find((f) => f.path.endsWith(pathSuffix));
+  if (found) return found;
+  violations.push({
+    rule,
+    why: `${why} — and the file this check reads is no longer there, so nothing was checked at all`,
+    fix: `${fix}. If the file moved, update the path in scripts/check-rules.mjs so the guard moves with it`,
+    where: pathSuffix,
+    line: "anchor file not found; this rule is currently unenforced",
+  });
+  return null;
+}
 
 function forbid({ rule, why, fix, test, allow = [] }) {
   for (const f of files) {
@@ -94,7 +117,11 @@ forbid({
 // guard on the guard: if someone removes the call, every drafter silently loses
 // it and nothing else in CI would notice.
 {
-  const staging = files.find((f) => f.path.endsWith("src/lib/draft-staging.ts"));
+  const staging = anchor("src/lib/draft-staging.ts", {
+    rule: "copy/staging-must-sanitize",
+    why: "stageDraft is the only point every outbound draft passes through",
+    fix: "restore the sanitizeDraft call in stageDraft",
+  });
   if (staging && !/sanitizeDraft\(/.test(staging.text)) {
     violations.push({
       rule: "copy/staging-must-sanitize",
@@ -104,7 +131,11 @@ forbid({
       line: "sanitizeDraft call missing",
     });
   }
-  const style = files.find((f) => f.path.endsWith("src/lib/email-style.ts"));
+  const style = anchor("src/lib/email-style.ts", {
+    rule: "copy/sanitize-must-strip-internal-notes",
+    why: "a drafter once pasted the raw call log into a supplier email ('Unable to reach after two call attempts')",
+    fix: "restore the stripInternalNotes call in sanitizeDraft",
+  });
   if (style && !/stripInternalNotes\(/.test(style.text)) {
     violations.push({
       rule: "copy/sanitize-must-strip-internal-notes",
@@ -123,7 +154,8 @@ forbid({
       line: "CONCESSION_STRIPS missing",
     });
   }
-  const chokepoint = files.find((f) => f.path.endsWith("src/lib/draft-staging.ts"));
+  // Same file as `staging` above; looked up once.
+  const chokepoint = staging;
   if (chokepoint && !/tailorToThread\(/.test(chokepoint.text)) {
     violations.push({
       rule: "copy/staging-must-tailor-to-thread",
@@ -193,7 +225,11 @@ for (const f of files) {
 // 7. Every Supabase client must keep the truncation guard, or a read that hits
 // the 1000-row cap goes back to lying about being complete.
 for (const f of ["src/lib/supabase/admin.ts", "src/lib/supabase/server.ts"]) {
-  const mod = files.find((x) => x.path.endsWith(f));
+  const mod = anchor(f, {
+    rule: "reads/client-must-guard-truncation",
+    why: "PostgREST silently drops rows past 1000 and reports no error",
+    fix: "pass global: { fetch: truncationGuardedFetch() } when creating the client",
+  });
   if (mod && !/truncationGuardedFetch\(/.test(mod.text)) {
     violations.push({
       rule: "reads/client-must-guard-truncation",
@@ -213,7 +249,11 @@ for (const f of [
   "src/app/actions/leads.ts",
   "src/lib/staged-quotes.ts",
 ]) {
-  const mod = files.find((x) => x.path.endsWith(f));
+  const mod = anchor(f, {
+    rule: "price/writer-must-gate",
+    why: "a price must never be stored unreadable, negative or in a foreign currency",
+    fix: "route the write through publishablePrice / publishableTiers from @/lib/price-publish",
+  });
   if (mod && !/publishable(Price|Tiers)\(/.test(mod.text)) {
     violations.push({
       rule: "price/writer-must-gate",
@@ -236,7 +276,11 @@ for (const f of [
   "src/lib/staged-quotes.ts",
   "src/lib/tenkara-inbound.ts",
 ]) {
-  const mod = files.find((x) => x.path.endsWith(f));
+  const mod = anchor(f, {
+    rule: "price/capture-must-carry-source-text",
+    why: "a price that does not appear in the supplier's own words was computed rather than read",
+    fix: "check it with verifyPriceProvenance from @/lib/price-provenance and withhold the price when it fails, never repair it",
+  });
   if (mod && !/verifyPriceProvenance\(/.test(mod.text)) {
     violations.push({
       rule: "price/capture-must-carry-source-text",
@@ -251,7 +295,11 @@ for (const f of [
 // The two extractors are the other half: a fragment can only be verified if it
 // was asked for. Both prompts must demand it alongside the price.
 for (const f of ["src/lib/reply-quote-extract.ts", "src/lib/attachment-parser.ts"]) {
-  const mod = files.find((x) => x.path.endsWith(f));
+  const mod = anchor(f, {
+    rule: "price/capture-must-carry-source-text",
+    why: "the writer withholds any price it cannot trace, so an extractor that stops asking for the supplier's wording silently withholds every price it captures",
+    fix: "keep the 'price_source_text is MANDATORY whenever price is not null' rule in this extractor's system prompt",
+  });
   if (mod && !/price_source_text is MANDATORY/.test(mod.text)) {
     violations.push({
       rule: "price/capture-must-carry-source-text",
@@ -268,7 +316,11 @@ for (const f of ["src/lib/reply-quote-extract.ts", "src/lib/attachment-parser.ts
 // two rungs at one amount whose thresholds we could not read differ only in the
 // words they were read from. Silent, and shaped exactly like dedup working.
 {
-  const w = files.find((x) => x.path.endsWith("src/lib/staged-quotes.ts"));
+  const w = anchor("src/lib/staged-quotes.ts", {
+    rule: "price/tier-rungs-never-collapse",
+    why: "two rungs of one ladder can agree on material, price, currency and unit, and collapse into one row",
+    fix: "include provenanceKey(price_source_text) in the dedup keys in this file",
+  });
   if (w) {
     for (const key of ["dupKey", "echoKey", "pricelessKey"]) {
       // A fixed window rather than a brace match: these signatures are typed
@@ -429,7 +481,11 @@ for (const f of files) {
 // The check has to exclude the triage artefact, and has to read the set rather
 // than maybeSingle, which returns nothing when a message carries both.
 {
-  const router = files.find((f) => f.path.endsWith("src/lib/tenkara-inbound.ts"));
+  const router = anchor("src/lib/tenkara-inbound.ts", {
+    rule: "replies/idempotency-must-exclude-triage-artefacts",
+    why: "the reply-drafted check must keep telling a real reply from the clarification draft staged on a parked message",
+    fix: "restore the check in the inbound router",
+  });
   // The check itself: from the lookup key to the early return it guards.
   const idempotency = router?.text.match(/in_reply_to_message_id[\s\S]{0,800}?deduped:\s*true/)?.[0];
   const distinguishes = idempotency?.includes("unmatched_inbound_clarification");
@@ -512,41 +568,58 @@ forbid({
 // Anything "owed" is a debt, so it must also be named in OUTSTANDING.md.
 {
   const dir = join(ROOT, "rules");
-  const vocabulary =
-    /^\*\*Enforcement:\*\* (Guard\b|Audit —|Audit owed\b|Check owed\b|Judgement\.|None\.|Retired\b|See [A-Z]+-\d+\.)/m;
+  const rules = collectRules(dir);
   const outstanding = readFileSync(join(dir, "OUTSTANDING.md"), "utf8");
 
-  for (const name of readdirSync(dir)) {
-    if (!/^\d+.*\.md$/.test(name)) continue;
-    const text = readFileSync(join(dir, name), "utf8");
-    for (const section of text.split(/\n(?=## )/)) {
-      const head = section.match(/^## ([A-Z]+-\d+) — (.+)/);
-      if (!head) continue;
-      const where = `rules/${name}`;
-      const line = `${head[1]} — ${head[2]}`;
+  for (const r of rules) {
+    const where = `rules/${r.file}`;
+    const line = `${r.id} — ${r.title}`;
 
-      if (!vocabulary.test(section)) {
-        violations.push({
-          rule: "rules/every-rule-declares-enforcement",
-          why: "a rule whose enforcement is not stated in the fixed vocabulary reads as protected without saying what protects it",
-          fix: "make the Enforcement line begin with one of: 'Guard — <module or check-rules id>', 'Audit — <job>', 'Check owed — <check-rules id>', 'Audit owed — <job>', 'Judgement.', 'None.', 'Retired <date>', or 'See <RULE-ID>.'",
-          where,
-          line,
-        });
-        continue;
-      }
-
-      // A debt that is not on the outstanding list is a debt nobody will pay.
-      if (/^\*\*Enforcement:\*\*[\s\S]*?\bowed\b/m.test(section) && !outstanding.includes(head[1])) {
-        violations.push({
-          rule: "rules/owed-enforcement-must-be-outstanding",
-          why: "a rule that admits it needs a guard, and is not on the outstanding list, is how a gap goes quiet",
-          fix: `add ${head[1]} to rules/OUTSTANDING.md, or change its Enforcement line to Judgement if nothing mechanical can ever check it`,
-          where,
-          line,
-        });
-      }
+    if (r.bucket === UNCLASSIFIED) {
+      violations.push({
+        rule: "rules/every-rule-declares-enforcement",
+        why: "a rule whose enforcement is not stated in the fixed vocabulary reads as protected without saying what protects it",
+        fix: `make the Enforcement line begin with one of: ${vocabularyHint()}`,
+        where,
+        line: r.enforcement ? line : `${line} (no Enforcement line at all)`,
+      });
+      continue;
     }
+
+    // A debt that is not on the outstanding list is a debt nobody will pay.
+    //
+    // Both halves of this used to be wrong. The debt test searched the whole
+    // section for the word "owed", so a rule whose prose happened to say a
+    // check "is owed elsewhere" was filed as a debt though its Enforcement
+    // line read Guard. And the lookup was a substring, so `ORG-1` was
+    // satisfied by any mention of `ORG-10`: a real debt could be discharged
+    // by a different rule's entry. The bucket decides, and the id matches on
+    // a word boundary.
+    if (isOwed(r.bucket) && !new RegExp(`\\b${r.id}\\b`).test(outstanding)) {
+      violations.push({
+        rule: "rules/owed-enforcement-must-be-outstanding",
+        why: "a rule that admits it needs a guard, and is not on the outstanding list, is how a gap goes quiet",
+        fix: `add ${r.id} to rules/OUTSTANDING.md, or change its Enforcement line to Judgement if nothing mechanical can ever check it`,
+        where,
+        line,
+      });
+    }
+  }
+
+  // The ledger is a view of the rule files, so it must be exactly what the
+  // generator would write today. It was not: production shipped an
+  // ENFORCEMENT.md that listed PERS-08 as an enforced Guard while the rule
+  // text and the guard itself were uncommitted. A generated file nobody
+  // regenerates is a claim nobody checks.
+  const expected = renderLedger(rules);
+  if (readFileSync(join(dir, "ENFORCEMENT.md"), "utf8") !== expected) {
+    violations.push({
+      rule: "rules/enforcement-ledger-must-match",
+      why: "the ledger states which rules are actually enforced; when it is stale it overstates that, which is the one direction that matters",
+      fix: "run `npm run gen:enforcement` and commit the result; never hand-edit rules/ENFORCEMENT.md",
+      where: "rules/ENFORCEMENT.md",
+      line: "does not match what gen:enforcement would write from the rule files",
+    });
   }
 }
 
