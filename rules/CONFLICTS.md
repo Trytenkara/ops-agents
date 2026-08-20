@@ -113,11 +113,36 @@ from both ends: each path is an anchor, so a rename fails the build, and
 from the list a violation in its own right. Twenty-eight breaches were live
 when the ruling was applied, including one in a client deliverable.
 
-## L — The dealbreaker grade rule states its own premise is false — OPEN
+## L — The dealbreaker grade rule states its own premise is false — RULED 2026-08-20
 
-The rule stands, but its enforcement is inert for the flagship live client
-because the required-grade field is unset there, and the record does not say
-whether the field was cleared or the original write-up was wrong.
+DATA-08 carried a note saying its own enforcement was inert, because on
+2026-08-04 every California Chemicals material had `isDealbreaker: false`, and
+the record did not say whether the field had been cleared or the original
+write-up was wrong.
 
-**Decision needed:** confirm against the live client record whether a required
-grade should be set. Until then treat the rule as stated but unenforced.
+**Ruling:** the rule stands, and the premise recorded against it was wrong in
+both directions. Checked against live Tenkara and 5,519 staged drafts on
+2026-08-20:
+
+- The rule is not unenforced fleet-wide. 246 dealbreaker grades are set across
+  188 materials, including both of the other real clients: SaponIQ has 4 of 4
+  materials flagged and 880 of its 938 drafts carry a required grade, and
+  McGinley has 2 of 3 flagged.
+- California Chemicals genuinely has none. All 7 of its materials are
+  `isDealbreaker: false` today, so the note's observation still holds for that
+  client, just not as a statement about the rule.
+- The enforcement is neither inert nor sound. It is **intermittent**, which the
+  conflict never considered. The same material on the same code path armed 7
+  drafts and left 203 unarmed across thirteen days with no Tenkara edit in
+  between. The measurement is in DATA-08 and the repair is owed in
+  `OUTSTANDING.md`.
+
+Two things that looked like defects and are not. McGinley's 10 drafts all
+predate 2026-08-04, when the arming code landed, so its 0-of-10 is history and
+not a gap. California's 62 armed drafts name grades that match its own
+materials, so they are the same intermittency and not a cross-client leak.
+
+**No decision is needed from Sam on whether California should have a required
+grade set.** That is the client's specification to state, and an unflagged
+material is a legitimate answer. What was owed here was evidence, and it is now
+recorded.

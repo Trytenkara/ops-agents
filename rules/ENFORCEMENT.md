@@ -129,7 +129,7 @@ otherwise, so a gap cannot go quiet.
 
 | Rule | | Enforcement |
 |---|---|---|
-| `DATA-08` | A dealbreaker grade is a hard specification | Audit owed — a daily check that a client with a stated required grade has it set on the record, and that no draft invites an adjacent grade. Held today by a QA lint that is inert when the field is unset. |
+| `DATA-08` | A dealbreaker grade is a hard specification | Audit owed — a daily check that the arming value is stable for a material whose Tenkara record has not changed, and that no draft invites an adjacent grade. `grade_ask_widened` is a blocking code inside `stageDraft` and does hold part of this, but it is deliberately NOT counted as a guard: it arms on a value that moved on 97% of one material's drafts with no Tenkara edit behind it, and a guard that fires on 3% of identical cases makes nothing impossible. See `OUTSTANDING.md` and `CONFLICTS.md` L. |
 | `PRICING-04` | Delivery-cost extraction is audited every run | Audit owed — daily shipping-capture health job, `shipping/health-must-monitor-extraction-rate`. |
 | `PERS-07` | A withheld price is a job, not an outcome | Audit owed — a daily count of withheld prices with no surface, plus the surface itself on the client's own tab (see `80-control-room.md`). See `OUTSTANDING.md`. |
 | `DISC-08` | A source's own paging must advance | Audit owed — a daily check that every paged source's cursor advanced, and that the marker written is the marker read. A credit gate once wrote its marker under one key and read it under another, so it never fired and the source re-ran every pass. |

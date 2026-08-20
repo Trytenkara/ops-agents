@@ -89,10 +89,36 @@ When a client states a required grade, never widen the ask, never invite a
 nearby grade or a different source material, and never treat an adjacent grade
 as a near match worth drafting.
 
-**Enforcement:** Audit owed — a daily check that a client with a stated
-required grade has it set on the record, and that no draft invites an
-adjacent grade. Held today by a QA lint that is inert when the field is
-unset.
+Written after a supplier for Avlaan Pharmaceutical was asked, in our own copy,
+whether they could supply "both coconut and palm sources" for MCT when the
+client had named one of them as a dealbreaker. Inviting the nearby grade reads
+to the supplier as though the specification is negotiable, and the quote that
+comes back cannot be used.
+
+The guard is real but its trigger is not. `grade_ask_widened` only arms when
+`metadata.required_grade` is set on the draft, and that value is resolved from
+Tenkara at draft time: only grades flagged `isDealbreaker` count. Measured on
+2026-08-20 across 5,519 staged drafts, that arming is unstable. For one
+California Chemicals material (Propylene Glycol, unchanged in Tenkara since
+2026-08-07) the same agent on the same code path armed 7 drafts and left 203
+unarmed over the following thirteen days. Nothing in our code is
+non-deterministic here, so the flag itself is moving underneath us. A guard
+that fires on 3% of identical cases is not protection, it is a coin toss.
+
+Separately, the guard has never once fired: zero blocks across the 1,129
+drafts that were armed. Its pattern does catch the phrasing from the original
+incident, so it is not inert in the way COMM-08's was, but it is narrow. It
+misses softer invitations that break the rule just as effectively, among them
+"coconut-based as well if palm isn't available" and "let us know what else you
+stock in this range".
+
+**Enforcement:** Audit owed — a daily check that the arming value is stable for
+a material whose Tenkara record has not changed, and that no draft invites an
+adjacent grade. `grade_ask_widened` is a blocking code inside `stageDraft` and
+does hold part of this, but it is deliberately NOT counted as a guard: it arms
+on a value that moved on 97% of one material's drafts with no Tenkara edit
+behind it, and a guard that fires on 3% of identical cases makes nothing
+impossible. See `OUTSTANDING.md` and `CONFLICTS.md` L.
 
 ## DATA-09 — Aliases never add a qualifier the input lacked
 

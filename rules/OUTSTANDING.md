@@ -240,6 +240,36 @@ live, so the agent call path queueing into the digest is now the intended
 behaviour, and the digest line names the caller. The email operator's name is
 still only in the body, which the digest does not render.
 
+## P1 — The dealbreaker-grade guard arms intermittently, and has never fired
+
+Breaks DATA-08. Found 2026-08-20 while ruling `CONFLICTS.md` L. Two separate
+faults in the one guard.
+
+**It arms on an unstable value.** `grade_ask_widened` only runs when
+`metadata.required_grade` is set, which is resolved from Tenkara at draft time.
+For California Chemicals' Propylene Glycol, whose Tenkara record has not
+changed since 2026-08-07, Agent 04 armed 7 drafts and left 203 unarmed over the
+following thirteen days, with armed and unarmed drafts on the same day. Same
+material id, same code path, no branch in our code that could explain it, so
+the flag is moving on the Tenkara side without touching `updated_at`, or the
+read is not returning a stable row. Until that is understood, a client who does
+set a dealbreaker grade is protected on an unpredictable fraction of drafts.
+
+**It has never fired.** Zero blocks across the 1,129 armed drafts. The pattern
+does match the phrasing from the incident the rule was written for, so unlike
+COMM-08 it is not inert, but it is five narrow alternations and misses softer
+invitations that break the rule identically: "coconut-based as well if palm
+isn't available", "we'd also welcome your coconut option", "let us know what
+else you stock in this range". A model writing the copy is not obliged to use
+the phrasings we thought of.
+
+**Owed:** first, find out why the arming value moves, since a fix to the
+pattern is worthless while the trigger is a coin toss. Then widen the pattern,
+or better, stop pattern-matching outbound copy for this and check the ask
+against the stated grade directly, per the standing preference for reading over
+another regex. The check needs a mutation behind it per META-09, which today it
+does not have.
+
 ## P2 — Guessed contacts can be synthesised at a directory
 
 Breaks DATA-05. The guess builder is otherwise correct: right combinations,
@@ -410,7 +440,7 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 
 | Rule | The job |
 | --- | --- |
-| DATA-08 | daily: a client with a stated required grade has it set, and no draft invites an adjacent grade (see `CONFLICTS.md` L) |
+| DATA-08 | daily: the arming value is stable for a material Tenkara has not edited, and no draft invites an adjacent grade — see the P1 above |
 | PRICING-04 | daily: shipping capture rate against a threshold |
 | PERS-07 | daily: withheld prices with no surface — see the P0 above |
 | DISC-08 | daily: every paged source's cursor advanced, and the marker written is the marker read |
@@ -419,5 +449,5 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 
 ## Open decisions
 
-See `CONFLICTS.md` K (scope of the em dash ban) and L (whether the flagship
-client should have a required grade set).
+None open. `CONFLICTS.md` K (scope of the em dash ban) and L (the dealbreaker
+grade rule) were both ruled on 2026-08-20.
