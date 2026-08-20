@@ -10,17 +10,20 @@ marketplaces carried it under two other names.
 The resolver is `src/lib/material-aliases.ts`, model-resolved and cached per
 material. Any new source must use it rather than resolving its own.
 
-**Enforcement:** Guard — shared resolver, threaded into all three sources.
-Check owed — `discovery/source-must-use-alias-resolver`, so a NEW source
-cannot skip it.
+**Enforcement:** Guard — `discovery/source-must-use-alias-resolver`. Keyed on
+the write, not on a list of the sources we have: anything under
+`agents/lead-creator/` that inserts into `leads_in_flight` is a discovery
+source by definition, and has to name the aliases. A new source cannot skip it
+by not being on the list, because there is no list.
 
 ## DISC-02 — Aliases must reach the relevance filter too
 
 A source that searches aliases but filters results against the original string
 discards the very rows the alias search just won.
 
-**Enforcement:** Check owed —
-`discovery/relevance-filter-must-accept-aliases`.
+**Enforcement:** Guard — `discovery/relevance-filter-must-accept-aliases`,
+anchored per filtering source, so deleting or renaming one is the violation
+rather than a quiet loss of coverage.
 
 ## DISC-03 — Aliases never re-specify (see DATA-09)
 
@@ -54,7 +57,10 @@ name-match to guess at.
 Two materials that share a name but differ in grade are intentionally distinct
 and must never be merged.
 
-**Enforcement:** Check owed — `materials/never-merge-on-name-alone`.
+**Enforcement:** Guard — `materials/never-merge-on-name-alone`. It asserts the
+grade test runs in the same loop as the name match, so a pair cannot reach the
+candidate list on the name alone, and that nothing outside
+`src/lib/material-merge-flags.ts` writes `material_merge_flags` (META-04).
 
 ## DISC-08 — A source's own paging must advance
 

@@ -303,9 +303,131 @@ const MUTATIONS = [
     label: "the anchor file is renamed away",
     mutate: drop("src/app/actions/leads.ts"),
   },
+
+  // DISC-01. The rule already held when the check was written, so every
+  // mutation here has to break real code — a fixture alone would only prove the
+  // check can fire on something nobody wrote.
+  {
+    expect: "discovery/source-must-use-alias-resolver",
+    label: "the alias resolver is deleted",
+    mutate: drop("src/lib/material-aliases.ts"),
+  },
+  {
+    expect: "discovery/source-must-use-alias-resolver",
+    label: "the resolver stops exporting the entry point every source calls",
+    mutate: rename(
+      "src/lib/material-aliases.ts",
+      "export async function getMaterialAliases",
+      "async function getMaterialAliases",
+    ),
+  },
+  {
+    expect: "discovery/source-must-use-alias-resolver",
+    label: "a live source stops asking what else the trade calls it",
+    mutate: edit("src/agents-runtime/agents/lead-creator/sourceready.ts", (t) =>
+      t.split("aliases").join("searchTerms"),
+    ),
+  },
+  {
+    // The case the rule is actually written against: not a source that stops
+    // using the resolver, but a new one that never started.
+    expect: "discovery/source-must-use-alias-resolver",
+    label: "a fifth source stages leads without ever asking for aliases",
+    mutate: fixture(
+      "src/agents-runtime/agents/lead-creator/newsource.ts",
+      `const rows = hits.map((h) => ({ org_id: orgId, supplier_name: h.name }));\n` +
+        `await admin.from("leads_in_flight").insert(rows);\n`,
+    ),
+  },
+
+  // DISC-02. Both sources explain in a comment above the seed why aliases
+  // belong in the word set. `codeLines` strips the comment, so the mutation
+  // proves the check is reading the code and not the explanation.
+  {
+    expect: "discovery/relevance-filter-must-accept-aliases",
+    label: "SourceReady filters its alias hits against our name alone",
+    mutate: rename(
+      "src/agents-runtime/agents/lead-creator/sourceready.ts",
+      "[req.materialName, req.inci, ...(req.aliases ?? [])]",
+      "[req.materialName, req.inci]",
+    ),
+  },
+  {
+    expect: "discovery/relevance-filter-must-accept-aliases",
+    label: "ImportYeti filters its alias hits against our name alone",
+    mutate: rename(
+      "src/agents-runtime/agents/lead-creator/importyeti.ts",
+      "[req.materialName, req.inci, ...(req.aliases ?? [])]",
+      "[req.materialName, req.inci]",
+    ),
+  },
+
+  // DISC-07. Same name, different grade, is deliberately two materials.
+  {
+    expect: "materials/never-merge-on-name-alone",
+    label: "the grade gate is dropped from the candidate loop",
+    mutate: rename(
+      "src/lib/material-merge-flags.ts",
+      "      if (!gradesMergeable(live[i].grades, live[j].grades)) continue;\n",
+      "",
+    ),
+  },
+  {
+    expect: "materials/never-merge-on-name-alone",
+    label: "a second flagger writes merge pairs that never met the grade test",
+    mutate: fixture(
+      "src/agents-runtime/agents/material-sweep/index.ts",
+      `await admin.from("material_merge_flags").insert({ keep_material_id: a, drop_material_id: b });\n`,
+    ),
+  },
+  {
+    expect: "materials/never-merge-on-name-alone",
+    label: "the merge module is deleted outright",
+    mutate: drop("src/lib/material-merge-flags.ts"),
+  },
+
+  // AUTO-05. This rule holds today by absence — no agent writes membership —
+  // so there is no real code to break. That makes the fixtures the whole proof,
+  // and each one is a shape that would otherwise have gone unseen.
+  {
+    expect: "orgs/no-operator-membership-writes",
+    label: "an agent adds the call operator the audit found missing",
+    mutate: fixture(
+      "src/agents-runtime/agents/ownership-repair/index.ts",
+      `await admin.from("user_org_assignments").insert({ user_id: u, org_id: o, operator_type: "call" });\n`,
+    ),
+  },
+  {
+    // The builder split over three lines. A line-at-a-time scanner sees
+    // `.from(...)` and `.update(...)` as unrelated and reports nothing.
+    expect: "orgs/no-operator-membership-writes",
+    label: "the write is spread across a multi-line builder chain",
+    mutate: fixture(
+      "src/app/api/agent/retype-operator/route.ts",
+      `await admin\n  .from("user_org_assignments")\n  .update({ lanes: ["direct"] })\n  .eq("user_id", userId);\n`,
+    ),
+  },
+  {
+    expect: "orgs/no-operator-membership-writes",
+    label: "a repair script goes round PostgREST and writes the table in SQL",
+    mutate: fixture(
+      "src/scripts/fix-membership.ts",
+      "const sql = `insert into user_org_assignments (user_id, org_id) values ($1, $2)`;\n",
+    ),
+  },
+  {
+    // The allow list is three paths, and it has to be a path match. A substring
+    // match would wave through anything whose name merely ends the same way.
+    expect: "orgs/no-operator-membership-writes",
+    label: "a near-miss filename is not the allowed server action",
+    mutate: fixture(
+      "src/app/actions/bulk-operators.ts",
+      `await admin.from("user_roles").delete().eq("user_id", userId);\n`,
+    ),
+  },
 ];
 
-// The three checks over rules/ itself read from disk, so they mutate a copy.
+// The checks over rules/ itself read from disk, so they mutate a copy.
 const RULES_MUTATIONS = [
   {
     expect: "rules/enforcement-ledger-must-match",

@@ -64,8 +64,12 @@ findings violate the rules and which merely follow the rules and look strange.
 This covers org membership, `user_org_assignments`, `operator_type` and lanes.
 It is not about code defects, which are still fixed on sight.
 
-**Enforcement:** Check owed — `orgs/no-operator-membership-writes`: no code
-path inserts, deletes or retypes an operator or an org membership.
+**Enforcement:** Guard — `orgs/no-operator-membership-writes`: nothing writes
+`user_org_assignments` or `user_roles`, in the query builder or in raw SQL,
+outside three human-gated server actions. `operator_type` and lanes are columns
+of that table, so they are covered by covering the table. The allow-list is an
+exact path match, not a substring, so a new `bulk-operators.ts` is not admitted
+by resembling one that is.
 
 ## AUTO-06 — Cold outbound is never auto-sent
 

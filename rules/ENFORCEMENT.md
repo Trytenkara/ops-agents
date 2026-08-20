@@ -4,17 +4,17 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-120 rules. 58 are actually enforced, 42 owe a check or a job,
+120 rules. 61 are actually enforced, 38 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
-6 of the enforced rules hold only part of their invariant and say so in
+5 of the enforced rules hold only part of their invariant and say so in
 their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 55 |
+| **Guard** | A shared module or build check makes it impossible. | 58 |
 | **Audit** | A scheduled job reports the break after the fact. | 3 |
-| **Check owed** | A build check is possible and is not built yet. | 31 |
+| **Check owed** | A build check is possible and is not built yet. | 28 |
 | **Audit owed** | No build check can see it; a scheduled job can. Not built. | 5 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
@@ -32,7 +32,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (55)
+## Guard (58)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -44,6 +44,7 @@ this ledger read as enforced.
 | `COMM-07` | Everything an agent raises waits for the daily post | Guard — `dispatchAlert` queues every severity except p3; nothing else in the repo posts an agent alert. Fail-open is deliberate. |
 | `COMM-08` | Copy bans | Guard — `sanitizeDraft` inside `stageDraft` at runtime, and `copy/no-rfq-or-em-dash-in-templates` at build time over a named scope of outbound-copy files, held closed by two companion checks: the scope paths are anchors, so renaming one fails the build rather than silently dropping it, and `copy/scope-must-cover-every-draft-site` makes any `stageDraft` caller missing from that scope a violation. Check owed — `copy/no-direct-draft-create`: two paths still create a draft on the platform without going through `stageDraft`, so neither guard sees them. See `OUTSTANDING.md`. |
 | `AUTO-02` | Decide alone: volume of change | Guard — `src/lib/requirements-recheck.ts` `recheckOrgLeads`. |
+| `AUTO-05` | Never touch: operator and org membership | Guard — `orgs/no-operator-membership-writes`: nothing writes `user_org_assignments` or `user_roles`, in the query builder or in raw SQL, outside three human-gated server actions. `operator_type` and lanes are columns of that table, so they are covered by covering the table. The allow-list is an exact path match, not a substring, so a new `bulk-operators.ts` is not admitted by resembling one that is. |
 | `AUTO-07` | Owner of an open record is derived, never trusted | Guard — `src/lib/operator-assignment.ts` `recordOwnerId`, `assignment/derive-owner-via-recordOwnerId`. |
 | `AUTO-09` | Real clients before internal test orgs | Guard — `src/lib/org-priority.ts`, `queues/no-inline-org-priority`. |
 | `AUTO-10` | Near-duplicate supplier names reach one operator | Guard — `src/lib/operator-assignment.ts` `mergeSimilarNameKeys`, applied inside `getOrgLeadIndex` so every surface that resolves an owner shares one key map. |
@@ -66,9 +67,11 @@ this ledger read as enforced.
 | `PERS-06` | No hidden caps on a worklist | Guard for the accidental cut — `src/lib/supabase-paging.ts` `selectAllPaged` and `src/lib/supabase/truncation-guard.ts`, `reads/client-must-guard-truncation`. Check owed — `reads/limit-must-report-remainder` for deliberate windows. |
 | `PERS-08` | The record of a failure is never proof of success | Guard — the reply-drafted check in `src/lib/tenkara-inbound.ts` excludes `unmatched_inbound_clarification` and `retireUnmatchedTriage` closes the case and the draft on a successful match; `replies/idempotency-must-exclude-triage-artefacts` fails the build if the check stops distinguishing them or the retirement is dropped. |
 | `PERS-09` | A paced job stops itself and says where it stopped | Guard — `deadlineAt` on `syncOrgThreadOwners` (`src/lib/sync-thread-owners.ts`), threaded into both push loops, with `unpushed` in the run summary and the re-assert cursor rewound to the last thread actually pushed; `INTERACTIVE_SYNC_BUDGET_MS` at the server-action call sites. Check owed for the class — `runs/paced-loop-must-carry-deadline`, so a new per-item push loop with no deadline fails the build. See `OUTSTANDING.md`. |
-| `DISC-01` | Search the trade's name, not ours | Guard — shared resolver, threaded into all three sources. Check owed — `discovery/source-must-use-alias-resolver`, so a NEW source cannot skip it. |
+| `DISC-01` | Search the trade's name, not ours | Guard — `discovery/source-must-use-alias-resolver`. Keyed on the write, not on a list of the sources we have: anything under `agents/lead-creator/` that inserts into `leads_in_flight` is a discovery source by definition, and has to name the aliases. A new source cannot skip it by not being on the list, because there is no list. |
+| `DISC-02` | Aliases must reach the relevance filter too | Guard — `discovery/relevance-filter-must-accept-aliases`, anchored per filtering source, so deleting or renaming one is the violation rather than a quiet loss of coverage. |
 | `DISC-03` | Aliases never re-specify (see DATA-09) | Guard — see DATA-09. |
 | `DISC-06` | Duplicate suppliers have one definition | Guard — `src/lib/lead-dupe-guard.ts`. |
+| `DISC-07` | Same name, different grade, is not a duplicate | Guard — `materials/never-merge-on-name-alone`. It asserts the grade test runs in the same loop as the name match, so a pair cannot reach the candidate list on the name alone, and that nothing outside `src/lib/material-merge-flags.ts` writes `material_merge_flags` (META-04). |
 | `DISC-10` | Checkout decides what a marketplace is | Guard — the price read downgrades any marketplace-labelled page with no checkout at the single read chokepoint (`marketplace_checkout` downgrade in `lead-price-pull.ts`), and the scout prompt applies the same test at classification time. |
 | `OUT-05` | No draft into an existing thread may ignore what was already said | Guard — `src/lib/thread-context.ts`, `src/lib/thread-tailor.ts`, `copy/staging-must-tailor-to-thread`. |
 | `OUT-06` | Internal notes never reach a supplier | Guard — `src/lib/internal-notes.ts` `stripInternalNotes` inside `sanitizeDraft`, `copy/sanitize-must-strip-internal-notes`. |
@@ -100,13 +103,12 @@ this ledger read as enforced.
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
-## Check owed (31)
+## Check owed (28)
 
 | Rule | | Enforcement |
 |---|---|---|
 | `COMM-05` | Never speak as the human | Check owed — `comm/one-slack-sender`: a single send helper that accepts only the bot token, and no user token anywhere. |
 | `COMM-09` | Never announce as a bot in a crawler user agent | Check owed — `crawl/no-agent-identifying-user-agent`. |
-| `AUTO-05` | Never touch: operator and org membership | Check owed — `orgs/no-operator-membership-writes`: no code path inserts, deletes or retypes an operator or an org membership. |
 | `AUTO-06` | Cold outbound is never auto-sent | Check owed — `outreach/no-send-outside-operator-action`, plus the existing `COLD_OUTBOUND` flag. |
 | `AUTO-08` | Call tasks belong to call operators only | Check owed — `assignment/call-owner-must-be-call-operator`. Partially held today by the operator-type pool filter. |
 | `DATA-05` | Guessing a recipient is allowed; guessing content is not | Check owed — `contacts/guessed-combo-requires-own-domain-and-flag`: reject a guessed combo on a known platform host, and require the guessed flag. |
@@ -120,9 +122,7 @@ this ledger read as enforced.
 | `PERS-04` | Retry limits are a spend control, and must be named | Check owed — `retry/bound-must-be-declared`: a bounded retry must name its bound here and in the run summary. |
 | `PERS-05` | Never give up on a lead with no contact | Check owed — `outreach/no-terminal-drop-without-channel`. A scheduled sweep compensates today, which is a workaround under META-03 and is named in `OUTSTANDING.md`. |
 | `PERS-10` | Blocked is not empty | Check owed — `fetch/blocked-must-not-read-as-empty`: a non-2xx response may not reach a content parser, and the blocked reason is stored. See `OUTSTANDING.md`. |
-| `DISC-02` | Aliases must reach the relevance filter too | Check owed — `discovery/relevance-filter-must-accept-aliases`. |
 | `DISC-05` | A platform is never the supplier | Check owed — `discovery/platform-is-never-manufacturer`. |
-| `DISC-07` | Same name, different grade, is not a duplicate | Check owed — `materials/never-merge-on-name-alone`. |
 | `DISC-09` | A self-supplied material is not sourced | Check owed — `discovery/self-supplied-gate-must-fail-closed`: the gates are fail-open today. |
 | `OUT-02` | Marketplace storefronts get drafted, on a different channel | Check owed — `outreach/no-terminal-drop-without-channel`. See `OUTSTANDING.md`. |
 | `OUT-04` | One email per supplier, one thread | Check owed — `outreach/one-thread-per-supplier`. |

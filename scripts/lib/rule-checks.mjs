@@ -863,5 +863,200 @@ export function runChecks(files, rulesDir) {
     }
   }
 
+  // DISC-01. Every source searches the trade's names as well as the client's
+  // intake string. One material sat at a clean zero from all three sources for
+  // four days while three marketplaces carried it under two other names.
+  //
+  // The rule already held when this was written, and that is the reason to
+  // write it: what was guarding it was that three authors happened to thread an
+  // argument through by hand. The resolver is imported in exactly one file and
+  // passed down; nothing stopped a fourth source from staging leads without
+  // ever asking for aliases. So the subject is the INSERT, not a list of known
+  // sources — a source is in scope from the day it can stage a lead, which is
+  // the only day that matters.
+  {
+    const rule = "discovery/source-must-use-alias-resolver";
+
+    const resolver = anchor("src/lib/material-aliases.ts", {
+      rule,
+      why: "one model-resolved, per-material cache is what every source searches through (META-04)",
+      fix: "restore src/lib/material-aliases.ts exporting getMaterialAliases",
+    });
+    if (resolver && !/export async function getMaterialAliases\b/.test(codeLines(resolver).join("\n"))) {
+      violations.push({
+        rule,
+        why: "the resolver is the shared module the rule names; without this export every source resolves its own",
+        fix: "export async function getMaterialAliases from src/lib/material-aliases.ts",
+        where: resolver.path,
+        line: "getMaterialAliases is not exported",
+      });
+    }
+
+    for (const f of files) {
+      if (!f.path.includes("agents/lead-creator/")) continue;
+      const text = codeLines(f).join("\n");
+      if (!/from\(\s*["']leads_in_flight["']\s*\)[\s\S]{0,600}?\.insert\s*\(/.test(text)) continue;
+      if (/\baliases\b/.test(text)) continue;
+      violations.push({
+        rule,
+        why: "this file stages a lead, so it is a discovery source, and it never asks what else the trade calls the material",
+        fix: "thread the aliases from getMaterialAliases into this source's search terms",
+        where: f.path,
+        line: "inserts into leads_in_flight without naming aliases",
+      });
+    }
+  }
+
+  // DISC-02. Searching the aliases and then filtering the results against our
+  // own string throws away the exact rows the alias search just won. Both
+  // filtering sources say so in a comment above the seed; the comment is not
+  // the guard.
+  {
+    const rule = "discovery/relevance-filter-must-accept-aliases";
+    for (const p of [
+      "src/agents-runtime/agents/lead-creator/sourceready.ts",
+      "src/agents-runtime/agents/lead-creator/importyeti.ts",
+    ]) {
+      const f = anchor(p, {
+        rule,
+        why: "this source filters candidates against a material word set, so the word set is where aliases have to arrive",
+        fix: `restore ${p}`,
+      });
+      if (!f) continue;
+      if (/materialWords[\s\S]{0,400}?req\.aliases/.test(codeLines(f).join("\n"))) continue;
+      violations.push({
+        rule,
+        why: "a supplier surfaced by the alias search describes its goods in the alias's vocabulary, so filtering on our name alone discards it",
+        fix: "seed materialWords from [req.materialName, req.inci, ...(req.aliases ?? [])]",
+        where: f.path,
+        line: "the relevance filter's word set does not include req.aliases",
+      });
+    }
+  }
+
+  // DISC-07. Two materials sharing a name but differing in grade are
+  // intentionally distinct. The name match alone is the dangerous half, so the
+  // grade test has to sit in the same loop, between the name match and the
+  // candidate — not somewhere downstream where a second flagger could skip it.
+  {
+    const rule = "materials/never-merge-on-name-alone";
+
+    const merge = anchor("src/lib/material-merge-flags.ts", {
+      rule,
+      why: "this module is the only place a merge candidate is decided (META-04)",
+      fix: "restore src/lib/material-merge-flags.ts exporting gradesMergeable",
+    });
+    if (merge) {
+      const text = codeLines(merge).join("\n");
+      if (!/export function gradesMergeable\b/.test(text)) {
+        violations.push({
+          rule,
+          why: "the grade test is what separates a real duplicate from two deliberately distinct grades",
+          fix: "export function gradesMergeable from src/lib/material-merge-flags.ts",
+          where: merge.path,
+          line: "gradesMergeable is not exported",
+        });
+      }
+      if (!/mergeReasonFor\([\s\S]{0,300}?gradesMergeable\(/.test(text)) {
+        violations.push({
+          rule,
+          why: "a name match that reaches the candidate list without passing the grade test is a merge on name alone",
+          fix: "keep the gradesMergeable gate in the same loop as mergeReasonFor, before the pair becomes a candidate",
+          where: merge.path,
+          line: "the name match is not followed by the grade test",
+        });
+      }
+    }
+
+    for (const f of files) {
+      if (f.path.endsWith("src/lib/material-merge-flags.ts")) continue;
+      const text = codeLines(f).join("\n");
+      if (!/from\(\s*["']material_merge_flags["']\s*\)[\s\S]{0,200}?\.(?:insert|upsert)\s*\(/.test(text)) continue;
+      violations.push({
+        rule,
+        why: "a second flagger writes merge candidates that never met the grade test",
+        fix: "flag through flagDuplicateMaterials in @/lib/material-merge-flags",
+        where: f.path,
+        line: "writes material_merge_flags outside the shared module",
+      });
+    }
+  }
+
+  // AUTO-05. Never add, remove or re-type an operator, and never change org
+  // membership, to close a gap or make an assignment work. Sam, after an audit
+  // found Tenkara had no call operator at all and its 12 open calls unowned:
+  // "no dont add until ops adds it — as long as everything is according to the
+  // rules leave it."
+  //
+  // The rule holds today by absence: no agent, no API route and no repair
+  // script writes these tables. Absence is the state a check exists to freeze,
+  // because nothing about it is visible in a diff that adds the first one.
+  //
+  // Keyed on the table rather than on the column names, because operator_type
+  // and lanes ARE columns of user_org_assignments — a write to either is a
+  // write here. Matched across lines: the builder is routinely split so that
+  // `.from(...)` and `.update(...)` are three lines apart, and a line scanner
+  // sees neither half as a write.
+  //
+  // The allow list is three server actions, each behind a session and a role
+  // check, each writing audit_log. Two of them were missed by a survey that
+  // named only the first, which is the argument for the list being explicit:
+  // a fourth writer has to be added here, in a diff, on purpose.
+  {
+    const rule = "orgs/no-operator-membership-writes";
+    const why =
+      "operator and org membership is ops' call; an agent or a repair script that adds, removes or re-types one is closing a gap that ops has not decided to close";
+    const fix =
+      "report the gap and stop. Membership changes go through the Control Room server actions, which are behind a role check and write audit_log";
+    const ALLOW = [
+      "src/app/actions/operators.ts",
+      "src/app/actions/assignment-settings.ts",
+      "src/app/actions/signup.ts",
+    ];
+    // The verb has to be reached without leaving the statement. A flat window
+    // of N characters ran `from("user_roles").select(...)` straight into the
+    // next line's `from("users").insert(...)` and reported the session reader
+    // in src/lib/auth.ts as a membership write. Cut the window at the first `;`
+    // or the next `from(`, and what is left is one builder chain.
+    const TABLE = /from\(\s*["'](?:user_org_assignments|user_roles)["']\s*\)/g;
+    const RAW_SQL = /(?:insert\s+into|update|delete\s+from)\s+(?:public\.)?(?:user_org_assignments|user_roles)\b/gi;
+    const at = (text, i) => text.slice(0, i).split("\n").length;
+
+    for (const f of files) {
+      if (ALLOW.some((a) => f.path.endsWith(a))) continue;
+      const text = codeLines(f).join("\n");
+
+      TABLE.lastIndex = 0;
+      let m;
+      while ((m = TABLE.exec(text))) {
+        const rest = text.slice(m.index + m[0].length, m.index + m[0].length + 400);
+        const end = Math.min(
+          ...[rest.indexOf(";"), rest.search(/\bfrom\(/)].filter((i) => i !== -1).concat([rest.length]),
+        );
+        const chain = rest.slice(0, end);
+        const verb = /\.(insert|upsert|update|delete)\s*\(/.exec(chain);
+        if (!verb) continue;
+        violations.push({
+          rule,
+          why,
+          fix,
+          where: `${f.path}:${at(text, m.index)}`,
+          line: `${m[0]}${chain.slice(0, verb.index + verb[0].length)}`.replace(/\s+/g, " ").slice(0, 120),
+        });
+      }
+
+      RAW_SQL.lastIndex = 0;
+      while ((m = RAW_SQL.exec(text))) {
+        violations.push({
+          rule,
+          why,
+          fix,
+          where: `${f.path}:${at(text, m.index)}`,
+          line: m[0].replace(/\s+/g, " ").slice(0, 120),
+        });
+      }
+    }
+  }
+
   return violations;
 }

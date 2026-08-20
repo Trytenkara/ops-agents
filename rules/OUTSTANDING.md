@@ -474,7 +474,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | META-04 | `meta/no-second-copy-of-a-shared-guard`, beyond the invariants already covered |
 | COMM-05 | `comm/one-slack-sender` — one send helper, bot token only, no user token anywhere |
 | COMM-09 | `crawl/no-agent-identifying-user-agent` |
-| AUTO-05 | `orgs/no-operator-membership-writes` |
 | AUTO-06 | `outreach/no-send-outside-operator-action` |
 | AUTO-08 | `assignment/call-owner-must-be-call-operator` |
 | DATA-05 | `contacts/guessed-combo-requires-own-domain-and-flag` |
@@ -485,10 +484,7 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | PERS-05 | `outreach/no-terminal-drop-without-channel` — see the P0 above |
 | PERS-06 | `reads/limit-must-report-remainder` — see the P1 above |
 | PERS-10 | `fetch/blocked-must-not-read-as-empty` — a non-2xx may not reach a content parser; the same shape as the P0 storefront drop above |
-| DISC-01 | `discovery/source-must-use-alias-resolver`, so a NEW source cannot skip it |
-| DISC-02 | `discovery/relevance-filter-must-accept-aliases` |
 | DISC-05 | `discovery/platform-is-never-manufacturer` |
-| DISC-07 | `materials/never-merge-on-name-alone` |
 | DISC-09 | `discovery/self-supplied-gate-must-fail-closed` — gates are fail-open today |
 | OUT-02 | `outreach/no-terminal-drop-without-channel` — see the P0 above |
 | OUT-04 | `outreach/one-thread-per-supplier` |

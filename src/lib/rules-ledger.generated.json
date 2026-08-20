@@ -135,8 +135,8 @@
     {
       "id": "AUTO-05",
       "title": "Never touch: operator and org membership",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "AUTO-06",
@@ -388,13 +388,13 @@
       "id": "DISC-01",
       "title": "Search the trade's name, not ours",
       "bucket": "Guard",
-      "owes": true
+      "owes": false
     },
     {
       "id": "DISC-02",
       "title": "Aliases must reach the relevance filter too",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "DISC-03",
@@ -423,8 +423,8 @@
     {
       "id": "DISC-07",
       "title": "Same name, different grade, is not a duplicate",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "DISC-08",
