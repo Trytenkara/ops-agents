@@ -112,6 +112,14 @@ recorded against the supplier id.
 The direction is one-way. Aligning a surface means pulling it onto the lead's
 answer, never moving a lead to match a thread.
 
+The same holds for the LANE the owner is picked from, since operators are split
+by lane. A supplier's kind is read off its name, which a validated profile
+owns, before its key. The key is a contact email whenever the row carries no
+supplier id, two unrelated suppliers can share one mailbox, and only leads write
+an email-keyed kind, from the scanner's first guess. Reading the key first let
+one supplier's guess pick another's lane, which is how 27 live drafts ended up
+owned by an aggregator operator while their leads named someone else.
+
 **Enforcement:** Guard — `src/lib/operator-assignment.ts` `orgAutoKey` resolves
-every row through the key map built from the leads and profiles, and every
-derivation site goes through it.
+every row through the key map built from the leads and profiles, `supplierKind`
+resolves every lane name-first, and every derivation site goes through both.
