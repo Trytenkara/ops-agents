@@ -795,37 +795,57 @@ export function runChecks(files, rulesDir) {
   }
 
 
-  // DATA-07: Volume-based quotes require density for $/lb conversion.
-  // Check that insertStagedQuotes calls validateQuoteDensity.
-  const sq = files.find((f) => f.path === "src/lib/staged-quotes.ts");
-  if (sq && !sq.text.includes("validateQuoteDensity")) {
-    violations.push({
-      rule: "DATA-07",
-      message: "insertStagedQuotes must call validateQuoteDensity to enforce density requirement",
-      fix: "import { validateQuoteDensity } from '@/lib/quote-density-guard' and call it in the quote processing loop",
-      where: "src/lib/staged-quotes.ts",
-      line: "insertStagedQuotes function",
-    });
-  }
+  // DATA-07. A volume-priced quote needs a density to reach $/lb, and it has to
+  // be the right kind: bulk for a solid, specific gravity for a liquid. True
+  // density overstates a packed weight badly.
+  //
+  // This check was added on 2026-08-20 in three shapes that could not hold, all
+  // of them the failures the rest of this file is written against. It reported
+  // under the id `DATA-07`, which is the rule's name and not the check id the
+  // ledger points at, so the id in rules/ was unreachable. It carried `message`
+  // where the CLI prints `why`, so a real break would have printed
+  // `why: undefined` above the fix. And it read each file with
+  // `files.find(...)` guarded by `if (found && ...)`, so renaming either file
+  // disabled the check and left the build green — the fail-open shape `anchor`
+  // exists for. It also had no mutation behind it, which is now itself a
+  // failure in rule-self-test.mjs rather than something a reader has to notice.
+  {
+    const rule = "density/solids-require-bulk";
 
-  // DATA-07: quote-density-guard must exist and export the guard functions.
-  const guard = files.find((f) => f.path === "src/lib/quote-density-guard.ts");
-  if (guard && (!guard.text.includes("export function validateQuoteDensity") || !guard.text.includes("export function assertQuoteDensity"))) {
-    violations.push({
-      rule: "DATA-07",
-      message: "quote-density-guard must export both validateQuoteDensity and assertQuoteDensity",
-      fix: "ensure both functions are exported",
-      where: "src/lib/quote-density-guard.ts",
-      line: "exports",
+    const writer = anchor("src/lib/staged-quotes.ts", {
+      rule,
+      why: "insertStagedQuotes is the one writer that converts a volume price, so it is where the density guard has to be called",
+      fix: "restore src/lib/staged-quotes.ts",
     });
-  } else if (!guard) {
-    violations.push({
-      rule: "DATA-07",
-      message: "quote-density-guard.ts does not exist",
-      fix: "create src/lib/quote-density-guard.ts with validateQuoteDensity and assertQuoteDensity exports",
-      where: "src/lib/quote-density-guard.ts",
-      line: "file anchor",
+    if (writer && !/\bvalidateQuoteDensity\b/.test(codeLines(writer).join("\n"))) {
+      violations.push({
+        rule,
+        why: "a volume-priced quote with no density, or with a true density where a bulk one is required, converts to a $/lb figure wrong by the packing fraction",
+        fix: "call validateQuoteDensity from @/lib/quote-density-guard inside insertStagedQuotes",
+        where: writer.path,
+        line: "insertStagedQuotes does not call validateQuoteDensity",
+      });
+    }
+
+    const guard = anchor("src/lib/quote-density-guard.ts", {
+      rule,
+      why: "this module is the single place the density rule is expressed (META-04)",
+      fix: "restore src/lib/quote-density-guard.ts exporting validateQuoteDensity and assertQuoteDensity",
     });
+    if (guard) {
+      const text = codeLines(guard).join("\n");
+      for (const fn of ["validateQuoteDensity", "assertQuoteDensity"]) {
+        if (!new RegExp(`export function ${fn}\\b`).test(text)) {
+          violations.push({
+            rule,
+            why: "both entry points are load-bearing: the validator reports, the assert throws, and a caller that finds only one reimplements the other",
+            fix: `export ${fn} from src/lib/quote-density-guard.ts`,
+            where: guard.path,
+            line: `${fn} is not exported`,
+          });
+        }
+      }
+    }
   }
 
   return violations;

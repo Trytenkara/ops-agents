@@ -133,6 +133,18 @@ symbol is *used*, on a word boundary and outside comments — not merely present
 A check that cannot be made to fire is downgraded to `Check owed` and listed in
 `OUTSTANDING.md`. Deleting the mutation to get a green build is the break.
 
+Owing a mutation was itself only a convention until 2026-08-20. The self-test
+collected the set of covered ids and used it to print a count, never to demand
+anything, so a check added with no mutation behind it read exactly like one that
+had passed. `density/solids-require-bulk` was added that day with no mutation,
+under an id the ledger named and the code did not use, reading both of its files
+through `files.find(...)` so that renaming either one disabled it in silence:
+three of the failure shapes this rule exists to catch, inside a check written to
+enforce it, one day after the rule was written. The self-test now reads the
+declared id of every check out of the source and fails on any that no mutation
+expects. The id has to be read rather than observed, because a check only
+announces itself when it fires and the ones being hunted never fire.
+
 A guard that is switched off is inert in the same way, and harder to see.
 `core.hooksPath` is local machine config, so a committed hook does nothing until
 someone sets it, and a repository with its hooks off is indistinguishable from
@@ -140,6 +152,8 @@ one where every hook passed. The skills repository had no installer at all, and
 its commit hook is the only thing checking the agent skills against these rules.
 
 **Enforcement:** Guard — `npm run check:rules:self-test`, which runs ahead of
-`next build`, so an inert guard fails the deploy; and `scripts/install-hooks.mjs`
-installs both repositories' hooks from `npm install`, with `check-rules`
-refusing to pass locally while either has its hooks unset.
+`next build`, so an inert guard fails the deploy. It fails on two separate
+things: a mutation its check did not catch, and a check no mutation covers.
+Plus `scripts/install-hooks.mjs`, which installs both repositories' hooks from
+`npm install`, with `check-rules` refusing to pass locally while either has its
+hooks unset.

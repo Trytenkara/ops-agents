@@ -15,6 +15,7 @@
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { runChecks } from "./rule-checks.mjs";
 
 // --- corpus mutators -------------------------------------------------------
@@ -231,6 +232,28 @@ const MUTATIONS = [
     ),
   },
   {
+    expect: "density/solids-require-bulk",
+    label: "the writer stops calling the density guard",
+    mutate: rename("src/lib/staged-quotes.ts", "validateQuoteDensity", "validateQuoteDensityX"),
+  },
+  {
+    expect: "density/solids-require-bulk",
+    label: "the guard stops exporting its throwing entry point",
+    mutate: rename(
+      "src/lib/quote-density-guard.ts",
+      "export function assertQuoteDensity",
+      "function assertQuoteDensity",
+    ),
+  },
+  {
+    // The version of this check that shipped read the file with `files.find`,
+    // so deleting it was silence rather than a violation. This is the mutation
+    // that would have caught that.
+    expect: "density/solids-require-bulk",
+    label: "the guard module is deleted outright",
+    mutate: drop("src/lib/quote-density-guard.ts"),
+  },
+  {
     expect: "orgs/candidate-match-must-not-key-on-null",
     label: "the shared resolver is gone",
     mutate: rename("src/lib/tenkara-inbound.ts", "soleReplyTarget(", "soleReplyTargetX("),
@@ -324,6 +347,22 @@ const RULES_MUTATIONS = [
 
 const ids = (vs) => new Set(vs.map((v) => v.rule));
 
+// Every check owes a mutation, and until now nothing said so. `covered` was
+// computed and used only to print a count, so a check added with no mutation
+// was indistinguishable from one that had passed — the same shape as the bug
+// META-09 exists for, one level up. DATA-07's check was added on 2026-08-20
+// with no mutation behind it, and it was also fail-open and reachable under an
+// id the ledger did not use. Nothing noticed for a day.
+//
+// Reading the source is the point: the id has to be discoverable without
+// running the check, because a check only announces its id when it fires and a
+// check that never fires is exactly the one being looked for.
+const CHECKS_SRC = fileURLToPath(new URL("./rule-checks.mjs", import.meta.url));
+const declaredCheckIds = () =>
+  new Set(
+    [...readFileSync(CHECKS_SRC, "utf8").matchAll(/(?:^|[\s{(])rule:\s*"([^"]+)"/g)].map((m) => m[1]),
+  );
+
 export function selfTest(files, rulesDir) {
   const baseline = runChecks(files, rulesDir);
   if (baseline.length) {
@@ -363,6 +402,18 @@ export function selfTest(files, rulesDir) {
   }
 
   const covered = new Set([...MUTATIONS, ...RULES_MUTATIONS].map((m) => m.expect));
+  const uncovered = [...declaredCheckIds()].filter((id) => !covered.has(id)).sort();
+
+  if (uncovered.length) {
+    console.error(
+      `\ncheck-rules --self-test FAILED: ${uncovered.length} check(s) have no mutation.\n`,
+    );
+    for (const id of uncovered) console.error(`  ${id}`);
+    console.error("\nA check with nothing breaking it on purpose is a claim, not a guard.");
+    console.error("Add a mutation to MUTATIONS in scripts/lib/rule-self-test.mjs that breaks");
+    console.error("the codebase and expects this id back.\n");
+    return false;
+  }
 
   if (inert.length) {
     console.error(`\ncheck-rules --self-test FAILED: ${inert.length} of ${ran} mutations went unnoticed.\n`);
