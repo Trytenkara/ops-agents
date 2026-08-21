@@ -124,6 +124,7 @@ cadence itself healthy — nothing overdue with an empty outbox — and one thre
 held by a draft staged more than fourteen days earlier. That is the shape to
 watch, not the count: 3,461 drafts are sitting staged fleet-wide, so the number
 of threads this can silence is bounded by how many of them go unactioned.
+Capping the exemption is owed, and is a product decision rather than a check.
 
 The audit runs on the sweep's own loader rather than a copy of its logic. An
 audit that re-derives the clock drifts from the producer and then reports on a

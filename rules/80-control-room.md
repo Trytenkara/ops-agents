@@ -15,8 +15,9 @@ not to add another entry to a global queue.
 
 **Enforcement:** Guard — `ui/no-global-review-route`, as a ratchet. Seven
 routes under `work/review/` predate the rule and are named in the check; an
-eighth fails the build. Deleting the seven is a product decision, not a cleanup,
-so the debt is paid down by removing names from that list, never by adding them.
+eighth fails the build. The seven are owed: they are live and cross-client, and
+the debt is paid down by removing names from that list, never by adding them.
+Deleting them is a product decision, not a cleanup.
 
 The operator home and the work index also read worklist tables across clients
 and are deliberately not covered: both scope by org access and label every row
@@ -72,9 +73,9 @@ no count. The registry in `src/lib/flagged-work.ts` is the list of such sets;
 the panel must render whatever is in it rather than the sets it happens to know
 the names of, or a new set added to the registry is invisible again.
 
-**Enforcement:** Guard — `ui/flagged-set-must-have-a-surface`. Audit findings
-are still not persisted anywhere, so they are not yet in the registry; see
-`OUTSTANDING.md`.
+**Enforcement:** Guard — `ui/flagged-set-must-have-a-surface`. A home for
+audit findings is owed: they are persisted nowhere, so they are not yet in the
+registry the guard reads; see `OUTSTANDING.md`.
 
 ## UI-07 — Seed a real client before judging a view
 

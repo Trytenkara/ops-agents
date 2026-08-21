@@ -49,7 +49,10 @@ made, and numbers captured. The distinction matters more than the rate. A key
 present with a null under it says the writer ran; a number says it produced
 something; zero attempts against thousands of pulls says the feature is inert,
 which is exactly the state it shipped in and held for weeks. The audit reports
-the inert case as its own finding rather than as a capture rate of zero.
+the inert case as its own finding rather than as a capture rate of zero. The
+fix is owed: `getOrgShipToAddress` selects `ship_to_*` columns that do not
+exist on this project's `orgs` table and the catch swallows it, which is why
+there are zero attempts against 4,044 pulled listings.
 
 ## PRICING-05 — A delivery cost is never fabricated
 

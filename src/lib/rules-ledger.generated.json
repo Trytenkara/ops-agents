@@ -202,7 +202,7 @@
       "id": "DATA-05",
       "title": "Guessing a recipient is allowed; guessing content is not",
       "bucket": "Guard",
-      "owes": false
+      "owes": true
     },
     {
       "id": "DATA-06",
@@ -220,7 +220,7 @@
       "id": "DATA-08",
       "title": "A dealbreaker grade is a hard specification",
       "bucket": "Audit",
-      "owes": false
+      "owes": true
     },
     {
       "id": "DATA-09",
@@ -298,7 +298,7 @@
       "id": "PRICING-04",
       "title": "Delivery-cost extraction is audited every run",
       "bucket": "Audit",
-      "owes": false
+      "owes": true
     },
     {
       "id": "PRICING-05",
@@ -346,7 +346,7 @@
       "id": "PERS-04",
       "title": "Retry limits are a spend control, and must be named",
       "bucket": "Guard",
-      "owes": false
+      "owes": true
     },
     {
       "id": "PERS-05",
@@ -430,7 +430,7 @@
       "id": "DISC-08",
       "title": "A source's own paging must advance",
       "bucket": "Audit",
-      "owes": false
+      "owes": true
     },
     {
       "id": "DISC-09",
@@ -454,7 +454,7 @@
       "id": "OUT-02",
       "title": "Marketplace storefronts get drafted, on a different channel",
       "bucket": "Guard",
-      "owes": false
+      "owes": true
     },
     {
       "id": "OUT-03",
@@ -502,7 +502,7 @@
       "id": "OUT-09",
       "title": "Stalled conversations get chased",
       "bucket": "Audit",
-      "owes": false
+      "owes": true
     },
     {
       "id": "OUT-10",
@@ -622,7 +622,7 @@
       "id": "UI-02",
       "title": "Everything lives on the client's own tabs",
       "bucket": "Guard",
-      "owes": false
+      "owes": true
     },
     {
       "id": "UI-03",
@@ -646,7 +646,7 @@
       "id": "UI-06",
       "title": "Flagged work needs a home",
       "bucket": "Guard",
-      "owes": false
+      "owes": true
     },
     {
       "id": "UI-07",
@@ -718,7 +718,7 @@
       "id": "SHIP-07",
       "title": "Deploy and schema move together",
       "bucket": "Guard",
-      "owes": false
+      "owes": true
     },
     {
       "id": "SHIP-08",

@@ -621,21 +621,28 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 
 ### Check owed — a build check is possible and is not built
 
+<!-- generated-membership: the ids in this table and the next must be exactly
+     the rules whose Enforcement line admits a debt. `rules/debt-register-must-
+     match-the-ledger` fails the build otherwise, in both directions. -->
+
 | Rule | The check |
 | --- | --- |
 | META-04 | `meta/no-second-copy-of-a-shared-guard`, beyond the invariants already covered |
+| COMM-08 | the scope's edges. `copy/no-rfq-or-em-dash-in-templates` holds a named list of outbound-copy files and `copy/scope-must-cover-every-draft-site` makes a `stageDraft` caller missing from it a violation. Copy reaching a supplier by some other path is still unseen. |
 | AUTO-08 | `assignment/call-owner-must-be-call-operator` |
 | DATA-05 | the shared host list. `contacts/guessed-combo-requires-own-domain-and-flag` shipped 2026-08-20 and holds the gate and the flag together. The gate still reads a hand-copied list in `enrich.ts` that has drifted 15 hosts behind `src/lib/aggregator-hosts.ts`, so a guess is allowed on those hosts. Merging the lists is a behaviour change for every other caller of the shared one, which is why it is not folded in here. |
+| PERS-01 | `retry/verdict-must-use-shared-classifier`. Three call sites use `classifyFailure` and two hand-rolled classifiers remain — see the P2 above. |
 | PERS-02 | `queues/flag-must-not-exit-queue` |
-| PERS-03 | `discovery/zero-must-not-be-terminal` — see the P1 above |
 | PERS-04 | the run-summary half. `retry/bound-must-be-declared` shipped 2026-08-20 and holds the rules-folder half: all seven bounds are now named under PERS-04 and an eighth fails the build. A bound must also appear in the run summary, which cannot be read from the source. |
+| PERS-09 | `runs/paced-loop-must-carry-deadline`. `deadlineAt` holds the one job it was written for; a new per-item push loop with no deadline passes the build today. |
 | DISC-05 | `discovery/platform-is-never-manufacturer` |
 | DISC-09 | `discovery/self-supplied-gate-must-fail-closed` — gates are fail-open today |
+| OUT-02 | the aggregator inquiry channel itself. `outreach/no-terminal-drop-without-channel` stops a storefront being dropped for having no email; it cannot make the inquiry form a channel we can actually send through. |
 | OUT-08 | `outreach/asks-must-be-staged` |
 | OUT-10 | `outreach/cancel-must-release-alias` |
 | ORG-06 | `orgs/name-lookup-must-scope-query` — see the P2 above |
 | UI-02 | the seven existing global review routes. `ui/no-global-review-route` shipped 2026-08-20 as a ratchet, so no eighth can be added, but the seven that predate it are still live and still cross-client. Removing them is a product decision. |
-| UI-06 | `ui/flagged-set-must-have-a-surface` — see the P0 above |
+| UI-06 | somewhere to persist an audit finding. `ui/flagged-set-must-have-a-surface` makes every set in the registry render; findings that live nowhere never reach the registry, so the guard cannot see them. |
 | SHIP-02 | pre-commit hook refusing unstaged paths — see the P2 above |
 | SHIP-07 | column granularity. `ship/migration-must-accompany-schema-read` shipped 2026-08-20 over tables and RPCs; all 49 tables and 15 functions read today are created by a migration, so it is a ratchet. A read of a *column* that no migration adds is still invisible, and that is the shape ENG-1036 took. |
 | PRICING-01 | `shipping/cost-must-be-numeric` |
@@ -643,14 +650,12 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | PRICING-03 | `shipping/extraction-org-opt-in` |
 | PRICING-05 | `shipping/no-fabricated-costs` — the per-tier estimator breaks it today, see the P2 above |
 
-### Audit owed — no build check can see it, a scheduled job can
+### Reported by an audit, and the audit closes nothing
 
-None. The last five were covered by Agent 26 on 2026-08-20, which reports
-DATA-08, PRICING-04, PERS-07, DISC-08 and OUT-09 every morning and repairs
-nothing. Each of the five needs a person to decide what the right value was, so
-an audit that wrote its own answer would be guessing.
-
-What the audit does NOT close, and what each one found on its first pass:
+Agent 26 reports DATA-08, PRICING-04, PERS-07, DISC-08 and OUT-09 every morning
+and repairs nothing. Each needs a person to decide what the right value was, so
+an audit that wrote its own answer would be guessing. What is left owing, and
+what each one found on its first pass:
 
 | Rule | Still owed |
 | --- | --- |

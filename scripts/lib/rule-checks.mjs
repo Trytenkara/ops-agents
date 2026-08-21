@@ -921,6 +921,52 @@ export function runChecks(files, rulesDir) {
       }
     }
 
+    // The register at the bottom of OUTSTANDING.md is the answer to "what is
+    // still breakable", and it was hand-kept, so it drifted both ways at once:
+    // it still listed rules closed that morning, and three rules that owed work
+    // appeared nowhere in it. The check above only asks whether an owing id is
+    // mentioned SOMEWHERE in the file, which a narrative paragraph satisfies,
+    // so neither direction failed a build. Membership is mechanical — the rule
+    // files already say who owes — so it is checked, and only the prose in the
+    // second column stays a human's job.
+    const registerAt = outstanding.indexOf("## The full enforcement debt");
+    if (registerAt === -1) {
+      violations.push({
+        rule: "rules/debt-register-must-match-the-ledger",
+        why: "the debt register is the one place that answers what is still unguarded",
+        fix: "restore the '## The full enforcement debt' section in rules/OUTSTANDING.md",
+        where: "rules/OUTSTANDING.md",
+        line: "the enforcement debt register is gone",
+      });
+    } else {
+      const listed = new Set(
+        [...outstanding.slice(registerAt).matchAll(/^\|\s*([A-Z]+-\d+)\s*\|/gm)].map((m) => m[1])
+      );
+      const owing = new Set(rules.filter((r) => r.owes).map((r) => r.id));
+      for (const id of owing) {
+        if (!listed.has(id)) {
+          violations.push({
+            rule: "rules/debt-register-must-match-the-ledger",
+            why: "a rule whose Enforcement line admits a debt, and which the register does not list, is a gap nobody counting the register would ever see",
+            fix: `add a ${id} row to the register at the bottom of rules/OUTSTANDING.md saying what is owed`,
+            where: "rules/OUTSTANDING.md",
+            line: `${id} owes work and is missing from the enforcement debt register`,
+          });
+        }
+      }
+      for (const id of listed) {
+        if (!owing.has(id)) {
+          violations.push({
+            rule: "rules/debt-register-must-match-the-ledger",
+            why: "a register that lists settled rules overstates the debt, and the next person to read it works from a number that is wrong in the safe-sounding direction",
+            fix: `remove the ${id} row from the register, or say on ${id}'s Enforcement line what is still owed`,
+            where: "rules/OUTSTANDING.md",
+            line: `${id} is in the enforcement debt register and owes nothing`,
+          });
+        }
+      }
+    }
+
     // The ledger is a view of the rule files, so it must be exactly what the
     // generator would write today. It was not: production shipped an
     // ENFORCEMENT.md that listed PERS-08 as an enforced Guard while the rule

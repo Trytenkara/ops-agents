@@ -96,9 +96,14 @@ export function isOwed(bucketName) {
  * "Guard for the invariants that have a check-rules id. Check owed — extending
  * coverage to the rest." Reading only the first word files that as fully
  * enforced and the debt is never listed anywhere.
+ *
+ * Any use of the word is a debt, not just the two openings. Three rules
+ * admitted their missing half in prose — "the run-summary half is still owed"
+ * — and were counted as fully enforced for it, which is the same failure one
+ * sentence further in.
  */
 export function owesWork(enforcement, bucketName) {
-  return isOwed(bucketName) || /\b(?:Check|Audit) owed\b/.test(enforcement);
+  return isOwed(bucketName) || /\bowed\b/.test(enforcement);
 }
 
 /** Human-readable list of the accepted openings, for the failure message. */

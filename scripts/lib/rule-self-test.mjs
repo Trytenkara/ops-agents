@@ -898,6 +898,30 @@ const RULES_MUTATIONS = [
     mutate: (dir) => writeFileSync(join(dir, "OUTSTANDING.md"), "# Outstanding\n\nNothing.\n"),
   },
   {
+    // Both directions, because the register drifted both ways at once: it
+    // listed rules closed that morning and omitted three that owed work.
+    expect: "rules/debt-register-must-match-the-ledger",
+    label: "an owing rule is dropped from the debt register",
+    mutate: (dir) => {
+      const p = join(dir, "OUTSTANDING.md");
+      const text = readFileSync(p, "utf8");
+      const row = text.match(/^\| AUTO-08 \|.*$/m);
+      if (!row) return;
+      writeFileSync(p, text.replace(row[0] + "\n", ""));
+    },
+  },
+  {
+    expect: "rules/debt-register-must-match-the-ledger",
+    label: "the register keeps a row for a rule that no longer owes anything",
+    mutate: (dir) => {
+      const p = join(dir, "OUTSTANDING.md");
+      const text = readFileSync(p, "utf8");
+      const row = text.match(/^\| AUTO-08 \|.*$/m);
+      if (!row) return;
+      writeFileSync(p, text.replace(row[0], row[0] + "\n| META-01 | long since settled |"));
+    },
+  },
+  {
     // A rule may hold half its invariant and admit the rest is not built. The
     // admission is on the second line, and the parser used to stop at the first
     // — so 69 of 118 rules were published half-quoted and five read as fully

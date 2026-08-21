@@ -74,7 +74,9 @@ without the `done` key the reader looks for, and a page cursor nobody writes
 any more. The first is the dangerous one, because the reader treats a missing
 `done` as finished, so a marker written under the wrong shape gates its
 material off that source permanently. All 15 SourceReady markers were in that
-state when the audit shipped, alongside 52 orphaned page cursors.
+state when the audit shipped, alongside 52 orphaned page cursors. Clearing
+them is owed — until somebody does, each one reads as finished and gates its
+material off SourceReady for good.
 
 ## DISC-09 — A self-supplied material is not sourced
 

@@ -84,7 +84,9 @@ operator can see it.
 repo that builds an address out of a name and a domain must keep both its
 `!isAggregatorDomain(...)` gate and its `guessed` confidence stamp. The two are
 checked together because each reads as redundant next to the other, so a cleanup
-removes one and leaves the rule half-true.
+removes one and leaves the rule half-true. The shared host list is owed: the
+gate reads a hand-copied copy in `enrich.ts` that has drifted 15 hosts behind
+`src/lib/aggregator-hosts.ts`, so a guess is still allowed on those hosts.
 
 That branch still uses a hand-copied host list rather than the shared one in
 `src/lib/aggregator-hosts.ts`, and the copy has drifted; the guess is therefore
@@ -190,7 +192,9 @@ reports every material where the two disagree in either direction: armed when
 the client flags nothing, unarmed when the client flags a grade. It is keyed on
 the resolved grade string and not on `updated_at`, because Tenkara rewrites
 every material nightly at 00:00:02 UTC, so a staleness test keyed on the
-timestamp sees a changed record every day and reports nothing.
+timestamp sees a changed record every day and reports nothing. The audit
+reports and repairs nothing: the 7 disagreeing materials, and the widening
+phrasings the blocking code still misses, are owed.
 
 `grade_ask_widened` is a blocking code inside `stageDraft` and holds part of
 this, but it is deliberately NOT counted as a guard: it arms on a value that
