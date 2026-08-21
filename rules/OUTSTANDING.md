@@ -112,16 +112,18 @@ answer. Held by `contacts/confidence-derived-from-source`, five mutations
 behind it, and the check covers the skills corpus because that is where three
 of the four writers were.
 
-**Still owed, two things.**
+**Backfilled 2026-08-20**, same derivation as the code, from the source already
+stored on each row: 8,608 to discovered, 94 pattern combos to guessed, 7 real
+LeadMagic rows to verified, and 702 leads holding a confidence with no address
+had the key removed. Old values snapshotted to
+`/workspace/backfill-data06-snapshot.json` first. The column now holds three
+words: 8,608 discovered, 821 guessed, 96 verified.
 
-The 8,093 rows keep their old label until the lead is enriched again. Harmless
-today only because nothing reads the column — which is the second thing. The
-label is written on every lead and consumed by no code and no screen in the
-repository: `contact_confidence` appears in exactly one place outside the
-enrichment agent, a `delete` that clears it when the address is cleared. So the
-distinction it now records honestly is not in front of anybody. That surface is
-UI-06's, and the backfill has to run before it ships or the first thing the new
-column shows an operator is the old lie.
+**Still owed:** the surface. The label is written on every lead and read by no
+code and no screen — `contact_confidence` appears in exactly one place outside
+the enrichment agent, a `delete` that clears it when the address is cleared. So
+the distinction it now records honestly is not in front of anybody. That is
+UI-06's half.
 
 ## P0 — Withheld prices are a complete dead end
 

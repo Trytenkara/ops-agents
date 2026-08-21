@@ -115,6 +115,9 @@ previous run's answer and reads as discovered whatever originally resolved it.
 excludes only `guessed`), because an untested address is still worth keeping;
 it is the operator's read of it that had to stop overstating.
 
+The 10,227 rows already carrying a label were backfilled the same day from the
+source stored on each of them, so the column is not half old vocabulary.
+
 **Enforcement:** Guard — `VERIFYING_SOURCES` in
 `src/agents-runtime/agents/data-enrichment/enrich.ts`,
 `contacts/confidence-derived-from-source`. The check is on the derivation
