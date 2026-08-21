@@ -302,13 +302,27 @@ full session precisely because no row said where its number came from — and th
 first pass through them was itself wrong, reading case prices as per-unit
 prices, which is how four correct rows came to be reported as defects.
 
+The gate runs at capture, so it can never reach a row captured before it
+existed. Every stored row is rechecked against the extractor's own reading of
+the message — `raw_extract`, which every row carries even when
+`price_source_text` is empty — by `reconcileQuoteRow` in
+`src/lib/price-reconcile.ts`. That needs no message, no model call and no
+network, and on 2026-08-21 it found the one non-reconciling row in all 106
+priced rows fleet-wide, the same Yujiang row a person had found by hand. The
+answer to "was this client unusual or typical" is that it was the only one.
+
 **Enforcement:** Guard — `price/capture-must-carry-source-text`:
 `verifyPriceProvenance` in `src/lib/price-provenance.ts` is applied by
 `insertStagedQuotes` before the publish gate and again on the lead-headline
 mirror in `src/lib/tenkara-inbound.ts`; a price it cannot trace is stored as
 null with the reason and `needs_review`. The check also holds the two
 extractors to asking for the fragment, and holds `staged_quotes` to a
-`price_source_text` column (migration 0124).
+`price_source_text` column (migration 0124). The backward half is the
+`unreconciled_quote` set in `src/lib/flagged-work.ts`, which runs the same
+reconciliation over stored rows on every load of the client's Overview tab, and
+`scripts/repair-unreconciled-quotes.mts`, which corrects the one class
+arithmetic can settle — a per-tonne price charged to a case that is not a tonne
+— and reports the rest rather than guessing.
 
 ## DATA-15 — Extraction records what it did not take
 

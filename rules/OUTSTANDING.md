@@ -119,11 +119,10 @@ had the key removed. Old values snapshotted to
 `/workspace/backfill-data06-snapshot.json` first. The column now holds three
 words: 8,608 discovered, 821 guessed, 96 verified.
 
-**Still owed:** the surface. The label is written on every lead and read by no
-code and no screen — `contact_confidence` appears in exactly one place outside
-the enrichment agent, a `delete` that clears it when the address is cleared. So
-the distinction it now records honestly is not in front of anybody. That is
-UI-06's half.
+**Surfaced 2026-08-21.** The label was written on every lead and read by no code
+and no screen. It is now the `unverified_contact` set in
+`src/lib/flagged-work.ts`, counted on the client's own Overview tab, so a
+guessed address is in front of somebody before the first email goes to it.
 
 ## P0 — Withheld prices were a complete dead end — FIXED 2026-08-21
 
@@ -159,77 +158,56 @@ publish gate must also record the mark.
 posts to Slack and nothing persists a finding, so there is no row for the
 registry to count. Until they have a table they cannot have a surface.
 
-## P1 — The prices already captured wrong are still live
+## P1 — The prices already captured wrong — one row, corrected 2026-08-21
 
-Breaks DATA-14, DATA-15 and the basis half of DATA-01. Found 2026-08-19 by
+Broke DATA-14, DATA-15 and the basis half of DATA-01. Found 2026-08-19 by
 re-reading all 77 California Chemicals supplier threads from Tenkara and
 reconciling them against `staged_quotes`, because the table could not be
 checked against itself.
 
-**The forward half is fixed, same day.** DATA-14, DATA-15 and DATA-16 now hold
+**The forward half was fixed the same day.** DATA-14, DATA-15 and DATA-16 hold
 guards and an audit: a price that does not reconcile arithmetically against the
 supplier's own words is withheld rather than stored, `confidence` is derived
 from `price-qa` instead of self-reported, and every inbound message records what
-it stated against what was staged so a miss leaves a mark. What follows is the
-residue that fix does not touch, because it is forward-only.
+it stated against what was staged so a miss leaves a mark.
 
 **Correction, 2026-08-20.** The first pass through these rows was itself wrong
 and this section said so for a day. It read `price` as a per-unit figure when
 `price` is the price of a CASE and `unit_price` is the derived per-unit column,
 so four rows quoting `usd####/mt` against a 1000 kg case — Jiangsu Yny 2900,
 Shandong Andy 1335, Henan Chemger 1280 — and Katonah's 620.5410 against a 518 lb
-drum were reported as defects when all four are correct. Katonah is off by
-0.04%, the supplier's own rounding. Re-verified against the source emails.
+drum were reported as defects when all four are correct.
 
-Against 54 price points the suppliers actually sent, the table holds 48 distinct
-rows (plus one duplicate). **One is wrong:** Yujiang, row
-`5bee93d0-0876-4a22-ab21-4b5e447dd118`. The email says "EXW price: USD1015/MT;
-Packing: 180KGS/Drum"; the row stores 1015 against a 180 kg case, so the
-material reads $5.64/kg instead of $1.015/kg. The basis was read off the packing
-line. Stamped `confidence: medium`, `status: pending_review`.
+**The wrong row is corrected and the residue is sized, 2026-08-21.** The audit
+concluded a stored row could not be rechecked because it does not carry the
+supplier's words. That was half true: it does not carry the message, but every
+row carries `raw_extract`, the extractor's own reading of it, including the unit
+the price was stated in. `reconcileQuoteRow` compares the stored columns against
+that reading — no message, no model call, no network. Run over all 106 priced
+rows fleet-wide it returned exactly one failure, the Yujiang row the hand audit
+had found: `USD1015/MT` with `180KGS/Drum` stored as 1015 for the drum, reading
+$5.64/kg for a material quoted at $1.015/kg. Corrected in place to 182.70 for
+the 180 kg case, the old figures written into `extraction_notes`, left
+`pending_review` for an operator to confirm. The fleet re-reconciles clean.
 
-Six price points produced no row at all, and no record that anything was read:
-Shandong Depu (usd1300/mt), Sinochem Nanjing (USD1450/MT) and Hefei TNJ
-(USD1490/mt) were missed entirely; Foodchem's revision (1.53 FOB / 1.81 CIF)
-was dropped, leaving the superseded 1.49 as the client's live figure; Reroot's
-second material was dropped.
+So this client was not unusual; it was the only one. The two Hangzhou Ontology
+MCT rows that also differ from their extract had already been hand-corrected and
+say so on the row.
 
-The misses are not an extractor fault. `inbound_message_ledger` marks those
-suppliers `recorded_unmatched`: the replies never reached extraction at all.
-`unmatched_inbound_events` holds 85 unmatched inbound replies in the 30 days to
-2026-08-20 — 46 with a client resolved, across 43 distinct conversations, and 39
-that arrived at an inbox mapped to no client.
+The reconciliation is not a one-off script. It is the `unreconciled_quote` set
+in `src/lib/flagged-work.ts`, recomputed on every load of the client's Overview
+tab, so the next row that stops reconciling is counted on the client's own page
+rather than waiting for someone to re-read a mailbox.
+`scripts/repair-unreconciled-quotes.mts` corrects the one class arithmetic can
+settle and reports the rest.
 
-**The 46 are diagnosed and fixed forward.** Every one failed the same test: the
-router keyed candidate agreement on `supplier_id ?? ""`, so a thread whose cold
-outreach predated the supplier link held both `null:material` and
-`supplier:material` and was refused as ambiguous. That is ORG-11, now a rule
-with a guard. Replayed against the live table the new test resolves 37 of the
-43. The remaining six name no supplier on any draft — Sinochem Nanjing is one,
-which is why its price is on the missing list — so there is nothing for the
-router to agree about. Those need the supplier link backfilled upstream, not a
-looser router.
-
-The 39 with no client are a different fault and still live: the receiving inbox
-is not mapped to a Control Room client, so there is nothing to file them
-against. That path already alerts p2 per inbox.
-
-The wrong row is still in the table as found. The new gate runs at capture time,
-so it cannot reach a row captured before it existed: nothing re-reads history,
-and no stored row carries the source fragment the guard needs, so a bad row
-cannot be identified in bulk by the same test that would now stop it. Scope
-beyond this one client is unmeasured — the same read has not been run for the
-rest of the fleet, and the per-message ledger only starts counting from messages
-that arrive after 2026-08-19.
-
-**Owed:** a replay of the 43 unmatched conversations, since ORG-11 only changes
-what happens to the NEXT message on them and nothing re-reads the ones already
-in the dead-letter table — that is how the six missed price points arrive
-through the normal path; mapping the inboxes behind the other 39; a re-extract
-path, since none exists and the capture-time fix leaves every existing row
-exactly as it is; correcting the Yujiang row; and the same reconciliation run
-fleet-wide to size the residue, which is the only way to learn whether this
-client was unusual or typical.
+**Still owed:** the six price points that produced no row at all — Shandong Depu
+(usd1300/mt), Sinochem Nanjing (USD1450/MT), Hefei TNJ (usd1490/mt), Foodchem's
+revision (1.53 FOB / 1.81 CIF, leaving the superseded 1.49 live) and Reroot's
+second material. Those are not an extractor fault: `inbound_message_ledger`
+marks those suppliers `recorded_unmatched`, so the replies never reached
+extraction. They arrive through the normal path only when the 43 unmatched
+conversations are replayed, which is the item below.
 
 ## P1 — Two draft paths bypass the staging chokepoint
 

@@ -13,6 +13,7 @@
 // panel renders whatever this array holds and knows none of the keys by name.
 
 import type { createAdminClient } from "@/lib/supabase/admin";
+import { reconcileQuoteRow } from "@/lib/price-reconcile";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -103,6 +104,41 @@ export const FLAGGED_SETS: FlaggedSet[] = [
         at: q.created_at ?? null,
       }));
       return { items, total: count ?? items.length };
+    },
+  },
+  {
+    key: "unreconciled_quote",
+    label: "Prices that do not reconcile with how they were read",
+    rule: "DATA-14",
+    description:
+      "The stored figure disagrees with the extractor's own reading of the supplier's message — a per-tonne price charged to a drum, a conversion that does not multiply out, a number that changed with no rate recorded. These are live prices, and the client is quoting from them.",
+    href: (slug) => `/work/orgs/${slug}/price-index`,
+    load: async (admin, orgId) => {
+      // Reconciliation is arithmetic on columns PostgREST cannot compare
+      // against each other, so the filtering happens here. The table is small
+      // by construction — one row per quoted price per supplier — and the count
+      // returned is of rows that actually failed, not of rows examined.
+      const { data, error } = await admin
+        .from("staged_quotes")
+        .select(
+          "id, supplier_name, material_name, price, case_size, unit_of_measurement, currency, unit_price, native_price, native_currency, fx_rate, raw_extract, created_at"
+        )
+        .eq("org_id", orgId)
+        .neq("status", "dismissed")
+        .not("price", "is", null);
+      if (error) throw new Error(error.message);
+      const failed = (data ?? [])
+        .map((q: any) => ({ q, issues: reconcileQuoteRow(q) }))
+        .filter((r) => r.issues.length > 0);
+      return {
+        items: failed.slice(0, SHOW).map(({ q, issues }) => ({
+          id: q.id,
+          title: pair(q.supplier_name, q.material_name),
+          reason: issues.join("; "),
+          at: q.created_at ?? null,
+        })),
+        total: failed.length,
+      };
     },
   },
   {
