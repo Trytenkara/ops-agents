@@ -67,9 +67,16 @@ committed, because the token used to push is not permitted to create one. See
 A change that needs a database migration is not shipped until the migration is
 applied to the same environment. Deploying the code ahead of the migration
 leaves production running against a schema that does not have the columns it
-reads.
+reads. ENG-1036 shipped that way and the symptom was ordinary-looking agent
+errors, not anything that said "the schema is behind".
 
-**Enforcement:** Check owed — `ship/migration-must-accompany-schema-read`.
+**Enforcement:** Guard — `ship/migration-must-accompany-schema-read`: every
+table read through `.from(...)` and every `.rpc(...)` must be created by a
+migration in this repo. That is the granularity that can be read statically and
+the one that fails every call rather than one field; a missing *column* is
+still owed and is listed in `OUTSTANDING.md`. The check also fails if no
+migrations are in the corpus at all, since an empty schema would otherwise read
+as "nothing to check".
 
 ## SHIP-08 — Weekly rules review
 

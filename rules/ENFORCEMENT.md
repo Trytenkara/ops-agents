@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-120 rules. 63 are actually enforced, 36 owe a check or a job,
+120 rules. 68 are actually enforced, 31 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 5 of the enforced rules hold only part of their invariant and say so in
@@ -12,9 +12,9 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 60 |
+| **Guard** | A shared module or build check makes it impossible. | 65 |
 | **Audit** | A scheduled job reports the break after the fact. | 3 |
-| **Check owed** | A build check is possible and is not built yet. | 26 |
+| **Check owed** | A build check is possible and is not built yet. | 21 |
 | **Audit owed** | No build check can see it; a scheduled job can. Not built. | 5 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
@@ -32,7 +32,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (60)
+## Guard (65)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -43,6 +43,7 @@ this ledger read as enforced.
 | `COMM-06` | One channel, one post a day | Guard — `comm/one-slack-channel` in `scripts/lib/rule-checks.mjs` rejects any channel argument, any of the retired channel env vars, and any Slack id that is not `C0B5M1QCE9E`, everywhere except `src/lib/slack.ts`. It runs over this repository in `npm run build` and over `/workspace/.claude/skills` in that repo's pre-commit hook, because the skills post to Slack too and four of them were found breaking this rule on 2026-08-20 while the ledger reported it enforced. |
 | `COMM-07` | Everything an agent raises waits for the daily post | Guard — `dispatchAlert` queues every severity except p3; nothing else in the repo posts an agent alert. Fail-open is deliberate. |
 | `COMM-08` | Copy bans | Guard — `sanitizeDraft` inside `stageDraft` at runtime, and `copy/no-rfq-or-em-dash-in-templates` at build time over a named scope of outbound-copy files, held closed by two companion checks: the scope paths are anchors, so renaming one fails the build rather than silently dropping it, and `copy/scope-must-cover-every-draft-site` makes any `stageDraft` caller missing from that scope a violation. Check owed — `copy/no-direct-draft-create`: two paths still create a draft on the platform without going through `stageDraft`, so neither guard sees them. See `OUTSTANDING.md`. |
+| `COMM-09` | Never announce as a bot in a crawler user agent | Guard — `crawl/no-agent-identifying-user-agent`: a user agent naming the company or a crawler token fails the build. It is a check on the literal rather than on a shared constant, because there are six user agents in the fleet and consolidating them is a separate change; what matters is that none of them says who we are. The skills folder is only scanned when `check-rules` is run with `--also`, so a skill's fetcher is covered by the daily skills pass, not by the deploy build. |
 | `AUTO-02` | Decide alone: volume of change | Guard — `src/lib/requirements-recheck.ts` `recheckOrgLeads`. |
 | `AUTO-05` | Never touch: operator and org membership | Guard — `orgs/no-operator-membership-writes`: nothing writes `user_org_assignments` or `user_roles`, in the query builder or in raw SQL, outside three human-gated server actions. `operator_type` and lanes are columns of that table, so they are covered by covering the table. The allow-list is an exact path match, not a substring, so a new `bulk-operators.ts` is not admitted by resembling one that is. |
 | `AUTO-07` | Owner of an open record is derived, never trusted | Guard — `src/lib/operator-assignment.ts` `recordOwnerId`, `assignment/derive-owner-via-recordOwnerId`. |
@@ -52,6 +53,7 @@ this ledger read as enforced.
 | `DATA-01` | Never fabricate, approximate or infer a price | Guard — `src/lib/price-publish.ts` `publishablePrice` / `publishableTiers` at every price writer, `price/writer-must-gate`, for the amount; `src/lib/price-provenance.ts` `verifyPriceProvenance`, `price/capture-must-carry-source-text`, for the basis (DATA-14). |
 | `DATA-02` | A foreign price is published only through one conversion | Guard — `fx/no-direct-convertToUsd`. |
 | `DATA-04` | Agents may never invent a contact detail in an outgoing body | Guard — `src/lib/contact-guard.ts`, `contacts/staging-must-guard-fabrication`. |
+| `DATA-05` | Guessing a recipient is allowed; guessing content is not | Guard — `contacts/guessed-combo-requires-own-domain-and-flag`: the one branch in the repo that builds an address out of a name and a domain must keep both its `!isAggregatorDomain(...)` gate and its `guessed` confidence stamp. The two are checked together because each reads as redundant next to the other, so a cleanup removes one and leaves the rule half-true. |
 | `DATA-07` | Density: bulk for solids, specific gravity for liquids | Guard — `src/lib/quote-density-guard.ts` `validateQuoteDensity` called inside `insertStagedQuotes`, and `density/solids-require-bulk` in `scripts/lib/rule-checks.mjs` fails the build if the guard is removed. Partially held by the enrichment sanitiser for display. |
 | `DATA-09` | Aliases never add a qualifier the input lacked | Guard — `GRADE_WORDS` in `src/lib/material-aliases.ts`. |
 | `DATA-10` | A write that fails is never silent | Guard — unconditional `console.error` on insert failure in `insertStagedQuotes` (`src/lib/staged-quotes.ts`), plus the `quote_capture_silent` check in the QA watchdog, which fires when supplier replies keep arriving and nothing is staged from them. |
@@ -64,6 +66,7 @@ this ledger read as enforced.
 | `PRICING-07` | A marketplace that deals by email becomes a second, direct supplier | Guard — `splitDirectLeadFromMarketplace` in `src/lib/marketplace-direct-split.ts`, which refuses a platform address, refuses a lead already split, and reuses an existing direct sibling instead of stacking a second one. |
 | `PRICING-08` | A price row belongs to one lane and no writer may cross | Guard — `quote_profiles.lane`, not null, no default at the call site: `insertQuoteProfile` requires it, `seedQuoteProfilesFromStaged` reads and writes `direct` only, `syncQuoteProfilesFromMarketplace` reads and writes `marketplace` only, and the quotes tab groups by supplier and lane. |
 | `PERS-01` | Only a structural verdict is terminal | Guard — `src/lib/retry-verdict.ts` `classifyFailure`. Check owed — `retry/verdict-must-use-shared-classifier`: only three call sites use it and two hand-rolled classifiers remain. See `OUTSTANDING.md`. |
+| `PERS-04` | Retry limits are a spend control, and must be named | Guard — `retry/bound-must-be-declared`: a constant whose name says it bounds attempts, retries or dry passes must be named in this file. The guard holds the half that can be read from the source; the run-summary half is still owed and is listed in `OUTSTANDING.md`. |
 | `PERS-05` | Never give up on a lead with no contact | Guard — `outreach/contactless-must-park-not-drop`. This used to name OUT-02's check. They are not the same break: OUT-02 is a storefront that was never given a channel, PERS-05 is a direct supplier actively set to `dropped` so the re-queue cannot see it. Sharing one id meant guarding either one would report both as held. |
 | `PERS-06` | No hidden caps on a worklist | Guard for the accidental cut — `src/lib/supabase-paging.ts` `selectAllPaged` and `src/lib/supabase/truncation-guard.ts`, `reads/client-must-guard-truncation`. Check owed — `reads/limit-must-report-remainder` for deliberate windows. |
 | `PERS-08` | The record of a failure is never proof of success | Guard — the reply-drafted check in `src/lib/tenkara-inbound.ts` excludes `unmatched_inbound_clarification` and `retireUnmatchedTriage` closes the case and the draft on a successful match; `replies/idempotency-must-exclude-triage-artefacts` fails the build if the check stops distinguishing them or the retirement is dropped. |
@@ -94,8 +97,10 @@ this ledger read as enforced.
 | `UI-01` | Never ship a native OS dropdown | Guard — `ui/no-native-select`. |
 | `UI-09` | A one-click write needs a way back | Guard — `src/lib/call-undo.ts` `undoLastAttemptPatch`, surfaced by `UndoCallAttempt` on both the open call task and the recently-closed table. Judgement for other one-click controls. |
 | `UI-10` | A withheld value shows its reason where it renders | Guard — the withheld-price cells in `src/components/staged-quote-row.tsx` and `src/components/direct-prices-on-file.tsx` (`priceNote`), which render the capture reason and carry it into the CSV. Judgement for other withheld fields. |
+| `UI-11` | A placeholder must never look like a value | Guard — `ui/no-numeric-placeholder-in-value-field`: a placeholder whose whole text is a number fails the build. A unit (`kg`), a format (`price per unit`) or an explicit `e.g.` stays legal, which is what the fix looks like. The three live breaks on the marketplace-pricing card — case size, case price, unit price — were fixed with the check. |
 | `SHIP-03` | A red build is silent, so build before you push | Guard — pre-push hook, on machines that ran `npm install`. |
 | `SHIP-04` | Rules are checked before the build | Guard. |
+| `SHIP-07` | Deploy and schema move together | Guard — `ship/migration-must-accompany-schema-read`: every table read through `.from(...)` and every `.rpc(...)` must be created by a migration in this repo. That is the granularity that can be read statically and the one that fails every call rather than one field; a missing *column* is still owed and is listed in `OUTSTANDING.md`. The check also fails if no migrations are in the corpus at all, since an empty schema would otherwise read as "nothing to check". |
 
 ## Audit (3)
 
@@ -105,15 +110,13 @@ this ledger read as enforced.
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
-## Check owed (26)
+## Check owed (21)
 
 | Rule | | Enforcement |
 |---|---|---|
 | `COMM-05` | Never speak as the human | Check owed — `comm/one-slack-sender`: a single send helper that accepts only the bot token, and no user token anywhere. |
-| `COMM-09` | Never announce as a bot in a crawler user agent | Check owed — `crawl/no-agent-identifying-user-agent`. |
 | `AUTO-06` | Cold outbound is never auto-sent | Check owed — `outreach/no-send-outside-operator-action`, plus the existing `COLD_OUTBOUND` flag. |
 | `AUTO-08` | Call tasks belong to call operators only | Check owed — `assignment/call-owner-must-be-call-operator`. Partially held today by the operator-type pool filter. |
-| `DATA-05` | Guessing a recipient is allowed; guessing content is not | Check owed — `contacts/guessed-combo-requires-own-domain-and-flag`: reject a guessed combo on a known platform host, and require the guessed flag. |
 | `DATA-06` | Only a same-run verification counts as a confirmed email | Check owed — `contacts/confidence-derived-from-source`: confidence is derived from the source, and a same-run provider verdict is persisted. |
 | `PRICING-01` | A shipping cost is a number or it is nothing | Check owed — `shipping/cost-must-be-numeric`. |
 | `PRICING-02` | Delivery cost is per pack tier when pack size changes it | Check owed — `shipping/cost-per-tier`. |
@@ -121,7 +124,6 @@ this ledger read as enforced.
 | `PRICING-05` | A delivery cost is never fabricated | Check owed — `shipping/no-fabricated-costs`. |
 | `PERS-02` | "Needs a human" is a display flag, never a queue exit | Check owed — `queues/flag-must-not-exit-queue`. |
 | `PERS-03` | A zero-result pass is never "this market is empty" | Check owed — `discovery/zero-must-not-be-terminal`, over one shared dry-pass helper. Honoured per source today. See `OUTSTANDING.md`. |
-| `PERS-04` | Retry limits are a spend control, and must be named | Check owed — `retry/bound-must-be-declared`: a bounded retry must name its bound here and in the run summary. |
 | `PERS-10` | Blocked is not empty | Check owed — `fetch/blocked-must-not-read-as-empty`: a non-2xx response may not reach a content parser, and the blocked reason is stored. See `OUTSTANDING.md`. |
 | `DISC-05` | A platform is never the supplier | Check owed — `discovery/platform-is-never-manufacturer`. |
 | `DISC-09` | A self-supplied material is not sourced | Check owed — `discovery/self-supplied-gate-must-fail-closed`: the gates are fail-open today. |
@@ -132,9 +134,7 @@ this ledger read as enforced.
 | `ORG-06` | Cross-client lookups are scoped at the query, not filtered after | Check owed — `orgs/name-lookup-must-scope-query`, plus an outstanding repair of the records already mislabelled. See `OUTSTANDING.md`. |
 | `UI-02` | Everything lives on the client's own tabs | Check owed — `ui/no-global-review-route`. |
 | `UI-06` | Flagged work needs a home | Check owed — `ui/flagged-set-must-have-a-surface`. See `OUTSTANDING.md`. |
-| `UI-11` | A placeholder must never look like a value | Check owed — `ui/no-numeric-placeholder-in-value-field`: a `placeholder` that parses as a number on an input bound to a stored value. See `OUTSTANDING.md`. |
 | `SHIP-02` | Never stage everything | Check owed — a pre-commit hook that refuses paths outside those explicitly staged. See `OUTSTANDING.md`. |
-| `SHIP-07` | Deploy and schema move together | Check owed — `ship/migration-must-accompany-schema-read`. |
 
 ## Audit owed (5)
 

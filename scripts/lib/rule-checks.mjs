@@ -14,7 +14,7 @@
 // Adding a rule here is cheap. If you are tempted to add an exemption instead,
 // that usually means the guard belongs in a shared module, not in a waiver.
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { UNCLASSIFIED, vocabularyHint } from "./enforcement-vocab.mjs";
 import { collectRules, renderLedger, renderSnapshot } from "./enforcement-ledger.mjs";
@@ -1174,6 +1174,183 @@ export function runChecks(files, rulesDir) {
             fix: "park the lead instead of setting status to dropped",
             where: outreach.path,
             line: "the no-contact branch still drops the lead",
+          });
+        }
+      }
+    }
+  }
+
+  // PERS-04. A bounded retry is allowed as a spend control and banned as a
+  // verdict, and the only way to tell which one a bound is, is to read the
+  // reasoning next to it. So every bound has to be named in the rules folder.
+  // Seven exist and none were named until 2026-08-20, which meant PERS-01 was
+  // being enforced against the ones anybody happened to notice.
+  //
+  // The name is the whole check. A bound that has to be written down in a file
+  // that is reviewed weekly is a bound somebody decided on; a fresh
+  // `MAX_ATTEMPTS = 2` in a new agent is the shape this rule exists to catch.
+  {
+    const rule = "retry/bound-must-be-declared";
+    const NAMES = /\b[A-Z][A-Z0-9_]*(?:ATTEMPTS?|RETRIES|RETRY|DRY_PASSE?S?)[A-Z0-9_]*\b/;
+    // Read the rules folder directly. It is not part of the scanned corpus,
+    // and treating an empty read as "nothing is declared" would fail every
+    // bound at once rather than saying the folder could not be found.
+    const declared = readdirSync(rulesDir)
+      .filter((n) => n.endsWith(".md"))
+      .map((n) => readFileSync(join(rulesDir, n), "utf8"))
+      .join("\n");
+    for (const f of files) {
+      if (!/^src\//.test(f.path)) continue;
+      codeLines(f).forEach((line, i) => {
+        // Only a declaration with a literal number is a bound. A comparison
+        // against one (`attempts >= MAX_ATTEMPTS`) is the bound being used.
+        const m = /(?:const|let|var)\s+([A-Z][A-Z0-9_]*)\s*(?::[^=]+)?=\s*\d/.exec(line);
+        if (!m || !NAMES.test(m[1])) return;
+        if (declared.includes(m[1])) return;
+        violations.push({
+          rule,
+          why: "an undeclared retry bound is indistinguishable from a verdict, which is the PERS-01 break",
+          fix: `name ${m[1]}, its value and why it is a spend control in rules/40-persistence.md under PERS-04`,
+          where: `${f.path}:${i + 1}`,
+          line: line.trim().slice(0, 120),
+        });
+      });
+    }
+  }
+
+  // SHIP-07. Deploy and schema move together. ENG-1036 went out reading a
+  // column that production did not have yet, and the failure surfaced as
+  // ordinary agent errors rather than as a missing migration.
+  //
+  // Table and function granularity is the part that can be read statically and
+  // is where the damage is: a whole table or RPC that does not exist yet fails
+  // every call, whereas a missing column usually fails one field. Both lists
+  // are complete as of 2026-08-20, so this is a ratchet.
+  {
+    const rule = "ship/migration-must-accompany-schema-read";
+    const sql = files
+      .filter((f) => /supabase\/migrations\/.*\.sql$/.test(f.path))
+      .map((f) => f.text)
+      .join("\n")
+      .toLowerCase();
+    if (!sql) {
+      violations.push({
+        rule,
+        why: "no migrations were read, so every table would look unmigrated and nothing would be checked",
+        fix: "run this check from the repo root so supabase/migrations is in the corpus",
+        where: "supabase/migrations",
+        line: "no migration files in the corpus",
+      });
+    } else {
+      const tables = new Set(
+        [...sql.matchAll(/create\s+table\s+(?:if\s+not\s+exists\s+)?(?:public\.)?([a-z_0-9]+)/g)].map((m) => m[1]),
+      );
+      const fns = new Set(
+        [...sql.matchAll(/create\s+(?:or\s+replace\s+)?function\s+(?:public\.)?([a-z_0-9]+)/g)].map((m) => m[1]),
+      );
+      for (const f of files) {
+        if (!/^src\/.*\.tsx?$/.test(f.path)) continue;
+        codeLines(f).forEach((line, i) => {
+          for (const [re, known, kind] of [
+            [/\.from\("([a-z_0-9]+)"\)/g, tables, "table"],
+            [/\.rpc\("([a-z_0-9]+)"/g, fns, "function"],
+          ]) {
+            for (const m of line.matchAll(re)) {
+              if (known.has(m[1])) continue;
+              violations.push({
+                rule,
+                why: `this reads a ${kind} that no migration in this repo creates, so the deploy would run against a schema that does not have it`,
+                fix: `add the migration that creates ${m[1]} in the same change, or correct the name`,
+                where: `${f.path}:${i + 1}`,
+                line: line.trim().slice(0, 120),
+              });
+            }
+          }
+        });
+      }
+    }
+  }
+
+  // COMM-09. A crawler that announces itself gets refused, and PERS-10 says a
+  // refusal is then filed as "this supplier publishes nothing". So the two
+  // rules compound: naming ourselves in the user agent turns our own politeness
+  // into bad data about the client's market. 1,751 residual leads were parsed
+  // from 403 bodies on 2026-08-05 for this reason.
+  //
+  // The check is on the literal, not on a shared constant, because there are
+  // six user agents in the fleet and consolidating them is its own change. What
+  // matters is that none of them says who we are.
+  forbid({
+    rule: "crawl/no-agent-identifying-user-agent",
+    why: "a self-identifying crawler is refused, and PERS-10 then files the refusal as an empty page",
+    fix: "use an ordinary browser user agent; if a supplier needs to allow us, arrange it out of band",
+    // The rule has to be able to name the thing it forbids.
+    allow: ["rules/10-communication.md"],
+    test: (l) =>
+      /user-?agent/i.test(l) &&
+      /(?:Tenkara|TackleBox|Sierra|ops-agents|[A-Za-z-]*(?:Bot|Crawler|Spider|Agent|Scout|Enrich))[A-Za-z-]*\/\d/.test(l),
+  });
+
+  // UI-11. A placeholder is what the operator sees when the field is empty, so
+  // one that reads as a number is indistinguishable from a stored value that
+  // happens to be greyed out. The marketplace pricing card had three: 25, 450.00
+  // and 18.00, on case size, case price and unit price.
+  //
+  // Anything that is ONLY digits is the break. A unit ("kg"), a format hint
+  // ("price per unit") or an "e.g." are the correct forms and must stay legal,
+  // which is why this matches the whole string rather than a leading digit.
+  forbid({
+    rule: "ui/no-numeric-placeholder-in-value-field",
+    why: "a numeric placeholder is read as a stored value, so an empty field looks like a filled one",
+    fix: "use the unit or the format instead: placeholder=\"kg\", \"price per unit\", \"e.g. 4\"",
+    test: (l, f) => f.path.endsWith(".tsx") && /placeholder=(?:"|\{")\s*[$€£]?\d[\d,]*(?:\.\d+)?\s*(?:"|"\})/.test(l),
+  });
+
+  // DATA-05. Guessing which mailbox a named person has is allowed. Guessing on
+  // a platform host is not: `first.last@alibaba.com` is not that supplier's
+  // address, it is somebody else's. And a guess that is not labelled a guess
+  // becomes a fact the moment it is stored.
+  //
+  // Both conditions live in one block in enrich.ts, which is the only place in
+  // the repo that builds an address out of a name and a domain. The check keeps
+  // them together: the failure mode is one of the two being moved or dropped in
+  // a cleanup, since each looks redundant next to the other.
+  {
+    const rule = "contacts/guessed-combo-requires-own-domain-and-flag";
+    const enrich = anchor("src/agents-runtime/agents/data-enrichment/enrich.ts", {
+      rule,
+      why: "this is the only file that synthesises an email address from a name and a domain",
+      fix: "restore src/agents-runtime/agents/data-enrichment/enrich.ts",
+    });
+    if (enrich) {
+      const text = codeLines(enrich).join("\n");
+      const guess = /contactSource\s*=\s*"pattern_guess"/.exec(text);
+      if (!guess) {
+        violations.push({
+          rule,
+          why: "the guessed-combo branch is what this rule is about, and it cannot be found to check",
+          fix: "keep the guess stamping contactSource = \"pattern_guess\" so it stays identifiable",
+          where: enrich.path,
+          line: "no pattern_guess branch found",
+        });
+      } else {
+        const around = text.slice(Math.max(0, guess.index - 1200), guess.index + 400);
+        if (!/!isAggregatorDomain\(/.test(around)) {
+          violations.push({
+            rule,
+            why: "guessing on a platform host invents an address at a company that is not the supplier",
+            fix: "keep the guess gated on !isAggregatorDomain(host)",
+            where: enrich.path,
+            line: "the guess branch is no longer gated on the host being the supplier's own",
+          });
+        }
+        if (!/contactConfidence\s*=\s*"guessed"/.test(around)) {
+          violations.push({
+            rule,
+            why: "a guess that is not labelled a guess is stored as a fact",
+            fix: "keep contactConfidence = \"guessed\" alongside the pattern_guess source",
+            where: enrich.path,
+            line: "the guess branch no longer stamps a guessed confidence",
           });
         }
       }

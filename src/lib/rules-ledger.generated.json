@@ -105,8 +105,8 @@
     {
       "id": "COMM-09",
       "title": "Never announce as a bot in a crawler user agent",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "AUTO-01",
@@ -201,8 +201,8 @@
     {
       "id": "DATA-05",
       "title": "Guessing a recipient is allowed; guessing content is not",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "DATA-06",
@@ -345,8 +345,8 @@
     {
       "id": "PERS-04",
       "title": "Retry limits are a spend control, and must be named",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "PERS-05",
@@ -669,8 +669,8 @@
     {
       "id": "UI-11",
       "title": "A placeholder must never look like a value",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "SHIP-01",
@@ -711,8 +711,8 @@
     {
       "id": "SHIP-07",
       "title": "Deploy and schema move together",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "SHIP-08",

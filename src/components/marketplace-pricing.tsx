@@ -364,7 +364,7 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
                   inputMode="decimal"
                   value={num(t.case_size)}
                   disabled={!canAct || pending}
-                  placeholder="25"
+                  placeholder="units per case"
                   onChange={(e) => setTier(i, { case_size: toNum(e.target.value) })}
                 />
               </TableCell>
@@ -401,7 +401,7 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
                   inputMode="decimal"
                   value={num(t.price)}
                   disabled={!canAct || pending}
-                  placeholder="450.00"
+                  placeholder="case price"
                   onChange={(e) => setTier(i, { price: toNum(e.target.value) })}
                 />
               </TableCell>
@@ -437,7 +437,7 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
                     inputMode="decimal"
                     value={num(t.unit_price)}
                     disabled={!canAct || pending}
-                    placeholder="18.00"
+                    placeholder="price per unit"
                     onChange={(e) => setTier(i, { unit_price: toNum(e.target.value) })}
                   />
                 )}

@@ -57,6 +57,11 @@ const read = (p, base) => ({ path: relative(base, p), text: readFileSync(p, "utf
 
 const files = walk(join(ROOT, "src")).map((p) => read(p, ROOT));
 
+// The schema is part of the corpus because SHIP-07 is about code and schema
+// moving together: a check that reads only the code can see a table being
+// queried but not whether anything creates it.
+files.push(...walk(join(ROOT, "supabase", "migrations"), /\.sql$/).map((p) => read(p, ROOT)));
+
 // Skills are Python and plain JS as well as TypeScript, and their SKILL.md is
 // where an agent is told which channel to watch, so markdown is code here too.
 let only = null;

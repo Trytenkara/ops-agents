@@ -110,6 +110,8 @@ Found on the marketplace-pricing card's per-unit field, which renders that
 placeholder whenever the price is null. Null is exactly when the operator most
 needs to see nothing.
 
-**Enforcement:** Check owed — `ui/no-numeric-placeholder-in-value-field`: a
-`placeholder` that parses as a number on an input bound to a stored value.
-See `OUTSTANDING.md`.
+**Enforcement:** Guard — `ui/no-numeric-placeholder-in-value-field`: a
+placeholder whose whole text is a number fails the build. A unit (`kg`), a
+format (`price per unit`) or an explicit `e.g.` stays legal, which is what the
+fix looks like. The three live breaks on the marketplace-pricing card — case
+size, case price, unit price — were fixed with the check.

@@ -79,9 +79,17 @@ Conditions, all required: a real name, the supplier's own domain (never a
 marketplace or platform host), and the payload flagged as guessed so an
 operator can see it.
 
-**Enforcement:** Check owed —
-`contacts/guessed-combo-requires-own-domain-and-flag`: reject a guessed
-combo on a known platform host, and require the guessed flag.
+**Enforcement:** Guard —
+`contacts/guessed-combo-requires-own-domain-and-flag`: the one branch in the
+repo that builds an address out of a name and a domain must keep both its
+`!isAggregatorDomain(...)` gate and its `guessed` confidence stamp. The two are
+checked together because each reads as redundant next to the other, so a cleanup
+removes one and leaves the rule half-true.
+
+That branch still uses a hand-copied host list rather than the shared one in
+`src/lib/aggregator-hosts.ts`, and the copy has drifted; the guess is therefore
+allowed on 15 platform hosts the shared list knows about. Listed in
+`OUTSTANDING.md`.
 
 ## DATA-06 — Only a same-run verification counts as a confirmed email
 

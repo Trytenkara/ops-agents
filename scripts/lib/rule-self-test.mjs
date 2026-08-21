@@ -489,6 +489,81 @@ const MUTATIONS = [
     label: "the outreach agent is deleted outright",
     mutate: drop("src/agents-runtime/agents/outreach/index.ts"),
   },
+  {
+    expect: "retry/bound-must-be-declared",
+    label: "a new agent bounds its retries and tells nobody",
+    mutate: fixture("src/__selftest__/retry.ts", `const MAX_RETRY_ROUNDS = 4;\n`),
+  },
+  {
+    expect: "retry/bound-must-be-declared",
+    label: "an existing bound is renamed, so the rules folder no longer names it",
+    mutate: rename(
+      "src/agents-runtime/agents/lead-creator/index.ts",
+      "SOURCEREADY_MAX_DRY_PASSES",
+      "SOURCEREADY_MAX_EMPTY_ATTEMPTS",
+    ),
+  },
+  {
+    expect: "ship/migration-must-accompany-schema-read",
+    label: "code reads a table no migration creates",
+    mutate: fixture(
+      "src/__selftest__/schema.ts",
+      `const rows = await admin.from("lead_contact_attempts").select("id");\n`,
+    ),
+  },
+  {
+    expect: "ship/migration-must-accompany-schema-read",
+    label: "code calls an RPC no migration creates",
+    mutate: fixture("src/__selftest__/rpc.ts", `await admin.rpc("requeue_dropped_contact_leads", {});\n`),
+  },
+  {
+    // The other direction, and the one ENG-1036 actually was: the read is
+    // fine and the schema is what is missing.
+    expect: "ship/migration-must-accompany-schema-read",
+    label: "the migration creating a live table is lost",
+    mutate: edit("supabase/migrations/0001_init.sql", (t) =>
+      t.replace("create table if not exists public.leads_in_flight", "create table if not exists public.leads_tmp"),
+    ),
+  },
+  {
+    expect: "crawl/no-agent-identifying-user-agent",
+    label: "a crawler introduces itself and is refused",
+    mutate: fixture(
+      "src/__selftest__/ua.ts",
+      `const headers = { "User-Agent": "Mozilla/5.0 (compatible; TenkaraSourcing/1.0; +https://ops.tenkara.ai)" };\n`,
+    ),
+  },
+  {
+    expect: "crawl/no-agent-identifying-user-agent",
+    label: "the name is a bare bot token rather than the company",
+    mutate: fixture("src/__selftest__/ua2.ts", `const h = { "user-agent": "PriceScout/2.1 (+contact)" };\n`),
+  },
+  {
+    expect: "ui/no-numeric-placeholder-in-value-field",
+    label: "an empty price field looks like a filled one",
+    mutate: fixture("src/__selftest__/Price.tsx", `export const P = () => <input placeholder="450.00" />;\n`),
+  },
+  {
+    expect: "contacts/guessed-combo-requires-own-domain-and-flag",
+    label: "the guess is no longer gated on the supplier's own domain",
+    mutate: rename(
+      "src/agents-runtime/agents/data-enrichment/enrich.ts",
+      "!isAggregatorDomain(",
+      "Boolean(",
+    ),
+  },
+  {
+    expect: "contacts/guessed-combo-requires-own-domain-and-flag",
+    label: "a guessed address is stored without being labelled a guess",
+    mutate: edit("src/agents-runtime/agents/data-enrichment/enrich.ts", (t) =>
+      t.replace('contactConfidence = "guessed"', 'contactConfidence = "low"'),
+    ),
+  },
+  {
+    expect: "contacts/guessed-combo-requires-own-domain-and-flag",
+    label: "the file the rule is anchored to is gone",
+    mutate: drop("src/agents-runtime/agents/data-enrichment/enrich.ts"),
+  },
 ];
 
 // The checks over rules/ itself read from disk, so they mutate a copy.

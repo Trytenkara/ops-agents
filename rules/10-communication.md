@@ -158,4 +158,10 @@ way, so the announcement bought nothing and cost the page. Fixed 2026-08-05 in
 `4dd2151`, and the rule applies to every fetcher in the fleet, not just the one
 that broke.
 
-**Enforcement:** Check owed — `crawl/no-agent-identifying-user-agent`.
+**Enforcement:** Guard — `crawl/no-agent-identifying-user-agent`: a user agent
+naming the company or a crawler token fails the build. It is a check on the
+literal rather than on a shared constant, because there are six user agents in
+the fleet and consolidating them is a separate change; what matters is that none
+of them says who we are. The skills folder is only scanned when `check-rules` is
+run with `--also`, so a skill's fetcher is covered by the daily skills pass, not
+by the deploy build.

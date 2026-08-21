@@ -57,12 +57,28 @@ one shared dry-pass helper. Honoured per source today. See `OUTSTANDING.md`.
 Where a source does bound retries, the bound must be stated in this folder and
 in the run summary. A silent bound is a break of PERS-01.
 
-Currently bounded: the SourceReady discovery path gives up after three
-consecutive dry passes. This is a deliberate credit control, recorded here so
-it is not mistaken for the rule.
+Every bound in the fleet, by name. Only the first is a bound across runs; the
+rest bound attempts inside one run, which is a spend control on a synchronous
+request and never a verdict about the work:
 
-**Enforcement:** Check owed — `retry/bound-must-be-declared`: a bounded
-retry must name its bound here and in the run summary.
+- `SOURCEREADY_MAX_DRY_PASSES` (3) — the discovery path stops re-querying a
+  material against SourceReady after three consecutive passes that returned
+  nothing. A deliberate credit control, and the only one here that can end a
+  line of enquiry.
+- `MAX_ATTEMPTS` in `src/lib/tenkara-readonly.ts` (3) — the Tenkara pooler
+  hangs intermittently and each failure rebuilds the pool.
+- `MAX_ATTEMPTS` in `src/lib/thread-tailor.ts` (3) — on exhaustion the draft is
+  flagged `needsTailorRetry` and picked up by a later run, so nothing stops.
+- `MAX_RETRIES` in `contact-read.ts` and `storefront-resolve.ts` (1 each) —
+  a per-lead model-call ceiling, so one stuck call cannot eat the lead budget.
+- `RATE_LIMIT_RETRIES` in `shopify-feed.ts` (2).
+- `FLAG_AFTER_ATTEMPTS` (3) — not a retry bound at all: it is how many times
+  `needs_review` is seen before a case is opened. Retries continue.
+
+**Enforcement:** Guard — `retry/bound-must-be-declared`: a constant whose name
+says it bounds attempts, retries or dry passes must be named in this file. The
+guard holds the half that can be read from the source; the run-summary half is
+still owed and is listed in `OUTSTANDING.md`.
 
 ## PERS-05 — Never give up on a lead with no contact
 

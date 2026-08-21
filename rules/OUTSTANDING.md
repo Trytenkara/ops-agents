@@ -511,14 +511,13 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | --- | --- |
 | META-04 | `meta/no-second-copy-of-a-shared-guard`, beyond the invariants already covered |
 | COMM-05 | `comm/one-slack-sender` — one send helper, bot token only, no user token anywhere |
-| COMM-09 | `crawl/no-agent-identifying-user-agent` |
 | AUTO-06 | `outreach/no-send-outside-operator-action` |
 | AUTO-08 | `assignment/call-owner-must-be-call-operator` |
-| DATA-05 | `contacts/guessed-combo-requires-own-domain-and-flag` |
+| DATA-05 | the shared host list. `contacts/guessed-combo-requires-own-domain-and-flag` shipped 2026-08-20 and holds the gate and the flag together. The gate still reads a hand-copied list in `enrich.ts` that has drifted 15 hosts behind `src/lib/aggregator-hosts.ts`, so a guess is allowed on those hosts. Merging the lists is a behaviour change for every other caller of the shared one, which is why it is not folded in here. |
 | DATA-06 | `contacts/confidence-derived-from-source` — see the P0 above |
 | PERS-02 | `queues/flag-must-not-exit-queue` |
 | PERS-03 | `discovery/zero-must-not-be-terminal` — see the P1 above |
-| PERS-04 | `retry/bound-must-be-declared` |
+| PERS-04 | the run-summary half. `retry/bound-must-be-declared` shipped 2026-08-20 and holds the rules-folder half: all seven bounds are now named under PERS-04 and an eighth fails the build. A bound must also appear in the run summary, which cannot be read from the source. |
 | PERS-06 | `reads/limit-must-report-remainder` — see the P1 above |
 | PERS-10 | `fetch/blocked-must-not-read-as-empty` — a non-2xx may not reach a content parser; the same shape as the P0 storefront drop above |
 | DISC-05 | `discovery/platform-is-never-manufacturer` |
@@ -530,9 +529,8 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | ORG-06 | `orgs/name-lookup-must-scope-query` — see the P2 above |
 | UI-02 | `ui/no-global-review-route` |
 | UI-06 | `ui/flagged-set-must-have-a-surface` — see the P0 above |
-| UI-11 | `ui/no-numeric-placeholder-in-value-field` — live on the marketplace-pricing card's per-unit field |
 | SHIP-02 | pre-commit hook refusing unstaged paths — see the P2 above |
-| SHIP-07 | `ship/migration-must-accompany-schema-read` |
+| SHIP-07 | column granularity. `ship/migration-must-accompany-schema-read` shipped 2026-08-20 over tables and RPCs; all 49 tables and 15 functions read today are created by a migration, so it is a ratchet. A read of a *column* that no migration adds is still invisible, and that is the shape ENG-1036 took. |
 | PRICING-01 | `shipping/cost-must-be-numeric` |
 | PRICING-02 | `shipping/cost-per-tier` |
 | PRICING-03 | `shipping/extraction-org-opt-in` |
