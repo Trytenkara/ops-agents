@@ -1957,6 +1957,104 @@ export function runChecks(files, rulesDir) {
     test: (l) => /xoxp-|SLACK_USER_TOKEN|slack_user_token/.test(l),
   });
 
+  // PERS-06. A deliberate cap is allowed; a cap nobody is told about is not.
+  //
+  // The truncation guard catches the accidental thousand-row cut and waves
+  // through anything carrying an explicit `.limit()`, on the grounds that the
+  // caller asked for it. That is the hole this closes: a window is invisible in
+  // exactly the same way an accident is, because nothing downstream is handed
+  // the remainder. "Found 25 stale leads" read as the whole backlog when it was
+  // the cap, four drain-caps reported no queue behind them, and a page showing
+  // 50 of 3,461 staged drafts looked like a page showing 50 drafts.
+  //
+  // PostgREST returns the true matching count on the SAME request as the capped
+  // page, so the fix costs nothing: `.select(..., { count: "exact" })`, then
+  // cappedRead in src/lib/capped-read.ts carries the remainder out with the
+  // rows. selectAllPaged is the other answer — read all of it and there is no
+  // remainder to report.
+  {
+    const WORK_TABLES = new Set([
+      "leads_in_flight",
+      "draft_references",
+      "staged_quotes",
+      "cases",
+      "supplier_profiles",
+      "supplier_documents",
+      "quote_profiles",
+      "marketplace_check_findings",
+      "supplier_do_not_contact",
+      "pending_approvals",
+    ]);
+    // A window that genuinely hides no work, keyed by file AND by the exact
+    // limit expression: rename the constant or move the file and the waiver
+    // stops applying, which is the point. Each one states why in a comment at
+    // the call site. Nothing is added here to silence a check — if work can be
+    // left behind, it gets counted instead.
+    const DECLARED_WINDOWS = new Set([
+      // A statistical prior over already-pulled leads. Every lead is still
+      // pulled on its own schedule; a wider sample moves a starting interval by
+      // at most a day.
+      "src/agents-runtime/agents/marketplace-validation/lead-price-pull.ts@HOST_PRIOR_SAMPLE",
+      // The discard history a re-draft is checked against. A remainder here
+      // would not be work waiting, it would be a discard that fell off the end
+      // and let the same email be staged twice, so the window is sized to make
+      // that impossible rather than reported.
+      "src/lib/draft-suppression.ts@DISCARD_WINDOW",
+    ]);
+    const REPORTS = /count:\s*["']exact["']|cappedRead|selectAllPaged|remainderNote|ShowingNote|windowed\(/;
+
+    for (const f of files) {
+      if (!f.path.startsWith("src/")) continue;
+      const lines = codeLines(f);
+      const text = lines.join("\n");
+
+      // Which table a query builder held onto, for the `let q = admin.from(...)`
+      // shape where the `.limit()` lands lines away from the `.from()`.
+      const varTable = new Map();
+      for (const m of text.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*(?:await\s+)?\w+\s*\.from\(\s*["'`](\w+)["'`]/g)) {
+        varTable.set(m[1], m[2]);
+      }
+
+      lines.forEach((line, i) => {
+        const lim = /\.limit\(\s*([A-Za-z0-9_.]+)\s*\)/.exec(line);
+        if (!lim) return;
+        const arg = lim[1];
+        // A one- or two-row lookup is an existence check, not a window.
+        if (/^\d+$/.test(arg) && Number(arg) < 3) return;
+
+        // The table this limit belongs to: nearest `.from()` above it in the
+        // same chain, or the table the builder variable was created from.
+        let table = null;
+        for (let j = i; j >= Math.max(0, i - 40); j--) {
+          const from = /\.from\(\s*["'`](\w+)["'`]/.exec(lines[j]);
+          if (from) {
+            table = from[1];
+            break;
+          }
+          if (j < i && /;\s*$/.test(lines[j])) break;
+        }
+        if (!table) {
+          const viaVar = /(?:await\s+)?(\w+)\s*\.limit\(/.exec(line);
+          if (viaVar) table = varTable.get(viaVar[1]) ?? null;
+        }
+        if (!table || !WORK_TABLES.has(table)) return;
+        if (DECLARED_WINDOWS.has(`${f.path}@${arg}`)) return;
+
+        // The remainder has to be visible near the read, not in principle.
+        const window = lines.slice(Math.max(0, i - 20), i + 20).join("\n");
+        if (REPORTS.test(window)) return;
+
+        violations.push({
+          rule: "reads/limit-must-report-remainder",
+          why: `a capped read of ${table} that never says what it left behind — the short list reads as the whole queue`,
+          fix: "add { count: \"exact\" } to the select and pass it through cappedRead (src/lib/capped-read.ts), or read all of it with selectAllPaged",
+          where: `${f.path}:${i + 1}`,
+          line: line.trim().slice(0, 120),
+        });
+      });
+    }
+  }
+
   // AUTO-06. Nothing in this codebase sends an email to a supplier. It writes a
   // draft into the email app and an operator presses send there, which is what
   // makes the guessed recipient in DATA-05 safe to stage at all.

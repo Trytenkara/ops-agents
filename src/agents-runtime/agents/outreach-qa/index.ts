@@ -1,5 +1,6 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { cappedRead } from "@/lib/capped-read";
 import { lintDraft, type Finding } from "./lint";
 
 // v1: a defensive lint over staged drafts. Operators may sit on a draft for
@@ -31,29 +32,38 @@ registerAgent({
     const minAge = new Date(Date.now() - GRACE_MINUTES * 60_000).toISOString();
     const maxAge = new Date(Date.now() - MAX_AGE_DAYS * 24 * 3600 * 1000).toISOString();
 
-    const { data: drafts, error: pullErr } = await admin
-      .from("draft_references")
-      .select("id, subject, body_preview, assigned_operator, metadata, status, created_at")
-      .eq("status", "staged")
-      .lt("created_at", minAge)
-      .gt("created_at", maxAge)
-      .order("created_at", { ascending: true })
-      .limit(MAX_DRAFTS_PER_RUN);
-
-    if (pullErr) {
-      await ctx.log(`Pull failed: ${pullErr.message}`, { level: "error", step: "pull" });
+    // PERS-06: "Linting 100 staged drafts" and "QA'd 100 drafts" both read as
+    // the whole window when 100 is the batch cap. The queue behind it is now
+    // part of both lines.
+    let draftRead;
+    try {
+      draftRead = await cappedRead<any>(
+        admin
+          .from("draft_references")
+          .select("id, subject, body_preview, assigned_operator, metadata, status, created_at", { count: "exact" })
+          .eq("status", "staged")
+          .lt("created_at", minAge)
+          .gt("created_at", maxAge)
+          .order("created_at", { ascending: true })
+          .limit(MAX_DRAFTS_PER_RUN),
+        MAX_DRAFTS_PER_RUN,
+        `staged drafts in the QA window (older than ${GRACE_MINUTES}m, younger than ${MAX_AGE_DAYS}d)`
+      );
+    } catch (e: any) {
+      await ctx.log(`Pull failed: ${e.message}`, { level: "error", step: "pull" });
       ctx.setStatus("failure");
-      ctx.setSummary(`Pull failed: ${pullErr.message}`);
+      ctx.setSummary(`Pull failed: ${e.message}`);
       return;
     }
-    if (!drafts || drafts.length === 0) {
+    const drafts = draftRead.rows;
+    if (drafts.length === 0) {
       ctx.setItemsProcessed(0);
       ctx.setStatus("success");
       ctx.setSummary("No staged drafts in QA window.");
       return;
     }
 
-    await ctx.log(`Linting ${drafts.length} staged drafts (older than ${GRACE_MINUTES}m, younger than ${MAX_AGE_DAYS}d)`, { step: "pull" });
+    await ctx.log(`Linting ${draftRead.note}`, { step: "pull", data: { backlog: draftRead.total, remainder: draftRead.remainder } });
 
     let clean = 0;
     let withWarnings = 0;
@@ -112,7 +122,7 @@ registerAgent({
       .map(([k, v]) => `${k}=${v}`)
       .join(", ");
     ctx.setSummary(
-      `QA'd ${drafts.length} drafts · ${clean} clean · ${withWarnings} warn · ${withErrors} error${codeStr ? ` (${codeStr})` : ""}${errored ? ` · ${errored} update failures` : ""}`
+      `QA'd ${drafts.length} of ${draftRead.total} drafts${draftRead.remainder ? ` (${draftRead.remainder} more waiting)` : ""} · ${clean} clean · ${withWarnings} warn · ${withErrors} error${codeStr ? ` (${codeStr})` : ""}${errored ? ` · ${errored} update failures` : ""}`
     );
   },
 });

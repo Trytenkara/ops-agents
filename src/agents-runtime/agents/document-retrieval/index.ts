@@ -6,6 +6,7 @@ import { retrieveDocumentsFromUrl } from "@/lib/document-retrieve";
 import { syncDocRequirementsMet } from "@/lib/document-requirements";
 import { orgScopedKey } from "@/lib/org-isolation";
 import { advanceDryPass, retryAfter } from "@/lib/dry-pass";
+import { cappedRead } from "@/lib/capped-read";
 
 // Agent 09 - Document Retrieval.
 //
@@ -29,6 +30,11 @@ import { advanceDryPass, retryAfter } from "@/lib/dry-pass";
 // what a browser escalation would have to solve.
 
 const MAX_PAGES_PER_RUN = 40;
+// How much of each candidate source one run reads. Windows, not totals: what
+// falls outside is counted and reported, never treated as absent (PERS-06).
+const QUOTE_PAGE_WINDOW = 2000;
+const LEAD_PAGE_WINDOW = 3000;
+const FINDING_PAGE_WINDOW = 1000;
 // Wall-clock guard. Each page is a fetch plus up to a few PDF downloads and an
 // extraction call, so the per-page cost varies a lot; stop cleanly instead of
 // being killed mid-write.
@@ -87,13 +93,23 @@ registerAgent({
       targets.push(t);
     };
 
-    const { data: quoteRows } = await admin
-      .from("quote_profiles")
-      .select("org_id, supplier_id, supplier_name, material_id, source_url")
-      .in("org_id", sourcingOrgIds)
-      .not("source_url", "is", null)
-      .limit(2000);
-    for (const r of (quoteRows ?? []) as any[]) {
+    // PERS-06: each of the three sources is windowed. A source row that never
+    // made it into `targets` is not a page that was "already checked" — it was
+    // never seen — so the count is carried to the queue line and the summary.
+    let sourceRemainder = 0;
+    const quotes = await cappedRead<any>(
+      admin
+        .from("quote_profiles")
+        .select("org_id, supplier_id, supplier_name, material_id, source_url", { count: "exact" })
+        .in("org_id", sourcingOrgIds)
+        .not("source_url", "is", null)
+        .order("id")
+        .limit(QUOTE_PAGE_WINDOW),
+      QUOTE_PAGE_WINDOW,
+      "quote pages"
+    );
+    sourceRemainder += quotes.remainder;
+    for (const r of quotes.rows as any[]) {
       push({
         pageUrl: r.source_url,
         orgId: r.org_id,
@@ -104,13 +120,19 @@ registerAgent({
       });
     }
 
-    const { data: leadRows } = await admin
-      .from("leads_in_flight")
-      .select("org_id, supplier_id, supplier_name, material_id, payload")
-      .in("org_id", sourcingOrgIds)
-      .eq("status", "active")
-      .limit(3000);
-    for (const r of (leadRows ?? []) as any[]) {
+    const leadPages = await cappedRead<any>(
+      admin
+        .from("leads_in_flight")
+        .select("org_id, supplier_id, supplier_name, material_id, payload", { count: "exact" })
+        .in("org_id", sourcingOrgIds)
+        .eq("status", "active")
+        .order("id")
+        .limit(LEAD_PAGE_WINDOW),
+      LEAD_PAGE_WINDOW,
+      "active leads"
+    );
+    sourceRemainder += leadPages.remainder;
+    for (const r of leadPages.rows as any[]) {
       const p = (r.payload ?? {}) as any;
       for (const url of [p.source_url, p.supplier_website]) {
         if (!url) continue;
@@ -129,14 +151,19 @@ registerAgent({
     // the pull web_searches its way to the real product page and records it here
     // rather than on the quote, so without this source the better page is the one
     // page we never scan for documents.
-    const { data: findingRows } = await admin
-      .from("marketplace_check_findings")
-      .select("org_id, supplier_id, supplier_name, material_id, source_url, created_at")
-      .in("org_id", sourcingOrgIds)
-      .not("source_url", "is", null)
-      .order("created_at", { ascending: false })
-      .limit(1000);
-    for (const r of (findingRows ?? []) as any[]) {
+    const findings = await cappedRead<any>(
+      admin
+        .from("marketplace_check_findings")
+        .select("org_id, supplier_id, supplier_name, material_id, source_url, created_at", { count: "exact" })
+        .in("org_id", sourcingOrgIds)
+        .not("source_url", "is", null)
+        .order("created_at", { ascending: false })
+        .limit(FINDING_PAGE_WINDOW),
+      FINDING_PAGE_WINDOW,
+      "priced pages"
+    );
+    sourceRemainder += findings.remainder;
+    for (const r of findings.rows as any[]) {
       push({
         pageUrl: r.source_url,
         orgId: r.org_id,
@@ -174,17 +201,23 @@ registerAgent({
 
     // Real clients before internal test orgs: this is a capped queue and the
     // cap is the scarce resource.
-    const queue = targets
+    const due = targets
       .filter((t) => !scannedRecently.has(orgScopedKey(t.orgId, pageHash(t.pageUrl))))
-      .sort((a, b) => Number(a.isInternal) - Number(b.isInternal))
-      .slice(0, MAX_PAGES_PER_RUN);
+      .sort((a, b) => Number(a.isInternal) - Number(b.isInternal));
+    const queue = due.slice(0, MAX_PAGES_PER_RUN);
+    const queueRemainder = due.length - queue.length;
 
+    const outsideWindow =
+      (queueRemainder ? ` · ${queueRemainder} due page(s) waiting behind the ${MAX_PAGES_PER_RUN}-page cap` : "") +
+      (sourceRemainder ? ` · ${sourceRemainder} source row(s) outside this run's read windows` : "");
     await ctx.log(
-      `${targets.length} candidate page(s), ${scannedRecently.size} checked within ${RESCAN_AFTER_DAYS}d, scanning ${queue.length}`,
-      { step: "queue" }
+      `${targets.length} candidate page(s), ${scannedRecently.size} checked within ${RESCAN_AFTER_DAYS}d, scanning ${queue.length}${outsideWindow}`,
+      { step: "queue", data: { source_remainder: sourceRemainder, due: due.length, queue_remainder: queueRemainder } }
     );
     if (!queue.length) {
-      ctx.setSummary(`No pages due. ${targets.length} candidate page(s) all checked within ${RESCAN_AFTER_DAYS} days.`);
+      ctx.setSummary(
+        `No pages due. ${targets.length} candidate page(s) all checked within ${RESCAN_AFTER_DAYS} days.${outsideWindow}`
+      );
       return;
     }
 
@@ -310,7 +343,8 @@ registerAgent({
     ctx.setSummary(
       `${docsStored} document(s) from ${pagesWithDocs}/${pagesScanned} page(s)` +
         (docsHealed ? `; ${docsHealed} existing record(s) given their file` : "") +
-        (blocked ? `; ${blocked} page(s) blocked (403/429)` : "")
+        (blocked ? `; ${blocked} page(s) blocked (403/429)` : "") +
+        outsideWindow
     );
     ctx.setStatus(docsStored > 0 || docsHealed > 0 || pagesScanned > 0 ? "success" : "partial");
   },

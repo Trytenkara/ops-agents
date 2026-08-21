@@ -52,6 +52,8 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ case_id: data.id });
 }
 
+const PAGE_SIZE = 50;
+
 export async function GET(request: NextRequest) {
   const agent = await authenticateAgent(request);
   if (!agent) return unauthorized();
@@ -61,10 +63,15 @@ export async function GET(request: NextRequest) {
   const status = url.searchParams.get("status") ?? "open";
 
   const admin = createAdminClient();
-  let q = admin.from("cases").select("id, type, status, supplier_id, material_id, created_at").eq("status", status);
+  let q = admin
+    .from("cases")
+    .select("id, type, status, supplier_id, material_id, created_at", { count: "exact" })
+    .eq("status", status);
   if (supplier_id) q = q.eq("supplier_id", supplier_id);
   if (material_id) q = q.eq("material_id", material_id);
-  const { data, error } = await q.limit(50);
+  // PERS-06: a page, said out loud.
+  const { data, error, count } = await q.order("created_at", { ascending: false }).order("id").limit(PAGE_SIZE);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ cases: data ?? [] });
+  const cases = data ?? [];
+  return NextResponse.json({ cases, total: count ?? cases.length, remainder: Math.max((count ?? cases.length) - cases.length, 0) });
 }

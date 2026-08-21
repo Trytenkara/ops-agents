@@ -1,5 +1,6 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { cappedRead } from "@/lib/capped-read";
 import { getOrgAssignmentContext, spreadOwnerId, orgAutoKey, type AssignmentContext } from "@/lib/operator-assignment";
 import { classifyClient } from "../quote-revalidation/config";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
@@ -96,21 +97,27 @@ registerAgent({
     // ready_for_approval for a duplicate-record question still needs its
     // material asked about. ready_for_outreach is excluded because a draft for
     // it already exists.
-    const { data: leadRows, error: fetchErr } = await admin
-      .from("leads_in_flight")
-      .select(
-        "id, org_id, supplier_id, supplier_name, material_id, material_name, stage, confidence_score, assigned_operator_id, assigned_operator_at, payload"
-      )
-      .eq("status", "active")
-      .in("org_id", activeOrgIds)
-      .neq("stage", "ready_for_outreach")
-      .eq("payload->>contact_source", "manual_operator")
-      .is("payload->operator_email_outreach", null)
-      .order("created_at", { ascending: true })
-      .limit(MAX_LEADS_PER_RUN);
-    if (fetchErr) throw new Error(`Lead fetch failed: ${fetchErr.message}`);
+    // PERS-06: the run already says when the TIME budget bit, but said nothing
+    // when the 120-lead cap did, so a queue deeper than one run looked drained.
+    const leadRead = await cappedRead<any>(
+      admin
+        .from("leads_in_flight")
+        .select(
+          "id, org_id, supplier_id, supplier_name, material_id, material_name, stage, confidence_score, assigned_operator_id, assigned_operator_at, payload",
+          { count: "exact" }
+        )
+        .eq("status", "active")
+        .in("org_id", activeOrgIds)
+        .neq("stage", "ready_for_outreach")
+        .eq("payload->>contact_source", "manual_operator")
+        .is("payload->operator_email_outreach", null)
+        .order("created_at", { ascending: true })
+        .limit(MAX_LEADS_PER_RUN),
+      MAX_LEADS_PER_RUN,
+      "operator-added emails awaiting an inquiry"
+    );
 
-    const leads = (leadRows ?? []) as any[];
+    const leads = leadRead.rows;
     if (!leads.length) {
       ctx.setSummary("No operator-added emails are waiting on an inquiry.");
       ctx.setStatus("success");
@@ -378,7 +385,7 @@ registerAgent({
     ctx.setItemsProcessed(ccdOntoThread + coldStaged);
     ctx.setStatus(errors > 0 && ccdOntoThread + coldStaged === 0 ? "failure" : errors > 0 ? "partial" : "success");
     ctx.setSummary(
-      `Operator-added emails: ${coldStaged} first-contact draft${coldStaged === 1 ? "" : "s"} · ${ccdOntoThread} CC'd onto an open thread · ${alreadyReached} already reached · ${skipped} skipped${errors ? ` · ${errors} errors` : ""}${ranOutOfTime ? ` · ${ranOutOfTime} left for the next run (time budget)` : ""}`
+      `Operator-added emails: ${coldStaged} first-contact draft${coldStaged === 1 ? "" : "s"} · ${ccdOntoThread} CC'd onto an open thread · ${alreadyReached} already reached · ${skipped} skipped${errors ? ` · ${errors} errors` : ""}${ranOutOfTime ? ` · ${ranOutOfTime} left for the next run (time budget)` : ""}${leadRead.remainder ? ` · ${leadRead.remainder} more waiting (batch cap)` : ""}`
     );
   },
 });

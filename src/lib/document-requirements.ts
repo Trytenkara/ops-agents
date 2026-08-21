@@ -1,5 +1,6 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { getClientRequirements } from "@/lib/tenkara-requirements";
+import { selectAllPaged } from "@/lib/supabase-paging";
 
 // Tick a quote profile's pre-order document requirements from the documents we
 // actually hold. Those checkboxes were operator-toggled and nothing wrote them,
@@ -56,15 +57,22 @@ export async function syncDocRequirementsMet(admin: Admin, orgId: string): Promi
   // supplier_issued=false is a third-party reference sheet scraped off the web.
   // It is real chemistry but it is not this vendor issuing a document, so it
   // cannot satisfy a client requirement. Null (every pre-0078 row) counts.
-  const { data: docs } = await admin
-    .from("supplier_documents")
-    .select("supplier_id, supplier_name, material_id, doc_type, supplier_issued")
-    .eq("org_id", orgId)
-    .in("doc_type", Object.keys(DOC_TYPE_TO_MET))
-    .limit(5000);
+  // PERS-06: this is a completeness check, so a window is the wrong shape for
+  // it entirely — a document past the cap is invisible and the supplier is
+  // re-asked for a CoA we already hold. Both sides page to the end, over the
+  // primary key so the order is stable between pages.
+  const docs = await selectAllPaged<any>((from, to) =>
+    admin
+      .from("supplier_documents")
+      .select("supplier_id, supplier_name, material_id, doc_type, supplier_issued")
+      .eq("org_id", orgId)
+      .in("doc_type", Object.keys(DOC_TYPE_TO_MET))
+      .order("id")
+      .range(from, to)
+  );
 
   const held = new Map<string, Set<string>>();
-  for (const d of (docs ?? []) as any[]) {
+  for (const d of docs) {
     if (d.supplier_issued === false) continue;
     const k = matchKey(d);
     if (!k) continue;
@@ -73,16 +81,19 @@ export async function syncDocRequirementsMet(admin: Admin, orgId: string): Promi
   }
   if (!held.size) return { updated: 0 };
 
-  const { data: profiles } = await admin
-    .from("quote_profiles")
-    .select(
-      "id, supplier_id, supplier_name, material_id, preorder_coa_required, preorder_sds_required, preorder_tds_required, preorder_coa_met, preorder_sds_met, preorder_tds_met"
-    )
-    .eq("org_id", orgId)
-    .limit(5000);
+  const profiles = await selectAllPaged<any>((from, to) =>
+    admin
+      .from("quote_profiles")
+      .select(
+        "id, supplier_id, supplier_name, material_id, preorder_coa_required, preorder_sds_required, preorder_tds_required, preorder_coa_met, preorder_sds_met, preorder_tds_met"
+      )
+      .eq("org_id", orgId)
+      .order("id")
+      .range(from, to)
+  );
 
   let updated = 0;
-  for (const p of (profiles ?? []) as any[]) {
+  for (const p of profiles) {
     const pKey = matchKey(p);
     const types = pKey ? held.get(pKey) : undefined;
     if (!types) continue;

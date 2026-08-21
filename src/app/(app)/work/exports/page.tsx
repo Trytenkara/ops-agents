@@ -7,12 +7,16 @@ import { Badge } from "@/components/ui/badge";
 import { relativeTime } from "@/lib/utils";
 import { getAssignedOrgIds } from "@/lib/org-access";
 import { ListPageHeader } from "@/components/list-page-header";
+import { ShowingNote } from "@/components/showing-note";
 
 export const dynamic = "force-dynamic";
 
 // Cross-org rollup of every CSV-bound approval in the last 30 days.
 // Lead Operators and Admins use this when they need to re-download a CSV or
 // see what's stuck waiting for Tenkara upload.
+// PERS-06: a window, reported when it bites.
+const EXPORT_WINDOW = 200;
+
 export default async function ExportsRollup() {
   const session = (await getSession())!;
   if (!hasAnyRole(session, ["admin", "ops_lead", "monitor"])) redirect("/work");
@@ -23,13 +27,15 @@ export default async function ExportsRollup() {
   const admin = createAdminClient();
   let q = admin
     .from("pending_approvals")
-    .select("id, org_id, type, status, requested_at, decided_at, payload, orgs(slug, name), agents(name)")
+    .select("id, org_id, type, status, requested_at, decided_at, payload, orgs(slug, name), agents(name)", {
+      count: "exact",
+    })
     .in("status", ["approved", "ready_for_export", "exported"])
     .gte("requested_at", since)
     .order("requested_at", { ascending: false })
-    .limit(200);
+    .limit(EXPORT_WINDOW);
   if (assigned) q = q.in("org_id", assigned);
-  const { data: rows } = await q;
+  const { data: rows, count } = await q;
 
   return (
     <div className="space-y-4">
@@ -43,6 +49,8 @@ export default async function ExportsRollup() {
           </>
         }
       />
+
+      <ShowingNote shown={rows?.length ?? 0} total={count} noun="exports in the last 30 days" />
       <Table>
         <TableHeader>
           <TableRow>

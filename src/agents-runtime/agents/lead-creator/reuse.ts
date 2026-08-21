@@ -10,6 +10,9 @@ import { isAggregatorDomain } from "../data-enrichment/enrich";
 // Generic connectors only. Chemistry words like "acid" or "seed" stay
 // significant: dropping them would let "Citric Acid" token-match "Citric".
 const STOPWORDS = new Set(["the", "and", "with", "from"]);
+// Newest N token matches considered per material. A window, and the run says so
+// when it bites (PERS-06).
+const TOKEN_MATCH_WINDOW = 200;
 
 type SourceRow = {
   supplier_name: string | null;
@@ -112,17 +115,28 @@ export async function runDbReuse(
   );
   let tokenRows: SourceRow[] = [];
   if (tokens.length) {
-    const { data, error } = await admin
+    const { data, error, count } = await admin
       .from("leads_in_flight")
-      .select("supplier_name, supplier_id, material_name, payload")
+      .select("supplier_name, supplier_id, material_name, payload", { count: "exact" })
       .eq("status", "active")
       .neq("material_id", material.id)
       .or(tokens.map((t) => `material_name.ilike.*${t}*`).join(","))
-      .limit(200);
+      .order("created_at", { ascending: false })
+      .order("id")
+      .limit(TOKEN_MATCH_WINDOW);
     if (error) {
       await log(`DB reuse token query failed (non-fatal): ${error.message}`, { level: "warn" });
     } else {
       tokenRows = (data ?? []) as SourceRow[];
+      // PERS-06: the window is a cost control, not a verdict that these are the
+      // only near-material suppliers on file.
+      const left = Math.max((count ?? tokenRows.length) - tokenRows.length, 0);
+      if (left) {
+        await log(
+          `Reuse read the ${tokenRows.length} newest of ${count} token matches for "${matLabel}" - ${left} more not considered this pass.`,
+          { level: "warn" }
+        );
+      }
     }
   }
 

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { deleteTenkaraDrafts } from "@/lib/tenkara";
+import { selectAllPaged } from "@/lib/supabase-paging";
 
 // One home for "the address we mail this supplier on just changed".
 //
@@ -133,14 +134,20 @@ export async function applyContactChange(
   if (changed && next) delete payload.operator_email_outreach;
 
   if (changed && args.lead.org_id) {
-    const { data: refs } = await admin
-      .from("draft_references")
-      .select("id, draft_id, thread_id, status, metadata, email_client")
-      .eq("org_id", args.lead.org_id)
-      .in("status", ["staged", "reviewed", "blocked", "sent", "linked"])
-      .limit(2000);
+    // PERS-06: the address being corrected is matched in JS across every live
+    // draft for the org, so a 2,000-row window meant a stale address on draft
+    // 2,001 was simply never corrected.
+    const refs = await selectAllPaged<any>((from, to) =>
+      admin
+        .from("draft_references")
+        .select("id, draft_id, thread_id, status, metadata, email_client")
+        .eq("org_id", args.lead.org_id!)
+        .in("status", ["staged", "reviewed", "blocked", "sent", "linked"])
+        .order("id")
+        .range(from, to)
+    );
 
-    for (const ref of (refs ?? []) as any[]) {
+    for (const ref of refs) {
       const to = norm(ref.metadata?.supplier_contact_email);
       const cc = Array.isArray(ref.metadata?.cc_contacts) ? ref.metadata.cc_contacts.map(norm) : [];
       if (to !== previous && !cc.includes(previous)) continue;

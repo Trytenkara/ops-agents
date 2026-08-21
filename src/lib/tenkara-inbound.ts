@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { selectAllPaged } from "@/lib/supabase-paging";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { stageDraft, threadCcContacts } from "@/lib/draft-staging";
 import { composeReply } from "@/lib/reply-drafter";
@@ -139,14 +140,19 @@ async function resolveInboundOrg(admin: Admin, msg: InboundMessage): Promise<{ o
   // is the ORG-06 fault, not a fix for this one.
   let threadResolved = false;
   if (!orgId) {
-    const { data, error } = await admin
-      .from("draft_references")
-      .select("org_id")
-      .eq("thread_id", msg.conversation_id)
-      .not("org_id", "is", null)
-      .limit(200);
-    if (error) throw new Error(`org lookup by conversation failed: ${error.message}`);
-    const owners = new Set((data ?? []).map((r: any) => r.org_id));
+    // PERS-06: every reference on the conversation. A window here does not lose
+    // rows quietly, it changes the answer: a second client whose reference fell
+    // outside it turns an ambiguous thread into a confident wrong owner.
+    const data = await selectAllPaged<any>((fromRow, toRow) =>
+      admin
+        .from("draft_references")
+        .select("org_id")
+        .eq("thread_id", msg.conversation_id)
+        .not("org_id", "is", null)
+        .order("id")
+        .range(fromRow, toRow)
+    );
+    const owners = new Set(data.map((r: any) => r.org_id));
     if (owners.size === 1) {
       orgId = [...owners][0];
       threadResolved = true;
@@ -431,13 +437,19 @@ export async function handleInboundReply(
     const bouncedAddress = String(refMeta.supplier_contact_email ?? "").trim().toLowerCase();
     const permanent = isPermanentBounce(msg.subject ?? null, msg.body_text ?? null);
     if (bouncedAddress && ref.org_id && permanent) {
-      const { data: carrying } = await admin
-        .from("leads_in_flight")
-        .select("id, payload")
-        .eq("status", "active")
-        .eq("payload->>supplier_contact_email", bouncedAddress)
-        .limit(500);
-      for (const row of (carrying ?? []) as any[]) {
+      // PERS-06: a dead mailbox is dead on every lead carrying it. One left
+      // outside a window is written to again on the next outreach pass and
+      // bounces again.
+      const carrying = await selectAllPaged<any>((fromRow, toRow) =>
+        admin
+          .from("leads_in_flight")
+          .select("id, payload")
+          .eq("status", "active")
+          .eq("payload->>supplier_contact_email", bouncedAddress)
+          .order("id")
+          .range(fromRow, toRow)
+      );
+      for (const row of carrying as any[]) {
         await admin
           .from("leads_in_flight")
           .update({ payload: retireInPayload(row.payload ?? {}, bouncedAddress, "bounced") })
@@ -970,17 +982,25 @@ export async function handleInboundReply(
     const supplierKey = (value: string | null | undefined) => (value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "").trim();
     const wantSupplierKey = supplierKey(replySupplierName);
     if (hasQuoteDetails && ref.org_id && ref.material_id && (ref.supplier_id || wantSupplierKey)) {
-      const { data: quoteRows, error: quoteReadError } = await admin
-        .from("staged_quotes")
-        .select("id, raw_extract, case_dimensions, dim_source, supplier_id, supplier_name, price, case_size, unit_of_measurement")
-        .eq("org_id", ref.org_id)
-        .eq("material_id", ref.material_id)
-        .not("status", "eq", "dismissed")
-        .order("created_at", { ascending: false })
-        .limit(20);
-      if (quoteReadError) throw quoteReadError;
+      // PERS-06: this used to read the twenty newest quotes for the material and
+      // look for the supplier inside that window. A supplier whose quote was
+      // older than twenty others simply did not match, and the miss fell
+      // through to the insert below — so the reply created a duplicate quote
+      // row instead of filling in the one we already had. The population per
+      // org and material is small; read all of it, then pick the newest match.
+      const quoteRows = await selectAllPaged<any>((fromRow, toRow) =>
+        admin
+          .from("staged_quotes")
+          .select("id, created_at, raw_extract, case_dimensions, dim_source, supplier_id, supplier_name, price, case_size, unit_of_measurement")
+          .eq("org_id", ref.org_id!)
+          .eq("material_id", ref.material_id!)
+          .not("status", "eq", "dismissed")
+          .order("id")
+          .range(fromRow, toRow)
+      );
+      quoteRows.sort((a: any, b: any) => String(b.created_at ?? "").localeCompare(String(a.created_at ?? "")));
       let quote =
-        (quoteRows ?? []).find(
+        quoteRows.find(
           (q: any) =>
             (!!ref.supplier_id && q.supplier_id === ref.supplier_id) ||
             (!!wantSupplierKey && supplierKey(q.supplier_name) === wantSupplierKey)

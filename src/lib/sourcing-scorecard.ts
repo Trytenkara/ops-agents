@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getClientBenchmark } from "@/lib/price-pulse";
+import { selectAllPaged } from "@/lib/supabase-paging";
 
 // Live sourcing scorecard (#1 — benchmark at intake). For an active sourcing
 // exercise, take the in-flight sourced quotes (staged_quotes, written by the
@@ -65,15 +66,19 @@ export async function buildSourcingScorecard(
   opts?: { statuses?: string[] }
 ): Promise<SourcingScorecard> {
   const statuses = opts?.statuses ?? ["pending_review"];
-  const { data } = await admin
-    .from("staged_quotes")
-    .select(
-      "material_id, material_name, supplier_name, price, case_size, unit_of_measurement, unit_price, currency"
-    )
-    .eq("org_id", orgId)
-    .in("status", statuses)
-    .limit(2000);
-  const rows = (data ?? []) as StagedQuoteRow[];
+  // PERS-06: this computes averages and coverage, so a window does not merely
+  // hide rows, it changes the numbers on the scorecard without saying so.
+  const rows = (await selectAllPaged<any>((from, to) =>
+    admin
+      .from("staged_quotes")
+      .select(
+        "material_id, material_name, supplier_name, price, case_size, unit_of_measurement, unit_price, currency"
+      )
+      .eq("org_id", orgId)
+      .in("status", statuses)
+      .order("id")
+      .range(from, to)
+  )) as StagedQuoteRow[];
 
   // Benchmark map: client's current price + market avg, keyed by material+unit.
   // When the client has no current-supply price, keep client=null so the line

@@ -11,7 +11,7 @@ import { relativeTime } from "@/lib/utils";
 const STAGE_INDEX: Record<string, number> = Object.fromEntries(PIPELINE_STAGES.map((s, i) => [s.key, i]));
 
 export function PricingPipelineTable({ data, emptyReason, slug = "all" }: { data: PipelineData; emptyReason?: string; slug?: string }) {
-  const { threads, counts } = data;
+  const { threads, counts, windowNote } = data;
   const { filtered, controls } = useListFilter(threads, {
     searchText: (t: PipelineThread) => `${t.supplier} ${t.materials.join(" ")}`,
     searchPlaceholder: "supplier or material…",
@@ -30,6 +30,9 @@ export function PricingPipelineTable({ data, emptyReason, slug = "all" }: { data
 
   return (
     <div className="space-y-4">
+      {windowNote ? (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">{windowNote}</div>
+      ) : null}
       <div className="flex flex-wrap gap-2">
         {PIPELINE_STAGES.map((s) => (
           <div key={s.key} className="rounded-md border px-3 py-2 text-sm">

@@ -10,6 +10,7 @@ import { DensityToggle } from "@/components/density-toggle";
 import { existingQuotesForOrg, type ExistingQuote } from "@/agents-runtime/agents/lead-creator/sql";
 import { resolveMaterialGradeSpecs, type MaterialGradeSpec } from "@/lib/tenkara-names";
 import Link from "next/link";
+import { ShowingNote } from "@/components/showing-note";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,9 @@ function gradeRank(quoteGrade: string | null, spec: MaterialGradeSpec | undefine
   return named.some((t) => t.every((tok) => stated.has(tok))) ? 0 : 2;
 }
 
+// PERS-06: a window over the client's collected quotes, reported when it bites.
+const QUOTE_WINDOW = 1000;
+
 export default async function OrgMaterialsPage({ params }: { params: { slug: string } }) {
   const session = await getSession();
   const admin = createAdminClient();
@@ -49,12 +53,18 @@ export default async function OrgMaterialsPage({ params }: { params: { slug: str
 
   // Collected quotes per material (Quotes tab folded in here): each carries its
   // own approval status (pending_review / approved / dismissed).
-  const { data: quoteRows } = await admin
+  // PERS-06: the newest slice of the client's collected quotes. When it bites,
+  // a material's drill-down is missing its older quotes and the page has to say
+  // so rather than present a short list as the whole record.
+  const { data: quoteRows, count: quoteTotal } = await admin
     .from("staged_quotes")
-    .select("id, material_id, supplier_name, price, case_size, unit_of_measurement, unit_price, grade, status, confidence, created_at")
+    .select(
+      "id, material_id, supplier_name, price, case_size, unit_of_measurement, unit_price, grade, status, confidence, created_at",
+      { count: "exact" }
+    )
     .eq("org_id", org.id)
     .order("created_at", { ascending: false })
-    .limit(1000);
+    .limit(QUOTE_WINDOW);
   const quotesByMaterial: Record<string, any[]> = {};
   for (const q of quoteRows ?? []) {
     if (!q.material_id) continue;
@@ -120,6 +130,13 @@ export default async function OrgMaterialsPage({ params }: { params: { slug: str
         </div>
         <span className="text-muted-foreground group-hover:text-foreground" aria-hidden>→</span>
       </Link>
+
+      <ShowingNote
+        shown={quoteRows?.length ?? 0}
+        total={quoteTotal}
+        noun="collected quotes"
+        hint="Older quotes are not in the per-material drill-downs below."
+      />
 
       <MaterialsPanel
         orgId={org.id}

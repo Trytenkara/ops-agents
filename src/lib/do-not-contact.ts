@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSourcingExclusions, hostOf, normalizeCompanyName } from "@/lib/tenkara-sourcing-exclusions";
+import { selectAllPaged } from "@/lib/supabase-paging";
 
 // "Never contact this company again for this client" has two authors:
 //
@@ -64,13 +65,23 @@ export async function isDoNotContact(
   // name is the same company when it later arrives carrying a supplier id.
   // Matched in JS rather than in the query, because company names carry commas
   // and brackets, which are the separators in a PostgREST or-filter.
-  const { data, error } = await admin
-    .from("supplier_do_not_contact")
-    .select("supplier_id, name_key, host, email, reason")
-    .eq("org_id", q.orgId)
-    .is("removed_at", null)
-    .limit(1000);
-  if (!error && data?.length) {
+  // PERS-06: a do-not-contact list is the one read where a window is never
+  // acceptable — the 1,001st entry would simply be contacted, and at exactly
+  // the PostgREST page size an accidental truncation would look identical to
+  // the cap. Paged to the end over the primary key.
+  const data = await selectAllPaged<any>((from, to) =>
+    admin
+      .from("supplier_do_not_contact")
+      .select("supplier_id, name_key, host, email, reason")
+      .eq("org_id", q.orgId!)
+      .is("removed_at", null)
+      .order("id")
+      .range(from, to)
+  ).catch((e: any) => {
+    console.warn(`[do-not-contact] ops list read failed for org ${q.orgId}: ${e?.message ?? e}`);
+    return null;
+  });
+  if (data?.length) {
     for (const row of data as any[]) {
       const match =
         (supplierId && row.supplier_id && String(row.supplier_id) === supplierId) ||

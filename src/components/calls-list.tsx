@@ -611,6 +611,7 @@ function LogStrayCallForm({ orgId, onCreated }: { orgId: string; onCreated: () =
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [options, setOptions] = useState<LeadOption[]>([]);
+  const [moreCount, setMoreCount] = useState(0);
   const [pickedLeadId, setPickedLeadId] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [err, setErr] = useState<string | null>(null);
@@ -620,7 +621,10 @@ function LogStrayCallForm({ orgId, onCreated }: { orgId: string; onCreated: () =
     if (!open) return;
     const handle = setTimeout(() => {
       searchOrgLeadsForCall(orgId, query).then((r) => {
-        if (r.ok) setOptions(r.leads);
+        if (r.ok) {
+          setOptions(r.leads);
+          setMoreCount(r.moreCount);
+        }
       });
     }, 200);
     return () => clearTimeout(handle);
@@ -630,6 +634,7 @@ function LogStrayCallForm({ orgId, onCreated }: { orgId: string; onCreated: () =
     setOpen(false);
     setQuery("");
     setOptions([]);
+    setMoreCount(0);
     setPickedLeadId(null);
     setReason("");
     setErr(null);
@@ -683,6 +688,11 @@ function LogStrayCallForm({ orgId, onCreated }: { orgId: string; onCreated: () =
                   {o.materialName && <span className="text-muted-foreground"> — {o.materialName}</span>}
                 </button>
               ))}
+              {moreCount > 0 && (
+                <p className="px-2 py-1 text-xs text-muted-foreground">
+                  {moreCount} more supplier{moreCount === 1 ? "" : "s"} match — keep typing to narrow it down.
+                </p>
+              )}
             </div>
           )}
         </div>

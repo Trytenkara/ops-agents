@@ -12,6 +12,23 @@ import { resolveSupplierNames, resolveMaterialNames } from "@/lib/tenkara-names"
 
 const LEAD_STAGES = ["raw", "enriched", "ready_for_outreach", "ready_for_approval", "terminal"] as const;
 
+// Rows one answer carries. The assistant is answering a person, and "you have 25
+// open cases" when there are 300 is a wrong answer, not a short one, so the true
+// count and the shortfall travel with the rows (PERS-06).
+const ANSWER_WINDOW = 25;
+
+function windowed(shown: number, total: number | null) {
+  const count = total ?? shown;
+  const left = Math.max(count - shown, 0);
+  return {
+    count,
+    shown,
+    ...(left
+      ? { note: `Showing the ${shown} most recent of ${count}; ${left} more are not listed here.` }
+      : {}),
+  };
+}
+
 export const TOOL_DEFS: Anthropic.Tool[] = [
   {
     name: "list_my_orgs",
@@ -75,20 +92,20 @@ export async function runRunbookTool(
       // Inherently scoped to this user; org filter is a belt-and-suspenders extra.
       let q = admin
         .from("draft_references")
-        .select("id, subject, supplier_id, material_id, created_at, org_id, orgs(name)")
+        .select("id, subject, supplier_id, material_id, created_at, org_id, orgs(name)", { count: "exact" })
         .eq("assigned_operator", session.userId)
         .eq("status", "staged")
         .order("created_at", { ascending: false })
-        .limit(25);
+        .limit(ANSWER_WINDOW);
       if (assigned) q = q.in("org_id", assigned);
-      const { data } = await q;
+      const { data, count } = await q;
       const rows = (data ?? []) as any[];
       const [supplierNames, materialNames] = await Promise.all([
         resolveSupplierNames(rows.map((r) => r.supplier_id).filter(Boolean)),
         resolveMaterialNames(rows.map((r) => r.material_id).filter(Boolean)),
       ]).catch(() => [new Map<string, string>(), new Map<string, string>()] as const);
       return {
-        count: rows.length,
+        ...windowed(rows.length, count),
         drafts: rows.map((r) => ({
           subject: r.subject ?? "(no subject)",
           org: r.orgs?.name ?? null,
@@ -119,18 +136,20 @@ export async function runRunbookTool(
       if (noAccess) return { count: 0, cases: [] };
       let q = admin
         .from("cases")
-        .select("id, supplier_id, type, recommended_action, status, created_at, org_id, metadata, orgs(name)")
+        .select("id, supplier_id, type, recommended_action, status, created_at, org_id, metadata, orgs(name)", {
+          count: "exact",
+        })
         .in("status", ["open", "in_progress"])
         .order("created_at", { ascending: false })
-        .limit(25);
+        .limit(ANSWER_WINDOW);
       if (assigned) q = q.in("org_id", assigned);
-      const { data } = await q;
+      const { data, count } = await q;
       const rows = (data ?? []) as any[];
       const supplierNames = await resolveSupplierNames(rows.map((r) => r.supplier_id).filter(Boolean)).catch(
         () => new Map<string, string>()
       );
       return {
-        count: rows.length,
+        ...windowed(rows.length, count),
         cases: rows.map((r) => ({
           org: r.orgs?.name ?? null,
           supplier: r.supplier_id ? supplierNames.get(r.supplier_id) ?? null : null,
@@ -147,10 +166,13 @@ export async function runRunbookTool(
       if (noAccess) return { count: 0, leads: [] };
       let q = admin
         .from("leads_in_flight")
-        .select("supplier_name, material_name, stage, status, source, confidence_score, payload, org_id, orgs(name)")
+        .select("supplier_name, material_name, stage, status, source, confidence_score, payload, org_id, orgs(name)", {
+          count: "exact",
+        })
         .eq("status", "active")
         .order("confidence_score", { ascending: false, nullsFirst: false })
-        .limit(25);
+        .order("id")
+        .limit(ANSWER_WINDOW);
       if (assigned) q = q.in("org_id", assigned);
       if (typeof input.stage === "string" && (LEAD_STAGES as readonly string[]).includes(input.stage)) {
         q = q.eq("stage", input.stage);
@@ -161,10 +183,10 @@ export async function runRunbookTool(
       if (typeof input.supplier === "string" && input.supplier.trim()) {
         q = q.ilike("supplier_name", `%${input.supplier.trim()}%`);
       }
-      const { data } = await q;
+      const { data, count } = await q;
       const rows = (data ?? []) as any[];
       return {
-        count: rows.length,
+        ...windowed(rows.length, count),
         leads: rows.map((r) => ({
           supplier: r.supplier_name,
           material: r.material_name,

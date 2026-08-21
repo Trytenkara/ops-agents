@@ -10,6 +10,7 @@ import { loadThreadContext } from "@/lib/thread-context";
 import { tailorToThread, needsTailorRetry } from "@/lib/thread-tailor";
 import { isDraftSuppressed } from "@/lib/draft-suppression";
 import { isDoNotContact, tenkaraOrgIdFor } from "@/lib/do-not-contact";
+import { cappedRead } from "@/lib/capped-read";
 
 // Shared draft → QA building block. Every intake agent (02 expiries,
 // 04 new-material outreach) and the Tenkara inbound webhook composes its own
@@ -22,6 +23,10 @@ type Admin = ReturnType<typeof createAdminClient>;
 // QA findings that hold the draft instead of merely flagging it. Everything
 // else is advisory and surfaces as a pill in the Control Room.
 const BLOCKING_CODES = new Set(["fabricated_contact_info", "grade_ask_widened"]);
+
+// A sample of the foreign drafts on a replayed conversation, not the count of
+// them: the count comes back exact on the same request (PERS-06).
+const CROSS_ORG_SAMPLE = 50;
 
 const BLOCKED_DIGEST_GROUP = "Drafts held for unverified contacts";
 
@@ -389,17 +394,28 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
       // recorded under a DIFFERENT org means the scoping has been defeated
       // somewhere else. Alert loudly rather than stage into it.
       if (c.idempotent && threadId) {
-        const { data: otherOrgRows } = await admin
+        // PERS-06: the blast radius of an isolation breach is the number this
+        // alert exists to report, so it is counted in the database and not by
+        // filtering a capped page in JS. The old read took 50 rows before the
+        // org filter, so a busy thread's own-org drafts could crowd the foreign
+        // ones out entirely and the alert would read zero.
+        const foreignQuery = admin
           .from("draft_references")
-          .select("id, org_id")
+          .select("id, org_id", { count: "exact" })
           .eq("email_client", "rod_app")
           .eq("thread_id", threadId)
-          .limit(50);
-        const foreign = (otherOrgRows ?? []).filter((r: any) => (r.org_id ?? null) !== (orgId ?? null));
-        if (foreign.length) {
+          .order("created_at", { ascending: false })
+          .limit(CROSS_ORG_SAMPLE);
+        const foreignRead = await cappedRead<{ id: string; org_id: string | null }>(
+          orgId ? foreignQuery.or(`org_id.neq.${orgId},org_id.is.null`) : foreignQuery.not("org_id", "is", null),
+          CROSS_ORG_SAMPLE,
+          "foreign drafts on this conversation",
+        );
+        if (foreignRead.total > 0) {
           extraMeta.cross_org_replay = true;
+          extraMeta.cross_org_draft_count = foreignRead.total;
           await postAgentAlert(
-            `:rotating_light: Cross-client conversation reuse: a draft for org ${orgId ?? "none"} replayed conversation ${threadId}, which already carries ${foreign.length} draft(s) from another client. External id: ${scopedExternalId}.`,
+            `:rotating_light: Cross-client conversation reuse: a draft for org ${orgId ?? "none"} replayed conversation ${threadId}, which already carries ${foreignRead.total} draft(s) from another client. External id: ${scopedExternalId}.`,
             {
                     severity: "p1",
               key: `cross_org_replay:${threadId}`,

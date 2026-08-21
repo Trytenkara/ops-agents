@@ -1,5 +1,6 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { cappedRead } from "@/lib/capped-read";
 import { loadOrgStatuses, sourcingAllowed } from "@/lib/org-status";
 import { loadDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 import { assessMaterialRelevance, collectProductText, type RawLead } from "./enrich";
@@ -219,22 +220,39 @@ registerAgent({
 
     // Relevance backfill is a sweep over already-promoted leads, so like the
     // seeders it is primary-lane-only.
-    const { data: historical, error: historicalError } = isPrimary
-      ? await admin
-          .from("leads_in_flight")
-          .select("id, material_name, source, payload")
-          .eq("status", "active")
-          .in("stage", ["enriched", "ready_for_outreach"])
-          .in("source", ["importyeti", "sourceready"])
-          .in("org_id", sourcingOrgIds)
-          .is("payload->enrichment->material_relevance", null)
-          .order("created_at", { ascending: true })
-          .limit(MAX_LEADS_PER_RUN)
-      : { data: [] as any[], error: null };
+    // PERS-06: the batch drains over successive runs, which is fine, but until
+    // now nothing said how deep the backfill queue still was, so a queue that
+    // was not draining looked exactly like one that had finished.
+    let historical: any[] = [];
+    let historicalNote = "";
+    let historicalError: { message: string } | null = null;
+    if (isPrimary) {
+      try {
+        const read = await cappedRead<any>(
+          admin
+            .from("leads_in_flight")
+            .select("id, material_name, source, payload", { count: "exact" })
+            .eq("status", "active")
+            .in("stage", ["enriched", "ready_for_outreach"])
+            .in("source", ["importyeti", "sourceready"])
+            .in("org_id", sourcingOrgIds)
+            .is("payload->enrichment->material_relevance", null)
+            .order("created_at", { ascending: true })
+            .limit(MAX_LEADS_PER_RUN),
+          MAX_LEADS_PER_RUN,
+          "leads awaiting a relevance backfill"
+        );
+        historical = read.rows;
+        if (read.remainder) historicalNote = ` · ${read.remainder} more awaiting relevance backfill`;
+        await ctx.log(read.note, { step: "relevance_backfill", data: { backlog: read.total, remainder: read.remainder } });
+      } catch (e: any) {
+        historicalError = { message: e.message };
+      }
+    }
     if (historicalError) {
       await ctx.log(`Historical relevance scan failed: ${historicalError.message}`, { level: "error", step: "relevance_backfill" });
     } else {
-      for (const lead of historical ?? []) {
+      for (const lead of historical) {
         const payload = (lead.payload as any) ?? {};
         const productText = collectProductText(payload);
         if (!productText) continue;
@@ -507,7 +525,7 @@ registerAgent({
       .map(([k, v]) => `${k}=${v}`)
       .join(", ");
     ctx.setSummary(
-      `Lane ${lane}: enriched ${promoted}/${leads.length} → stage=enriched · ${blocked} left at raw${reasonStr ? ` (${reasonStr})` : ""}${skipped ? ` · ${skipped} deferred (deadline)` : ""}${leadTimeouts ? ` · ${leadTimeouts} timed out (retried later)` : ""}${superseded ? ` · ${superseded} superseded` : ""}${errored ? ` · ${errored} errors` : ""}${seedNote}${fillNote}`
+      `Lane ${lane}: enriched ${promoted}/${leads.length} → stage=enriched · ${blocked} left at raw${reasonStr ? ` (${reasonStr})` : ""}${skipped ? ` · ${skipped} deferred (deadline)` : ""}${leadTimeouts ? ` · ${leadTimeouts} timed out (retried later)` : ""}${superseded ? ` · ${superseded} superseded` : ""}${errored ? ` · ${errored} errors` : ""}${historicalNote}${seedNote}${fillNote}`
     );
   },
 });

@@ -8,6 +8,7 @@ import { MarketplaceFindingRow, MarketplaceFindingHeaders, marketplaceFindingCol
 import { ExportApprovedCsvButton } from "@/components/marketplace-export-csv-button";
 import { ListPageHeader } from "@/components/list-page-header";
 import { correctMaterialSpelling } from "@/lib/material-spelling";
+import { ShowingNote } from "@/components/showing-note";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +38,9 @@ interface FindingRow {
   orgs: { slug: string; name: string } | null;
 }
 
+// PERS-06: a window, reported when it bites.
+const FINDING_WINDOW = 500;
+
 export default async function MarketplaceFindingsPage({
   searchParams,
 }: {
@@ -56,17 +60,18 @@ export default async function MarketplaceFindingsPage({
   let q = admin
     .from("marketplace_check_findings")
     .select(
-      "id, org_id, supplier_id, supplier_name, material_id, material_name, baseline_price, current_price, currency, pack_size, pct_change, classification, source_url, source_citations, notes, status, approved_at, dismissed_at, created_at, orgs(slug, name)"
+      "id, org_id, supplier_id, supplier_name, material_id, material_name, baseline_price, current_price, currency, pack_size, pct_change, classification, source_url, source_citations, notes, status, approved_at, dismissed_at, created_at, orgs(slug, name)",
+      { count: "exact" }
     )
     .eq("status", status)
     .order("pct_change", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
-    .limit(500);
+    .limit(FINDING_WINDOW);
   if (assigned) q = q.in("org_id", assigned);
   if (supplierFilter) q = q.ilike("supplier_name", `%${supplierFilter}%`);
   if (orgFilter) q = q.eq("org_id", orgFilter);
 
-  const { data: rows, error } = await q;
+  const { data: rows, error, count } = await q;
   const findings = ((rows ?? []) as unknown as FindingRow[]).map((r) => ({
     ...r,
     material_name: correctMaterialSpelling(r.material_name),
@@ -156,6 +161,8 @@ export default async function MarketplaceFindingsPage({
           </div>
         }
       />
+
+      <ShowingNote shown={findings.length} total={count} noun={`${status.replace("_", " ")} findings`} />
 
       <Table>
         <TableHeader>

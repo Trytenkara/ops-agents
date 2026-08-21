@@ -303,19 +303,34 @@ export async function requestOutreachRetry(leadId: string): Promise<ActionResult
   if (!siblings.length) return { ok: false, error: "no_retryable_supplier_leads" };
 
   const emails = Array.from(new Set(siblings.map((s: any) => String(s.payload?.supplier_contact_email ?? "").trim().toLowerCase()).filter(Boolean)));
-  const { data: activeThreads, error: existingError } = await admin
+  // PERS-06: this decides whether the supplier already has a live thread, so a
+  // window is not a cost control, it is a wrong answer — the 5,001st row is the
+  // thread we then write over the top of. Ask the database the actual question
+  // instead of scanning a slice of the client's drafts in JS.
+  const LIVE_STATUSES = ["staged", "reviewed", "sent", "linked"];
+  const liveThread = admin
     .from("draft_references")
-    .select("supplier_id, metadata")
+    .select("id")
     .eq("org_id", lead.org_id)
-    .in("status", ["staged", "reviewed", "sent", "linked"])
-    .limit(5000);
-  if (existingError) return { ok: false, error: existingError.message };
-  const emailSet = new Set(emails);
-  const hasExisting = (activeThreads ?? []).some((thread: any) => {
-    const threadEmail = String(thread.metadata?.supplier_contact_email ?? "").trim().toLowerCase();
-    return (lead.supplier_id && thread.supplier_id === lead.supplier_id) || (!!threadEmail && emailSet.has(threadEmail));
-  });
-  if (hasExisting) return { ok: false, error: "supplier_already_has_live_or_sent_thread" };
+    .in("status", LIVE_STATUSES);
+  const [bySupplier, byEmail] = await Promise.all([
+    lead.supplier_id
+      ? liveThread.eq("supplier_id", lead.supplier_id).limit(1).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    emails.length
+      ? admin
+          .from("draft_references")
+          .select("id")
+          .eq("org_id", lead.org_id)
+          .in("status", LIVE_STATUSES)
+          .in("metadata->>supplier_contact_email", emails)
+          .limit(1)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ]);
+  const existingError = bySupplier.error ?? byEmail.error;
+  if (existingError) return { ok: false, error: (existingError as any).message };
+  if (bySupplier.data || byEmail.data) return { ok: false, error: "supplier_already_has_live_or_sent_thread" };
 
   const requestId = randomUUID();
   const { error: markError } = await admin.rpc("mark_outreach_retry", {

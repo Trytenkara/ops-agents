@@ -174,18 +174,26 @@ function priorDaysFor(checks: number, changes: number): number {
   return 14; // stable across ≥2 checks, never moved.
 }
 
+const HOST_PRIOR_SAMPLE = 1000;
+
 // Aggregate per-host price-change history across already-pulled leads into a
 // starting-interval prior. One lightweight read per run; empty on first rollout
 // (no history yet) so everything correctly starts at daily and warms up.
 async function computeHostPriors(admin: Admin, activeOrgIds: string[]): Promise<Map<string, number>> {
   const priors = new Map<string, number>();
+  // PERS-06 declared sample. This limit hides no work: the rows are read only
+  // to size a starting re-check interval per host, every lead is still pulled on
+  // its own schedule, and a wider sample moves a prior at most a day. Ordered so
+  // the sample is the same rows run to run rather than whatever the planner
+  // returns.
   const { data, error } = await admin
     .from("leads_in_flight")
     .select("payload")
     .eq("status", "active")
     .in("org_id", activeOrgIds)
     .eq("payload->marketplace_pull->>status", "pulled")
-    .limit(1000);
+    .order("id")
+    .limit(HOST_PRIOR_SAMPLE);
   if (error || !data) return priors;
   const agg = new Map<string, { checks: number; changes: number }>();
   for (const r of data as { payload: any }[]) {
@@ -315,6 +323,8 @@ export async function expandAggregatorIndexPage(opts: {
     return fresh.length;
 }
 
+type Cohort = { rows: LeadRow[]; total: number };
+
 export interface LeadPullResult {
   processed: number;
   pulled: number;
@@ -325,6 +335,12 @@ export interface LeadPullResult {
   sellersStaged: number;
   stoppedEarly: boolean;
   timedOut: number;   // leads abandoned at LEAD_TIMEOUT_MS; nothing written, they roll over
+  /**
+   * Leads that were due this run and did not fit under the per-run caps. The
+   * caps are a spend control, so the queue behind them has to be visible or a
+   * run that pulled its 60 reads as a run that pulled everything (PERS-06).
+   */
+  queued: number;
 }
 
 export async function pullPricesForNewMarketplaceLeads(opts: {
@@ -334,7 +350,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   log: (msg: string, meta?: any) => Promise<void> | void;
 }): Promise<LeadPullResult> {
   const { admin, runId, deadline, log } = opts;
-  const empty: LeadPullResult = { processed: 0, pulled: 0, flagged: 0, pending: 0, notMarketplace: 0, expanded: 0, sellersStaged: 0, stoppedEarly: false, timedOut: 0 };
+  const empty: LeadPullResult = { processed: 0, pulled: 0, flagged: 0, pending: 0, notMarketplace: 0, expanded: 0, sellersStaged: 0, stoppedEarly: false, timedOut: 0, queued: 0 };
   if (Date.now() > deadline) return empty;
 
   // Only pull for orgs that are actively sourcing. Paused ('off') orgs otherwise
@@ -380,11 +396,11 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   // Cohort A — first pull: active marketplace leads with no pull attempt yet
   // (or still mid-retry). Marketplace is signalled by the scanner's site_type
   // (M/MS) or an explicit Marketplace role. Oldest-first (FIFO) within a tier.
-  const queryFirst = async (orgIds: string[], limit: number): Promise<LeadRow[]> => {
-    if (orgIds.length === 0 || limit <= 0) return [];
-    const { data, error } = await admin
+  const queryFirst = async (orgIds: string[], limit: number): Promise<Cohort> => {
+    if (orgIds.length === 0 || limit <= 0) return { rows: [], total: 0 };
+    const { data, error, count } = await admin
       .from("leads_in_flight")
-      .select(cols)
+      .select(cols, { count: "exact" })
       .eq("status", "active")
       .in("org_id", orgIds)
       .or("payload->marketplace_pull.is.null,payload->marketplace_pull->>status.eq.pending")
@@ -400,18 +416,18 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       .limit(limit);
     if (error) {
       await log(`Marketplace lead query failed (non-fatal): ${error.message}`, { level: "warn", step: "mp_leads" });
-      return [];
+      return { rows: [], total: 0 };
     }
-    return ((data ?? []) as LeadRow[]).filter(eligible);
+    return { rows: ((data ?? []) as LeadRow[]).filter(eligible), total: count ?? 0 };
   };
 
   // Cohort B — re-check: already-pulled leads whose next_check_at is due (or
   // legacy pulled leads with no cadence yet → next_check_at null, treated as due).
-  const queryRecheck = async (orgIds: string[], limit: number): Promise<LeadRow[]> => {
-    if (orgIds.length === 0 || limit <= 0) return [];
-    const { data, error } = await admin
+  const queryRecheck = async (orgIds: string[], limit: number): Promise<Cohort> => {
+    if (orgIds.length === 0 || limit <= 0) return { rows: [], total: 0 };
+    const { data, error, count } = await admin
       .from("leads_in_flight")
-      .select(cols)
+      .select(cols, { count: "exact" })
       .eq("status", "active")
       .in("org_id", orgIds)
       .eq("payload->marketplace_pull->>status", "pulled")
@@ -421,27 +437,40 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       .limit(limit);
     if (error) {
       await log(`Marketplace re-check query failed (non-fatal): ${error.message}`, { level: "warn", step: "mp_leads" });
-      return [];
+      return { rows: [], total: 0 };
     }
-    return ((data ?? []) as LeadRow[]).filter(eligible);
+    return { rows: ((data ?? []) as LeadRow[]).filter(eligible), total: count ?? 0 };
   };
 
   // Real clients first; top up any remaining cap from internal test orgs.
   const withPriority = async (
-    q: (orgIds: string[], limit: number) => Promise<LeadRow[]>,
+    q: (orgIds: string[], limit: number) => Promise<Cohort>,
     cap: number,
-  ): Promise<LeadRow[]> => {
-    const real = (await q(realOrgIds, cap * 3)).slice(0, cap);
-    if (real.length >= cap || internalOrgIds.length === 0) return real;
+  ): Promise<Cohort> => {
+    const realRes = await q(realOrgIds, cap * 3);
+    const real = realRes.rows.slice(0, cap);
+    if (real.length >= cap || internalOrgIds.length === 0) return { rows: real, total: realRes.total };
     const remaining = cap - real.length;
-    const internal = (await q(internalOrgIds, remaining * 3)).slice(0, remaining);
-    return [...real, ...internal];
+    const internalRes = await q(internalOrgIds, remaining * 3);
+    return { rows: [...real, ...internalRes.rows.slice(0, remaining)], total: realRes.total + internalRes.total };
   };
 
-  const firstLeads = await withPriority(queryFirst, FIRST_PULL_CAP);
-  const recheckLeads = await withPriority(queryRecheck, RECHECK_CAP);
+  const firstRes = await withPriority(queryFirst, FIRST_PULL_CAP);
+  const recheckRes = await withPriority(queryRecheck, RECHECK_CAP);
+  const firstLeads = firstRes.rows;
+  const recheckLeads = recheckRes.rows;
   const leads = [...firstLeads, ...recheckLeads];
-  if (leads.length === 0) return empty;
+  // PERS-06: what was due and did not fit. Carried out on the result so the run
+  // summary states the queue rather than implying there isn't one.
+  const queued =
+    Math.max(firstRes.total - firstLeads.length, 0) + Math.max(recheckRes.total - recheckLeads.length, 0);
+  if (queued) {
+    await log(
+      `${leads.length} lead(s) this run of ${firstRes.total + recheckRes.total} due - ${queued} more waiting on the per-run caps (first ${FIRST_PULL_CAP}, re-check ${RECHECK_CAP}).`,
+      { step: "mp_leads", data: { queued, first_due: firstRes.total, recheck_due: recheckRes.total } },
+    );
+  }
+  if (leads.length === 0) return { ...empty, queued };
 
   // Volume signal: in FULL (daily re-verify) mode, if the due-recheck pool keeps
   // maxing out the per-run cap the daily check volume is getting large — the point
@@ -1482,5 +1511,5 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     }
   }
 
-  return { processed, pulled, flagged, pending, notMarketplace, expanded, sellersStaged, stoppedEarly, timedOut };
+  return { processed, pulled, flagged, pending, notMarketplace, expanded, sellersStaged, stoppedEarly, timedOut, queued };
 }

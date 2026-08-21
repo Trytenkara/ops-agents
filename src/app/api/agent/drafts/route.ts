@@ -125,6 +125,8 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ draft_id: data.id, assigned_operator });
 }
 
+const PAGE_SIZE = 50;
+
 export async function GET(request: NextRequest) {
   const agent = await authenticateAgent(request);
   if (!agent) return unauthorized();
@@ -135,11 +137,17 @@ export async function GET(request: NextRequest) {
   const status = url.searchParams.get("status") ?? "staged";
 
   const admin = createAdminClient();
-  let q = admin.from("draft_references").select("id, status, thread_id, draft_id, subject, created_at, reviewed_at").eq("status", status);
+  let q = admin
+    .from("draft_references")
+    .select("id, status, thread_id, draft_id, subject, created_at, reviewed_at", { count: "exact" })
+    .eq("status", status);
   if (quote_id) q = q.eq("quote_id", quote_id);
   if (supplier_id) q = q.eq("supplier_id", supplier_id);
   if (material_id) q = q.eq("material_id", material_id);
-  const { data, error } = await q.limit(50);
+  // PERS-06: the caller gets a page, and it is told so. A bare array of 50 reads
+  // as "these are all of them" to an agent exactly as it does to a person.
+  const { data, error, count } = await q.order("created_at", { ascending: false }).order("id").limit(PAGE_SIZE);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ drafts: data ?? [] });
+  const drafts = data ?? [];
+  return NextResponse.json({ drafts, total: count ?? drafts.length, remainder: Math.max((count ?? drafts.length) - drafts.length, 0) });
 }

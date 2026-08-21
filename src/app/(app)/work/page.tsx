@@ -11,6 +11,7 @@ import { PageExplainer } from "@/components/page-explainer";
 import { roleLabel } from "@/lib/roles";
 import { seesAllOrgs, getAssignedOrgIds } from "@/lib/org-access";
 import { DraftStatusBadge } from "@/components/draft-status-badge";
+import { ShowingNote } from "@/components/showing-note";
 
 export const dynamic = "force-dynamic";
 
@@ -20,17 +21,19 @@ export default async function TodayInboxPage() {
   const isAccountManager = hasAnyRole(session, ["account_manager"]) && !hasAnyRole(session, ["admin","ops_lead","ops_operator"]);
 
   // My assigned drafts (Phase 1: drafts are the primary actionable item).
-  const { data: assignedDrafts } = await admin
+  // PERS-06: the heading counts are the true totals, the tables are the newest
+  // slice, and where the two differ the page says so.
+  const { data: assignedDrafts, count: assignedTotal } = await admin
     .from("draft_references")
-    .select("id, subject, supplier_id, material_id, status, created_at, org_id, orgs(slug, name)")
+    .select("id, subject, supplier_id, material_id, status, created_at, org_id, orgs(slug, name)", { count: "exact" })
     .eq("assigned_operator", session.userId)
     .eq("status", "staged")
     .order("created_at", { ascending: false })
     .limit(20);
 
-  const { data: unassignedDrafts } = await admin
+  const { data: unassignedDrafts, count: unassignedTotal } = await admin
     .from("draft_references")
-    .select("id, subject, supplier_id, material_id, status, created_at, org_id, orgs(slug, name)")
+    .select("id, subject, supplier_id, material_id, status, created_at, org_id, orgs(slug, name)", { count: "exact" })
     .is("assigned_operator", null)
     .eq("status", "staged")
     .order("created_at", { ascending: false })
@@ -90,18 +93,24 @@ export default async function TodayInboxPage() {
       </PageExplainer>
 
       <section className="space-y-3">
-        <h3 className="text-sm uppercase tracking-wider text-muted-foreground font-medium">My assigned items <span className="ml-1 text-foreground">· {assignedDrafts?.length ?? 0}</span></h3>
+        <h3 className="text-sm uppercase tracking-wider text-muted-foreground font-medium">My assigned items <span className="ml-1 text-foreground">· {assignedTotal ?? assignedDrafts?.length ?? 0}</span></h3>
         {assignedDrafts && assignedDrafts.length > 0 ? (
-          <DraftTable rows={assignedDrafts as any} supplierNames={supplierNames} materialNames={materialNames} />
+          <>
+            <DraftTable rows={assignedDrafts as any} supplierNames={supplierNames} materialNames={materialNames} />
+            <ShowingNote shown={assignedDrafts.length} total={assignedTotal} noun="staged drafts assigned to you" />
+          </>
         ) : (
           <p className="text-sm text-muted-foreground">Nothing assigned to you right now. Pick up an unassigned item below.</p>
         )}
       </section>
 
       <section className="space-y-3">
-        <h3 className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Unassigned <span className="ml-1 text-foreground">· {unassignedDrafts?.length ?? 0}</span></h3>
+        <h3 className="text-sm uppercase tracking-wider text-muted-foreground font-medium">Unassigned <span className="ml-1 text-foreground">· {unassignedTotal ?? unassignedDrafts?.length ?? 0}</span></h3>
         {unassignedDrafts && unassignedDrafts.length > 0 ? (
-          <DraftTable rows={unassignedDrafts as any} supplierNames={supplierNames} materialNames={materialNames} />
+          <>
+            <DraftTable rows={unassignedDrafts as any} supplierNames={supplierNames} materialNames={materialNames} />
+            <ShowingNote shown={unassignedDrafts.length} total={unassignedTotal} noun="unassigned staged drafts" />
+          </>
         ) : (
           <p className="text-sm text-muted-foreground">Inbox zero — nothing waiting for pickup.</p>
         )}

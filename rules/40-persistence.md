@@ -170,10 +170,16 @@ total order, because `created_at desc` alone is not one and ties shift between
 pages, and push per-tab filters into the query rather than filtering in JS, or
 surfaces sharing a loader starve each other inside one response.
 
-**Enforcement:** Guard for the accidental cut — `src/lib/supabase-paging.ts`
-`selectAllPaged` and `src/lib/supabase/truncation-guard.ts`,
-`reads/client-must-guard-truncation`. Check owed —
-`reads/limit-must-report-remainder` for deliberate windows.
+**Enforcement:** Guard, in two halves. The accidental cut —
+`src/lib/supabase-paging.ts` `selectAllPaged` and
+`src/lib/supabase/truncation-guard.ts`, `reads/client-must-guard-truncation`.
+The deliberate window — `reads/limit-must-report-remainder`, which fails any
+capped read of a work table that does not carry its own remainder out.
+`src/lib/capped-read.ts` is the runtime half (PostgREST returns the true count
+on the same request, so knowing what was left behind is free) and
+`src/components/showing-note.tsx` the page half. A window that genuinely hides
+no work is waived in the check's `DECLARED_WINDOWS`, keyed by file *and* by the
+exact constant, so renaming or moving it revokes the waiver.
 
 ## PERS-07 — A withheld price is a job, not an outcome
 

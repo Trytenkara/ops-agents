@@ -36,6 +36,10 @@ import { sortByOrgPriority } from "@/lib/org-priority";
 // so the deadline is what actually bounds a run; the lead cap is a cost ceiling.
 const RUN_DEADLINE_MS = 700_000;
 const MAX_LEADS_PER_RUN = 120;
+// Read windows, wider than the per-run budget. Their remainder is reported, not
+// hidden: see selectWorklist (PERS-06).
+const PENDING_WINDOW = 1500;
+const WITHHELD_WINDOW = 500;
 // Browserbase plan allows 100 concurrent sessions. Stay under it: this agent is
 // not the only thing that may hold sessions.
 const CONCURRENCY = 40;
@@ -334,18 +338,18 @@ async function writePull(
   return gotPrice;
 }
 
-async function selectWorklist(admin: any, log: RunLog): Promise<{ leads: Lead[]; skippedWalls: number }> {
+async function selectWorklist(admin: any, log: RunLog): Promise<{ leads: Lead[]; skippedWalls: number; outsideWindow: number }> {
   const { data: orgs } = await admin.from("orgs").select("id, slug, is_internal, sourcing_status");
   const live = new Map<string, any>();
   for (const o of orgs ?? []) {
     if (o.sourcing_status === "active" || o.sourcing_status === "sourcing_only") live.set(o.id, o);
   }
-  if (!live.size) return { leads: [], skippedWalls: 0 };
+  if (!live.size) return { leads: [], skippedWalls: 0, outsideWindow: 0 };
 
   const [pending, withheld] = await Promise.all([
     admin
       .from("leads_in_flight")
-      .select("id, org_id, supplier_name, material_name, payload")
+      .select("id, org_id, supplier_name, material_name, payload", { count: "exact" })
       .eq("status", "active")
       .in("org_id", [...live.keys()])
       .eq("payload->marketplace_pull->>status", "pending")
@@ -353,7 +357,7 @@ async function selectWorklist(admin: any, log: RunLog): Promise<{ leads: Lead[];
       // Stalest first, so a bounded run advances through the pool rather than
       // re-reading the same head every day.
       .order("payload->marketplace_pull->>at", { ascending: true, nullsFirst: true })
-      .limit(1500),
+      .limit(PENDING_WINDOW),
     // A price the publish gate took away files as `pulled` with no `reason`, so
     // it satisfies neither predicate above and nothing ever came back for it —
     // the one pool guaranteed to contain a page we read successfully and still
@@ -362,12 +366,12 @@ async function selectWorklist(admin: any, log: RunLog): Promise<{ leads: Lead[];
     // kind of filter that silently matches nothing.
     admin
       .from("leads_in_flight")
-      .select("id, org_id, supplier_name, material_name, payload")
+      .select("id, org_id, supplier_name, material_name, payload", { count: "exact" })
       .eq("status", "active")
       .in("org_id", [...live.keys()])
       .eq("payload->marketplace_pull->>withheld", "true")
       .order("payload->marketplace_pull->>withheld_at", { ascending: true, nullsFirst: true })
-      .limit(500),
+      .limit(WITHHELD_WINDOW),
   ]);
   const error = pending.error ?? withheld.error;
   if (error) throw new Error(`worklist query failed: ${error.message}`);
@@ -391,8 +395,17 @@ async function selectWorklist(admin: any, log: RunLog): Promise<{ leads: Lead[];
 
   // Real clients always get scarce throughput before internal test orgs.
   eligible = sortByOrgPriority(eligible, (l) => live.get(l.org_id));
-  await log(`Worklist: ${eligible.length} eligible, ${skippedWalls} skipped as quote-request walls`, { step: "worklist" });
-  return { leads: eligible.slice(0, MAX_LEADS_PER_RUN), skippedWalls };
+  // PERS-06: the run summary already names what the TIME budget left behind.
+  // These two read windows left their own remainder unsaid, so a pool deeper
+  // than 1,500 pending leads looked like a pool of exactly 1,500.
+  const pool = (pending.count ?? rows.length) + (withheld.count ?? 0);
+  const outsideWindow = Math.max(pool - rows.length, 0);
+  await log(
+    `Worklist: ${eligible.length} eligible of ${pool} in the pool, ${skippedWalls} skipped as quote-request walls` +
+      (outsideWindow ? ` — ${outsideWindow} outside the read window` : ""),
+    { step: "worklist", data: { pool, outsideWindow } },
+  );
+  return { leads: eligible.slice(0, MAX_LEADS_PER_RUN), skippedWalls, outsideWindow };
 }
 
 type RunLog = (m: string, o?: any) => Promise<void>;
@@ -418,7 +431,7 @@ registerAgent({
       return;
     }
 
-    const { leads, skippedWalls } = await selectWorklist(admin, (m, o) => ctx.log(m, o));
+    const { leads, skippedWalls, outsideWindow } = await selectWorklist(admin, (m, o) => ctx.log(m, o));
     if (!leads.length) {
       ctx.setStatus("success");
       ctx.setSummary(`No escalation-eligible leads (${skippedWalls} quote-request walls skipped).`);
@@ -569,7 +582,8 @@ registerAgent({
       `Browserbase escalation: priced ${pulled}/${attempted} lead(s)` +
         (shippingAttempted > 0 ? ` · shipping captured for ${shippingCaptured}/${shippingAttempted} (${shippingAttempted > 0 ? Math.round((shippingCaptured / shippingAttempted) * 100) : 0}%)` : "") +
         (skippedWalls ? ` · ${skippedWalls} quote-request walls skipped` : "") +
-        (stoppedForTime ? ` · stopped at time budget (${ordered.length - attempted} left for tomorrow)` : ""),
+        (stoppedForTime ? ` · stopped at time budget (${ordered.length - attempted} left for tomorrow)` : "") +
+        (outsideWindow ? ` · ${outsideWindow} outside the read window` : ""),
     );
   },
 });

@@ -1,5 +1,7 @@
 import { registerAgent } from "../../registry";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { cappedRead } from "@/lib/capped-read";
+import { selectAllPaged } from "@/lib/supabase-paging";
 import { postSlackMessage, deepLink } from "@/lib/slack";
 import { shouldPostDigest, recordDigestPosted } from "@/lib/alert-policy";
 import {
@@ -38,24 +40,36 @@ registerAgent({
     const admin = createAdminClient();
 
     const cutoff = new Date(Date.now() - STALE_DAYS * 24 * 3600 * 1000).toISOString();
-    const { data: leads, error: pullErr } = await admin
-      .from("leads_in_flight")
-      .select("id, org_id, supplier_id, material_id, supplier_name, material_name, stage, updated_at, payload")
-      .eq("status", "active")
-      .lt("updated_at", cutoff)
-      .order("updated_at", { ascending: true })
-      .limit(MAX_ESCALATIONS_PER_RUN);
-
-    if (pullErr) {
-      await ctx.log(`Pull failed: ${pullErr.message}`, { level: "error", step: "pull" });
+    // PERS-06: the batch is deliberately 25 a run and that is fine, but
+    // "Found 25 stale leads" read as the whole population, and the same number
+    // was then the denominator of the run summary's completion ratio. The exact
+    // count comes back on this request, so the backlog is stated instead.
+    let stale;
+    try {
+      stale = await cappedRead<any>(
+        admin
+          .from("leads_in_flight")
+          .select(
+            "id, org_id, supplier_id, material_id, supplier_name, material_name, stage, updated_at, payload",
+            { count: "exact" }
+          )
+          .eq("status", "active")
+          .lt("updated_at", cutoff)
+          .order("updated_at", { ascending: true })
+          .limit(MAX_ESCALATIONS_PER_RUN),
+        MAX_ESCALATIONS_PER_RUN,
+        `stale leads (>${STALE_DAYS}d at status=active)`
+      );
+    } catch (e: any) {
+      await ctx.log(`Pull failed: ${e.message}`, { level: "error", step: "pull" });
       ctx.setStatus("failure");
-      ctx.setSummary(`Pull failed: ${pullErr.message}`);
+      ctx.setSummary(`Pull failed: ${e.message}`);
       return;
     }
-    const staleLeads = leads ?? [];
+    const staleLeads = stale.rows;
     // Note: we don't early-return on an empty set — the nudge pass below still
     // needs to run to chase un-actioned drafts/leads.
-    await ctx.log(`Found ${staleLeads.length} stale leads (>${STALE_DAYS}d at status=active)`, { step: "pull" });
+    await ctx.log(stale.note, { step: "pull", data: { backlog: stale.total, remainder: stale.remainder } });
 
     // Assignment context per org, once. A stale lead is routed to whoever owns
     // that supplier for the client, so the case lands next to the rest of that
@@ -239,20 +253,32 @@ registerAgent({
     const nudgeCutoff = new Date(Date.now() - NUDGE_STALE_DAYS * 24 * 3600 * 1000).toISOString();
     let nudgedOrgs = 0;
     try {
-      const [{ data: staleDrafts }, { data: stuckLeads }] = await Promise.all([
-        admin
-          .from("draft_references")
-          .select("org_id, metadata")
-          .eq("status", "staged")
-          .lt("created_at", nudgeCutoff)
-          .limit(1000),
-        admin
-          .from("leads_in_flight")
-          .select("org_id")
-          .eq("status", "active")
-          .eq("stage", "enriched")
-          .lt("updated_at", nudgeCutoff)
-          .limit(1000),
+      // PERS-06: these two counts ARE the message, so a cap here understates
+      // the very backlog the nudge exists to report. Both sat at exactly 1000,
+      // the PostgREST page size, so the deliberate cap and an accidental
+      // truncation were indistinguishable — and with 3,461 staged drafts
+      // fleet-wide the drafts read was cutting today. Paged to the end over the
+      // primary key, which is the stable order paging requires.
+      const [staleDrafts, stuckLeads] = await Promise.all([
+        selectAllPaged<any>((from, to) =>
+          admin
+            .from("draft_references")
+            .select("org_id, metadata")
+            .eq("status", "staged")
+            .lt("created_at", nudgeCutoff)
+            .order("id")
+            .range(from, to)
+        ),
+        selectAllPaged<any>((from, to) =>
+          admin
+            .from("leads_in_flight")
+            .select("org_id")
+            .eq("status", "active")
+            .eq("stage", "enriched")
+            .lt("updated_at", nudgeCutoff)
+            .order("id")
+            .range(from, to)
+        ),
       ]);
 
       type Counts = { drafts: number; replies: number; promote: number };
@@ -263,10 +289,10 @@ registerAgent({
         c[k]++;
         byOrg.set(orgId, c);
       };
-      for (const d of (staleDrafts ?? []) as any[]) {
+      for (const d of staleDrafts) {
         bump(d.org_id, (d.metadata as any)?.draft_kind === "inbound_reply" ? "replies" : "drafts");
       }
-      for (const l of (stuckLeads ?? []) as any[]) bump(l.org_id, "promote");
+      for (const l of stuckLeads) bump(l.org_id, "promote");
 
       if (byOrg.size > 0) {
         const { data: orgRows } = await admin.from("orgs").select("id, slug, name").in("id", Array.from(byOrg.keys()));
@@ -310,7 +336,7 @@ registerAgent({
     ctx.setItemsProcessed(escalated);
     ctx.setStatus(errored > 0 && escalated === 0 ? "failure" : errored > 0 ? "partial" : "success");
     ctx.setSummary(
-      `Escalated ${escalated}/${staleLeads.length} stale lead${escalated === 1 ? "" : "s"} → cases${deduped ? ` · ${deduped} deduped (open case exists)` : ""}${nudgedOrgs ? ` · nudged ${nudgedOrgs} org(s)` : ""}${skippedNoOrg ? ` · ${skippedNoOrg} skipped (no org)` : ""}${errored ? ` · ${errored} errors` : ""}`
+      `Escalated ${escalated}/${staleLeads.length} of ${stale.total} stale lead${escalated === 1 ? "" : "s"} → cases${stale.remainder ? ` · ${stale.remainder} more waiting` : ""}${deduped ? ` · ${deduped} deduped (open case exists)` : ""}${nudgedOrgs ? ` · nudged ${nudgedOrgs} org(s)` : ""}${skippedNoOrg ? ` · ${skippedNoOrg} skipped (no org)` : ""}${errored ? ` · ${errored} errors` : ""}`
     );
   },
 });

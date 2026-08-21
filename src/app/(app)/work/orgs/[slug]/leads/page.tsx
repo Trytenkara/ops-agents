@@ -27,6 +27,7 @@ import { MaterialMergePrompt, type MaterialMergeFlag } from "@/components/materi
 import { getOutreachTracker } from "@/lib/outreach-tracker";
 import { DensityToggle } from "@/components/density-toggle";
 import { Tooltip } from "@/components/ui/tooltip";
+import { ShowingNote } from "@/components/showing-note";
 
 export const dynamic = "force-dynamic";
 
@@ -247,10 +248,11 @@ export default async function OrgLeadsPage({ params, searchParams }: { params: {
   // to manual handling (payload.drop_reason=manual_outreach_case) and
   // escalated_to_case — those are active work shown under the Outreach tab, not
   // removals. Loaded separately since the main list is active-only; capped at 500.
-  const { data: removedRaw } = await admin
+  const { data: removedRaw, count: removedTotal } = await admin
     .from("leads_in_flight")
     .select(
-      "id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, updated_at, orgs(slug, name)"
+      "id, org_id, supplier_name, supplier_id, material_name, material_id, stage, status, source, payload, drop_reason, confidence_score, agent_run_id, created_at, updated_at, orgs(slug, name)",
+      { count: "exact" }
     )
     .eq("org_id", org.id)
     .or("status.eq.terminal,and(status.eq.dropped,drop_reason.in.(dedup_canonical_name,duplicate_open_case)),payload->>outreach_suppressed.not.is.null")
@@ -382,6 +384,13 @@ export default async function OrgLeadsPage({ params, searchParams }: { params: {
           </p>
         </div>
       )}
+      <ShowingNote
+        shown={removedRows.length}
+        total={removedTotal}
+        noun="removed leads"
+        hint="The Removed tab shows the newest ones."
+      />
+
       <LeadsTabs rows={leads} removedRows={removedRows} canAct={canAct} slug={org.slug} orgId={org.id} operatorOptions={operatorOptions} currentUserName={assignmentCtx.pool.find((op) => op.id === session.userId)?.name ?? null} tracker={tracker} initialTab={initialTab} orgClients={orgClients} tagsByMaterialId={tagsByMaterialId} dimsByPack={marketplaceDims} supplierProfiles={supplierProfiles} profileOperators={profileOperators} marketplaceAccounts={marketplaceAccounts} enrichmentCases={enrichmentCases} enrichmentCaseCount={supplierCasesOpen.length} supplierDocs={supplierDocs} mergePrompt={<MaterialMergePrompt flags={mergeFlags} />} />
     </div>
   );

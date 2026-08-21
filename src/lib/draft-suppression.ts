@@ -21,6 +21,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 //  - A reply to something the supplier just sent us. If they write again, ops
 //    needs a draft; the inbound path already dedupes per inbound message.
 
+// The discard history a re-draft is checked against. Wide enough that a
+// discard cannot fall off the end and let the same email be staged twice
+// (PERS-06); the filters are already narrow — one org, one draft kind, one
+// supplier or one thread.
+const DISCARD_WINDOW = 200;
+
 /** Discards our own code performed. These never suppress anything. */
 const SYSTEM_DISCARD_REASONS = new Set([
   "contact_email_replaced",
@@ -208,7 +214,10 @@ export async function isDraftSuppressed(
     // capitalisation discovery found ("Ro@smirks.com"), so an equality filter on
     // a lowercased address silently matched nothing and suppressed nothing.
     .order("created_at", { ascending: false })
-    .limit(25);
+    // PERS-06: a window here would let a discard fall off the end and the same
+    // draft be staged again. Bounded only by the filters, which are narrow: one
+    // org, one draft kind, one supplier or one thread.
+    .limit(DISCARD_WINDOW);
   // Prefer the supplier: the same company can span several threads. Fall back to
   // the thread for leads discovery handed over without a supplier id.
   query = q.supplierId ? query.eq("supplier_id", q.supplierId) : query.eq("thread_id", q.threadId as string);

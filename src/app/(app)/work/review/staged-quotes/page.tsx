@@ -9,6 +9,7 @@ import { StagedQuotesExportCsvButton } from "@/components/staged-quotes-export-c
 import { resolveMaterialGrades } from "@/lib/tenkara-names";
 import { correctMaterialSpelling } from "@/lib/material-spelling";
 import { ListPageHeader } from "@/components/list-page-header";
+import { ShowingNote } from "@/components/showing-note";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +41,9 @@ interface StagedRow {
   orgs: { slug: string; name: string } | null;
 }
 
+// PERS-06: a window, reported when it bites.
+const QUOTE_WINDOW = 500;
+
 export default async function StagedQuotesPage({
   searchParams,
 }: {
@@ -57,14 +61,15 @@ export default async function StagedQuotesPage({
   let q = admin
     .from("staged_quotes")
     .select(
-      "id, org_id, source, source_attachment_name, source_conversation_id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, unit_price_gap_reason, currency, incoterm, incoterm_location, confidence, extraction_notes, case_type, case_dimensions, dim_source, status, created_at, orgs(slug, name)"
+      "id, org_id, source, source_attachment_name, source_conversation_id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, unit_price_gap_reason, currency, incoterm, incoterm_location, confidence, extraction_notes, case_type, case_dimensions, dim_source, status, created_at, orgs(slug, name)",
+      { count: "exact" }
     )
     .eq("status", status)
     .order("created_at", { ascending: false })
-    .limit(500);
+    .limit(QUOTE_WINDOW);
   if (assigned) q = q.in("org_id", assigned);
 
-  const { data: rows, error } = await q;
+  const { data: rows, error, count } = await q;
   let staged = (rows ?? []) as unknown as StagedRow[];
   // Lowest-confidence first so ops triages the riskiest extractions up top.
   staged = staged.sort((a, b) => (STAGED_CONF_ORDER[a.confidence] ?? 9) - (STAGED_CONF_ORDER[b.confidence] ?? 9));
@@ -120,6 +125,8 @@ export default async function StagedQuotesPage({
           </div>
         }
       />
+
+      <ShowingNote shown={staged.length} total={count} noun={`${status.replace("_", " ")} staged quotes`} />
 
       <Table>
         <TableHeader>

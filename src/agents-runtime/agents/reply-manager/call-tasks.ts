@@ -4,6 +4,7 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 import { buildCallBrief } from "@/lib/call-brief";
 import { CallOperatorResolver, notifyCallEscalation } from "@/lib/call-escalation";
 import { loadThreadState } from "./no-reply-followup";
+import { cappedRead } from "@/lib/capped-read";
 
 // Scheduled call tasks (part of Agent 15). The live cadence interleaves email and
 // phone rather than treating a call as the thing that happens once email has
@@ -26,6 +27,8 @@ type Ctx = { agentId: string | null; runId: string | null; log: (m: string, o?: 
 type Admin = ReturnType<typeof createAdminClient>;
 
 const MAX_PER_RUN = 50;
+// The read window, wider than the per-run budget so the budget is what bites.
+const SENT_WINDOW = 300;
 
 // Stages already raised on a conversation, stamped on the outreach draft so a
 // task is never raised twice. Skipped stages are recorded here too, since an intro
@@ -158,24 +161,38 @@ export async function runCallTasks(ctx: Ctx, admin: Admin): Promise<{ raised: nu
 
   // Unlike the nudge sweep this cannot filter on reply_detected: stage 1 fires
   // for suppliers who replied too.
-  const { data: sent } = await admin
-    .from("draft_references")
-    .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata, thread_id, reviewed_at")
-    .eq("agent_id", a4.id)
-    .eq("status", "sent")
-    .not("reviewed_at", "is", null)
-    .limit(300);
+  // PERS-06: 300 with no order at all meant the excluded set was arbitrary and
+  // moved between runs, so a supplier could go indefinitely without ever
+  // reaching this sweep. Oldest sent first, because the oldest RFQ is the one
+  // most overdue for a call, and the backlog behind the window is reported.
+  const sentRead = await cappedRead<any>(
+    admin
+      .from("draft_references")
+      .select(
+        "id, org_id, supplier_id, material_id, subject, assigned_operator, metadata, thread_id, reviewed_at",
+        { count: "exact" }
+      )
+      .eq("agent_id", a4.id)
+      .eq("status", "sent")
+      .not("reviewed_at", "is", null)
+      .order("reviewed_at", { ascending: true })
+      .limit(SENT_WINDOW),
+    SENT_WINDOW,
+    "sent RFQs in the call-task window"
+  );
+  const sent = sentRead.rows;
+  await ctx.log(sentRead.note, { step: "call_task", data: { backlog: sentRead.total, remainder: sentRead.remainder } });
 
   const orgStatuses = await loadOrgStatuses(admin);
   const { followups: followupsByThread, replied: repliedThreads } = await loadThreadState(
     admin,
-    Array.from(new Set(((sent ?? []) as any[]).map((r) => r.thread_id).filter(Boolean)))
+    Array.from(new Set(sent.map((r: any) => r.thread_id).filter(Boolean)))
   );
 
   const now = Date.now();
   const resolver = new CallOperatorResolver(admin as any);
 
-  for (const r of (sent ?? []) as any[]) {
+  for (const r of sent) {
     if (raised >= MAX_PER_RUN) break;
     const meta = (r.metadata ?? {}) as any;
     if (!outreachAllowed(orgStatuses.byOaId.get(r.org_id) ?? "off")) continue;

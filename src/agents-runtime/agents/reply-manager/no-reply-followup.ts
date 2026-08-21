@@ -3,6 +3,8 @@ import { followupDelaysMs } from "@/lib/agent-timing";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { randomUUID } from "crypto";
+import { cappedRead } from "@/lib/capped-read";
+import { selectAllPaged } from "@/lib/supabase-paging";
 
 // Feature #2: pull in any supplier contact we haven't reached yet as CC on this
 // nudge (same thread) — a silent primary contact shouldn't be the only shot.
@@ -15,15 +17,21 @@ async function findUnreachedContacts(
 ): Promise<{ cc: { name: string | null; address: string }[]; reservationId: string | null }> {
   if (!r.supplier_id || !r.thread_id) return { cc: [], reservationId: null };
   try {
-    const { data: sibLeads } = await admin
-      .from("leads_in_flight")
-      .select("payload")
-      .eq("org_id", r.org_id)
-      .eq("supplier_id", r.supplier_id)
-      .limit(50);
+    // PERS-06: every lead for this supplier, not the first fifty. A contact that
+    // fell outside the window was a person we then never CC'd, which reads
+    // downstream as "this supplier has one contact".
+    const sibLeads = await selectAllPaged<any>((fromRow, toRow) =>
+      admin
+        .from("leads_in_flight")
+        .select("payload")
+        .eq("org_id", r.org_id)
+        .eq("supplier_id", r.supplier_id)
+        .order("id")
+        .range(fromRow, toRow)
+    );
     const candidates = new Map<string, string | null>();
     const toLower = toAddress.toLowerCase();
-    for (const sl of (sibLeads ?? []) as any[]) {
+    for (const sl of sibLeads as any[]) {
       const acs = (sl.payload as any)?.additional_contacts;
       if (!Array.isArray(acs)) continue;
       for (const ac of acs) {
@@ -67,6 +75,8 @@ async function findUnreachedContacts(
 // the last nudge has gone out.
 
 const MAX_PER_RUN = 50;
+// The read window, wider than the per-run budget so the budget is what bites.
+const SENT_WINDOW = 300;
 
 // A staged draft the operator hasn't acted on yet. While one of these is sitting
 // in a thread the sequence is paused: nudge #2 says "circling back", which is a
@@ -145,14 +155,27 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
     return { drafted, skipped, handedOff };
   }
 
-  const { data: sent } = await admin
-    .from("draft_references")
-    .select("id, org_id, supplier_id, material_id, subject, assigned_operator, metadata, email_client, thread_id, reviewed_at")
-    .eq("agent_id", a4.id)
-    .eq("status", "sent") // the RFQ was actually sent
-    .is("metadata->reply_detected", null) // and got no reply
-    .not("reviewed_at", "is", null) // reviewed_at = the sent timestamp (set by the webhook)
-    .limit(300);
+  // PERS-06: same fault as the call sweep — 300 rows in no order, so which
+  // suppliers fell outside the window changed run to run and some were never
+  // nudged at all. Oldest sent first, and the backlog is reported.
+  const sentRead = await cappedRead<any>(
+    admin
+      .from("draft_references")
+      .select(
+        "id, org_id, supplier_id, material_id, subject, assigned_operator, metadata, email_client, thread_id, reviewed_at",
+        { count: "exact" }
+      )
+      .eq("agent_id", a4.id)
+      .eq("status", "sent") // the RFQ was actually sent
+      .is("metadata->reply_detected", null) // and got no reply
+      .not("reviewed_at", "is", null) // reviewed_at = the sent timestamp (set by the webhook)
+      .order("reviewed_at", { ascending: true })
+      .limit(SENT_WINDOW),
+    SENT_WINDOW,
+    "un-replied sent RFQs in the follow-up window"
+  );
+  const sent = sentRead.rows;
+  await ctx.log(sentRead.note, { step: "no_reply", data: { backlog: sentRead.total, remainder: sentRead.remainder } });
 
   // Per-org switch: only nudge/escalate for orgs whose switch is 'active'. A
   // paused org's in-flight RFQs stop getting follow-ups.
@@ -160,11 +183,11 @@ export async function runNoReplyFollowups(ctx: Ctx, admin: Admin): Promise<{ dra
 
   const { followups: followupsByThread, replied: repliedThreads } = await loadThreadState(
     admin,
-    Array.from(new Set(((sent ?? []) as any[]).map((r) => r.thread_id).filter(Boolean)))
+    Array.from(new Set(sent.map((r: any) => r.thread_id).filter(Boolean)))
   );
 
   const now = Date.now();
-  for (const r of (sent ?? []) as any[]) {
+  for (const r of sent) {
     if (drafted >= MAX_PER_RUN) break;
     const meta = (r.metadata ?? {}) as any;
     if (TERMINAL.has(meta.flow_status)) continue;

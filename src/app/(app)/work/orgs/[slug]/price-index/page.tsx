@@ -27,6 +27,7 @@ import { cn } from "@/lib/utils";
 import { aggregatorNameFromPayload, aggregatorNameOf } from "@/lib/aggregator-hosts";
 import { leadMarketKind, type MarketKind } from "@/lib/lead-market";
 import { tierDelta, stagedQuoteDelta } from "@/lib/price-delta";
+import { ShowingNote } from "@/components/showing-note";
 
 export const dynamic = "force-dynamic";
 
@@ -41,6 +42,11 @@ type Status = (typeof STATUSES)[number]["value"];
 // Marketplace suppliers: re-check the current public price (Agent 05). Direct
 // suppliers: there's no public price, so an expiring quote becomes a re-quote
 // draft (Agent 02). Folds in the old Price Changes tab.
+// PERS-06 windows over this page's three sources, reported when they bite.
+const FINDING_WINDOW = 200;
+const DRAFT_WINDOW = 200;
+const STAGED_WINDOW = 1000;
+
 export default async function OrgPriceIndexPage({
   params,
   searchParams,
@@ -61,28 +67,33 @@ export default async function OrgPriceIndexPage({
     admin
       .from("marketplace_check_findings")
       .select(
-        "id, supplier_name, material_name, baseline_price, current_price, currency, pack_size, pct_change, classification, status, source_url, notes, stock_status, stock_note, out_of_stock_since, created_at, orgs(slug, name)"
+        "id, supplier_name, material_name, baseline_price, current_price, currency, pack_size, pct_change, classification, status, source_url, notes, stock_status, stock_note, out_of_stock_since, created_at, orgs(slug, name)",
+        { count: "exact" }
       )
       .eq("org_id", org.id)
       .eq("status", status)
       .order("pct_change", { ascending: false, nullsFirst: false })
-      .limit(200),
+      .limit(FINDING_WINDOW),
     admin
       .from("draft_references")
       .select(
-        "id, subject, supplier_id, material_id, quote_id, status, created_at, metadata, assigned_operator, users:users!draft_references_assigned_operator_fkey(display_name, email, user_roles(role)), reviewer:users!draft_references_reviewer_fkey(display_name), agents(slug)"
+        "id, subject, supplier_id, material_id, quote_id, status, created_at, metadata, assigned_operator, users:users!draft_references_assigned_operator_fkey(display_name, email, user_roles(role)), reviewer:users!draft_references_reviewer_fkey(display_name), agents(slug)",
+        { count: "exact" }
       )
       .eq("org_id", org.id)
       .eq("agents.slug", "agent-02-revalidation")
       .order("created_at", { ascending: false })
-      .limit(200),
+      .limit(DRAFT_WINDOW),
     admin
       .from("staged_quotes")
-      .select("id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, currency, grade, status, created_at, case_type, case_dimensions, native_price, native_currency, fx_rate, captured_price, captured_fx_rate, extraction_notes, price_source, price_source_at, price_change_source, supplier_price_usd, supplier_price_changed_at")
+      .select(
+        "id, supplier_id, supplier_name, material_id, material_name, price, case_size, unit_of_measurement, unit_price, currency, grade, status, created_at, case_type, case_dimensions, native_price, native_currency, fx_rate, captured_price, captured_fx_rate, extraction_notes, price_source, price_source_at, price_change_source, supplier_price_usd, supplier_price_changed_at",
+        { count: "exact" }
+      )
       .eq("org_id", org.id)
       .not("material_id", "is", null)
       .order("created_at", { ascending: false })
-      .limit(1000),
+      .limit(STAGED_WINDOW),
     // Marketplace prices we've already pulled (Agent 05 lead-price-pull) live on
     // the lead payload, not in findings. Surface them so the Live Price Index
     // shows the *current* price on file, not only re-check deltas.
@@ -444,8 +455,13 @@ export default async function OrgPriceIndexPage({
 
   const base = `/work/orgs/${org.slug}/price-index`;
 
+  // PERS-06: three windowed reads feed this page. Where one bites, the tab
+  // below it is a slice and says so instead of reading as the whole index.
   return (
     <div className="space-y-6">
+      <ShowingNote shown={findingsRes.data?.length ?? 0} total={findingsRes.count} noun="marketplace re-check findings" />
+      <ShowingNote shown={draftsRes.data?.length ?? 0} total={draftsRes.count} noun="re-quote drafts" />
+      <ShowingNote shown={stagedRes.data?.length ?? 0} total={stagedRes.count} noun="captured quotes" />
       <ListPageHeader
         level={2}
         title="Live Price Index"

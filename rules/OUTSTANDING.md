@@ -322,27 +322,56 @@ What each site was doing:
 **Enforcement:** `discovery/zero-must-not-be-terminal`, nine mutations. PERS-03
 moves from Check owed to Guard.
 
-## P1 — Deliberate caps hide work in eighteen places
+## Closed 2026-08-21 — deliberate caps hid work in thirty-odd places
 
-Breaks PERS-06. The accidental thousand-row cut is genuinely closed: the
-truncation guard is in both database clients and no unguarded bare read
-remains. But the guard treats any request carrying an explicit limit as
-intentional, so every remaining break is an explicit limit.
+Broke PERS-06. The accidental thousand-row cut was already closed by the
+truncation guard, but that guard waves through any request carrying an explicit
+`.limit()`, on the reasoning that a limit somebody typed is a limit somebody
+meant. Every remaining break was therefore an explicit limit — and the ones
+that mattered were not too small, they were unannounced. "Found 25 stale leads"
+and "QA'd 100 drafts" both read as the whole backlog. A page showing 50 of
+3,461 staged drafts looked exactly like a page showing 50 staged drafts.
 
-Highest impact: the read feeding the cross-client leak alert is capped at 50,
-so the alert under-reports the blast radius of an isolation breach. A document
-requirement check capped at 5,000 makes us re-ask suppliers for documents we
-already hold. Two reads sit exactly at the thousand-row page size and are
-therefore doubly truncated. Two cadence sweeps cap at 300 with no ordering at
-all, so past 300 an arbitrary and unstable subset of suppliers silently stops
-getting call and no-reply follow-ups. An inbound reply is matched against only
-the twenty newest staged quotes, which creates duplicates.
+The class fix is that a capped read carries its own remainder. PostgREST
+returns the true matching count on the *same* request as a capped page, so
+`.select(cols, { count: "exact" })` costs nothing and removes the excuse.
+`src/lib/capped-read.ts` wraps that for runtime code and hands back
+`{ rows, total, remainder, note }`, the note already worded for a log line or a
+run summary. `src/components/showing-note.tsx` is the same thing on a page.
 
-Four more drain over successive runs but never say how many are waiting, and
-one logs a count that reads as "all of them".
+Three sites were not capped-and-reported but re-read in full with
+`selectAllPaged`, because there the window changed the *answer* rather than the
+volume:
 
-**Owed:** an exact count on the same request plus "N more waiting" in every
-summary; `check-rules` id `reads/limit-must-report-remainder`.
+- The sibling-lead lookup in the no-reply follow-up read the first fifty leads
+  for a supplier, so a contact outside that window was a person we then never
+  CC'd — which reads downstream as "this supplier has one contact".
+- The inbound router resolved a thread's owner from 200 draft references. A
+  second client whose reference fell outside the window turns an ambiguous
+  thread into a confidently wrong owner, which is the ORG-06 fault.
+- The permanent-bounce retire capped at 500. A dead mailbox is dead on every
+  lead carrying it, not on the first five hundred.
+
+One site was rewritten rather than reported: the outreach-retry action decided
+whether a supplier already had a live thread by pulling a slice of the client's
+drafts and scanning it in JS. A window there is not a cost control, it is a
+wrong answer — the row past the cap is the live thread we then write over the
+top of. It now asks the database the actual question, twice, by supplier and by
+contact address, with `.limit(1)`.
+
+Everything else — the agents, the API routes, the runbook answers, nine
+Control Room pages — kept its cap and gained the count. The API feeds also
+gained a `remainder` field; the resolutions feed additionally caps its `until`
+cursor to the oldest unread row, because a since-cursor handed a short page
+with no remainder walks forward past everything it never saw.
+
+**Enforcement:** `reads/limit-must-report-remainder`, three mutations. It reads
+`.limit()` on a work table — resolving the table through a chained `.from()` or
+through a builder held in a variable — and demands an exact count, a
+`cappedRead`, a `selectAllPaged` or a `ShowingNote` within sight of it. Two
+windows are waived in `DECLARED_WINDOWS`, keyed by path *and* by the limit
+expression: rename the constant and the waiver stops applying. PERS-06 moves
+from Check owed to Guard.
 
 ## P1 — Call tasks reach nobody
 
@@ -600,7 +629,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | PERS-02 | `queues/flag-must-not-exit-queue` |
 | PERS-03 | `discovery/zero-must-not-be-terminal` — see the P1 above |
 | PERS-04 | the run-summary half. `retry/bound-must-be-declared` shipped 2026-08-20 and holds the rules-folder half: all seven bounds are now named under PERS-04 and an eighth fails the build. A bound must also appear in the run summary, which cannot be read from the source. |
-| PERS-06 | `reads/limit-must-report-remainder` — see the P1 above |
 | DISC-05 | `discovery/platform-is-never-manufacturer` |
 | DISC-09 | `discovery/self-supplied-gate-must-fail-closed` — gates are fail-open today |
 | OUT-08 | `outreach/asks-must-be-staged` |

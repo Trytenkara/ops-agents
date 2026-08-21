@@ -4,10 +4,10 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-121 rules. 83 are actually enforced, 18 owe a check or a job,
+121 rules. 83 are actually enforced, 17 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
-6 of the enforced rules hold only part of their invariant and say so in
+5 of the enforced rules hold only part of their invariant and say so in
 their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
@@ -71,7 +71,7 @@ this ledger read as enforced.
 | `PERS-03` | A zero-result pass is never "this market is empty" | Guard — `src/lib/dry-pass.ts` (`passOutcome`, `advanceDryPass`, `retryAfter`, `rowsOrThrow`) and `discovery/zero-must-not-be-terminal`, which fails the build if the helper stops naming all three outcomes, if any of the six sites stops going through it, or if the marketplace re-check goes back to writing a crash as a finding. |
 | `PERS-04` | Retry limits are a spend control, and must be named | Guard — `retry/bound-must-be-declared`: a constant whose name says it bounds attempts, retries or dry passes must be named in this file. The guard holds the half that can be read from the source; the run-summary half is still owed and is listed in `OUTSTANDING.md`. |
 | `PERS-05` | Never give up on a lead with no contact | Guard — `outreach/contactless-must-park-not-drop`. This used to name OUT-02's check. They are not the same break: OUT-02 is a storefront that was never given a channel, PERS-05 is a direct supplier actively set to `dropped` so the re-queue cannot see it. Sharing one id meant guarding either one would report both as held. |
-| `PERS-06` | No hidden caps on a worklist | Guard for the accidental cut — `src/lib/supabase-paging.ts` `selectAllPaged` and `src/lib/supabase/truncation-guard.ts`, `reads/client-must-guard-truncation`. Check owed — `reads/limit-must-report-remainder` for deliberate windows. |
+| `PERS-06` | No hidden caps on a worklist | Guard, in two halves. The accidental cut — `src/lib/supabase-paging.ts` `selectAllPaged` and `src/lib/supabase/truncation-guard.ts`, `reads/client-must-guard-truncation`. The deliberate window — `reads/limit-must-report-remainder`, which fails any capped read of a work table that does not carry its own remainder out. `src/lib/capped-read.ts` is the runtime half (PostgREST returns the true count on the same request, so knowing what was left behind is free) and `src/components/showing-note.tsx` the page half. A window that genuinely hides no work is waived in the check's `DECLARED_WINDOWS`, keyed by file *and* by the exact constant, so renaming or moving it revokes the waiver. |
 | `PERS-08` | The record of a failure is never proof of success | Guard — the reply-drafted check in `src/lib/tenkara-inbound.ts` excludes `unmatched_inbound_clarification` and `retireUnmatchedTriage` closes the case and the draft on a successful match; `replies/idempotency-must-exclude-triage-artefacts` fails the build if the check stops distinguishing them or the retirement is dropped. |
 | `PERS-09` | A paced job stops itself and says where it stopped | Guard — `deadlineAt` on `syncOrgThreadOwners` (`src/lib/sync-thread-owners.ts`), threaded into both push loops, with `unpushed` in the run summary and the re-assert cursor rewound to the last thread actually pushed; `INTERACTIVE_SYNC_BUDGET_MS` at the server-action call sites. Check owed for the class — `runs/paced-loop-must-carry-deadline`, so a new per-item push loop with no deadline fails the build. See `OUTSTANDING.md`. |
 | `PERS-10` | Blocked is not empty | Guard — `fetch/blocked-must-not-read-as-empty`, in three parts, because the rule breaks at two different points and the code broke at both while looking correct. |

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { cappedRead } from "@/lib/capped-read";
 
 // Pricing pipeline: per-supplier-thread lifecycle, derived from draft_references
 // whose metadata carries a flow_status. Shared by the cross-org Review queue
@@ -13,6 +14,10 @@ export const PIPELINE_STAGES: { key: string; label: string }[] = [
   { key: "stale", label: "Stale — needs ops" },
   { key: "closed_declined", label: "Closed (declined)" },
 ];
+
+// The newest slice of the pipeline one page renders. What falls outside is
+// counted and shown, never dropped in silence (PERS-06).
+const THREAD_WINDOW = 2000;
 
 const STAGE_INDEX: Record<string, number> = Object.fromEntries(PIPELINE_STAGES.map((s, i) => [s.key, i]));
 
@@ -31,6 +36,11 @@ export interface PipelineThread {
 export interface PipelineData {
   threads: PipelineThread[];
   counts: Record<string, number>;
+  /**
+   * Set when the read hit its window. The view shows a slice of the pipeline and
+   * has to say so, or the stage counts read as the whole book of work (PERS-06).
+   */
+  windowNote?: string;
 }
 
 // orgIds: null = all orgs (admin); [] handled by caller; otherwise scope to set.
@@ -40,11 +50,16 @@ export async function loadPricingThreads(
 ): Promise<PipelineData> {
   let q = admin
     .from("draft_references")
-    .select("id, org_id, thread_id, metadata, created_at")
+    .select("id, org_id, thread_id, metadata, created_at", { count: "exact" })
     .not("metadata->>flow_status", "is", null);
   if (orgIds) q = q.in("org_id", orgIds);
 
-  const { data: refs } = await q.order("created_at", { ascending: false }).limit(2000);
+  const read = await cappedRead<any>(
+    q.order("created_at", { ascending: false }).order("id").limit(THREAD_WINDOW),
+    THREAD_WINDOW,
+    "pipeline drafts"
+  );
+  const refs = read.rows;
 
   const byThread = new Map<string, PipelineThread>();
   for (const r of refs ?? []) {
@@ -78,5 +93,11 @@ export async function loadPricingThreads(
   );
   const counts: Record<string, number> = {};
   for (const t of threads) counts[t.status] = (counts[t.status] ?? 0) + 1;
-  return { threads, counts };
+  return {
+    threads,
+    counts,
+    windowNote: read.remainder
+      ? `Newest ${read.rows.length} of ${read.total} pipeline drafts — ${read.remainder} older one(s) not shown, so the stage counts below cover this slice only.`
+      : undefined,
+  };
 }

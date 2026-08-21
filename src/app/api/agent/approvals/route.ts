@@ -36,6 +36,8 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({ approval_id: data.id });
 }
 
+const PAGE_SIZE = 50;
+
 export async function GET(request: NextRequest) {
   const agent = await authenticateAgent(request);
   if (!agent) return unauthorized();
@@ -44,12 +46,22 @@ export async function GET(request: NextRequest) {
   const status = url.searchParams.get("status") ?? "pending";
 
   const admin = createAdminClient();
-  let q = admin.from("pending_approvals").select("id, type, status, requested_at, payload").eq("status", status);
+  let q = admin
+    .from("pending_approvals")
+    .select("id, type, status, requested_at, payload", { count: "exact" })
+    .eq("status", status);
   if (org_slug) {
     const { data: org } = await admin.from("orgs").select("id").eq("slug", org_slug).maybeSingle();
     if (org) q = q.eq("org_id", org.id);
   }
-  const { data, error } = await q.limit(50);
+  // PERS-06: a page, said out loud, so a caller handed 50 does not read it as
+  // the whole queue.
+  const { data, error, count } = await q.order("requested_at", { ascending: true }).order("id").limit(PAGE_SIZE);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ approvals: data ?? [] });
+  const approvals = data ?? [];
+  return NextResponse.json({
+    approvals,
+    total: count ?? approvals.length,
+    remainder: Math.max((count ?? approvals.length) - approvals.length, 0),
+  });
 }

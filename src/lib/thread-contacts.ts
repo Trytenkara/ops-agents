@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { TenkaraMessage } from "@/lib/tenkara";
 import { isRetiredContact } from "@/lib/contact-change";
 import { isAggregatorEmail } from "@/agents-runtime/agents/data-enrichment/enrich";
+import { selectAllPaged } from "@/lib/supabase-paging";
 
 // Addresses an operator adds inside the email app were invisible here.
 //
@@ -78,15 +79,20 @@ export async function harvestThreadContacts(
   const participants = threadParticipants(args.messages);
   if (!participants.length) return 0;
 
-  const { data: refs } = await admin
-    .from("draft_references")
-    .select("metadata")
-    .eq("org_id", args.orgId)
-    .eq("thread_id", args.threadId)
-    .limit(50);
+  // PERS-06: the lead ids on a thread are the whole point of this read, and a
+  // thread with more than fifty draft rows would have silently lost some.
+  const refs = await selectAllPaged<any>((from, to) =>
+    admin
+      .from("draft_references")
+      .select("metadata")
+      .eq("org_id", args.orgId!)
+      .eq("thread_id", args.threadId)
+      .order("id")
+      .range(from, to)
+  );
 
   const leadIds = new Set<string>();
-  for (const ref of (refs ?? []) as any[]) {
+  for (const ref of refs) {
     for (const id of Array.isArray(ref.metadata?.lead_ids) ? ref.metadata.lead_ids : []) {
       if (typeof id === "string") leadIds.add(id);
     }

@@ -496,6 +496,8 @@ export async function addGranolaNotesToCase(caseId: string, notes: string) {
 // active lead on this org, name-matched. Never a free-typed new supplier — a
 // stray call is still tied to a real lead so the case links up like every other
 // one (phone lookups, drop/deescalate, the lead itself).
+const LEAD_PICKER_WINDOW = 20;
+
 export async function searchOrgLeadsForCall(orgId: string, query: string) {
   const session = await getSession();
   if (!session) return { ok: false, error: "unauthenticated" } as const;
@@ -505,17 +507,23 @@ export async function searchOrgLeadsForCall(orgId: string, query: string) {
   const q = (query ?? "").trim();
   let builder = admin
     .from("leads_in_flight")
-    .select("id, supplier_id, supplier_name, material_id, material_name, payload")
+    .select("id, supplier_id, supplier_name, material_id, material_name, payload", { count: "exact" })
     .eq("org_id", orgId)
     .eq("status", "active")
     .order("updated_at", { ascending: false })
-    .limit(20);
+    .limit(LEAD_PICKER_WINDOW);
   if (q) builder = builder.ilike("supplier_name", `%${q}%`);
-  const { data, error } = await builder;
+  const { data, error, count } = await builder;
   if (error) return { ok: false, error: error.message } as const;
+
+  // PERS-06: a picker showing 20 of 400 looks like a complete list, and the
+  // supplier the operator wants is simply absent from it.
+  const shown = (data ?? []).length;
+  const moreCount = Math.max((count ?? shown) - shown, 0);
 
   return {
     ok: true,
+    moreCount,
     leads: (data ?? []).map((r: any) => ({
       leadId: r.id as string,
       supplierId: r.supplier_id as string | null,

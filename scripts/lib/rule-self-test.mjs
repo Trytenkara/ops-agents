@@ -44,6 +44,38 @@ const drop = (suffix) => (files) => files.filter((f) => !f.path.endsWith(suffix)
 
 const MUTATIONS = [
   // Line scanners. A synthetic file is enough: these read one line at a time.
+  // PERS-06. Three shapes, because the check has to find the table three ways:
+  // a chained read, a builder held in a variable, and a real call site whose
+  // reporting has been taken away.
+  {
+    expect: "reads/limit-must-report-remainder",
+    label: "a chained read of a work table caps itself and reports nothing",
+    mutate: fixture(
+      "src/__selftest__/capped-chain.ts",
+      `const { data } = await admin\n  .from("leads_in_flight")\n  .select("id, supplier_name")\n  .eq("status", "active")\n  .limit(200);\n`,
+    ),
+  },
+  {
+    expect: "reads/limit-must-report-remainder",
+    label: "a builder variable is capped lines away from its own .from()",
+    mutate: fixture(
+      "src/__selftest__/capped-builder.ts",
+      `let q = admin.from("cases").select("id, type").eq("status", "open");\n` +
+        `if (orgIds) q = q.in("org_id", orgIds);\n` +
+        `const { data } = await q.limit(50);\n`,
+    ),
+  },
+  {
+    expect: "reads/limit-must-report-remainder",
+    label: "a live capped read loses its exact count, so the remainder is unknowable",
+    mutate: edit("src/agents-runtime/agents/outreach-qa/index.ts", (t) =>
+      t
+        .split('created_at", { count: "exact" })')
+        .join('created_at")')
+        .split("cappedRead")
+        .join("plainRead"),
+    ),
+  },
   {
     expect: "fx/no-direct-convertToUsd",
     mutate: fixture("src/__selftest__/fx.ts", `const usd = convertToUsd(amount, "CNY");\n`),
@@ -717,7 +749,7 @@ const MUTATIONS = [
   {
     expect: "orgs/inbound-org-must-try-the-thread",
     label: "the router gives up on the mailbox without asking the thread",
-    mutate: rename("src/lib/tenkara-inbound.ts", '.from("draft_references")\n      .select("org_id")', '.from("orgs")\n      .select("id")'),
+    mutate: rename("src/lib/tenkara-inbound.ts", '.from("draft_references")\n        .select("org_id")', '.from("orgs")\n        .select("id")'),
   },
   {
     expect: "orgs/inbound-org-must-try-the-thread",

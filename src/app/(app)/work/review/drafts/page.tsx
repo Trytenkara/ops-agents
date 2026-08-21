@@ -9,8 +9,12 @@ import { DraftSignals } from "@/components/draft-signals";
 import { DraftStatusBadge } from "@/components/draft-status-badge";
 import { OperatorChip } from "@/components/operator-chip";
 import { operatorRoles, primaryRole } from "@/lib/operator";
+import { ShowingNote } from "@/components/showing-note";
 
 export const dynamic = "force-dynamic";
+
+// PERS-06: a window, and the page says when it bites.
+const DRAFT_WINDOW = 50;
 
 export default async function CrossOrgPage() {
   const session = (await getSession())!;
@@ -22,18 +26,19 @@ export default async function CrossOrgPage() {
   const admin = createAdminClient();
   let q = admin
     .from("draft_references")
-    .select("id, subject, status, created_at, org_id, metadata, orgs(slug, name), users:users!draft_references_assigned_operator_fkey(display_name, email, user_roles(role)), reviewer:users!draft_references_reviewer_fkey(display_name)")
+    .select("id, subject, status, created_at, org_id, metadata, orgs(slug, name), users:users!draft_references_assigned_operator_fkey(display_name, email, user_roles(role)), reviewer:users!draft_references_reviewer_fkey(display_name)", { count: "exact" })
     .eq("status", "staged")
     .order("created_at", { ascending: false })
-    .limit(50);
+    .limit(DRAFT_WINDOW);
   if (assigned) q = q.in("org_id", assigned);
-  const { data: drafts } = await q;
+  const { data: drafts, count: draftTotal } = await q;
 
   return (
     <div className="space-y-4">
       <div>
         <h1 className="font-serif text-3xl tracking-tight">All staged drafts</h1>
         <p className="text-sm text-muted-foreground mt-1">Cross-org rollup. Lead Operators view.</p>
+        <ShowingNote shown={drafts?.length ?? 0} total={draftTotal} noun="staged drafts" hint="Newest first." />
       </div>
 
       <div className="rounded-md border border-dashed border-border bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
