@@ -90,9 +90,22 @@ async function deriveCaseOwners(admin: any, orgId: string, rows: any[], ctx?: As
     // Calls resolve over the client's call operators; everything else is desk
     // work. A client with no caller gets an unowned call rather than a ping to
     // someone who does not make calls.
-    const ownerId = recordOwnerId(assignment, c, isCallCase(c) ? "call" : "email");
+    const call = isCallCase(c);
+    const ownerId = recordOwnerId(assignment, c, call ? "call" : "email");
     const owner = ownerId ? byId.get(ownerId) : null;
-    if (!owner) continue;
+    if (!owner) {
+      // Derivation declined. For desk work the stored stamp is the right
+      // fallback, but for a call it is the one thing AUTO-08 forbids: whoever
+      // is stamped may have moved to the email desk, or left the client
+      // entirely, and the tab then names them as the caller indefinitely. An
+      // unowned call is honest and says the client needs a caller named; a
+      // wrongly-owned one is a task somebody else believes is handled.
+      if (call && c.assigned_operator && byId.get(c.assigned_operator)?.operatorType !== "call") {
+        c.assigned_operator = null;
+        c.users = null;
+      }
+      continue;
+    }
     c.assigned_operator = owner.id;
     c.users = {
       display_name: owner.name,

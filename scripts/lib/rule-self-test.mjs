@@ -44,6 +44,49 @@ const drop = (suffix) => (files) => files.filter((f) => !f.path.endsWith(suffix)
 
 const MUTATIONS = [
   // Line scanners. A synthetic file is enough: these read one line at a time.
+  // AUTO-08. Six, because the invariant has six limbs and each one on its own
+  // is enough to put a phone task on somebody who does not make calls.
+  {
+    expect: "assignment/call-owner-must-be-call-operator",
+    label: "the call router picks over the whole team instead of the callers",
+    mutate: rename("src/lib/call-escalation.ts", 'poolForWork(ctx.pool, { type: "call"', 'poolForWork(ctx.pool, { type: "email"'),
+  },
+  {
+    expect: "assignment/call-owner-must-be-call-operator",
+    label: "a call task is stamped with the email thread's operator",
+    mutate: edit("src/agents-runtime/agents/reply-manager/call-tasks.ts", (t) =>
+      t.replace("assigned_operator: routing.caller?.userId ?? null,", "assigned_operator: r.assigned_operator ?? null,")
+    ),
+  },
+  {
+    expect: "assignment/call-owner-must-be-call-operator",
+    label: "a new call task insert takes its owner from the session user",
+    mutate: fixture(
+      "src/__selftest__/call-case-insert.ts",
+      `await admin.from("cases").insert({\n  org_id: orgId,\n  type: "calling_escalation",\n  status: "open",\n  assigned_operator: actorUserId,\n});\n`,
+    ),
+  },
+  {
+    expect: "assignment/call-owner-must-be-call-operator",
+    label: "case owners are all derived as desk work",
+    mutate: rename("src/lib/org-cases.ts", 'call ? "call" : "email"', '"email"'),
+  },
+  {
+    expect: "assignment/call-owner-must-be-call-operator",
+    label: "a declined call derivation keeps a stamp belonging to the email desk",
+    mutate: rename("src/lib/org-cases.ts", 'operatorType !== "call"', "operatorType !== undefined"),
+  },
+  {
+    expect: "assignment/call-owner-must-be-call-operator",
+    label: "removing an operator hands their calls to the email pool",
+    mutate: rename("src/lib/reassign-owners.ts", 'poolForWork(pickPool, { type: "call", lane: null })', "pickPool"),
+  },
+  {
+    expect: "assignment/call-owner-must-be-call-operator",
+    label: "removing an operator leaves their open cases stamped to them",
+    mutate: edit("src/lib/reassign-owners.ts", (t) => t.split('.from("cases")').join('.from("case_events")')),
+  },
+
   // PERS-06. Three shapes, because the check has to find the table three ways:
   // a chained read, a builder held in a variable, and a real call site whose
   // reporting has been taken away.
@@ -905,7 +948,7 @@ const RULES_MUTATIONS = [
     mutate: (dir) => {
       const p = join(dir, "OUTSTANDING.md");
       const text = readFileSync(p, "utf8");
-      const row = text.match(/^\| AUTO-08 \|.*$/m);
+      const row = text.match(/^\| PERS-02 \|.*$/m);
       if (!row) return;
       writeFileSync(p, text.replace(row[0] + "\n", ""));
     },
@@ -916,7 +959,7 @@ const RULES_MUTATIONS = [
     mutate: (dir) => {
       const p = join(dir, "OUTSTANDING.md");
       const text = readFileSync(p, "utf8");
-      const row = text.match(/^\| AUTO-08 \|.*$/m);
+      const row = text.match(/^\| PERS-02 \|.*$/m);
       if (!row) return;
       writeFileSync(p, text.replace(row[0], row[0] + "\n| META-01 | long since settled |"));
     },

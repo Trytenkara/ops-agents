@@ -1,12 +1,13 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAllPaged } from "@/lib/supabase-paging";
-import { getOrgAssignmentContext, pickSupplierOperator, orgAutoKey } from "@/lib/operator-assignment";
+import { getOrgAssignmentContext, pickSupplierOperator, orgAutoKey, poolForWork } from "@/lib/operator-assignment";
 import { mirrorDraftAssignee } from "@/lib/draft-staging";
 
 export interface ReassignResult {
   claims: number;
   drafts: number;
   leads: number;
+  cases: number;
 }
 
 // When an operator stops being eligible for an org (role changed away from
@@ -24,7 +25,7 @@ export async function reassignIneligibleOwners(
   actorUserId: string
 ): Promise<ReassignResult> {
   const removed = Array.from(new Set(ineligibleUserIds.filter(Boolean)));
-  const result: ReassignResult = { claims: 0, drafts: 0, leads: 0 };
+  const result: ReassignResult = { claims: 0, drafts: 0, leads: 0, cases: 0 };
   if (removed.length === 0) return result;
 
   const ctx = await getOrgAssignmentContext(admin, orgId);
@@ -38,6 +39,11 @@ export async function reassignIneligibleOwners(
   // of auto-assignable, so a manual claim still finds a live owner.
   const pickPool = autoPool.length > 0 ? autoPool : anyPool;
   const pick = (key: string): string | null => pickSupplierOperator(pickPool, key)?.id ?? null;
+  // Calls go over the client's callers only, and never degrade to the email
+  // desk (AUTO-08). An empty call pool means the removed operator's calls come
+  // back unowned, which is the state that gets a caller named.
+  const callPool = poolForWork(pickPool, { type: "call", lane: null });
+  const pickCaller = (key: string): string | null => pickSupplierOperator(callPool, key)?.id ?? null;
   if (pickPool.length === 0) return result; // nobody left to take the book; leave it for a human to sort out
 
   // 1. Manual supplier claims.
@@ -121,6 +127,38 @@ export async function reassignIneligibleOwners(
       .update({ assigned_operator_id: newOwner, updated_at: new Date().toISOString() })
       .eq("id", l.id);
     if (!error) result.leads++;
+  }
+
+  // 4. Escalations, calls included. Every other tab derives its owner at read
+  // time, but the stamp is what the agent posts to Slack and what an operator
+  // filters their own queue by, so leaving it on somebody who no longer works
+  // this client means the case is addressed to a name nobody answers to. Calls
+  // route over the call pool and come back unowned rather than landing on the
+  // email desk.
+  const caseRows = await selectAllPaged<{ id: string; type: string | null; supplier_id: string | null; metadata: any }>(
+    (from, to) =>
+      admin
+        .from("cases")
+        .select("id, type, supplier_id, metadata")
+        .eq("org_id", orgId)
+        .in("status", ["open", "in_progress"])
+        .in("assigned_operator", removed)
+        .order("id")
+        .range(from, to)
+  ).catch(() => []);
+  for (const c of caseRows) {
+    const key = orgAutoKey(ctx, {
+      supplierId: c.supplier_id,
+      supplierName: (c.metadata?.supplier_name as string | undefined) ?? null,
+      email: (c.metadata?.supplier_contact_email as string | undefined) ?? null,
+      leadId: (c.metadata?.lead_id as string | undefined) ?? c.id,
+    });
+    const newOwner = c.type === "calling_escalation" ? pickCaller(key) : pick(key);
+    // A call with no caller left is set unowned on purpose; desk work with no
+    // pick is left alone, because the stored stamp is still its fallback.
+    if (!newOwner && c.type !== "calling_escalation") continue;
+    const { error } = await admin.from("cases").update({ assigned_operator: newOwner }).eq("id", c.id);
+    if (!error) result.cases++;
   }
 
   return result;

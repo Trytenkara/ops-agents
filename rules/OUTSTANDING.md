@@ -373,24 +373,32 @@ windows are waived in `DECLARED_WINDOWS`, keyed by path *and* by the limit
 expression: rename the constant and the waiver stops applying. PERS-06 moves
 from Check owed to Guard.
 
-## P1 — Call tasks reach nobody
+## Closed 2026-08-21 — call tasks reached nobody
 
-Breaks AUTO-08. The assignment library is correct. But the agent-scheduled path
-that raises essentially all call tasks posts at a severity that never appears
-live, with nobody mentioned, and a title that names only the caller. So the
-email operator's name never reaches Slack and no one is notified. Only the
-manual button satisfies the rule.
+Broke AUTO-08. Measured first: California Chemicals' 132 open call tasks are all
+owned by genuine call operators, and the unowned ones at the other two clients
+are unowned by design. So the write paths were already right, and the rule was
+being broken in the three places nothing revisits.
 
-Separately, when derivation declines to own a call the code keeps whatever is
-stamped in the database, so an operator moved to the email desk keeps showing
-as the owner of open calls indefinitely. A sibling surface handles this
-correctly.
+The notification. The agent path raises essentially every call task, and it
+posts into the daily digest, which renders the title and nothing else. Both
+names were in the body. The email operator therefore never learned their
+supplier was being called, which is the visibility half of the rule and the half
+that never reached anyone. The title now carries both.
 
-**Owed:** case rows included in owner reassignment. The notification half is
-closed differently than written: as of 2026-08-19 nothing an agent raises posts
-live, so the agent call path queueing into the digest is now the intended
-behaviour, and the digest line names the caller. The email operator's name is
-still only in the body, which the digest does not render.
+The stale stamp. When derivation declined to own a call, `deriveCaseOwners` fell
+back to whatever was stored — correct for desk work, wrong for a call, because
+the stamped operator may have moved to the email desk. It now clears the stamp
+in that case: an unowned call says the client needs a caller named, a wrongly
+owned one is a task somebody believes is handled.
+
+The removal path. `reassignIneligibleOwners` moved claims, drafts and leads and
+never touched `cases`, so a removed operator stayed the named owner of every
+open escalation they held. Cases are now reassigned too, with calls routed over
+the call pool and set unowned when no caller remains.
+
+**Enforcement:** `assignment/call-owner-must-be-call-operator`, six mutations,
+one per limb. AUTO-08 moves from Check owed to Guard.
 
 ## P1 — The dealbreaker-grade guard arms intermittently, and has never fired
 
@@ -629,7 +637,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | --- | --- |
 | META-04 | `meta/no-second-copy-of-a-shared-guard`, beyond the invariants already covered |
 | COMM-08 | the scope's edges. `copy/no-rfq-or-em-dash-in-templates` holds a named list of outbound-copy files and `copy/scope-must-cover-every-draft-site` makes a `stageDraft` caller missing from it a violation. Copy reaching a supplier by some other path is still unseen. |
-| AUTO-08 | `assignment/call-owner-must-be-call-operator` |
 | DATA-05 | the shared host list. `contacts/guessed-combo-requires-own-domain-and-flag` shipped 2026-08-20 and holds the gate and the flag together. The gate still reads a hand-copied list in `enrich.ts` that has drifted 15 hosts behind `src/lib/aggregator-hosts.ts`, so a guess is allowed on those hosts. Merging the lists is a behaviour change for every other caller of the shared one, which is why it is not folded in here. |
 | PERS-01 | `retry/verdict-must-use-shared-classifier`. Three call sites use `classifyFailure` and two hand-rolled classifiers remain — see the P2 above. |
 | PERS-02 | `queues/flag-must-not-exit-queue` |

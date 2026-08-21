@@ -2003,6 +2003,108 @@ export function runChecks(files, rulesDir) {
     test: (l) => /xoxp-|SLACK_USER_TOKEN|slack_user_token/.test(l),
   });
 
+  // AUTO-08. A call task is owned by a call operator or by nobody. The pool
+  // filter in `poolForWork` already refuses to degrade a call to the email desk,
+  // and that was read as the rule being held — but the filter only governs a
+  // fresh derivation. Two paths reach a stamp without it: a case row written
+  // straight to the table, and a stamp already in the database that nothing
+  // revisits. The second is how an operator moved to the email desk kept
+  // showing as the owner of open calls, and how a removed operator kept them
+  // after every other surface had moved on.
+  //
+  // Three anchors, because the invariant is only true if all three hold: the
+  // router asks for the call side, every insert takes its owner from that
+  // router, and both re-derivation paths route calls over callers alone.
+  {
+    const rule = "assignment/call-owner-must-be-call-operator";
+    const CALL_TYPE = '"calling_escalation"';
+
+    const router = anchor("src/lib/call-escalation.ts", {
+      rule,
+      why: "call routing is the one place that asks for the call side of a client's team",
+      fix: "restore src/lib/call-escalation.ts",
+    });
+    if (router && !/poolForWork\(\s*ctx\.pool\s*,\s*\{\s*type:\s*"call"/.test(router.text)) {
+      violations.push({
+        rule,
+        why: "a call routed over the whole pool reaches whoever owns the supplier's inbox, and a ping to somebody who does not dial is a task nobody performs",
+        fix: 'resolve the caller from poolForWork(ctx.pool, { type: "call", ... })',
+        where: router.path,
+        line: "the call router no longer asks for the call pool",
+      });
+    }
+
+    // Every row that IS a call task takes its owner from the router. A literal
+    // anywhere else — the draft's operator, a session user, a spread over the
+    // email pool — is the 2026-08-07 break coming back.
+    for (const f of files) {
+      if (!f.path.startsWith("src/")) continue;
+      const text = codeLines(f).join("\n");
+      if (!text.includes(CALL_TYPE)) continue;
+      for (const m of text.matchAll(/type:\s*"calling_escalation"[\s\S]{0,1200}?assigned_operator:\s*([^,\n]+)/g)) {
+        const value = m[1].trim();
+        if (/caller/.test(value)) continue;
+        violations.push({
+          rule,
+          why: "a call task stamped with an owner the call router did not choose is how the email operator became the assignee in the first place",
+          fix: "take the owner from CallOperatorResolver.route(...).caller, and write null when the client has named no caller",
+          where: f.path,
+          line: `call task assigned_operator: ${value.slice(0, 80)}`,
+        });
+      }
+    }
+
+    // Re-derivation, both paths. A stored stamp is the right fallback for desk
+    // work and never for a call.
+    const reader = anchor("src/lib/org-cases.ts", {
+      rule,
+      why: "every case surface derives its owner here, so this is where a stale call stamp is caught",
+      fix: "restore src/lib/org-cases.ts",
+    });
+    if (reader && !/isCallCase\([\s\S]{0,80}?\?\s*"call"\s*:\s*"email"/.test(reader.text)) {
+      violations.push({
+        rule,
+        why: "deriving a call owner as if it were desk work puts the supplier's inbox owner on the phone task",
+        fix: 'pass isCallCase(c) ? "call" : "email" as the work type',
+        where: reader.path,
+        line: "case owner derivation no longer distinguishes a call",
+      });
+    }
+    if (reader && !/operatorType\s*!==\s*"call"/.test(reader.text)) {
+      violations.push({
+        rule,
+        why: "when derivation declines, the stored stamp stands — and on a call that stamp may name somebody who has since moved to the email desk, so the tab shows a caller who is not one",
+        fix: "clear assigned_operator on a call case whose stamped operator is not a call operator today",
+        where: reader.path,
+        line: "a declined call derivation keeps whatever is stamped",
+      });
+    }
+
+    const reassign = anchor("src/lib/reassign-owners.ts", {
+      rule,
+      why: "removing an operator is the moment their calls need a live owner or none",
+      fix: "restore src/lib/reassign-owners.ts",
+    });
+    if (reassign && !/type:\s*"call"/.test(reassign.text)) {
+      violations.push({
+        rule,
+        why: "reassigning a removed operator's calls over the ordinary pool hands phone work to the email desk, which is the fallback AUTO-08 exists to forbid",
+        fix: 'pick a call case\'s new owner from poolForWork(pool, { type: "call", lane: null })',
+        where: reassign.path,
+        line: "operator removal reassigns calls over the email pool",
+      });
+    }
+    if (reassign && !/from\("cases"\)/.test(reassign.text)) {
+      violations.push({
+        rule,
+        why: "cases were the one owner stamp removal never touched, so a removed operator stayed the named owner of every open escalation they held",
+        fix: "reassign open and in-progress cases alongside claims, drafts and leads",
+        where: reassign.path,
+        line: "operator removal does not touch case owners",
+      });
+    }
+  }
+
   // PERS-06. A deliberate cap is allowed; a cap nobody is told about is not.
   //
   // The truncation guard catches the accidental thousand-row cut and waves

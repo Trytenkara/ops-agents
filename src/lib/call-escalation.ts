@@ -200,9 +200,13 @@ export async function notifyCallEscalation(args: {
       // cadence advances, and that is one line per lead per day.
       key: `call_task:${brief.leadId ?? brief.threadId ?? brief.supplierName ?? "unknown"}:${brief.callStage}`,
       digestGroup: "Call tasks waiting",
+      // Both names, because the digest renders the title and nothing else. The
+      // body below says who emailed this supplier and the digest throws it
+      // away, so the email operator learned nothing about their supplier being
+      // called — which is half of AUTO-08 and the half that never posts live.
       title: `Call ${brief.callStage}: ${brief.supplierName ?? "a supplier"} → ${target}${
-        brief.phoneStatus === "missing" ? " (no phone on file)" : ""
-      }`,
+        emailOwner ? ` (emailed by ${emailOwner}, FYI)` : ""
+      }${brief.phoneStatus === "missing" ? " (no phone on file)" : ""}`,
     }).catch(() => false);
   }
   return postAgentAlert(text, { mentionUserIds }).catch(() => false);

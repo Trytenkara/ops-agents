@@ -115,8 +115,17 @@ The fix for an unassigned call task is naming a call operator on that client.
 Never reintroduce a fallback to the email pool: the type filter in `poolForWork`
 degrades for email work deliberately and must not for calls.
 
-**Enforcement:** Check owed — `assignment/call-owner-must-be-call-operator`.
-Partially held today by the operator-type pool filter.
+**Enforcement:** Guard — `assignment/call-owner-must-be-call-operator`, six
+mutations. The pool filter in `poolForWork` was read as holding this rule, but
+it only governs a fresh derivation, and a stamp can reach a case row two other
+ways. So the check holds all three: `src/lib/call-escalation.ts` must resolve
+the caller from the call side of the pool, every `type: "calling_escalation"`
+insert must take its owner from that router, and both re-derivation paths —
+`src/lib/org-cases.ts` at read time and `src/lib/reassign-owners.ts` when an
+operator is removed — must route a call over callers alone and write nobody
+rather than the email desk. `deriveCaseOwners` now clears a stored call stamp
+belonging to someone who is not a caller today, and operator removal reassigns
+`cases`, which it never touched.
 
 ## AUTO-09 — Real clients before internal test orgs
 

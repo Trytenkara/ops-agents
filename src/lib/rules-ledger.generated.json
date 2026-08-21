@@ -153,8 +153,8 @@
     {
       "id": "AUTO-08",
       "title": "Call tasks belong to call operators only",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "AUTO-09",
@@ -738,7 +738,7 @@
     "P1 — Two draft paths bypass the staging chokepoint",
     "Closed 2026-08-21 — zero results were accepted as an answer in nine places",
     "Closed 2026-08-21 — deliberate caps hid work in thirty-odd places",
-    "P1 — Call tasks reach nobody",
+    "Closed 2026-08-21 — call tasks reached nobody",
     "P1 — The dealbreaker-grade guard arms intermittently, and has never fired",
     "P2 — Guessed contacts can be synthesised at a directory",
     "P2 — Nothing stops a paced loop from outrunning its function",

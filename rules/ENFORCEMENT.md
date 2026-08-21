@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-121 rules. 83 are actually enforced, 27 owe a check or a job,
+121 rules. 84 are actually enforced, 26 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 15 of the enforced rules hold only part of their invariant and say so in
@@ -12,9 +12,9 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 75 |
+| **Guard** | A shared module or build check makes it impossible. | 76 |
 | **Audit** | A scheduled job reports the break after the fact. | 8 |
-| **Check owed** | A build check is possible and is not built yet. | 12 |
+| **Check owed** | A build check is possible and is not built yet. | 11 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
 | **None** | Outside this repository. Cannot be checked here. | 2 |
@@ -31,7 +31,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (75)
+## Guard (76)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -48,6 +48,7 @@ this ledger read as enforced.
 | `AUTO-05` | Never touch: operator and org membership | Guard — `orgs/no-operator-membership-writes`: nothing writes `user_org_assignments` or `user_roles`, in the query builder or in raw SQL, outside three human-gated server actions. `operator_type` and lanes are columns of that table, so they are covered by covering the table. The allow-list is an exact path match, not a substring, so a new `bulk-operators.ts` is not admitted by resembling one that is. |
 | `AUTO-06` | Cold outbound is never auto-sent | Guard — `outreach/no-send-outside-operator-action`: the send verbs are banned outright, since the fault would arrive as a convenience — an `auto_send` on a draft body, or a POST to a send endpoint from a night-time agent. Nothing in this codebase sends to a supplier today; the only real send is the operator invite, which is an account email to a colleague. |
 | `AUTO-07` | Owner of an open record is derived, never trusted | Guard — `src/lib/operator-assignment.ts` `recordOwnerId`, `assignment/derive-owner-via-recordOwnerId`. |
+| `AUTO-08` | Call tasks belong to call operators only | Guard — `assignment/call-owner-must-be-call-operator`, six mutations. The pool filter in `poolForWork` was read as holding this rule, but it only governs a fresh derivation, and a stamp can reach a case row two other ways. So the check holds all three: `src/lib/call-escalation.ts` must resolve the caller from the call side of the pool, every `type: "calling_escalation"` insert must take its owner from that router, and both re-derivation paths — `src/lib/org-cases.ts` at read time and `src/lib/reassign-owners.ts` when an operator is removed — must route a call over callers alone and write nobody rather than the email desk. `deriveCaseOwners` now clears a stored call stamp belonging to someone who is not a caller today, and operator removal reassigns `cases`, which it never touched. |
 | `AUTO-09` | Real clients before internal test orgs | Guard — `src/lib/org-priority.ts`, `queues/no-inline-org-priority`. |
 | `AUTO-10` | Near-duplicate supplier names reach one operator | Guard — `src/lib/operator-assignment.ts` `mergeSimilarNameKeys`, applied inside `getOrgLeadIndex` so every surface that resolves an owner shares one key map. |
 | `AUTO-11` | The lead names the operator, every other surface follows | Guard — `src/lib/operator-assignment.ts` `orgAutoKey` resolves every row through the key map built from the leads and profiles, `supplierKind` resolves every lane name-first, and every derivation site goes through both. |
@@ -124,11 +125,10 @@ this ledger read as enforced.
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
-## Check owed (12)
+## Check owed (11)
 
 | Rule | | Enforcement |
 |---|---|---|
-| `AUTO-08` | Call tasks belong to call operators only | Check owed — `assignment/call-owner-must-be-call-operator`. Partially held today by the operator-type pool filter. |
 | `PRICING-01` | A shipping cost is a number or it is nothing | Check owed — `shipping/cost-must-be-numeric`. |
 | `PRICING-02` | Delivery cost is per pack tier when pack size changes it | Check owed — `shipping/cost-per-tier`. |
 | `PRICING-03` | Delivery-cost extraction is opt-in per client | Check owed — `shipping/extraction-org-opt-in`. |
