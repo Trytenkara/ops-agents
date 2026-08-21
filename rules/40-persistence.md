@@ -76,9 +76,16 @@ therefore not a label, it is removal from the only path that tries again. Park
 it — active, at `enriched`, stamped `outreach_parked_at` so it does not sit in
 front of an operator.
 
-**Enforcement:** Guard — `outreach/contactless-must-park-not-drop`. A scheduled
-sweep still compensates, which is a workaround under META-03 and is named in
-`OUTSTANDING.md`. This used to name OUT-02's check. They are not the same break:
+Nothing else was looking. The guessed-combo and provider waterfall all run in
+Agent 06 upstream, so by the time outreach sees a lead the search has already
+failed; outreach performs no lookup of its own, it only reads the stored
+address. The `contact-finder-agent` skill would re-attempt, but nothing
+schedules it and its own query filters on `status = 'active'`, so it could not
+see a dropped lead either. There was no compensating sweep — checked
+2026-08-20.
+
+**Enforcement:** Guard — `outreach/contactless-must-park-not-drop`. This used
+to name OUT-02's check. They are not the same break:
 OUT-02 is a storefront that was never given a channel, PERS-05 is a direct
 supplier actively set to `dropped` so the re-queue cannot see it. Sharing one id
 meant guarding either one would report both as held.
