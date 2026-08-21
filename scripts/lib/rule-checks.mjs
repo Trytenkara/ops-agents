@@ -649,6 +649,38 @@ export function runChecks(files, rulesDir) {
     }
   }
 
+  // ORG-12. The mailbox lookup answers "which client owns this inbox", which is
+  // empty for a webhook carrying no account and for an account id two orgs
+  // share. The thread is the answer in both cases and it is already on file.
+  {
+    const router = anchor("src/lib/tenkara-inbound.ts", {
+      rule: "orgs/inbound-org-must-try-the-thread",
+      why: "the inbound router is where a reply is matched to a client",
+      fix: "restore src/lib/tenkara-inbound.ts",
+    });
+    const resolver = router?.text.match(/async function resolveInboundOrg[\s\S]*?\n}/)?.[0] ?? "";
+    if (router && !/draft_references[\s\S]{0,400}?thread_id/.test(resolver)) {
+      violations.push({
+        rule: "orgs/inbound-org-must-try-the-thread",
+        why: "26 of 30 dead-lettered conversations name their client on their own draft references, 23 of them a paying client's; giving up on the mailbox alone parks a reply that was never in doubt",
+        fix: "ask draft_references for the conversation's owner before returning null",
+        where: router.path,
+        line: "resolveInboundOrg never asks the thread who owns it",
+      });
+    }
+    // One owner or none. A thread naming two clients is ORG-06's shared thread,
+    // and picking either is the guess ORG-04 forbids.
+    if (router && resolver && !/\bsize\s*===\s*1\b/.test(resolver)) {
+      violations.push({
+        rule: "orgs/inbound-org-must-try-the-thread",
+        why: "a conversation whose draft references name more than one client is a shared thread, not an answer; taking the first owner routes one client's reply into another client's workspace",
+        fix: "resolve from the thread only when its references name exactly one org",
+        where: router.path,
+        line: "thread fallback does not require a single owner",
+      });
+    }
+  }
+
   // PERS-08. The clarification draft staged on a parked message names that
   // message, so an idempotency check keyed on the name alone reads the record of
   // a failure as proof the work was done, and no later attempt can ever undo it.

@@ -595,6 +595,12 @@
       "owes": false
     },
     {
+      "id": "ORG-12",
+      "title": "A reply belongs to the client whose thread it is on",
+      "bucket": "Guard",
+      "owes": false
+    },
+    {
       "id": "ORG-07",
       "title": "Unaudited edge",
       "bucket": "None",
@@ -728,6 +734,7 @@
     "\"Verified\" contact confidence — fixed forward 2026-08-20, rows still wrong",
     "P0 — Withheld prices were a complete dead end — FIXED 2026-08-21",
     "P1 — The prices already captured wrong — one row, corrected 2026-08-21",
+    "P1 — Dead-lettered supplier replies — replayed 2026-08-21, two causes left",
     "P1 — Two draft paths bypass the staging chokepoint",
     "P1 — Zero results are accepted as an answer in nine places",
     "P1 — Deliberate caps hide work in eighteen places",

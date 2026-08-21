@@ -645,6 +645,16 @@ const MUTATIONS = [
     ),
   },
   {
+    expect: "orgs/inbound-org-must-try-the-thread",
+    label: "the router gives up on the mailbox without asking the thread",
+    mutate: rename("src/lib/tenkara-inbound.ts", '.from("draft_references")\n      .select("org_id")', '.from("orgs")\n      .select("id")'),
+  },
+  {
+    expect: "orgs/inbound-org-must-try-the-thread",
+    label: "a thread naming two clients hands back the first one",
+    mutate: rename("src/lib/tenkara-inbound.ts", "if (owners.size === 1) {", "if (owners.size >= 1) {"),
+  },
+  {
     expect: "ui/flagged-set-must-have-a-surface",
     label: "the client's own tab stops rendering the flagged panel",
     mutate: rename("src/app/(app)/work/orgs/[slug]/page.tsx", "<FlaggedWorkPanel", "<FlaggedWorkPanelDisabled"),

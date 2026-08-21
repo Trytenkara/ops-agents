@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-120 rules. 81 are actually enforced, 19 owe a check or a job,
+121 rules. 82 are actually enforced, 19 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 6 of the enforced rules hold only part of their invariant and say so in
@@ -12,7 +12,7 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 73 |
+| **Guard** | A shared module or build check makes it impossible. | 74 |
 | **Audit** | A scheduled job reports the break after the fact. | 8 |
 | **Check owed** | A build check is possible and is not built yet. | 13 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
@@ -31,7 +31,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (73)
+## Guard (74)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -98,6 +98,7 @@ this ledger read as enforced.
 | `ORG-09` | A supplier shared across clients never suppresses a client-owned supplier | Guard — `orgs/duplicate-guard-requires-exclusive-supplier`. |
 | `ORG-10` | A supplier id is checked against its owners before it is stored | Guard — the shared resolver `scopedSupplierId` in `src/lib/tenkara-supplier-linker.ts`, and `orgs/supplier-id-written-must-be-scoped`, which fails the build on both arrival paths: a `draft_references` write taking an id off a row, and any agent API route storing an id off the request body. |
 | `ORG-11` | Unknown is not ambiguous | Guard — `soleReplyTarget` in `src/lib/org-isolation.ts`, `orgs/candidate-match-must-not-key-on-null`, which fails the build on a `supplier_id ?? ""` or `material_id ?? ""` match key in the inbound router. |
+| `ORG-12` | A reply belongs to the client whose thread it is on | Guard — `orgs/inbound-org-must-try-the-thread`, which fails the build if `resolveInboundOrg` in `src/lib/tenkara-inbound.ts` gives up without asking `draft_references` for the conversation's owner, or if it takes an owner from a thread that names more than one. |
 | `SUP-01` | Suppliers are unique per client | Guard — `orgs/duplicate-guard-requires-exclusive-supplier` covers the online guard; the hand-run scan unions pairs only when their client sets intersect, enforced in its own code outside this repository. |
 | `UI-01` | Never ship a native OS dropdown | Guard — `ui/no-native-select`. |
 | `UI-02` | Everything lives on the client's own tabs | Guard — `ui/no-global-review-route`, as a ratchet. Seven routes under `work/review/` predate the rule and are named in the check; an eighth fails the build. Deleting the seven is a product decision, not a cleanup, so the debt is paid down by removing names from that list, never by adding them. |

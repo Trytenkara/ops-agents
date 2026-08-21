@@ -122,9 +122,39 @@ async function resolveInboundOrg(admin: Admin, msg: InboundMessage): Promise<{ o
   const accountOrg = accountRows.length === 1 ? accountRows[0].id : null;
   const addressOrg = addressRows.length === 1 ? addressRows[0].id : null;
   if (accountOrg && addressOrg && accountOrg !== addressOrg) throw new Error("Tenkara account and recipient resolve to different clients");
-  const orgId = accountOrg ?? addressOrg;
+  let orgId = accountOrg ?? addressOrg;
+
+  // Third signal: the thread itself. Both lookups above ask which client owns
+  // the MAILBOX, and both come back empty in two real cases — a webhook that
+  // carries neither an account nor a recipient, and an account id two orgs
+  // share (Tenkara and Whitecat both hold 599fb464), where `limit(2)` returning
+  // two rows reads as "unknown" rather than "ambiguous". Neither says anything
+  // about the message, and in both the answer is already on file: we sent the
+  // outreach, so a draft reference on this conversation names the client.
+  //
+  // Measured 2026-08-21: of the 30 conversations dead-lettered with no client,
+  // 26 are named unambiguously by their own draft references — 23 California
+  // Chemicals, 3 Tenkara. A thread whose references disagree is left
+  // unresolved: that is a genuinely shared thread and picking one client for it
+  // is the ORG-06 fault, not a fix for this one.
+  let threadResolved = false;
+  if (!orgId) {
+    const { data, error } = await admin
+      .from("draft_references")
+      .select("org_id")
+      .eq("thread_id", msg.conversation_id)
+      .not("org_id", "is", null)
+      .limit(200);
+    if (error) throw new Error(`org lookup by conversation failed: ${error.message}`);
+    const owners = new Set((data ?? []).map((r: any) => r.org_id));
+    if (owners.size === 1) {
+      orgId = [...owners][0];
+      threadResolved = true;
+    }
+  }
+
   if (!orgId) return null;
-  return { orgId, accountKey: accountId ?? toEmail!, replyTag };
+  return { orgId, accountKey: accountId ?? toEmail ?? (threadResolved ? `thread:${msg.conversation_id}` : ""), replyTag };
 }
 
 export interface InboundOptions {

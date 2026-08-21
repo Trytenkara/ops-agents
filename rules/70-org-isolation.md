@@ -142,6 +142,32 @@ company — so the domain and address fallbacks keep the strict test.
 `orgs/candidate-match-must-not-key-on-null`, which fails the build on a
 `supplier_id ?? ""` or `material_id ?? ""` match key in the inbound router.
 
+## ORG-12 — A reply belongs to the client whose thread it is on
+
+Routing an inbound reply asks which client owns the MAILBOX it arrived at. When
+that comes back empty the thread is asked, because we started it: a draft
+reference on the conversation names the client, and that is a fact about the
+message rather than a fact about the mail server.
+
+Two real cases produce an empty mailbox answer, and neither is a doubt about
+who the reply is for. A webhook can carry neither an account id nor a recipient
+address. And an account id two orgs share resolves to two rows, which a
+`limit(2)` reads as "unknown" — Tenkara and Whitecat both hold
+`599fb464-9682-43cd-8e9e-b5eeff83eb76`. Measured 2026-08-21: 30 conversations
+sat dead-lettered with no client, and 26 were named unambiguously by their own
+draft references, 23 of them California Chemicals — a paying client's supplier
+replies parked because a mail account was not on file.
+
+The thread is the last signal, never the first: the mailbox is the client's own
+and outranks it. A thread whose references name more than one client stays
+unresolved. That is a genuinely shared thread, ORG-06's fault, and choosing one
+of the two would be exactly the guess ORG-04 forbids.
+
+**Enforcement:** Guard — `orgs/inbound-org-must-try-the-thread`, which fails
+the build if `resolveInboundOrg` in `src/lib/tenkara-inbound.ts` gives up
+without asking `draft_references` for the conversation's owner, or if it takes
+an owner from a thread that names more than one.
+
 ## ORG-07 — Unaudited edge
 
 The inbox application is not in this repository, so the uniqueness scope of the

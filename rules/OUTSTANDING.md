@@ -206,8 +206,47 @@ settle and reports the rest.
 revision (1.53 FOB / 1.81 CIF, leaving the superseded 1.49 live) and Reroot's
 second material. Those are not an extractor fault: `inbound_message_ledger`
 marks those suppliers `recorded_unmatched`, so the replies never reached
-extraction. They arrive through the normal path only when the 43 unmatched
-conversations are replayed, which is the item below.
+extraction. They arrive through the normal path only when the unmatched
+conversations are replayed, which is the item below. Five of the six were
+recovered by that replay; only Sinochem Nanjing is still missing, and it is one
+of the threads that names no supplier at all.
+
+## P1 — Dead-lettered supplier replies — replayed 2026-08-21, two causes left
+
+ORG-11's fix stopped new replies being parked, but a parked reply is never
+reconsidered: the reconcile sweep skips any message already in
+`inbound_message_ledger`. `scripts/replay-unmatched-inbound.mts` clears the
+ledger row so the message reads as unseen and then runs the SAME reconcile pass
+the scheduled sweep runs, so a replay cannot drift from normal processing.
+Candidates come from `unmatched_inbound_events`, the durable record that a reply
+was parked, never from the ledger outcome, which changes the moment a replay is
+attempted and would hide any message a failed attempt had touched.
+
+**Replayed:** 36 messages across the resolvable conversations, 7 drafts
+produced, 0 failures, 28 triage cases closed and 25 clarification drafts
+retired. A message the ledger records as `drafted` or `deduped` is never
+replayed — clearing its ledger row would stage the same quotes twice — so the
+already-answered conversations had only their triage artefacts retired.
+
+**A second cause was found while replaying: 27 of the parked events named no
+client at all**, so they were not even candidates. Not one of them was a doubt
+about whose reply it was. The router asked which client owns the mailbox, and
+that question is unanswerable for a webhook carrying no account id, and for an
+account id two orgs share. 25 of the 27 were named unambiguously by their own
+draft references. That is ORG-12, now the third signal in `resolveInboundOrg`
+and guarded by `orgs/inbound-org-must-try-the-thread`; the same test backfilled
+the 25 in place, which exposed a further 13 conversations to the replay.
+
+**Still owed, two populations:**
+
+1. **19 conversations no draft on the thread names a supplier for.** Not a
+   replay fault — the supplier link was never written (ORG-10). They need the
+   link backfilled upstream, and Sinochem Nanjing's missing price is one of
+   them.
+2. **2 conversations genuinely unowned** — their mailbox is mapped to nobody
+   and their thread names nobody. Correctly left alone: ORG-12 stops at one
+   owner or none, because picking between two would be the guess ORG-04
+   forbids.
 
 ## P1 — Two draft paths bypass the staging chokepoint
 

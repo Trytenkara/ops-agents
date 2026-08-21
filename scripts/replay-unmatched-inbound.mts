@@ -35,6 +35,48 @@ const LIMIT = limitArg ? Number(limitArg.slice("--limit=".length)) : Infinity;
 async function main() {
   const admin = createAdminClient();
 
+  // ORG-12. An event recorded before the router learned to ask the thread has
+  // no org_id, and the candidate read below deliberately skips those. Name them
+  // first, by the same test the router now uses — exactly one owner across the
+  // conversation's draft references — so the replay works on the same
+  // population production would.
+  const { data: orphans, error: orphanError } = await admin
+    .from("unmatched_inbound_events")
+    .select("id, conversation_id")
+    .is("org_id", null);
+  if (orphanError) throw new Error(`orphan read failed: ${orphanError.message}`);
+  const orphanConvs = [...new Set((orphans ?? []).map((r: any) => r.conversation_id))];
+  let named = 0;
+  let stillOrphan = 0;
+  for (const conv of orphanConvs) {
+    const { data: refs, error } = await admin
+      .from("draft_references")
+      .select("org_id")
+      .eq("thread_id", conv)
+      .not("org_id", "is", null)
+      .limit(200);
+    if (error) throw new Error(`orphan refs read failed on ${conv}: ${error.message}`);
+    const owners = new Set((refs ?? []).map((r: any) => r.org_id));
+    if (owners.size !== 1) {
+      stillOrphan++;
+      continue;
+    }
+    named++;
+    if (!apply) continue;
+    const { error: upErr } = await admin
+      .from("unmatched_inbound_events")
+      .update({ org_id: [...owners][0] })
+      .eq("conversation_id", conv)
+      .is("org_id", null);
+    if (upErr) throw new Error(`orphan write failed on ${conv}: ${upErr.message}`);
+  }
+  if (orphanConvs.length) {
+    console.log(
+      `conversations with no client: ${orphanConvs.length}; named by their own drafts: ${named}` +
+        `; still unowned: ${stillOrphan} (their inbox is mapped to nobody and their thread names nobody)`
+    );
+  }
+
   const parked: any[] = [];
   for (let from = 0; ; from += 1000) {
     const q = admin
