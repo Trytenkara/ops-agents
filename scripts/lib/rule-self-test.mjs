@@ -607,6 +607,36 @@ const MUTATIONS = [
       `export default async function Page() { return null; }\n`,
     ),
   },
+  {
+    expect: "comm/one-slack-sender",
+    label: "an agent rolls its own Slack post",
+    mutate: fixture(
+      "src/__selftest__/notify.ts",
+      `await fetch("https://slack.com/api/chat.postMessage", { method: "POST" });\n`,
+    ),
+  },
+  {
+    expect: "comm/one-slack-sender",
+    label: "a user token appears, so the fleet could post as a person",
+    mutate: fixture("src/__selftest__/token.ts", `const tok = process.env.SLACK_USER_TOKEN;\n`),
+  },
+  {
+    expect: "comm/one-slack-sender",
+    label: "the alert helper goes back to its own fetch",
+    mutate: edit("src/lib/slack-alert.ts", (t) =>
+      t.replace("const res = await postSlackMessage({ text: body });", 'const res = await fetch("https://slack.com/api/chat.postMessage");'),
+    ),
+  },
+  {
+    expect: "outreach/no-send-outside-operator-action",
+    label: "an agent sends the draft it just staged",
+    mutate: fixture("src/__selftest__/send.ts", 'await tenkara.post("/drafts/" + id + "/send");\n'),
+  },
+  {
+    expect: "outreach/no-send-outside-operator-action",
+    label: "auto-send arrives as a flag on the draft body",
+    mutate: fixture("src/__selftest__/send2.ts", `const body = { subject, auto_send: true };\n`),
+  },
 ];
 
 // The checks over rules/ itself read from disk, so they mutate a copy.

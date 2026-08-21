@@ -77,8 +77,16 @@ Everything stages as a draft that a human reviews. This is the assumption that
 makes several other rules safe (notably CONTACT-03, pattern-guessed
 recipients).
 
-**Enforcement:** Check owed — `outreach/no-send-outside-operator-action`,
-plus the existing `COLD_OUTBOUND` flag.
+**Enforcement:** Guard — `outreach/no-send-outside-operator-action`: the send
+verbs are banned outright, since the fault would arrive as a convenience — an
+`auto_send` on a draft body, or a POST to a send endpoint from a night-time
+agent. Nothing in this codebase sends to a supplier today; the only real send is
+the operator invite, which is an account email to a colleague.
+
+This rule used to name a `COLD_OUTBOUND` flag as its other half. That flag has
+no use site anywhere in the repo — checked 2026-08-20. What actually gates cold
+outbound per client is `outreachAllowed()` in `src/lib/org-status.ts`, which
+admits only an org whose `sourcing_status` is `active`.
 
 ## AUTO-07 — Owner of an open record is derived, never trusted
 

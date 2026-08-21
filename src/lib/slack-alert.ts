@@ -9,7 +9,7 @@
 // one-off, operator-triggered alerts.
 
 import { dispatchAlert, type AlertSeverity } from "@/lib/alert-policy";
-import { OPS_CHANNEL_ID } from "@/lib/slack";
+import { postSlackMessage } from "@/lib/slack";
 
 export async function postAgentAlert(
   text: string,
@@ -37,18 +37,10 @@ export async function postAgentAlert(
     return outcome !== "suppressed";
   }
 
-  const token = process.env.SLACK_BOT_TOKEN;
-  const channel = OPS_CHANNEL_ID();
-  if (!token) return false;
   const body = ids.length ? `${ids.map((id) => `<@${id}>`).join(" ")} ${text}` : text;
   try {
-    const r = await fetch("https://slack.com/api/chat.postMessage", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json; charset=utf-8" },
-      body: JSON.stringify({ channel, text: body }),
-    });
-    const j = (await r.json()) as { ok?: boolean };
-    return !!j.ok;
+    const res = await postSlackMessage({ text: body });
+    return res.ok;
   } catch {
     return false;
   }

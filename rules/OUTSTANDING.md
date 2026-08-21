@@ -510,8 +510,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | Rule | The check |
 | --- | --- |
 | META-04 | `meta/no-second-copy-of-a-shared-guard`, beyond the invariants already covered |
-| COMM-05 | `comm/one-slack-sender` — one send helper, bot token only, no user token anywhere |
-| AUTO-06 | `outreach/no-send-outside-operator-action` |
 | AUTO-08 | `assignment/call-owner-must-be-call-operator` |
 | DATA-05 | the shared host list. `contacts/guessed-combo-requires-own-domain-and-flag` shipped 2026-08-20 and holds the gate and the flag together. The gate still reads a hand-copied list in `enrich.ts` that has drifted 15 hosts behind `src/lib/aggregator-hosts.ts`, so a guess is allowed on those hosts. Merging the lists is a behaviour change for every other caller of the shared one, which is why it is not folded in here. |
 | DATA-06 | `contacts/confidence-derived-from-source` — see the P0 above |

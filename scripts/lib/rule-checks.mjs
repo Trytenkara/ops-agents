@@ -122,6 +122,14 @@ export function runChecks(files, rulesDir) {
     "contacts/no-inline-mailbox-list@skills/detect-supplier-dupes/detect.mjs",
     "contacts/no-inline-mailbox-list@skills/importyeti-resolve-contacts/resolve.py",
     "queues/no-inline-org-priority@skills/contact-finder-agent/bulk_backfill_workflow.js",
+    // Four skill scripts post to Slack directly. They run outside the deploy
+    // and cannot import from src, so the shared sender is not reachable from
+    // them; the user-token half of COMM-05 still covers them.
+    "comm/one-slack-sender@skills/aggregator-inquiry/prepare.mjs",
+    "comm/one-slack-sender@skills/california-chemicals-watchdog/check.py",
+    "comm/one-slack-sender@skills/materials-expiry-slack/expiry_sweep.py",
+    "comm/one-slack-sender@skills/sourcing-health-watchdog/check.py",
+    "comm/one-slack-sender@skills/report-issue-triage/SKILL.md",
   ]);
 
   /**
@@ -1464,6 +1472,46 @@ export function runChecks(files, rulesDir) {
       });
     }
   }
+
+  // COMM-05. The fleet posts as the bot, never as a person. A user token would
+  // put words in someone's mouth, and a second hand-rolled sender is how a
+  // channel override or a user token gets in without anyone reviewing it, so
+  // both halves are one check: one sender, and no user token anywhere.
+  //
+  // Four skill scripts post directly and are grandfathered, because skills run
+  // outside the deploy and cannot import from src. They are the reason the
+  // second conjunct exists: a user token in one of them would be invisible.
+  forbid({
+    rule: "comm/one-slack-sender",
+    why: "a second sender is where a channel override or a user token gets in unreviewed",
+    fix: "post through postSlackMessage in src/lib/slack.ts, or postAgentAlert for anything an operator must act on",
+    allow: ["src/lib/slack.ts"],
+    test: (l) => /chat\.postMessage/.test(l),
+  });
+  forbid({
+    rule: "comm/one-slack-sender",
+    why: "a user token posts as a person, so the fleet would be speaking in someone's voice",
+    fix: "use SLACK_BOT_TOKEN; if a message must come from a person, a person sends it",
+    allow: ["rules/10-communication.md"],
+    test: (l) => /xoxp-|SLACK_USER_TOKEN|slack_user_token/.test(l),
+  });
+
+  // AUTO-06. Nothing in this codebase sends an email to a supplier. It writes a
+  // draft into the email app and an operator presses send there, which is what
+  // makes the guessed recipient in DATA-05 safe to stage at all.
+  //
+  // The check is a ban on the send verbs, because the fault would arrive as a
+  // convenience: an auto_send flag on a draft body, or a POST to the send
+  // endpoint from a night-time agent. The one real send in the repo is the
+  // operator invite, which is an account email to a colleague, not outbound.
+  forbid({
+    rule: "outreach/no-send-outside-operator-action",
+    why: "an agent that can send removes the human review every guessed recipient and every draft depends on",
+    fix: "stage the draft and let an operator send it in the email app",
+    allow: ["rules/20-autonomy.md"],
+    test: (l) =>
+      /auto_?send|send_now|send_immediately|sendDraft|\/send["'`)]/i.test(l),
+  });
 
   return violations;
 }

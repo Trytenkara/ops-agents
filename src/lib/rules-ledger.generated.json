@@ -81,8 +81,8 @@
     {
       "id": "COMM-05",
       "title": "Never speak as the human",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "COMM-06",
@@ -141,8 +141,8 @@
     {
       "id": "AUTO-06",
       "title": "Cold outbound is never auto-sent",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "AUTO-07",

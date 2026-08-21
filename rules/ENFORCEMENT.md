@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-120 rules. 71 are actually enforced, 28 owe a check or a job,
+120 rules. 73 are actually enforced, 26 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 5 of the enforced rules hold only part of their invariant and say so in
@@ -12,9 +12,9 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 68 |
+| **Guard** | A shared module or build check makes it impossible. | 70 |
 | **Audit** | A scheduled job reports the break after the fact. | 3 |
-| **Check owed** | A build check is possible and is not built yet. | 18 |
+| **Check owed** | A build check is possible and is not built yet. | 16 |
 | **Audit owed** | No build check can see it; a scheduled job can. Not built. | 5 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
@@ -32,7 +32,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (68)
+## Guard (70)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -40,12 +40,14 @@ this ledger read as enforced.
 | `META-04` | One shared module per invariant | Guard for the invariants that have a `check-rules` id. Check owed — `meta/no-second-copy-of-a-shared-guard`, extending coverage to the rest. |
 | `META-05` | Ad-hoc scripts live in `scripts/` and get deleted | Guard — `tsconfig.json` include scope. |
 | `META-09` | A guard is not a guard until a deliberate break makes it fire | Guard — `npm run check:rules:self-test`, which runs ahead of `next build`, so an inert guard fails the deploy. It fails on two separate things: a mutation its check did not catch, and a check no mutation covers. Plus `scripts/install-hooks.mjs`, which installs both repositories' hooks from `npm install`, with `check-rules` refusing to pass locally while either has its hooks unset. |
+| `COMM-05` | Never speak as the human | Guard — `comm/one-slack-sender`: `postSlackMessage` in `src/lib/slack.ts` is the only place that posts, and no user token may appear anywhere. `postAgentAlert` used to hold a second copy of the same fetch and now delegates to it. |
 | `COMM-06` | One channel, one post a day | Guard — `comm/one-slack-channel` in `scripts/lib/rule-checks.mjs` rejects any channel argument, any of the retired channel env vars, and any Slack id that is not `C0B5M1QCE9E`, everywhere except `src/lib/slack.ts`. It runs over this repository in `npm run build` and over `/workspace/.claude/skills` in that repo's pre-commit hook, because the skills post to Slack too and four of them were found breaking this rule on 2026-08-20 while the ledger reported it enforced. |
 | `COMM-07` | Everything an agent raises waits for the daily post | Guard — `dispatchAlert` queues every severity except p3; nothing else in the repo posts an agent alert. Fail-open is deliberate. |
 | `COMM-08` | Copy bans | Guard — `sanitizeDraft` inside `stageDraft` at runtime, and `copy/no-rfq-or-em-dash-in-templates` at build time over a named scope of outbound-copy files, held closed by two companion checks: the scope paths are anchors, so renaming one fails the build rather than silently dropping it, and `copy/scope-must-cover-every-draft-site` makes any `stageDraft` caller missing from that scope a violation. Check owed — `copy/no-direct-draft-create`: two paths still create a draft on the platform without going through `stageDraft`, so neither guard sees them. See `OUTSTANDING.md`. |
 | `COMM-09` | Never announce as a bot in a crawler user agent | Guard — `crawl/no-agent-identifying-user-agent`: a user agent naming the company or a crawler token fails the build. It is a check on the literal rather than on a shared constant, because there are six user agents in the fleet and consolidating them is a separate change; what matters is that none of them says who we are. The skills folder is only scanned when `check-rules` is run with `--also`, so a skill's fetcher is covered by the daily skills pass, not by the deploy build. |
 | `AUTO-02` | Decide alone: volume of change | Guard — `src/lib/requirements-recheck.ts` `recheckOrgLeads`. |
 | `AUTO-05` | Never touch: operator and org membership | Guard — `orgs/no-operator-membership-writes`: nothing writes `user_org_assignments` or `user_roles`, in the query builder or in raw SQL, outside three human-gated server actions. `operator_type` and lanes are columns of that table, so they are covered by covering the table. The allow-list is an exact path match, not a substring, so a new `bulk-operators.ts` is not admitted by resembling one that is. |
+| `AUTO-06` | Cold outbound is never auto-sent | Guard — `outreach/no-send-outside-operator-action`: the send verbs are banned outright, since the fault would arrive as a convenience — an `auto_send` on a draft body, or a POST to a send endpoint from a night-time agent. Nothing in this codebase sends to a supplier today; the only real send is the operator invite, which is an account email to a colleague. |
 | `AUTO-07` | Owner of an open record is derived, never trusted | Guard — `src/lib/operator-assignment.ts` `recordOwnerId`, `assignment/derive-owner-via-recordOwnerId`. |
 | `AUTO-09` | Real clients before internal test orgs | Guard — `src/lib/org-priority.ts`, `queues/no-inline-org-priority`. |
 | `AUTO-10` | Near-duplicate supplier names reach one operator | Guard — `src/lib/operator-assignment.ts` `mergeSimilarNameKeys`, applied inside `getOrgLeadIndex` so every surface that resolves an owner shares one key map. |
@@ -113,12 +115,10 @@ this ledger read as enforced.
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
-## Check owed (18)
+## Check owed (16)
 
 | Rule | | Enforcement |
 |---|---|---|
-| `COMM-05` | Never speak as the human | Check owed — `comm/one-slack-sender`: a single send helper that accepts only the bot token, and no user token anywhere. |
-| `AUTO-06` | Cold outbound is never auto-sent | Check owed — `outreach/no-send-outside-operator-action`, plus the existing `COLD_OUTBOUND` flag. |
 | `AUTO-08` | Call tasks belong to call operators only | Check owed — `assignment/call-owner-must-be-call-operator`. Partially held today by the operator-type pool filter. |
 | `DATA-06` | Only a same-run verification counts as a confirmed email | Check owed — `contacts/confidence-derived-from-source`: confidence is derived from the source, and a same-run provider verdict is persisted. |
 | `PRICING-01` | A shipping cost is a number or it is nothing | Check owed — `shipping/cost-must-be-numeric`. |

@@ -81,8 +81,15 @@ It admits no exception, including an explicit instruction. Sam ruled on
 himself: the click costs him nothing and a message in his name he did not write
 cannot be withdrawn. See `CONFLICTS.md` M.
 
-**Enforcement:** Check owed — `comm/one-slack-sender`: a single send helper
-that accepts only the bot token, and no user token anywhere.
+**Enforcement:** Guard — `comm/one-slack-sender`: `postSlackMessage` in
+`src/lib/slack.ts` is the only place that posts, and no user token may appear
+anywhere. `postAgentAlert` used to hold a second copy of the same fetch and now
+delegates to it.
+
+Four skill scripts post directly and are named as exceptions in the check: they
+run outside the deploy and cannot import from `src`. The user-token half still
+covers them, which is the half that matters — a second sender is a nuisance, a
+user token is Sam's name on something he did not write.
 
 ## COMM-06 — One channel, one post a day
 
