@@ -97,9 +97,31 @@ A verification provider's verdict is not stable across runs. Only a `valid`
 result from the same run is treated as confirmed. Everything else with a known
 name is a guessed combo under DATA-05, not a confirmed contact.
 
-**Enforcement:** Check owed — `contacts/confidence-derived-from-source`:
-confidence is derived from the source, and a same-run provider verdict is
-persisted.
+The column said `verified` on every address the waterfall resolved, because it
+was set by `if (email)` — the presence of an address, not the provenance of it.
+Only LeadMagic's Email Finder tests a mailbox, and it is the last paid provider
+in the waterfall, so almost nothing carrying that label had been tested: the
+free crawl alone is about 72% of the contacts we hold. Hunter's score is a
+pattern confidence, ZoomInfo and GetProspect return database records, and the
+domain memo replays an answer up to thirty days old.
+
+So there are three states, not two. `verified` means a provider validated the
+mailbox in this run and is written only from a source that does. `discovered`
+means we read the address somewhere and never tested it, which is most of them.
+`guessed` is unchanged: synthesised from a name and a domain. A cache hit is a
+previous run's answer and reads as discovered whatever originally resolved it.
+
+`discovered` is deliberately still a cache hit for the domain memo (`isHit`
+excludes only `guessed`), because an untested address is still worth keeping;
+it is the operator's read of it that had to stop overstating.
+
+**Enforcement:** Guard — `VERIFYING_SOURCES` in
+`src/agents-runtime/agents/data-enrichment/enrich.ts`,
+`contacts/confidence-derived-from-source`. The check is on the derivation
+rather than the word: confidence must be computed from the source, the cache
+replay must be excluded, and no other line in the corpus may assign the literal.
+That last part is what stops the old shape coming back, since `= "verified"`
+reads like a harmless default at every call site that might add one.
 
 ## DATA-07 — Density: bulk for solids, specific gravity for liquids
 

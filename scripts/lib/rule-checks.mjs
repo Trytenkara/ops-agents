@@ -1365,6 +1365,96 @@ export function runChecks(files, rulesDir) {
     }
   }
 
+  // DATA-06. "verified" is a claim that somebody tested the mailbox. It was
+  // being stamped on every address the waterfall resolved, so a name scraped off
+  // an about page and a mailbox a provider actually validated were stored as the
+  // same thing, and the one column that could tell an operator which is which
+  // said "verified" either way.
+  //
+  // The check is on the derivation, not on the word: the confidence must be
+  // computed from the source that produced the address, and the cache replay
+  // must be excluded, because a hit is a previous run's answer and DATA-06 only
+  // credits a verdict from this one. Anything else assigning the literal is the
+  // regression — it reads as a harmless default and silently re-widens the claim.
+  {
+    const rule = "contacts/confidence-derived-from-source";
+    const enrich = anchor("src/agents-runtime/agents/data-enrichment/enrich.ts", {
+      rule,
+      why: "this is the only file that resolves a primary contact and labels it",
+      fix: "restore src/agents-runtime/agents/data-enrichment/enrich.ts",
+    });
+    if (enrich) {
+      const text = codeLines(enrich).join("\n");
+      const derived = /VERIFYING_SOURCES\.has\(\s*contactSource\s*\)\s*\?\s*"verified"/.test(text);
+      if (!derived) {
+        violations.push({
+          rule,
+          why: "confidence is no longer derived from the source, so an untested address can be stored as verified",
+          fix: 'derive it: VERIFYING_SOURCES.has(contactSource) ? "verified" : "discovered"',
+          where: enrich.path,
+          line: "no source-derived confidence expression found",
+        });
+      } else if (!/!cacheServed\s*&&\s*contactSource\s*&&\s*VERIFYING_SOURCES/.test(text)) {
+        violations.push({
+          rule,
+          why: "a cached address carries a previous run's verdict, and DATA-06 counts only a same-run one",
+          fix: "keep !cacheServed in front of the VERIFYING_SOURCES test",
+          where: enrich.path,
+          line: "the cache replay is no longer excluded from a verified verdict",
+        });
+      }
+    }
+    // Nowhere else may hand out the label. The set is the one place that decides
+    // which providers verify, so a literal outside it is a claim with no test
+    // behind it. The skills are in scope and are where the second writer was:
+    // `contact-finder-agent/backfill.py` stamped verified on three of its own
+    // paths, and `importyeti-resolve-contacts/resolve.py` wrote a vocabulary of
+    // its own (`strong`, `medium`, `lead`) into the same column.
+    for (const f of files) {
+      if (!/\.(tsx?|py)$/.test(f.path)) continue;
+      for (const [i, line] of codeLines(f).entries()) {
+        // `p["contact_confidence"] = "verified"` and `contact_confidence:
+        // "verified"` are the same statement in two languages.
+        if (!/(?:contactConfidence|contact_confidence|confidence)["'\]\s]*[:=]\s*["']verified["']/.test(line)) continue;
+        if (/VERIFYING_SOURCES/.test(line)) continue;
+        violations.push({
+          rule,
+          why: "this stamps a verification verdict without a provider having tested the mailbox",
+          fix: "derive the confidence from contactSource via VERIFYING_SOURCES, or add the provider to that set if it really validates",
+          where: `${f.path}:${i + 1}`,
+          line: line.trim(),
+        });
+      }
+    }
+    // The column has three words and they mean specific things. A writer with a
+    // vocabulary of its own is not caught by the test above and is worse than a
+    // wrong value: `importyeti-resolve-contacts` was copying the model's own
+    // "strong"/"medium"/"lead" rating of whether it had found the right COMPANY
+    // into the column an operator reads as a verdict on the ADDRESS.
+    const WORDS = new Set(["verified", "discovered", "guessed"]);
+    for (const f of files) {
+      if (!/\.(tsx?|py)$/.test(f.path)) continue;
+      for (const [i, line] of codeLines(f).entries()) {
+        const m = /contact_confidence["'\]\s]*[:=]\s*(.+)$/.exec(line);
+        if (!m) continue;
+        const rhs = m[1].trim();
+        const lit = /^["']([^"']*)["']/.exec(rhs);
+        const copied = /\.get\(\s*["']confidence["']\s*\)|\[\s*["']confidence["']\s*\]/.test(rhs);
+        if (!lit && !copied) continue;
+        if (lit && WORDS.has(lit[1])) continue;
+        violations.push({
+          rule,
+          why: copied
+            ? "this copies another system's confidence word into a column that is read as a verdict on the address"
+            : `"${lit[1]}" is not one of the three states this column has, so nothing downstream can read it`,
+          fix: 'write "verified", "discovered" or "guessed", derived from the source that produced the address',
+          where: `${f.path}:${i + 1}`,
+          line: line.trim(),
+        });
+      }
+    }
+  }
+
   // PERS-10. A 403 body is a challenge page. Parsing it finds no email and no
   // company name, which is indistinguishable from a page that publishes
   // neither, so our own block ends up stored as the supplier's missing data.

@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-120 rules. 79 are actually enforced, 21 owe a check or a job,
+120 rules. 80 are actually enforced, 20 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 6 of the enforced rules hold only part of their invariant and say so in
@@ -12,9 +12,9 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 71 |
+| **Guard** | A shared module or build check makes it impossible. | 72 |
 | **Audit** | A scheduled job reports the break after the fact. | 8 |
-| **Check owed** | A build check is possible and is not built yet. | 15 |
+| **Check owed** | A build check is possible and is not built yet. | 14 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
 | **None** | Outside this repository. Cannot be checked here. | 2 |
@@ -31,7 +31,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (71)
+## Guard (72)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -55,6 +55,7 @@ this ledger read as enforced.
 | `DATA-02` | A foreign price is published only through one conversion | Guard — `fx/no-direct-convertToUsd`. |
 | `DATA-04` | Agents may never invent a contact detail in an outgoing body | Guard — `src/lib/contact-guard.ts`, `contacts/staging-must-guard-fabrication`. |
 | `DATA-05` | Guessing a recipient is allowed; guessing content is not | Guard — `contacts/guessed-combo-requires-own-domain-and-flag`: the one branch in the repo that builds an address out of a name and a domain must keep both its `!isAggregatorDomain(...)` gate and its `guessed` confidence stamp. The two are checked together because each reads as redundant next to the other, so a cleanup removes one and leaves the rule half-true. |
+| `DATA-06` | Only a same-run verification counts as a confirmed email | Guard — `VERIFYING_SOURCES` in `src/agents-runtime/agents/data-enrichment/enrich.ts`, `contacts/confidence-derived-from-source`. The check is on the derivation rather than the word: confidence must be computed from the source, the cache replay must be excluded, and no other line in the corpus may assign the literal. That last part is what stops the old shape coming back, since `= "verified"` reads like a harmless default at every call site that might add one. |
 | `DATA-07` | Density: bulk for solids, specific gravity for liquids | Guard — `src/lib/quote-density-guard.ts` `validateQuoteDensity` called inside `insertStagedQuotes`, and `density/solids-require-bulk` in `scripts/lib/rule-checks.mjs` fails the build if the guard is removed. Partially held by the enrichment sanitiser for display. |
 | `DATA-09` | Aliases never add a qualifier the input lacked | Guard — `GRADE_WORDS` in `src/lib/material-aliases.ts`. |
 | `DATA-10` | A write that fails is never silent | Guard — unconditional `console.error` on insert failure in `insertStagedQuotes` (`src/lib/staged-quotes.ts`), plus the `quote_capture_silent` check in the QA watchdog, which fires when supplier replies keep arriving and nothing is staged from them. |
@@ -120,12 +121,11 @@ this ledger read as enforced.
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
-## Check owed (15)
+## Check owed (14)
 
 | Rule | | Enforcement |
 |---|---|---|
 | `AUTO-08` | Call tasks belong to call operators only | Check owed — `assignment/call-owner-must-be-call-operator`. Partially held today by the operator-type pool filter. |
-| `DATA-06` | Only a same-run verification counts as a confirmed email | Check owed — `contacts/confidence-derived-from-source`: confidence is derived from the source, and a same-run provider verdict is persisted. |
 | `PRICING-01` | A shipping cost is a number or it is nothing | Check owed — `shipping/cost-must-be-numeric`. |
 | `PRICING-02` | Delivery cost is per pack tier when pack size changes it | Check owed — `shipping/cost-per-tier`. |
 | `PRICING-03` | Delivery-cost extraction is opt-in per client | Check owed — `shipping/extraction-org-opt-in`. |

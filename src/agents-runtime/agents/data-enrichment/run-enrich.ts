@@ -213,10 +213,10 @@ export async function enrichAndStageLead(
       enrichment_run_id: runId,
     },
     supplier_contact_email: result.contact.email ?? scoutEmailFallback ?? null,
-    // How the primary email was obtained: "guessed" = a synthesized pattern combo
-    // (name found, no verified email). Operators see this on the draft; guessed
-    // drafts are human-reviewed before send. Absent/null when there is no email or
-    // it came from a verified source.
+    // How the primary email was obtained (DATA-06): "verified" only when a
+    // provider validated the mailbox in this run, "discovered" when we read the
+    // address somewhere and never tested it, "guessed" for a synthesized pattern
+    // combo, null when there is no email. Nothing reads it yet; see UI-06.
     contact_confidence: result.contact.email ? result.contact_confidence : null,
     // Extra reachable people at this supplier, CC'd on the outreach thread.
     additional_contacts: result.additional_contacts,

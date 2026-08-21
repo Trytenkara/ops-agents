@@ -602,6 +602,49 @@ const MUTATIONS = [
     mutate: drop("src/agents-runtime/agents/data-enrichment/enrich.ts"),
   },
   {
+    expect: "contacts/confidence-derived-from-source",
+    label: "every resolved address is stamped verified again, whatever found it",
+    mutate: edit("src/agents-runtime/agents/data-enrichment/enrich.ts", (t) =>
+      t.replace(
+        /contactConfidence =\n\s*!cacheServed[^;]*;/,
+        'contactConfidence = "verified";',
+      ),
+    ),
+  },
+  {
+    expect: "contacts/confidence-derived-from-source",
+    label: "a cache replay inherits a previous run's verification",
+    mutate: rename(
+      "src/agents-runtime/agents/data-enrichment/enrich.ts",
+      "!cacheServed && contactSource && VERIFYING_SOURCES",
+      "contactSource && VERIFYING_SOURCES",
+    ),
+  },
+  {
+    expect: "contacts/confidence-derived-from-source",
+    label: "a second site hands out the label with no test behind it",
+    mutate: fixture(
+      "src/__selftest__/confidence.ts",
+      'export function label(email: string) {\n  return { email, contact_confidence: "verified" };\n}\n',
+    ),
+  },
+  {
+    expect: "contacts/confidence-derived-from-source",
+    label: "a writer invents a fourth confidence word",
+    mutate: fixture(
+      "src/__selftest__/confidence-word.ts",
+      'export const row = { contact_confidence: "high" };\n',
+    ),
+  },
+  {
+    expect: "contacts/confidence-derived-from-source",
+    label: "another system's confidence rating is copied into the column",
+    mutate: fixture(
+      "src/__selftest__/confidence-copied.ts",
+      'export function fill(payload: Record<string, unknown>, r: Record<string, unknown>) {\n  payload.contact_confidence = r["confidence"];\n}\n',
+    ),
+  },
+  {
     expect: "outreach/one-thread-per-supplier",
     label: "the material joins the consolidation key, so one supplier gets four emails",
     mutate: edit("src/agents-runtime/agents/outreach/index.ts", (t) =>

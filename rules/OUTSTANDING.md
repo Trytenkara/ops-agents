@@ -93,18 +93,35 @@ rather than a deploy. The 14-day untouched drop and the duplicate-open-case
 drop are untouched. The scheduled skill sweep can be retired (META-03) only once
 the backfill has run.
 
-## P0 — "Verified" contact confidence is stamped on unverified addresses
+## "Verified" contact confidence — fixed forward 2026-08-20, rows still wrong
 
-Breaks DATA-06. Any email at all, from any source including a free crawl and a
-30-day shared domain cache, is labelled verified. The one provider verdict that
-does mean something is used inline and never stored. An operator-typed address
-keeps whatever label was there before.
+Breaks DATA-06. Confidence was set by `if (email)`, so every address the
+waterfall resolved was labelled verified whatever found it. Measured on
+2026-08-20: 8,093 leads said `verified` and 89 of them came from the one
+provider that tests a mailbox. Three more writers existed outside the
+enrichment agent — `contact-finder-agent/backfill.py` stamped verified on its
+website scrape and its storefront-vision read, and
+`importyeti-resolve-contacts/resolve.py` wrote the model's own `strong` /
+`medium` / `lead` rating of whether it had found the right COMPANY into the
+column that is read as a verdict on the ADDRESS.
 
-Real effect: the guessed-versus-verified label operators rely on at draft
-review is meaningless for most leads.
+**Fixed forward.** Three states now: `verified` only from a source in
+`VERIFYING_SOURCES`, `discovered` for an address nobody tested, `guessed`
+unchanged. A cache hit reads as discovered because it is a previous run's
+answer. Held by `contacts/confidence-derived-from-source`, five mutations
+behind it, and the check covers the skills corpus because that is where three
+of the four writers were.
 
-**Owed:** confidence derived from the source, not from the presence of a
-string; the same-run verification verdict persisted.
+**Still owed, two things.**
+
+The 8,093 rows keep their old label until the lead is enriched again. Harmless
+today only because nothing reads the column — which is the second thing. The
+label is written on every lead and consumed by no code and no screen in the
+repository: `contact_confidence` appears in exactly one place outside the
+enrichment agent, a `delete` that clears it when the address is cleared. So the
+distinction it now records honestly is not in front of anybody. That surface is
+UI-06's, and the backfill has to run before it ships or the first thing the new
+column shows an operator is the old lie.
 
 ## P0 — Withheld prices are a complete dead end
 
@@ -512,7 +529,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | META-04 | `meta/no-second-copy-of-a-shared-guard`, beyond the invariants already covered |
 | AUTO-08 | `assignment/call-owner-must-be-call-operator` |
 | DATA-05 | the shared host list. `contacts/guessed-combo-requires-own-domain-and-flag` shipped 2026-08-20 and holds the gate and the flag together. The gate still reads a hand-copied list in `enrich.ts` that has drifted 15 hosts behind `src/lib/aggregator-hosts.ts`, so a guess is allowed on those hosts. Merging the lists is a behaviour change for every other caller of the shared one, which is why it is not folded in here. |
-| DATA-06 | `contacts/confidence-derived-from-source` — see the P0 above |
 | PERS-02 | `queues/flag-must-not-exit-queue` |
 | PERS-03 | `discovery/zero-must-not-be-terminal` — see the P1 above |
 | PERS-04 | the run-summary half. `retry/bound-must-be-declared` shipped 2026-08-20 and holds the rules-folder half: all seven bounds are now named under PERS-04 and an eighth fails the build. A bound must also appear in the run summary, which cannot be read from the source. |

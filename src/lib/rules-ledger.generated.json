@@ -207,8 +207,8 @@
     {
       "id": "DATA-06",
       "title": "Only a same-run verification counts as a confirmed email",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "DATA-07",
@@ -725,7 +725,7 @@
     "Verified NOT a defect",
     "P0 — Marketplace storefronts are silently dropped from outreach",
     "P0 — Direct suppliers with no email are dropped, defeating the retry queue",
-    "P0 — \"Verified\" contact confidence is stamped on unverified addresses",
+    "\"Verified\" contact confidence — fixed forward 2026-08-20, rows still wrong",
     "P0 — Withheld prices are a complete dead end",
     "P1 — The prices already captured wrong are still live",
     "P1 — Two draft paths bypass the staging chokepoint",

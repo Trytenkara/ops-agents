@@ -197,6 +197,15 @@ export function isPlaceholderEmail(email: string | null | undefined): boolean {
   return false;
 }
 
+export type ContactConfidence = "verified" | "discovered" | "guessed";
+
+// Which contact sources carry a deliverability verdict from the run that
+// resolved them (DATA-06). LeadMagic's Email Finder is the only one: it returns
+// a contact only on `status === "valid"`. Hunter's score is a pattern
+// confidence, not a test, and ZoomInfo/GetProspect return database records.
+// Adding a source here is a claim that it validated the mailbox in this run.
+const VERIFYING_SOURCES = new Set(["leadmagic"]);
+
 export interface ContactDiscovery {
   email: string | null;        // best discovered/known direct email
   phone: string | null;        // best discovered/known phone
@@ -312,11 +321,13 @@ export interface EnrichmentResult {
   // kept for the operator's reference on the manual-contact case. Null when the
   // resolved email is the supplier's own.
   aggregator_contact_email: string | null;
-  // How the primary email was obtained: "verified" for a scraped/provider/
-  // validated address, "guessed" for a synthesized pattern combo (name found but
-  // no verified email), null when there is no email. Operators see this on the
-  // draft; guessed drafts are always human-reviewed before send.
-  contact_confidence: "verified" | "guessed" | null;
+  // How the primary email was obtained: "verified" only when a provider
+  // validated deliverability in THIS run (DATA-06), "discovered" for an address
+  // we read off a page, a record or a provider without testing it, "guessed" for
+  // a synthesized pattern combo (name found but no address), null when there is
+  // no email. Written on every lead and read by nothing yet: the surface that
+  // shows an operator which is which is still owed (UI-06).
+  contact_confidence: ContactConfidence | null;
   // Set only for storefront-only leads (no website, contact is a platform
   // inquiry path). Records what the resolver learned about the real company so
   // the operator can see it and the next pass knows what was already tried.
@@ -1286,7 +1297,7 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
   // below; never used as a contact on its own.
   let guessPersonName: string | null = null;
   let guessPersonTitle: string | null = null;
-  let contactConfidence: "verified" | "guessed" | null = null;
+  let contactConfidence: ContactConfidence | null = null;
 
   // Hunter.io (primary paid fallback): the web + Tenkara gave us no direct
   // email. One Domain Search returns the supplier's known POC addresses. Runs
@@ -1376,8 +1387,15 @@ export async function enrichLead(lead: RawLead): Promise<EnrichmentResult> {
     }
   }
 
-  // Any email resolved so far came from a scraped/validated source.
-  if (email) contactConfidence = "verified";
+  // Confidence is derived from where the address came from, never from the fact
+  // that we have one (DATA-06). "verified" is a claim that somebody tested the
+  // mailbox, and only a VERIFYING_SOURCES provider does, in this run. A cache
+  // replay is a previous run's answer and cannot inherit that verdict however it
+  // was originally resolved, so it reads as discovered like the rest.
+  if (email) {
+    contactConfidence =
+      !cacheServed && contactSource && VERIFYING_SOURCES.has(contactSource) ? "verified" : "discovered";
+  }
 
   // Guessed-pattern fallback (rule 3): every scrape/DB/provider path missed a
   // deliverable email, but a POC NAME is in hand (a paid provider found the person
