@@ -68,10 +68,13 @@ A page cursor that resets every run re-reads page one forever: it burns credits
 and returns the same suppliers. Every paged source stores and advances its
 cursor, and the marker it writes must be the marker it reads.
 
-**Enforcement:** Audit owed — a daily check that every paged source's cursor
-advanced, and that the marker written is the marker read. A credit gate once
-wrote its marker under one key and read it under another, so it never fired
-and the source re-ran every pass.
+**Enforcement:** Audit — Agent 26 reads the discovery agent's stored state
+daily and reports two shapes of the same fault: a credit-gate marker saved
+without the `done` key the reader looks for, and a page cursor nobody writes
+any more. The first is the dangerous one, because the reader treats a missing
+`done` as finished, so a marker written under the wrong shape gates its
+material off that source permanently. All 15 SourceReady markers were in that
+state when the audit shipped, alongside 52 orphaned page cursors.
 
 ## DISC-09 — A self-supplied material is not sourced
 

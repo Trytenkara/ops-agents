@@ -4,18 +4,17 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-120 rules. 73 are actually enforced, 26 owe a check or a job,
+120 rules. 78 are actually enforced, 22 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
-5 of the enforced rules hold only part of their invariant and say so in
+6 of the enforced rules hold only part of their invariant and say so in
 their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
 | **Guard** | A shared module or build check makes it impossible. | 70 |
-| **Audit** | A scheduled job reports the break after the fact. | 3 |
+| **Audit** | A scheduled job reports the break after the fact. | 8 |
 | **Check owed** | A build check is possible and is not built yet. | 16 |
-| **Audit owed** | No build check can see it; a scheduled job can. Not built. | 5 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
 | **None** | Outside this repository. Cannot be checked here. | 2 |
@@ -107,11 +106,16 @@ this ledger read as enforced.
 | `SHIP-04` | Rules are checked before the build | Guard. |
 | `SHIP-07` | Deploy and schema move together | Guard — `ship/migration-must-accompany-schema-read`: every table read through `.from(...)` and every `.rpc(...)` must be created by a migration in this repo. That is the granularity that can be read statically and the one that fails every call rather than one field; a missing *column* is still owed and is listed in `OUTSTANDING.md`. The check also fails if no migrations are in the corpus at all, since an empty schema would otherwise read as "nothing to check". |
 
-## Audit (3)
+## Audit (8)
 
 | Rule | | Enforcement |
 |---|---|---|
+| `DATA-08` | A dealbreaker grade is a hard specification | Audit — Agent 26 compares, per material, what our drafts actually asked for against what Tenkara flags as a dealbreaker today, and reports every material where the two disagree in either direction: armed when the client flags nothing, unarmed when the client flags a grade. It is keyed on the resolved grade string and not on `updated_at`, because Tenkara rewrites every material nightly at 00:00:02 UTC, so a staleness test keyed on the timestamp sees a changed record every day and reports nothing. |
 | `DATA-15` | Extraction records what it did not take | Audit — `agent-24-price-capture-reconcile`. Every inbound message writes `message_price_capture` (migration 0125) with the price points the extractor counted before extracting and the rows actually accounted for; Agent 24 re-reads the shortfalls daily and alerts on the confirmed ones. Per META-07 the second read is a model read, never a price regex, and it reports rather than stages — the first read already got that message wrong once. |
+| `PRICING-04` | Delivery-cost extraction is audited every run | Audit — Agent 26 counts four things daily and reports the gap between them: listings pulled, rows carrying the delivery-cost keys, attempts made, and numbers captured. The distinction matters more than the rate. A key present with a null under it says the writer ran; a number says it produced something; zero attempts against thousands of pulls says the feature is inert, which is exactly the state it shipped in and held for weeks. The audit reports the inert case as its own finding rather than as a capture rate of zero. |
+| `PERS-07` | A withheld price is a job, not an outcome | Audit — Agent 26 counts withheld prices carrying no reason every morning and reports them with the oldest date. On the day it shipped all 19 withheld prices in the system had no reason recorded, so the count is a real measure and not a formality. Check owed for the second half: the surface itself on the client's own tab (UI-06). Until that exists a person still has to read the audit to find these rows, which is why the audit is the weaker of the two. See `OUTSTANDING.md`. |
+| `DISC-08` | A source's own paging must advance | Audit — Agent 26 reads the discovery agent's stored state daily and reports two shapes of the same fault: a credit-gate marker saved without the `done` key the reader looks for, and a page cursor nobody writes any more. The first is the dangerous one, because the reader treats a missing `done` as finished, so a marker written under the wrong shape gates its material off that source permanently. All 15 SourceReady markers were in that state when the audit shipped, alongside 52 orphaned page cursors. |
+| `OUT-09` | Stalled conversations get chased | Audit — Agent 26 reports conversations past the gap with nothing sent, and separately the ones exempt only because a draft has sat staged on them for more than fourteen days. The exemption is the half worth watching: a thread is not chased while an operator has something waiting on it, and that is evaluated over the whole thread, so one draft nobody ever actioned stops the sequence for good. 3,064 threads sat under that exemption when the audit shipped, against one genuinely overdue. |
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
@@ -135,16 +139,6 @@ this ledger read as enforced.
 | `ORG-06` | Cross-client lookups are scoped at the query, not filtered after | Check owed — `orgs/name-lookup-must-scope-query`, plus an outstanding repair of the records already mislabelled. See `OUTSTANDING.md`. |
 | `UI-06` | Flagged work needs a home | Check owed — `ui/flagged-set-must-have-a-surface`. See `OUTSTANDING.md`. |
 | `SHIP-02` | Never stage everything | Check owed — a pre-commit hook that refuses paths outside those explicitly staged. See `OUTSTANDING.md`. |
-
-## Audit owed (5)
-
-| Rule | | Enforcement |
-|---|---|---|
-| `DATA-08` | A dealbreaker grade is a hard specification | Audit owed — a daily check that the arming value is stable for a material whose Tenkara record has not changed, and that no draft invites an adjacent grade. `grade_ask_widened` is a blocking code inside `stageDraft` and does hold part of this, but it is deliberately NOT counted as a guard: it arms on a value that moved on 97% of one material's drafts with no Tenkara edit behind it, and a guard that fires on 3% of identical cases makes nothing impossible. See `OUTSTANDING.md` and `CONFLICTS.md` L. |
-| `PRICING-04` | Delivery-cost extraction is audited every run | Audit owed — daily shipping-capture health job, `shipping/health-must-monitor-extraction-rate`. |
-| `PERS-07` | A withheld price is a job, not an outcome | Audit owed — a daily count of withheld prices with no surface, plus the surface itself on the client's own tab (see `80-control-room.md`). See `OUTSTANDING.md`. |
-| `DISC-08` | A source's own paging must advance | Audit owed — a daily check that every paged source's cursor advanced, and that the marker written is the marker read. A credit gate once wrote its marker under one key and read it under another, so it never fired and the source re-ran every pass. |
-| `OUT-09` | Stalled conversations get chased | Audit owed — a daily report of conversations past their follow-up cadence with no outbound. |
 
 ## Judgement (20)
 

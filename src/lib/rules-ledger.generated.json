@@ -219,8 +219,8 @@
     {
       "id": "DATA-08",
       "title": "A dealbreaker grade is a hard specification",
-      "bucket": "Audit owed",
-      "owes": true
+      "bucket": "Audit",
+      "owes": false
     },
     {
       "id": "DATA-09",
@@ -297,8 +297,8 @@
     {
       "id": "PRICING-04",
       "title": "Delivery-cost extraction is audited every run",
-      "bucket": "Audit owed",
-      "owes": true
+      "bucket": "Audit",
+      "owes": false
     },
     {
       "id": "PRICING-05",
@@ -363,7 +363,7 @@
     {
       "id": "PERS-07",
       "title": "A withheld price is a job, not an outcome",
-      "bucket": "Audit owed",
+      "bucket": "Audit",
       "owes": true
     },
     {
@@ -429,8 +429,8 @@
     {
       "id": "DISC-08",
       "title": "A source's own paging must advance",
-      "bucket": "Audit owed",
-      "owes": true
+      "bucket": "Audit",
+      "owes": false
     },
     {
       "id": "DISC-09",
@@ -501,8 +501,8 @@
     {
       "id": "OUT-09",
       "title": "Stalled conversations get chased",
-      "bucket": "Audit owed",
-      "owes": true
+      "bucket": "Audit",
+      "owes": false
     },
     {
       "id": "OUT-10",

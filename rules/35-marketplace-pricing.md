@@ -43,8 +43,13 @@ feature shipped inert (reading ship-to fields from the wrong table, so it
 never produced a number) and nothing surfaced that for weeks, which is the
 incident this rule exists to prevent.
 
-**Enforcement:** Audit owed — daily shipping-capture health job,
-`shipping/health-must-monitor-extraction-rate`.
+**Enforcement:** Audit — Agent 26 counts four things daily and reports the gap
+between them: listings pulled, rows carrying the delivery-cost keys, attempts
+made, and numbers captured. The distinction matters more than the rate. A key
+present with a null under it says the writer ran; a number says it produced
+something; zero attempts against thousands of pulls says the feature is inert,
+which is exactly the state it shipped in and held for weeks. The audit reports
+the inert case as its own finding rather than as a capture rate of zero.
 
 ## PRICING-05 — A delivery cost is never fabricated
 

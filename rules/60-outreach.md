@@ -114,8 +114,17 @@ the conversation.
 A conversation with no reply is followed up on a fixed cadence measured from
 the last outbound message, not abandoned.
 
-**Enforcement:** Audit owed — a daily report of conversations past their
-follow-up cadence with no outbound.
+**Enforcement:** Audit — Agent 26 reports conversations past the gap with
+nothing sent, and separately the ones exempt only because a draft has sat
+staged on them for more than fourteen days. The exemption is the half worth
+watching: a thread is not chased while an operator has something waiting on it,
+and that is evaluated over the whole thread, so one draft nobody ever actioned
+stops the sequence for good. 3,064 threads sat under that exemption when the
+audit shipped, against one genuinely overdue.
+
+The audit runs on the sweep's own loader rather than a copy of its logic. An
+audit that re-derives the clock drifts from the producer and then reports on a
+pipeline that does not exist.
 
 ## OUT-10 — A cancelled outreach must release its alias
 

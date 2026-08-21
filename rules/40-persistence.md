@@ -140,9 +140,13 @@ The reason is stored so somebody can work the row. That only means anything if
 the flagged rows appear somewhere a person looks. A withheld price that is
 written and never surfaced is a silent failure wearing a reason code.
 
-**Enforcement:** Audit owed — a daily count of withheld prices with no
-surface, plus the surface itself on the client's own tab (see
-`80-control-room.md`). See `OUTSTANDING.md`.
+**Enforcement:** Audit — Agent 26 counts withheld prices carrying no reason
+every morning and reports them with the oldest date. On the day it shipped all
+19 withheld prices in the system had no reason recorded, so the count is a real
+measure and not a formality. Check owed for the second half: the surface itself
+on the client's own tab (UI-06). Until that exists a person still has to read
+the audit to find these rows, which is why the audit is the weaker of the two.
+See `OUTSTANDING.md`.
 
 ## PERS-08 — The record of a failure is never proof of success
 

@@ -159,13 +159,20 @@ misses softer invitations that break the rule just as effectively, among them
 "coconut-based as well if palm isn't available" and "let us know what else you
 stock in this range".
 
-**Enforcement:** Audit owed — a daily check that the arming value is stable for
-a material whose Tenkara record has not changed, and that no draft invites an
-adjacent grade. `grade_ask_widened` is a blocking code inside `stageDraft` and
-does hold part of this, but it is deliberately NOT counted as a guard: it arms
-on a value that moved on 97% of one material's drafts with no Tenkara edit
-behind it, and a guard that fires on 3% of identical cases makes nothing
-impossible. See `OUTSTANDING.md` and `CONFLICTS.md` L.
+**Enforcement:** Audit — Agent 26 compares, per material, what our drafts
+actually asked for against what Tenkara flags as a dealbreaker today, and
+reports every material where the two disagree in either direction: armed when
+the client flags nothing, unarmed when the client flags a grade. It is keyed on
+the resolved grade string and not on `updated_at`, because Tenkara rewrites
+every material nightly at 00:00:02 UTC, so a staleness test keyed on the
+timestamp sees a changed record every day and reports nothing.
+
+`grade_ask_widened` is a blocking code inside `stageDraft` and holds part of
+this, but it is deliberately NOT counted as a guard: it arms on a value that
+moved on 97% of one material's drafts with no Tenkara edit behind it, and a
+guard that fires on 3% of identical cases makes nothing impossible. If Tenkara
+is unreachable the audit says so and skips the comparison rather than reporting
+every material as unflagged. See `OUTSTANDING.md` and `CONFLICTS.md` L.
 
 ## DATA-09 — Aliases never add a qualifier the input lacked
 

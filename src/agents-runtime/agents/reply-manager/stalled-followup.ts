@@ -70,12 +70,16 @@ export function buildStalledBody(opts: {
   ].join("\n");
 }
 
-type ThreadState = {
+export type ThreadState = {
   lastOutboundAt: number;
   lastInboundAt: number;
   terminal: boolean;
   conversationComplete: boolean;
   awaitingOperator: boolean;
+  // When the oldest un-actioned draft on the thread was staged. The sweep only
+  // needs the boolean above; the audit needs the age, because an exemption that
+  // never expires is how a thread stops being chased for good (OUT-09).
+  awaitingSince: number | null;
   priorNudges: number;
   anchor: any | null; // the most recent sent row, whose metadata we reply from
   // Our reply drafts don't all carry the supplier's address, so the newest
@@ -118,13 +122,17 @@ export async function loadStalledThreadState(admin: Admin, threadIds: string[]):
       if (!d.thread_id) continue;
       let t = byThread.get(d.thread_id);
       if (!t) {
-        t = { lastOutboundAt: 0, lastInboundAt: 0, terminal: false, conversationComplete: false, awaitingOperator: false, priorNudges: 0, anchor: null, contactEmail: null };
+        t = { lastOutboundAt: 0, lastInboundAt: 0, terminal: false, conversationComplete: false, awaitingOperator: false, awaitingSince: null, priorNudges: 0, anchor: null, contactEmail: null };
         byThread.set(d.thread_id, t);
       }
       const meta = (d.metadata ?? {}) as any;
       if (!t.contactEmail && typeof meta.supplier_contact_email === "string") t.contactEmail = meta.supplier_contact_email;
       if (TERMINAL.has(meta.flow_status)) t.terminal = true;
-      if (PENDING_DRAFT_STATUS.has(d.status)) t.awaitingOperator = true;
+      if (PENDING_DRAFT_STATUS.has(d.status)) {
+        t.awaitingOperator = true;
+        const staged = new Date(d.created_at).getTime();
+        if (Number.isFinite(staged) && (t.awaitingSince === null || staged < t.awaitingSince)) t.awaitingSince = staged;
+      }
 
       const detected = meta.reply_detected?.detected_at;
       if (detected) {

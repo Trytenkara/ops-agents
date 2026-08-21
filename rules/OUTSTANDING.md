@@ -534,13 +534,20 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 
 ### Audit owed — no build check can see it, a scheduled job can
 
-| Rule | The job |
+None. The last five were covered by Agent 26 on 2026-08-20, which reports
+DATA-08, PRICING-04, PERS-07, DISC-08 and OUT-09 every morning and repairs
+nothing. Each of the five needs a person to decide what the right value was, so
+an audit that wrote its own answer would be guessing.
+
+What the audit does NOT close, and what each one found on its first pass:
+
+| Rule | Still owed |
 | --- | --- |
-| DATA-08 | daily: the arming value is stable for a material Tenkara has not edited, and no draft invites an adjacent grade — see the P1 above |
-| PRICING-04 | daily: shipping capture rate against a threshold |
-| PERS-07 | daily: withheld prices with no surface — see the P0 above |
-| DISC-08 | daily: every paged source's cursor advanced, and the marker written is the marker read |
-| OUT-09 | daily: conversations past their follow-up cadence with no outbound |
+| PERS-07 | the surface. All 19 withheld prices carry no reason at all, and until UI-06 ships there is nowhere on the client's tab for them to appear, so somebody has to read the audit to find them. |
+| PRICING-04 | the fix. Zero attempts against 4,044 pulled listings, because `getOrgShipToAddress` selects `ship_to_*` columns that do not exist on this project's `orgs` table and the catch swallows it. The audit now says so out loud; it does not move the columns. |
+| DISC-08 | the 52 orphaned cursors and the 15 markers written without `done`, all of which currently read as finished and gate their material off SourceReady permanently. Deleting them is a one-off repair nobody has run. |
+| OUT-09 | the exemption itself. 3,064 threads are held by a staged draft rather than chased; capping how long a staged draft may suppress the sequence is a product decision. |
+| DATA-08 | the 7 materials where arming disagrees with Tenkara, and the widening phrasings the blocking code still misses. |
 
 ## Open decisions
 
