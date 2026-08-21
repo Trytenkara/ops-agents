@@ -2003,6 +2003,67 @@ export function runChecks(files, rulesDir) {
     test: (l) => /xoxp-|SLACK_USER_TOKEN|slack_user_token/.test(l),
   });
 
+  // DISC-05. A platform is a route to a supplier, never the supplier. Two
+  // halves, and only the first was held. Discovery refuses to stage a platform
+  // as a company (`isAggregatorPlatformName` in the scout), but nothing stopped
+  // the platform's own inbox being stamped as a supplier's contact: 100 leads
+  // carry one today, including `service@echemi.com` on a Chinese manufacturer.
+  // None was ever written to, but only because those leads had not reached
+  // outreach yet.
+  {
+    const rule = "discovery/platform-is-never-manufacturer";
+    const HOSTS = "src/lib/aggregator-hosts.ts";
+
+    const hosts = anchor(HOSTS, {
+      rule,
+      why: "one list of platforms, and one answer to whether a name or an address belongs to one",
+      fix: "restore src/lib/aggregator-hosts.ts",
+    });
+    for (const fn of ["isAggregatorPlatformName", "isPlatformOwnedContact"]) {
+      if (hosts && !new RegExp(`export function ${fn}`).test(hosts.text)) {
+        violations.push({
+          rule,
+          why: "without the shared test each caller invents its own, and the ones that never had a test are exactly where the platform got recorded as the supplier",
+          fix: `keep ${fn} exported from ${HOSTS}`,
+          where: HOSTS,
+          line: `${fn} is gone`,
+        });
+      }
+    }
+
+    // Discovery: a platform's own name is never staged as a company.
+    const scout = anchor("src/agents-runtime/agents/lead-creator/scout.ts", {
+      rule,
+      why: "the scout is where a search result becomes a company, so it is where a directory would become one",
+      fix: "restore src/agents-runtime/agents/lead-creator/scout.ts",
+    });
+    if (scout && !/isAggregatorPlatformName\(/.test(scout.text)) {
+      violations.push({
+        rule,
+        why: "a directory staged as a company is chased for a quote it can never give, and the client's list of suppliers is wrong",
+        fix: "reject a result whose company name is the platform's own, via isAggregatorPlatformName",
+        where: scout.path,
+        line: "discovery no longer rejects a platform staged as a company",
+      });
+    }
+
+    // Outreach: a platform's own address is never the supplier's contact.
+    const staging = anchor("src/lib/draft-staging.ts", {
+      rule,
+      why: "eighteen places stamp a contact email on a lead and one place sends to it, so the gate belongs at the send",
+      fix: "restore src/lib/draft-staging.ts",
+    });
+    if (staging && !/isPlatformOwnedContact\(/.test(staging.text)) {
+      violations.push({
+        rule,
+        why: "a directory's inbox reaches the directory; the manufacturer may never hear of it and the reply comes back from the platform, which then reads as the supplier",
+        fix: "block a draft whose recipient is a platform's own address at the staging chokepoint",
+        where: staging.path,
+        line: "outreach can address a platform's own inbox as the supplier",
+      });
+    }
+  }
+
   // PERS-02. A "needs a human" mark may move a record to a person's queue. It
   // may never take it out of every queue. Two shapes break that: a read that
   // filters the marked rows away, and a write that parks a record against a

@@ -1,6 +1,7 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { createTenkaraDraft, createTenkaraConversation, setTenkaraConversationAssignee } from "@/lib/tenkara";
 import { bodyToHtml, sanitizeDraft } from "@/lib/email-style";
+import { isPlatformOwnedContact } from "@/lib/aggregator-hosts";
 import { lintDraft, type Finding } from "@/agents-runtime/agents/outreach-qa/lint";
 import { approvedContactsFor } from "@/lib/contact-guard";
 import { postAgentAlert } from "@/lib/slack-alert";
@@ -188,6 +189,20 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
       console.warn(`[stageDraft] skipped ${callerMeta.draft_kind} to ${to.address}: ${dnc.source}`);
       return { ok: false, suppressed: true, error: `suppressed:${dnc.source}` };
     }
+  }
+
+  // A platform is never the supplier (DISC-05), and its inbox is never the
+  // supplier's contact. Enforced here rather than at each write site because
+  // there are eighteen places a contact email is stamped on a lead and one
+  // place an email is sent. A directory address reaches the directory: the
+  // manufacturer may never hear about it, and the reply comes back from the
+  // platform, which then reads as the supplier.
+  const platformContact = isPlatformOwnedContact(to.address, input.supplierCompany ?? to.name ?? null);
+  if (platformContact.blocked) {
+    console.warn(
+      `[stageDraft] skipped ${callerMeta.draft_kind} to ${to.address}: that is ${platformContact.platform}'s own address, not ${input.supplierCompany ?? to.name ?? "the supplier"}'s`
+    );
+    return { ok: false, suppressed: true, error: `suppressed:platform_owned_contact:${platformContact.platform}` };
   }
 
   // Style rules (no "RFQ", no em dash) are enforced HERE, at the one chokepoint

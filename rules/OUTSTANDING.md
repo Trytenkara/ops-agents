@@ -373,6 +373,33 @@ windows are waived in `DECLARED_WINDOWS`, keyed by path *and* by the limit
 expression: rename the constant and the waiver stops applying. PERS-06 moves
 from Check owed to Guard.
 
+## Closed 2026-08-21 — a directory's own inbox counted as a supplier's contact
+
+Broke DISC-05. The classification half was held: the scout rejects a result
+whose company name is the platform's own. The contact half was not held
+anywhere. 100 leads carry a contact email at a platform's own domain —
+29 at pharmacompass.com, 25 at echemi.com, 32 at pharmaoffer.com, the rest
+scattered — and 7 of them are stamped `verified`. Some are honest, where
+Pharmaoffer itself is the company. Others are not: `service@echemi.com` is the
+recorded contact for Shandong Longda Bio-Products.
+
+None was ever written to, and that is luck rather than a guard — those leads
+had not reached outreach. Writing to a directory reaches the directory. It may
+or may not forward, and the reply comes back from the platform, which then
+reads as the supplier replying.
+
+`isPlatformOwnedContact` is the shared test and `stageDraft` is where it runs,
+because eighteen places stamp a contact email on a lead and one place sends to
+it. An address at a platform's domain is allowed only when the platform is the
+company being written to.
+
+**Owed:** the 100 leads still carry the address. Nothing will now send to them,
+so they sit un-contactable rather than mis-contacted, and re-running contact
+discovery for them is the repair.
+
+**Enforcement:** `discovery/platform-is-never-manufacturer`, four mutations.
+DISC-05 moves from Check owed to Guard.
+
 ## Closed 2026-08-21 — a lead parked against a case never came back
 
 Broke PERS-02. The escalation sweep takes a stale lead out of the active queue
@@ -666,7 +693,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | PERS-01 | `retry/verdict-must-use-shared-classifier`. Three call sites use `classifyFailure` and two hand-rolled classifiers remain — see the P2 above. |
 | PERS-04 | the run-summary half. `retry/bound-must-be-declared` shipped 2026-08-20 and holds the rules-folder half: all seven bounds are now named under PERS-04 and an eighth fails the build. A bound must also appear in the run summary, which cannot be read from the source. |
 | PERS-09 | `runs/paced-loop-must-carry-deadline`. `deadlineAt` holds the one job it was written for; a new per-item push loop with no deadline passes the build today. |
-| DISC-05 | `discovery/platform-is-never-manufacturer` |
 | DISC-09 | `discovery/self-supplied-gate-must-fail-closed` — gates are fail-open today |
 | OUT-02 | the aggregator inquiry channel itself. `outreach/no-terminal-drop-without-channel` stops a storefront being dropped for having no email; it cannot make the inquiry form a channel we can actually send through. |
 | OUT-08 | `outreach/asks-must-be-staged` |

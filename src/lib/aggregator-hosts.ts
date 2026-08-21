@@ -265,3 +265,22 @@ export function aggregatorNameFromPayload(payload: any): string | null {
     return null;
   }
 }
+
+// DISC-05. A platform's own inbox is not a supplier's contact. `info@pharmaoffer.com`
+// stamped on Pharmaoffer is honest — the platform IS the company being written to.
+// The same address stamped on "Shandong Longda Bio-Products" is not: it reaches
+// the directory, which forwards or does not, and the reply arrives from the
+// platform rather than the manufacturer. Both shapes are live today.
+export function isPlatformOwnedContact(
+  email: string | null | undefined,
+  supplierName: string | null | undefined
+): { blocked: boolean; platform: string | null } {
+  const at = (email ?? "").split("@")[1]?.trim().toLowerCase();
+  if (!at) return { blocked: false, platform: null };
+  const platform = aggregatorNameOfHost(at);
+  if (!platform) return { blocked: false, platform: null };
+  // Writing to the platform about the platform is fine.
+  const named = (supplierName ?? "").trim().toLowerCase();
+  const self = named.length > 0 && (named.includes(platform.toLowerCase()) || platform.toLowerCase().includes(named));
+  return { blocked: !self, platform };
+}

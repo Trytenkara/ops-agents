@@ -42,7 +42,14 @@ treated as a supplier's own domain for contact purposes.
 This is a classification rule. It is NOT a reason to drop the lead: see
 OUT-02.
 
-**Enforcement:** Check owed — `discovery/platform-is-never-manufacturer`.
+**Enforcement:** Guard — `discovery/platform-is-never-manufacturer`, four
+mutations. Both halves, because only the first was ever held: the scout refuses
+to stage a platform's own name as a company, and `stageDraft` refuses a
+recipient at a platform's own domain unless the platform is itself the company
+being written to. Both tests live in `src/lib/aggregator-hosts.ts`
+(`isAggregatorPlatformName`, `isPlatformOwnedContact`). The gate sits at the
+send rather than at each write because eighteen places stamp a contact email on
+a lead and one place sends to it.
 
 ## DISC-06 — Duplicate suppliers have one definition
 

@@ -44,6 +44,30 @@ const drop = (suffix) => (files) => files.filter((f) => !f.path.endsWith(suffix)
 
 const MUTATIONS = [
   // Line scanners. A synthetic file is enough: these read one line at a time.
+  // DISC-05. Four: the two shared tests, and the two chokepoints that use them.
+  {
+    expect: "discovery/platform-is-never-manufacturer",
+    label: "the shared test for a platform's own address is deleted",
+    mutate: rename("src/lib/aggregator-hosts.ts", "export function isPlatformOwnedContact", "function unusedIsPlatformOwnedContact"),
+  },
+  {
+    expect: "discovery/platform-is-never-manufacturer",
+    label: "the shared test for a platform's own name is deleted",
+    mutate: rename("src/lib/aggregator-hosts.ts", "export function isAggregatorPlatformName", "function unusedIsAggregatorPlatformName"),
+  },
+  {
+    expect: "discovery/platform-is-never-manufacturer",
+    label: "discovery stops rejecting a directory staged as a company",
+    mutate: edit("src/agents-runtime/agents/lead-creator/scout.ts", (t) =>
+      t.split("isAggregatorPlatformName(").join("neverTrue(")
+    ),
+  },
+  {
+    expect: "discovery/platform-is-never-manufacturer",
+    label: "outreach can address the platform's own inbox as the supplier",
+    mutate: edit("src/lib/draft-staging.ts", (t) => t.split("isPlatformOwnedContact(").join("noPlatformCheck(")),
+  },
+
   // PERS-02. Four: the read that hides the flag, the write that skips the
   // module, and both halves of the sweep that gives a held lead back.
   {
