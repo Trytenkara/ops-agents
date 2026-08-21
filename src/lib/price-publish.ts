@@ -94,9 +94,10 @@ export function publishablePrice<T extends PricedRow>(
 export function publishableTiers<T extends PricedRow>(
   tiers: T[] | null | undefined,
   opts: { where?: string } = {}
-): { tiers: T[]; issues: PriceIssue[] } {
+): { tiers: T[]; issues: PriceIssue[]; dropped: T[] } {
   const issues: PriceIssue[] = [];
   const kept: T[] = [];
+  const dropped: T[] = [];
   for (const [i, t] of (tiers ?? []).entries()) {
     const res = publishablePrice(t, { where: opts.where ? `${opts.where} tier ${i}` : `tier ${i}` });
     issues.push(...res.issues);
@@ -105,6 +106,45 @@ export function publishableTiers<T extends PricedRow>(
     const hadPrice = t.price != null || t.unit_price != null;
     const hasPrice = res.row.price != null || res.row.unit_price != null;
     if (!hadPrice || hasPrice) kept.push(res.row);
+    // The dropped rung is the only thing that knows which pack size lost its
+    // price: `issues` name the field and the reason but index by position in a
+    // ladder that no longer exists once this returns. Handed back so the caller
+    // can say "5 gal withheld" rather than "tier 2 withheld".
+    else dropped.push(res.row);
   }
-  return { tiers: kept, issues };
+  return { tiers: kept, issues, dropped };
+}
+
+/**
+ * The mark a caller stores when this gate took a price away.
+ *
+ * Three writers ran the gate and then wrote the reason onto an object that was
+ * never persisted, or onto a row this function had just deleted, so five
+ * distinct withholding reasons were computed daily and not one was readable
+ * anywhere (PERS-07). A price that is missing with no reason is indistinguishable
+ * from a price nobody has pulled yet, so the operator queue reads it as "not
+ * got to yet" forever and nothing retries it.
+ *
+ * `withheld` is a flat boolean on purpose: it is the column Agent 19's worklist
+ * and the client's flagged panel select on, and a nested or computed shape
+ * cannot be selected on in PostgREST.
+ */
+export interface WithheldMark {
+  withheld: true;
+  withheld_reason: string;
+  withheld_at: string;
+}
+
+export function withheldMark(
+  issues: PriceIssue[],
+  opts: { at: string; droppedPacks?: (string | null | undefined)[] }
+): WithheldMark | null {
+  if (!issues.length) return null;
+  const packs = (opts.droppedPacks ?? []).map((p) => String(p ?? "").trim()).filter(Boolean);
+  const why = issues.map((i) => `${i.field} (${i.reason})`).join("; ");
+  return {
+    withheld: true,
+    withheld_reason: packs.length ? `${why}. Pack sizes dropped: ${packs.join(", ")}.` : `${why}.`,
+    withheld_at: opts.at,
+  };
 }

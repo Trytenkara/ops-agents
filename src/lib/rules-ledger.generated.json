@@ -639,8 +639,8 @@
     {
       "id": "UI-06",
       "title": "Flagged work needs a home",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "UI-07",
@@ -726,7 +726,7 @@
     "P0 — Marketplace storefronts are silently dropped from outreach",
     "P0 — Direct suppliers with no email are dropped, defeating the retry queue",
     "\"Verified\" contact confidence — fixed forward 2026-08-20, rows still wrong",
-    "P0 — Withheld prices are a complete dead end",
+    "P0 — Withheld prices were a complete dead end — FIXED 2026-08-21",
     "P1 — The prices already captured wrong are still live",
     "P1 — Two draft paths bypass the staging chokepoint",
     "P1 — Zero results are accepted as an answer in nine places",

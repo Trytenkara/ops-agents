@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-120 rules. 80 are actually enforced, 20 owe a check or a job,
+120 rules. 81 are actually enforced, 19 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 6 of the enforced rules hold only part of their invariant and say so in
@@ -12,9 +12,9 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 72 |
+| **Guard** | A shared module or build check makes it impossible. | 73 |
 | **Audit** | A scheduled job reports the break after the fact. | 8 |
-| **Check owed** | A build check is possible and is not built yet. | 14 |
+| **Check owed** | A build check is possible and is not built yet. | 13 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
 | **None** | Outside this repository. Cannot be checked here. | 2 |
@@ -31,7 +31,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (72)
+## Guard (73)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -101,6 +101,7 @@ this ledger read as enforced.
 | `SUP-01` | Suppliers are unique per client | Guard — `orgs/duplicate-guard-requires-exclusive-supplier` covers the online guard; the hand-run scan unions pairs only when their client sets intersect, enforced in its own code outside this repository. |
 | `UI-01` | Never ship a native OS dropdown | Guard — `ui/no-native-select`. |
 | `UI-02` | Everything lives on the client's own tabs | Guard — `ui/no-global-review-route`, as a ratchet. Seven routes under `work/review/` predate the rule and are named in the check; an eighth fails the build. Deleting the seven is a product decision, not a cleanup, so the debt is paid down by removing names from that list, never by adding them. |
+| `UI-06` | Flagged work needs a home | Guard — `ui/flagged-set-must-have-a-surface`. Audit findings are still not persisted anywhere, so they are not yet in the registry; see `OUTSTANDING.md`. |
 | `UI-09` | A one-click write needs a way back | Guard — `src/lib/call-undo.ts` `undoLastAttemptPatch`, surfaced by `UndoCallAttempt` on both the open call task and the recently-closed table. Judgement for other one-click controls. |
 | `UI-10` | A withheld value shows its reason where it renders | Guard — the withheld-price cells in `src/components/staged-quote-row.tsx` and `src/components/direct-prices-on-file.tsx` (`priceNote`), which render the capture reason and carry it into the CSV. Judgement for other withheld fields. |
 | `UI-11` | A placeholder must never look like a value | Guard — `ui/no-numeric-placeholder-in-value-field`: a placeholder whose whole text is a number fails the build. A unit (`kg`), a format (`price per unit`) or an explicit `e.g.` stays legal, which is what the fix looks like. The three live breaks on the marketplace-pricing card — case size, case price, unit price — were fixed with the check. |
@@ -121,7 +122,7 @@ this ledger read as enforced.
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
-## Check owed (14)
+## Check owed (13)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -137,7 +138,6 @@ this ledger read as enforced.
 | `OUT-08` | Supplier asks are staggered | Check owed — `outreach/asks-must-be-staged`. |
 | `OUT-10` | A cancelled outreach must release its alias | Check owed — `outreach/cancel-must-release-alias`. |
 | `ORG-06` | Cross-client lookups are scoped at the query, not filtered after | Check owed — `orgs/name-lookup-must-scope-query`, plus an outstanding repair of the records already mislabelled. See `OUTSTANDING.md`. |
-| `UI-06` | Flagged work needs a home | Check owed — `ui/flagged-set-must-have-a-surface`. See `OUTSTANDING.md`. |
 | `SHIP-02` | Never stage everything | Check owed — a pre-commit hook that refuses paths outside those explicitly staged. See `OUTSTANDING.md`. |
 
 ## Judgement (20)

@@ -5,7 +5,7 @@ import { normalizeToUsd as fxNormalize } from "@/lib/fx";
 import { estimatePerTierShipping } from "@/lib/shipping-estimation";
 import { getOrgShipToAddress, formatAddressForCheckout } from "@/lib/tenkara-ship-to";
 import { sanitizeTiers, type PriceTier } from "@/lib/price-tiers";
-import { publishablePrice, publishableTiers } from "@/lib/price-publish";
+import { publishablePrice, publishableTiers, withheldMark } from "@/lib/price-publish";
 import { sortByOrgPriority } from "@/lib/org-priority";
 
 // Agent 19 - Browserbase Price Escalation.
@@ -284,11 +284,18 @@ async function writePull(
 
     const gated = publishableTiers(sanitizeTiers(tiers) as any[], { where: "escalation pull" });
     const gatedPull = publishablePrice(pull as any, { where: "escalation pull" });
-    if (gated.issues.length || gatedPull.issues.length) {
+    const withheld = withheldMark([...gatedPull.issues, ...gated.issues], {
+      at: now,
+      droppedPacks: gated.dropped.map((t: any) => t.pack_size),
+    });
+    if (withheld) {
       pull = gatedPull.row as any;
-      pull.last_notes = `${pull.last_notes ? pull.last_notes + " " : ""}Withheld: ${[...gatedPull.issues, ...gated.issues]
-        .map((i) => `${i.field} (${i.reason})`)
-        .join("; ")}.`;
+      // A note is prose an operator has to be looking at the right row to read.
+      // The mark beside it is what the worklist below and the client's flagged
+      // panel select on, so a withheld price comes back round instead of sitting
+      // as a blank cell that reads as "nobody has pulled this yet" (PERS-07).
+      Object.assign(pull, withheld);
+      pull.last_notes = `${pull.last_notes ? pull.last_notes + " " : ""}Withheld: ${withheld.withheld_reason}`;
     }
     nextPayload.price_tiers = gated.tiers;
     nextPayload.price_tiers_updated_at = now;
@@ -313,6 +320,11 @@ async function writePull(
       last_notes: result.notes ?? null,
       escalated_at: now,
       at: now,
+      // This read produced no price at all, so an earlier read's withholding is
+      // no longer what is wrong with the lead. Left set, the flagged panel would
+      // keep reporting a price we took away when the truth is we never got one.
+      withheld: false,
+      withheld_reason: null,
     };
   }
 
@@ -330,18 +342,38 @@ async function selectWorklist(admin: any, log: RunLog): Promise<{ leads: Lead[];
   }
   if (!live.size) return { leads: [], skippedWalls: 0 };
 
-  const { data: rows, error } = await admin
-    .from("leads_in_flight")
-    .select("id, org_id, supplier_name, material_name, payload")
-    .eq("status", "active")
-    .in("org_id", [...live.keys()])
-    .eq("payload->marketplace_pull->>status", "pending")
-    .in("payload->marketplace_pull->>reason", ["login_required", "needs_review"])
-    // Stalest first, so a bounded run advances through the pool rather than
-    // re-reading the same head every day.
-    .order("payload->marketplace_pull->>at", { ascending: true, nullsFirst: true })
-    .limit(1500);
+  const [pending, withheld] = await Promise.all([
+    admin
+      .from("leads_in_flight")
+      .select("id, org_id, supplier_name, material_name, payload")
+      .eq("status", "active")
+      .in("org_id", [...live.keys()])
+      .eq("payload->marketplace_pull->>status", "pending")
+      .in("payload->marketplace_pull->>reason", ["login_required", "needs_review"])
+      // Stalest first, so a bounded run advances through the pool rather than
+      // re-reading the same head every day.
+      .order("payload->marketplace_pull->>at", { ascending: true, nullsFirst: true })
+      .limit(1500),
+    // A price the publish gate took away files as `pulled` with no `reason`, so
+    // it satisfies neither predicate above and nothing ever came back for it —
+    // the one pool guaranteed to contain a page we read successfully and still
+    // could not publish (PERS-07). Separate query rather than an `or(...)`: the
+    // two cohorts are selected on different keys and a nested-json or() is the
+    // kind of filter that silently matches nothing.
+    admin
+      .from("leads_in_flight")
+      .select("id, org_id, supplier_name, material_name, payload")
+      .eq("status", "active")
+      .in("org_id", [...live.keys()])
+      .eq("payload->marketplace_pull->>withheld", "true")
+      .order("payload->marketplace_pull->>withheld_at", { ascending: true, nullsFirst: true })
+      .limit(500),
+  ]);
+  const error = pending.error ?? withheld.error;
   if (error) throw new Error(`worklist query failed: ${error.message}`);
+  const byId = new Map<string, any>();
+  for (const r of [...(pending.data ?? []), ...(withheld.data ?? [])]) byId.set(r.id, r);
+  const rows = [...byId.values()];
 
   let skippedWalls = 0;
   let eligible: Lead[] = [];

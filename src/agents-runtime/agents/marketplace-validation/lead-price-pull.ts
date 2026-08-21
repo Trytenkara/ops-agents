@@ -2,7 +2,7 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 import { recheckMarketplaceQuote, type AggregatorSeller } from "./price-recheck";
 import { shopifyFeedPull } from "./shopify-feed";
 import { normalizeToUsd } from "@/lib/fx";
-import { publishableTiers } from "@/lib/price-publish";
+import { publishableTiers, withheldMark } from "@/lib/price-publish";
 import { ensureMarketplaceCaseDims } from "@/lib/marketplace-case-dims-fill";
 import { neverMarketplaceHostOf } from "@/lib/marketplace-hosts";
 import { screenClonedListings } from "@/lib/clone-ring";
@@ -1255,10 +1255,18 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
       // implausible, or still in a foreign currency is withheld with a reason
       // rather than published.
       const gated = publishableTiers(tiers as any[], { where: "marketplace pull" });
-      if (gated.issues.length) {
-        result.notes = `${result.notes ? result.notes + " " : ""}Withheld: ${gated.issues
-          .map((i) => `${i.field} (${i.reason})`)
-          .join("; ")}.`;
+      const withheld = withheldMark(gated.issues, {
+        at: nowIso,
+        droppedPacks: gated.dropped.map((t: any) => t.pack_size),
+      });
+      if (withheld) {
+        // The mark goes on `pull`, which nextPayload holds by reference, because
+        // this is the only branch that reaches the DB. `result` is not written
+        // anywhere once gotPrice is true: last_notes is only snapshotted on the
+        // no-price branch above, and the escalate block that reads result.notes
+        // is unreachable from here. A note left on `result` alone died in memory.
+        Object.assign(pull, withheld);
+        result.notes = `${result.notes ? result.notes + " " : ""}Withheld: ${withheld.withheld_reason}`;
       }
       nextPayload.price_tiers = gated.tiers;
       nextPayload.price_tiers_updated_at = nowIso;

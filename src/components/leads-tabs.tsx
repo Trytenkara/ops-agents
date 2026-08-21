@@ -10,6 +10,7 @@ import { OutreachTrackerPanel } from "@/components/outreach-tracker-panel";
 import { SupplierLeadsView } from "@/components/supplier-leads-view";
 import type { MarketplaceAccount } from "@/components/marketplace-logins";
 import { leadMarketKind, isOperatorDropped } from "@/components/lead-rich-row";
+import { pullNeedsOperator } from "@/lib/marketplace-pull";
 import type { OutreachTracker } from "@/lib/outreach-tracker";
 import type { CaseDims } from "@/lib/marketplace-case-dims";
 import type { SupplierProfile } from "@/lib/supplier-profiles";
@@ -113,8 +114,9 @@ export function LeadsTabs({
   const droppedRows = removedRows.filter((r: any) => isOperatorDropped(r));
   const enrichmentRows = removedRows.filter((r: any) => !isOperatorDropped(r));
 
-  // Active marketplace leads whose price auto-scrape gave up (needs_manual_pull).
-  // They stay in Marketplace pricing so an operator can type a price in, but also
+  // Active marketplace leads the fleet could not price on its own: the scrape
+  // gave up, or it read a price the publish gate would not let it store. They
+  // stay in Marketplace pricing so an operator can type a price in, but also
   // surface here with a red "Unable to scrape" flag so the un-fillable ones aren't
   // lost among filled rows. Deduped against the removed set (a lead later dropped
   // shows under its drop reason instead).
@@ -124,7 +126,7 @@ export function LeadsTabs({
     (r: any) =>
       !removedIds.has(r.id) &&
       (kindOf(r) === "marketplace" || kindOf(r) === "aggregator") &&
-      r.payload?.marketplace_pull?.status === "needs_manual_pull"
+      pullNeedsOperator(r.payload?.marketplace_pull)
   );
   const enrichmentDisplay = [...enrichmentRows, ...needsPriceInput];
 

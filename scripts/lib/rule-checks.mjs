@@ -1455,6 +1455,111 @@ export function runChecks(files, rulesDir) {
     }
   }
 
+  // UI-06 / PERS-07. Work the fleet flags for a person has to be somewhere a
+  // person looks. Five withholding reasons were computed every day and not one
+  // was rendered anywhere in the product: the reason was appended to an object
+  // already frozen for storage, or written onto the very row the gate had just
+  // deleted, and the three surfaces that would have shown it all gated on a
+  // status migration 0089 retired. The price-index tab rendered a blank cell,
+  // which reads as "nobody has got to this yet", so nothing was ever picked up.
+  //
+  // Three things have to hold, and they are checked against each other rather
+  // than against a list written here: the registry declares the sets, the loader
+  // iterates the registry rather than naming sets, and the panel knows none of
+  // the keys. A panel that names its sets is a panel a sixth set can be left off.
+  {
+    const rule = "ui/flagged-set-must-have-a-surface";
+    let keys = [];
+    const registry = anchor("src/lib/flagged-work.ts", {
+      rule,
+      why: "this registry is what gives a flagged set a place on the client's tab",
+      fix: "restore src/lib/flagged-work.ts",
+    });
+    if (registry) {
+      const text = codeLines(registry).join("\n");
+      keys = [...text.matchAll(/key:\s*"([a-z_]+)"/g)].map((m) => m[1]);
+      if (!keys.length) {
+        violations.push({
+          rule,
+          why: "the registry declares no flagged sets, so the panel it feeds renders nothing whatever the fleet flags",
+          fix: "declare each flagged set in FLAGGED_SETS with a key, a label, the rule it serves and a loader",
+          where: registry.path,
+          line: "no `key: \"...\"` entries found in FLAGGED_SETS",
+        });
+      }
+      if (!/FLAGGED_SETS\s*\.\s*map\(|for \(const \w+ of FLAGGED_SETS\)/.test(text)) {
+        violations.push({
+          rule,
+          why: "the loader does not walk the registry, so a set added to it is loaded only if someone also remembers to wire it up",
+          fix: "load every set by iterating FLAGGED_SETS; never name the sets individually",
+          where: registry.path,
+          line: "loadFlaggedWork does not iterate FLAGGED_SETS",
+        });
+      }
+    }
+
+    const panel = anchor("src/components/flagged-work-panel.tsx", {
+      rule,
+      why: "this panel is the only surface any flagged set has",
+      fix: "restore src/components/flagged-work-panel.tsx",
+    });
+    if (panel) {
+      const text = codeLines(panel).join("\n");
+      if (!/\bgroups\b/.test(text) || !/\.map\(/.test(text)) {
+        violations.push({
+          rule,
+          why: "the panel does not render the groups it is handed, so a declared set still has no surface",
+          fix: "render every group passed in; the panel must not decide which sets are worth showing",
+          where: panel.path,
+          line: "no map over `groups` found",
+        });
+      }
+      for (const k of keys) {
+        if (!text.includes(k)) continue;
+        violations.push({
+          rule,
+          why: `the panel names the "${k}" set, so it renders the sets it knows about rather than the sets that exist`,
+          fix: "render the groups generically; a set is declared once, in FLAGGED_SETS, and nowhere else",
+          where: panel.path,
+          line: `flagged set key "${k}" hardcoded in the surface`,
+        });
+      }
+    }
+
+    const overview = anchor("src/app/(app)/work/orgs/[slug]/page.tsx", {
+      rule,
+      why: "the client's own workspace is the tab a flagged set has to appear on",
+      fix: "restore the org overview page",
+    });
+    if (overview && !/<FlaggedWorkPanel[\s/>]/.test(codeLines(overview).join("\n"))) {
+      violations.push({
+        rule,
+        why: "the client's workspace does not render the flagged panel, so every declared set is computed and shown to nobody",
+        fix: "render <FlaggedWorkPanel groups={...} /> on the org overview",
+        where: overview.path,
+        line: "no <FlaggedWorkPanel> on the client's own tab",
+      });
+    }
+
+    // The write half. An agent that runs the publish gate and does not record
+    // the withholding has produced a missing price indistinguishable from one
+    // nobody has pulled yet — which is how the withheld set stayed invisible
+    // even before the surface existed.
+    for (const f of files) {
+      if (!f.path.includes("src/agents-runtime/")) continue;
+      const text = codeLines(f).join("\n");
+      if (!/\bpublishable(?:Tiers|Price)\s*\(/.test(text)) continue;
+      if (/\bwithheldMark\s*\(/.test(text)) continue;
+      violations.push({
+        rule,
+        why: "this agent runs the publish gate but never marks what the gate took away, so the reason dies with the row",
+        fix: "pass the gate's issues through withheldMark() and store the mark on the object that is written",
+        where: f.path,
+        line: "publishable* called with no withheldMark()",
+      });
+    }
+  }
+
   // PERS-10. A 403 body is a challenge page. Parsing it finds no email and no
   // company name, which is indistinguishable from a page that publishes
   // neither, so our own block ends up stored as the supplier's missing data.

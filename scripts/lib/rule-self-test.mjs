@@ -645,6 +645,38 @@ const MUTATIONS = [
     ),
   },
   {
+    expect: "ui/flagged-set-must-have-a-surface",
+    label: "the client's own tab stops rendering the flagged panel",
+    mutate: rename("src/app/(app)/work/orgs/[slug]/page.tsx", "<FlaggedWorkPanel", "<FlaggedWorkPanelDisabled"),
+  },
+  {
+    expect: "ui/flagged-set-must-have-a-surface",
+    label: "the panel picks the sets it knows about instead of the ones that exist",
+    mutate: edit("src/components/flagged-work-panel.tsx", (t) =>
+      t.replace("const live = groups.filter((g) => g.total !== 0);", 'const live = groups.filter((g) => g.key === "withheld_price");'),
+    ),
+  },
+  {
+    expect: "ui/flagged-set-must-have-a-surface",
+    label: "the loader names its sets rather than walking the registry",
+    mutate: rename("src/lib/flagged-work.ts", "FLAGGED_SETS.map(async (set)", "[FLAGGED_SETS[0]].map(async (set)"),
+  },
+  {
+    expect: "ui/flagged-set-must-have-a-surface",
+    label: "an agent runs the publish gate and drops what it took away",
+    mutate: edit("src/agents-runtime/agents/marketplace-validation/lead-price-pull.ts", (t) =>
+      t.replace(/const withheld = withheldMark\(/, "const withheld = noMark("),
+    ),
+  },
+  {
+    expect: "ui/flagged-set-must-have-a-surface",
+    label: "a new agent gates a price with no mark at all",
+    mutate: fixture(
+      "src/agents-runtime/agents/__selftest__/gate.ts",
+      'import { publishableTiers } from "@/lib/price-publish";\n\nexport function store(tiers: any[]) {\n  return publishableTiers(tiers, { where: "selftest" }).tiers;\n}\n',
+    ),
+  },
+  {
     expect: "outreach/one-thread-per-supplier",
     label: "the material joins the consolidation key, so one supplier gets four emails",
     mutate: edit("src/agents-runtime/agents/outreach/index.ts", (t) =>

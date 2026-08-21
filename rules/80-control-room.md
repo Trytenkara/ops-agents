@@ -66,7 +66,14 @@ progressive disclosure and a named window, never a silent cap.
 Withheld prices, guessed contacts, ambiguous replies and audit findings each
 need a visible place on the owning client's tab. See PERS-07.
 
-**Enforcement:** Check owed — `ui/flagged-set-must-have-a-surface`. See
+A set is flagged in code long before anyone can see it: the marketplace publish
+gate withheld prices for months while the org overview showed a blank cell and
+no count. The registry in `src/lib/flagged-work.ts` is the list of such sets;
+the panel must render whatever is in it rather than the sets it happens to know
+the names of, or a new set added to the registry is invisible again.
+
+**Enforcement:** Guard — `ui/flagged-set-must-have-a-surface`. Audit findings
+are still not persisted anywhere, so they are not yet in the registry; see
 `OUTSTANDING.md`.
 
 ## UI-07 — Seed a real client before judging a view

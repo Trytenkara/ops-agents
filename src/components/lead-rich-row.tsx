@@ -7,6 +7,7 @@ import { LeadRowActions } from "@/components/lead-row-actions";
 import { SupplierOperatorAssign } from "@/components/supplier-operator-assign";
 import { LeadOperatorAssign } from "@/components/lead-operator-assign";
 import { deriveMatchTier } from "@/lib/lead-match-tier";
+import { pullNeedsOperator } from "@/lib/marketplace-pull";
 import {
   leadMarketKind,
   leadRichColSpan,
@@ -102,14 +103,6 @@ const REMOVAL_REASON_LABEL: Record<string, string> = {
   excluded_country: "Excluded country (client setting)",
 };
 
-// Marketplace price-pull give-up reasons: the auto-scrape couldn't land a price,
-// so an operator has to enter it by hand. Surfaced as a red "Unable to scrape" flag.
-const SCRAPE_REASON_LABEL: Record<string, string> = {
-  link_broken: "link broken",
-  login_required: "price behind login",
-  needs_review: "no price found on page",
-};
-
 // Resolve a removal/suppression reason for a lead, if any: outreach suppression
 // (lead still active) takes precedence, else the drop_reason on a dropped/terminal
 // lead. Returns a friendly label + whether it was a pre-outreach suppression.
@@ -134,12 +127,11 @@ export function leadRemoval(r: any): { label: string; kind: RemovalKind } | null
       kind: isOperatorDropped(r) ? "dropped" : "enrichment",
     };
   }
-  // Active marketplace lead whose price auto-scrape gave up — needs an operator
-  // to type the price in. Reported as a red flag so it isn't lost among filled rows.
-  const mp = r?.payload?.marketplace_pull;
-  if (mp?.status === "needs_manual_pull") {
-    return { label: SCRAPE_REASON_LABEL[mp.reason as string] ?? "needs a manual price", kind: "scrape" };
-  }
+  // Active marketplace lead the fleet could not finish on its own — the scrape
+  // gave up, or it read a price it was not allowed to publish. Reported as a red
+  // flag so it isn't lost among filled rows.
+  const needsOperator = pullNeedsOperator(r?.payload?.marketplace_pull);
+  if (needsOperator) return { label: needsOperator.label, kind: "scrape" };
   return null;
 }
 

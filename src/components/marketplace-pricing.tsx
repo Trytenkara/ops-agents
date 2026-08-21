@@ -16,6 +16,7 @@ import {
   type MarketKind,
 } from "@/lib/lead-market";
 import { aggregatorNameFromPayload } from "@/lib/aggregator-hosts";
+import { pullNeedsOperator } from "@/lib/marketplace-pull";
 import { saveLeadPriceTiers } from "@/app/actions/leads";
 import { type PriceTier, tierBreakdown, composePackSize } from "@/lib/price-tiers";
 import { fmtCaseDims, resolveCaseDims, type CaseDims } from "@/lib/marketplace-case-dims";
@@ -186,13 +187,9 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
   const isAggregator = (row.market_kind ?? leadMarketKind(row.payload?.site_type)) === "aggregator";
   const aggregator = isAggregator ? aggregatorNameFromPayload(row.payload) : null;
   const pull = row.payload?.marketplace_pull as
-    | { status: "pulled" | "needs_manual_pull" | "pending"; reason?: string; pulled_at?: string }
+    | { status?: string; reason?: string; pulled_at?: string; flagged?: boolean; withheld?: boolean; withheld_reason?: string }
     | undefined;
-  const pullReasonLabel: Record<string, string> = {
-    login_required: "needs login/account",
-    link_broken: "link broken",
-    needs_review: "no price found",
-  };
+  const needsOperator = pullNeedsOperator(pull);
   const sourceUrl = (row.payload?.source_url ?? row.payload?.supplier_website) as string | undefined;
   // A platform inquiry is submitted into the aggregator's own web form, so nothing
   // about it shows on the listing. Without this an operator cannot tell a seller we
@@ -268,17 +265,17 @@ function MarketplaceLeadCard({ row, canAct, dimsByPack }: { row: Row; canAct: bo
               </Badge>
             )}
             {st && <Badge variant={isAggregator ? "warn" : "accent"} title={st.title}>{st.label}</Badge>}
-            {pull?.status === "pulled" && (
+            {pull?.status === "pulled" && !needsOperator && (
               <Badge variant="success" title={pull.pulled_at ? `Auto-pulled ${pull.pulled_at}` : "Price auto-pulled from the listing"}>
                 price auto-pulled
               </Badge>
             )}
-            {pull?.status === "needs_manual_pull" && (
-              <Badge variant="danger" title="Auto-scrape couldn't get a price — an operator must enter it manually.">
-                unable to scrape{pull.reason ? ` · ${pullReasonLabel[pull.reason] ?? pull.reason}` : ""}
+            {needsOperator && (
+              <Badge variant="danger" title={needsOperator.detail}>
+                unable to scrape · {needsOperator.label}
               </Badge>
             )}
-            {(!pull || pull.status === "pending") && (
+            {(!pull || pull.status === "pending") && !needsOperator && (
               <Badge variant="outline" title="Not yet resolved — the marketplace price agent will retry pulling the listed price over the next runs. You can also enter the price ladder manually now.">
                 price pull pending
               </Badge>

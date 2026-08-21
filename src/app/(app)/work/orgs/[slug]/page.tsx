@@ -16,6 +16,8 @@ import { getOrgNudgeCounts } from "@/lib/org-nudges";
 import { caseCategory } from "@/lib/org-cases";
 import { orgDisplayName } from "@/lib/org-display";
 import { SourcingPipelineStrip, type StageKey } from "@/components/sourcing-pipeline-strip";
+import { FlaggedWorkPanel } from "@/components/flagged-work-panel";
+import { loadFlaggedWork } from "@/lib/flagged-work";
 import type { RunStat } from "@/components/agent-runs-strip";
 import { resolveMaterialNames } from "@/lib/tenkara-names";
 
@@ -49,6 +51,7 @@ export default async function OrgOverview({ params }: { params: { slug: string }
   const staged = drafts.filter((d: any) => d.status === "staged").length;
   const reviewed = drafts.filter((d: any) => d.status === "reviewed").length;
   const nudges = await getOrgNudgeCounts(admin, org.id);
+  const flagged = await loadFlaggedWork(admin, org.id, org.slug);
 
   // Live sourcing funnel — same four stages as the Agent Supplier Leads tab.
   // Held mirrors that page's rule exactly: an active lead whose material has no
@@ -138,6 +141,8 @@ export default async function OrgOverview({ params }: { params: { slug: string }
       </div>
 
       <SourcingPipelineStrip counts={pipelineCounts} runs={pipelineRuns} leadsHref={`${base}/leads`} />
+
+      <FlaggedWorkPanel groups={flagged} />
 
       <Card className="tb-surface shadow-none">
         <CardHeader>

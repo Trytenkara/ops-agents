@@ -125,18 +125,39 @@ the enrichment agent, a `delete` that clears it when the address is cleared. So
 the distinction it now records honestly is not in front of anybody. That is
 UI-06's half.
 
-## P0 — Withheld prices are a complete dead end
+## P0 — Withheld prices were a complete dead end — FIXED 2026-08-21
 
-Breaks PERS-07 and UI-06. Five distinct withholding reasons are computed and
-stored. Not one is read anywhere in the repository. The tier-level gate deletes
-the row carrying the reason, so usually it does not even survive. A "withheld"
-note is appended to a result object after that object was already frozen for
-storage. Three interface surfaces that would show it gate on a status that was
-retired by a migration and is emitted by nobody. Nothing retries a withheld
-price: the escalation agent's selection excludes them structurally.
+Broke PERS-07 and UI-06. Five distinct withholding reasons were computed and
+stored, and not one was read anywhere in the repository. The failure had five
+separate legs and every one of them was load-bearing on its own:
 
-**Owed:** surface the flagged set on the client's own tab; include withheld
-prices in the escalation agent's selection.
+1. The reason was written onto a result object that was already frozen for
+   storage, so it died in memory. It now goes on the object that actually
+   reaches the database, via one shared `withheldMark()` in
+   `src/lib/price-publish.ts`.
+2. The tier gate deleted the row carrying the reason, so the pack size that lost
+   its price could not be named. `publishableTiers()` now hands the dropped
+   rungs back and the mark reads "Pack sizes dropped: 5 gal".
+3. The staged-quote collapse merged the extractor's raw note over the locally
+   built one, dropping the explanation of why the row had no price.
+4. Three interface surfaces gated on `needs_manual_pull`, a status retired by
+   migration 0089 and emitted by nobody. All three now call one predicate,
+   `pullNeedsOperator()` in `src/lib/marketplace-pull.ts`.
+5. Nothing retried a withheld price. A gated row files as `pulled` with no
+   `reason`, so Agent 19's worklist matched neither of its predicates. It now
+   runs a second query for the withheld cohort and dedupes.
+
+The registry `src/lib/flagged-work.ts` gives flagged sets their first surface —
+withheld prices, priceless staged quotes and guessed contacts — rendered by
+`FlaggedWorkPanel` on the client's own overview tab. The guard
+`ui/flagged-set-must-have-a-surface` holds four things: the registry is
+iterated rather than listed, the panel renders the registry rather than naming
+sets it knows, the overview renders the panel, and an agent that calls the
+publish gate must also record the mark.
+
+**Still owed:** audit findings. UI-06 names them as a flagged set, but Agent 26
+posts to Slack and nothing persists a finding, so there is no row for the
+registry to count. Until they have a table they cannot have a surface.
 
 ## P1 — The prices already captured wrong are still live
 

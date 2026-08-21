@@ -488,7 +488,13 @@ export async function insertStagedQuotes(
         continue;
       }
       const priced = pricedRowByKey.get(priceless);
-      const note = (r.extractionNotes ?? "").trim();
+      // The locally built note, not the extractor's `r.extractionNotes`. This row
+      // is about to be discarded into the priced one, and everything explaining
+      // WHY it has no price — the provenance failure, the unknown currency, the
+      // publish gate — was appended above to `extractionNotes` and appears
+      // nowhere in the raw input. Merging the raw note dropped the reason and
+      // left an operator a blank price with no account of it (PERS-07).
+      const note = (extractionNotes ?? "").trim();
       if (priced) {
         if (note && !(priced.extraction_notes ?? "").includes(note)) {
           const merged = [priced.extraction_notes, `Also on this thread: ${note}`].filter(Boolean).join(" ");
