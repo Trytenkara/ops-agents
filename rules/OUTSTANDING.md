@@ -522,12 +522,10 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | PERS-10 | `fetch/blocked-must-not-read-as-empty` — a non-2xx may not reach a content parser; the same shape as the P0 storefront drop above |
 | DISC-05 | `discovery/platform-is-never-manufacturer` |
 | DISC-09 | `discovery/self-supplied-gate-must-fail-closed` — gates are fail-open today |
-| OUT-04 | `outreach/one-thread-per-supplier` |
 | OUT-08 | `outreach/asks-must-be-staged` |
 | OUT-10 | `outreach/cancel-must-release-alias` |
-| OUT-12 | `suppliers/approval-denied-is-not-do-not-contact` |
 | ORG-06 | `orgs/name-lookup-must-scope-query` — see the P2 above |
-| UI-02 | `ui/no-global-review-route` |
+| UI-02 | the seven existing global review routes. `ui/no-global-review-route` shipped 2026-08-20 as a ratchet, so no eighth can be added, but the seven that predate it are still live and still cross-client. Removing them is a product decision. |
 | UI-06 | `ui/flagged-set-must-have-a-surface` — see the P0 above |
 | SHIP-02 | pre-commit hook refusing unstaged paths — see the P2 above |
 | SHIP-07 | column granularity. `ship/migration-must-accompany-schema-read` shipped 2026-08-20 over tables and RPCs; all 49 tables and 15 functions read today are created by a migration, so it is a ratchet. A read of a *column* that no migration adds is still invisible, and that is the shape ENG-1036 took. |

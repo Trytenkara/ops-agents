@@ -1357,5 +1357,113 @@ export function runChecks(files, rulesDir) {
     }
   }
 
+  // OUT-04. A supplier gets one thread, so the consolidation key is per supplier
+  // and per org and nothing else. Adding the material to the key is the plausible
+  // regression — it looks like it fixes subject-line collisions and instead sends
+  // the same person four emails.
+  //
+  // Two conjuncts, because the rule can break at either end: the key, and the
+  // call. The call must be fed the whole group; `leads: [one]` inside the loop
+  // is the same fault expressed differently.
+  {
+    const rule = "outreach/one-thread-per-supplier";
+    const f = anchor("src/agents-runtime/agents/outreach/index.ts", {
+      rule,
+      why: "this is the only place cold outreach decides how many threads a supplier gets",
+      fix: "restore src/agents-runtime/agents/outreach/index.ts",
+    });
+    if (f) {
+      const text = codeLines(f).join("\n");
+      const key = /const supplierKeyOf[\s\S]{0,600}?\n {4}\};/.exec(text);
+      if (!key || !/for \(const \[\w+, \w+\] of emailBySupplier\)/.test(text)) {
+        violations.push({
+          rule,
+          why: "the per-supplier grouping is what makes one thread per supplier true",
+          fix: "keep supplierKeyOf building emailBySupplier and keep the drafting loop over that map",
+          where: f.path,
+          line: "supplierKeyOf / emailBySupplier loop not found",
+        });
+      } else if (/material|lead\.id|created_at/.test(key[0])) {
+        violations.push({
+          rule,
+          why: "a key that includes the material splits one supplier into one thread per material",
+          fix: "key on org and supplier only; the material belongs in the body, not in the key",
+          where: f.path,
+          line: "supplierKeyOf mentions the material or the lead",
+        });
+      }
+      const calls = text.match(/runOutreachForSupplier\(\{/g) ?? [];
+      if (calls.length !== 1 || !/leads:\s*\w+\.map\(/.test(text)) {
+        violations.push({
+          rule,
+          why: "a second staging call, or one fed a single lead, is a second thread to the same supplier",
+          fix: "stage once per group and pass the whole pool as leads",
+          where: f.path,
+          line: `${calls.length} staging call(s), grouped leads argument ${/leads:\s*\w+\.map\(/.test(text) ? "present" : "missing"}`,
+        });
+      }
+    }
+  }
+
+  // OUT-12. "Denied" in the email app means a supplier has not been validated
+  // yet. It was read as do-not-contact on 2026-08-19, a guard was built on that
+  // reading, and it was reverted the same day. Nothing in the repo makes that
+  // read today, and the check exists so it cannot come back under a new name.
+  //
+  // The durable half is the second conjunct: the old symbols are deleted, so a
+  // check written against them would be dead text. What recurs is the meaning —
+  // the word `denied` arriving at a suppression verdict.
+  forbid({
+    rule: "suppliers/approval-denied-is-not-do-not-contact",
+    why: "denied in Tenkara means not yet validated; treating it as do-not-contact silently shelves live suppliers",
+    fix: "leave approval to the suppliers display; suppression comes from supplier_do_not_contact and client dnc_suppliers only",
+    // The two display sites that legitimately bucket the column.
+    allow: ["src/lib/campaign-suppliers.ts", "src/lib/client-suppliers.ts", "rules/60-outreach.md"],
+    test: (l) =>
+      /\bdenied\b/.test(l) &&
+      /suppressed|isDraftSuppressed|isDoNotContact|do_not_contact|\bdnc_|blocked:\s*true/.test(l),
+  });
+  forbid({
+    rule: "suppliers/approval-denied-is-not-do-not-contact",
+    why: "reading the denied set out of the suppliers table is how the reverted guard started",
+    fix: "do not query suppliers by approval for outreach purposes",
+    allow: ["src/lib/campaign-suppliers.ts", "src/lib/client-suppliers.ts"],
+    test: (l) => /from\s+(?:public\.)?suppliers\b[\s\S]{0,80}approval/.test(l) || /approval\s*=\s*'denied'/.test(l),
+  });
+
+  // UI-02. Work is looked at per client, because a cross-org worklist is how a
+  // draft for one client gets read, approved and sent against another's supplier.
+  // Seven global review routes predate the rule and deleting them is a product
+  // decision, not a cleanup, so this is a ratchet: the seven are named, and an
+  // eighth fails the build. Removing one of the seven from this list is how the
+  // debt gets paid down; adding to it is not.
+  {
+    const rule = "ui/no-global-review-route";
+    const PREDATES = new Set([
+      "src/app/(app)/work/review/page.tsx",
+      "src/app/(app)/work/review/leads/page.tsx",
+      "src/app/(app)/work/review/drafts/page.tsx",
+      "src/app/(app)/work/review/marketplace/page.tsx",
+      "src/app/(app)/work/review/marketplace-outreach/page.tsx",
+      "src/app/(app)/work/review/staged-quotes/page.tsx",
+      "src/app/(app)/work/review/pricing-pipeline/page.tsx",
+    ]);
+    // The scope is the review tree itself, not every cross-org page. The
+    // operator home and the work index also read worklist tables, and they are
+    // not the fault: both scope by org access and label every row with its
+    // client. What UI-02 is about is a screen that presents work as one pile.
+    for (const f of files) {
+      if (!/^src\/app\/\(app\)\/work\/review\/.*page\.tsx$/.test(f.path)) continue;
+      if (PREDATES.has(f.path)) continue;
+      violations.push({
+        rule,
+        why: "the global review tree presents two clients' work as one pile, which is how a draft crosses clients",
+        fix: "put the page under work/orgs/[slug]/ and scope every query to that org",
+        where: f.path,
+        line: "new route in the deprecated global review tree",
+      });
+    }
+  }
+
   return violations;
 }

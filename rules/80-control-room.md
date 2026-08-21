@@ -13,7 +13,15 @@ No global, cross-client review surface in the navigation. When output is not
 visible to an operator, the fix is to surface it on the relevant client's tab,
 not to add another entry to a global queue.
 
-**Enforcement:** Check owed — `ui/no-global-review-route`.
+**Enforcement:** Guard — `ui/no-global-review-route`, as a ratchet. Seven
+routes under `work/review/` predate the rule and are named in the check; an
+eighth fails the build. Deleting the seven is a product decision, not a cleanup,
+so the debt is paid down by removing names from that list, never by adding them.
+
+The operator home and the work index also read worklist tables across clients
+and are deliberately not covered: both scope by org access and label every row
+with its client, which is the opposite of the one-pile surface this rule is
+about.
 
 ## UI-03 — Never build a screen over data this application cannot write to
 

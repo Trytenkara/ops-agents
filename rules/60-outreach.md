@@ -35,7 +35,13 @@ A supplier with several matching materials gets one consolidated email, not one
 per material. Multiple contacts at the same supplier go on one thread as To
 plus copies, and replies preserve the copied recipients.
 
-**Enforcement:** Check owed — `outreach/one-thread-per-supplier`.
+**Enforcement:** Guard — `outreach/one-thread-per-supplier`: the consolidation
+key must stay org-and-supplier only, and the single staging call must be fed the
+whole group. Adding the material to the key is the regression to expect — it
+looks like a fix for subject-line collisions and it sends one person four
+emails. Agent 22's operator path is not covered by this check; it stages one
+lead per call by design and avoids a second thread by CCing onto the existing
+one, which no static check can tell apart from the fault.
 
 ## OUT-05 — No draft into an existing thread may ignore what was already said
 
@@ -147,10 +153,13 @@ opposite of silence: confirm EXW with them, check the supplier email for a
 contact, ask whether they ship outside the EU. Do not build a do-not-contact
 list out of it. A real do-not-contact list is the exclusion list on the lead.
 
-**Enforcement:** Check owed —
-`suppliers/approval-denied-is-not-do-not-contact`. Recorded because a guard
-was built on the wrong reading of this column on 2026-08-19 and removed the
-same day.
+**Enforcement:** Guard —
+`suppliers/approval-denied-is-not-do-not-contact`. Recorded because a guard was
+built on the wrong reading of this column on 2026-08-19 and removed the same
+day. The check is on the meaning rather than on the old symbol names, which are
+already deleted: the word `denied` may not reach a suppression verdict, and the
+denied set may not be read out of the suppliers table. The two display sites
+that legitimately bucket the column are allowed by name.
 
 ## OUT-13 — Do-not-contact has two authors, and one gate
 

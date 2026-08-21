@@ -465,8 +465,8 @@
     {
       "id": "OUT-04",
       "title": "One email per supplier, one thread",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "OUT-05",
@@ -519,8 +519,8 @@
     {
       "id": "OUT-12",
       "title": "\"denied\" in Tenkara does not mean \"do not contact\"",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "OUT-13",
@@ -615,8 +615,8 @@
     {
       "id": "UI-02",
       "title": "Everything lives on the client's own tabs",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "UI-03",

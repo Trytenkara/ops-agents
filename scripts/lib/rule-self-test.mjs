@@ -564,6 +564,49 @@ const MUTATIONS = [
     label: "the file the rule is anchored to is gone",
     mutate: drop("src/agents-runtime/agents/data-enrichment/enrich.ts"),
   },
+  {
+    expect: "outreach/one-thread-per-supplier",
+    label: "the material joins the consolidation key, so one supplier gets four emails",
+    mutate: edit("src/agents-runtime/agents/outreach/index.ts", (t) =>
+      t.replace(
+        'return orgScopedKey(c.lead.org_id, "s", c.lead.supplier_id);',
+        'return orgScopedKey(c.lead.org_id, "s", c.lead.supplier_id, c.lead.material_id);',
+      ),
+    ),
+  },
+  {
+    expect: "outreach/one-thread-per-supplier",
+    label: "the group is staged one lead at a time",
+    mutate: edit("src/agents-runtime/agents/outreach/index.ts", (t) =>
+      t.replace("leads: pool.map((c) => c.lead as OutreachLead),", "leads: [primary.lead as OutreachLead],"),
+    ),
+  },
+  {
+    expect: "outreach/one-thread-per-supplier",
+    label: "the file the rule is anchored to is gone",
+    mutate: drop("src/agents-runtime/agents/outreach/index.ts"),
+  },
+  {
+    expect: "suppliers/approval-denied-is-not-do-not-contact",
+    label: "the reverted guard comes back at the do-not-contact chokepoint",
+    mutate: fixture(
+      "src/__selftest__/denied.ts",
+      `if (deniedIds.has(supplierId)) return { blocked: true, reason: "denied in Tenkara" };\n`,
+    ),
+  },
+  {
+    expect: "suppliers/approval-denied-is-not-do-not-contact",
+    label: "something reads the denied set out of the suppliers table again",
+    mutate: fixture("src/__selftest__/denied2.ts", `const q = \`select id from suppliers where approval = 'denied'\`;\n`),
+  },
+  {
+    expect: "ui/no-global-review-route",
+    label: "an eighth route joins the global review tree",
+    mutate: fixture(
+      "src/app/(app)/work/review/quotes/page.tsx",
+      `export default async function Page() { return null; }\n`,
+    ),
+  },
 ];
 
 // The checks over rules/ itself read from disk, so they mutate a copy.

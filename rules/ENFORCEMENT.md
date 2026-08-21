@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-120 rules. 68 are actually enforced, 31 owe a check or a job,
+120 rules. 71 are actually enforced, 28 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 5 of the enforced rules hold only part of their invariant and say so in
@@ -12,9 +12,9 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 65 |
+| **Guard** | A shared module or build check makes it impossible. | 68 |
 | **Audit** | A scheduled job reports the break after the fact. | 3 |
-| **Check owed** | A build check is possible and is not built yet. | 21 |
+| **Check owed** | A build check is possible and is not built yet. | 18 |
 | **Audit owed** | No build check can see it; a scheduled job can. Not built. | 5 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
@@ -32,7 +32,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (65)
+## Guard (68)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -78,11 +78,13 @@ this ledger read as enforced.
 | `DISC-07` | Same name, different grade, is not a duplicate | Guard — `materials/never-merge-on-name-alone`. It asserts the grade test runs in the same loop as the name match, so a pair cannot reach the candidate list on the name alone, and that nothing outside `src/lib/material-merge-flags.ts` writes `material_merge_flags` (META-04). |
 | `DISC-10` | Checkout decides what a marketplace is | Guard — the price read downgrades any marketplace-labelled page with no checkout at the single read chokepoint (`marketplace_checkout` downgrade in `lead-price-pull.ts`), and the scout prompt applies the same test at classification time. |
 | `OUT-02` | Marketplace storefronts get drafted, on a different channel | Guard — `outreach/no-terminal-drop-without-channel`. The aggregator inquiry channel itself is still owed; see `OUTSTANDING.md`. |
+| `OUT-04` | One email per supplier, one thread | Guard — `outreach/one-thread-per-supplier`: the consolidation key must stay org-and-supplier only, and the single staging call must be fed the whole group. Adding the material to the key is the regression to expect — it looks like a fix for subject-line collisions and it sends one person four emails. Agent 22's operator path is not covered by this check; it stages one lead per call by design and avoids a second thread by CCing onto the existing one, which no static check can tell apart from the fault. |
 | `OUT-05` | No draft into an existing thread may ignore what was already said | Guard — `src/lib/thread-context.ts`, `src/lib/thread-tailor.ts`, `copy/staging-must-tailor-to-thread`. |
 | `OUT-06` | Internal notes never reach a supplier | Guard — `src/lib/internal-notes.ts` `stripInternalNotes` inside `sanitizeDraft`, `copy/sanitize-must-strip-internal-notes`. |
 | `OUT-14` | Never offer to stop contacting a supplier | Guard — `CONCESSION_STRIPS` in `src/lib/email-style.ts`, run inside `sanitizeDraft` at the staging chokepoint so it covers model-written copy as well as templates, plus rule 5 of the `src/lib/thread-tailor.ts` prompt; `copy/sanitize-must-strip-concessions`. |
 | `OUT-07` | Copy bans are applied at staging (see COMM-08) | Guard — `copy/staging-must-sanitize`. |
 | `OUT-11` | A rejected draft is not redrafted | Guard — `src/lib/draft-suppression.ts` `isDraftSuppressed`, called by `stageDraft` and by Agent 02, which stages its own draft directly. |
+| `OUT-12` | "denied" in Tenkara does not mean "do not contact" | Guard — `suppliers/approval-denied-is-not-do-not-contact`. Recorded because a guard was built on the wrong reading of this column on 2026-08-19 and removed the same day. The check is on the meaning rather than on the old symbol names, which are already deleted: the word `denied` may not reach a suppression verdict, and the denied set may not be read out of the suppliers table. The two display sites that legitimately bucket the column are allowed by name. |
 | `OUT-13` | Do-not-contact has two authors, and one gate | Guard — `src/lib/do-not-contact.ts` `isDoNotContact`, called by `stageDraft`; the client list also still filters candidates in Agents 03 and 04. |
 | `OUT-15` | A discard has to say why, or it is a silent kill | Guard — `src/lib/draft-suppression.ts` `raiseDiscardReviewCase`, called from the Tenkara discard webhook, which is the only place an operator discard is recorded. |
 | `ORG-01` | Every idempotency key is scoped to the organisation | Guard — `src/lib/org-isolation.ts` `orgScopedExternalId`, `orgScopedKey`, `foreignOrgRows`; `orgs/staging-must-scope-external-id` and `orgs/conversation-create-must-scope-external-id`. |
@@ -95,6 +97,7 @@ this ledger read as enforced.
 | `ORG-11` | Unknown is not ambiguous | Guard — `soleReplyTarget` in `src/lib/org-isolation.ts`, `orgs/candidate-match-must-not-key-on-null`, which fails the build on a `supplier_id ?? ""` or `material_id ?? ""` match key in the inbound router. |
 | `SUP-01` | Suppliers are unique per client | Guard — `orgs/duplicate-guard-requires-exclusive-supplier` covers the online guard; the hand-run scan unions pairs only when their client sets intersect, enforced in its own code outside this repository. |
 | `UI-01` | Never ship a native OS dropdown | Guard — `ui/no-native-select`. |
+| `UI-02` | Everything lives on the client's own tabs | Guard — `ui/no-global-review-route`, as a ratchet. Seven routes under `work/review/` predate the rule and are named in the check; an eighth fails the build. Deleting the seven is a product decision, not a cleanup, so the debt is paid down by removing names from that list, never by adding them. |
 | `UI-09` | A one-click write needs a way back | Guard — `src/lib/call-undo.ts` `undoLastAttemptPatch`, surfaced by `UndoCallAttempt` on both the open call task and the recently-closed table. Judgement for other one-click controls. |
 | `UI-10` | A withheld value shows its reason where it renders | Guard — the withheld-price cells in `src/components/staged-quote-row.tsx` and `src/components/direct-prices-on-file.tsx` (`priceNote`), which render the capture reason and carry it into the CSV. Judgement for other withheld fields. |
 | `UI-11` | A placeholder must never look like a value | Guard — `ui/no-numeric-placeholder-in-value-field`: a placeholder whose whole text is a number fails the build. A unit (`kg`), a format (`price per unit`) or an explicit `e.g.` stays legal, which is what the fix looks like. The three live breaks on the marketplace-pricing card — case size, case price, unit price — were fixed with the check. |
@@ -110,7 +113,7 @@ this ledger read as enforced.
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
-## Check owed (21)
+## Check owed (18)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -127,12 +130,9 @@ this ledger read as enforced.
 | `PERS-10` | Blocked is not empty | Check owed — `fetch/blocked-must-not-read-as-empty`: a non-2xx response may not reach a content parser, and the blocked reason is stored. See `OUTSTANDING.md`. |
 | `DISC-05` | A platform is never the supplier | Check owed — `discovery/platform-is-never-manufacturer`. |
 | `DISC-09` | A self-supplied material is not sourced | Check owed — `discovery/self-supplied-gate-must-fail-closed`: the gates are fail-open today. |
-| `OUT-04` | One email per supplier, one thread | Check owed — `outreach/one-thread-per-supplier`. |
 | `OUT-08` | Supplier asks are staggered | Check owed — `outreach/asks-must-be-staged`. |
 | `OUT-10` | A cancelled outreach must release its alias | Check owed — `outreach/cancel-must-release-alias`. |
-| `OUT-12` | "denied" in Tenkara does not mean "do not contact" | Check owed — `suppliers/approval-denied-is-not-do-not-contact`. Recorded because a guard was built on the wrong reading of this column on 2026-08-19 and removed the same day. |
 | `ORG-06` | Cross-client lookups are scoped at the query, not filtered after | Check owed — `orgs/name-lookup-must-scope-query`, plus an outstanding repair of the records already mislabelled. See `OUTSTANDING.md`. |
-| `UI-02` | Everything lives on the client's own tabs | Check owed — `ui/no-global-review-route`. |
 | `UI-06` | Flagged work needs a home | Check owed — `ui/flagged-set-must-have-a-surface`. See `OUTSTANDING.md`. |
 | `SHIP-02` | Never stage everything | Check owed — a pre-commit hook that refuses paths outside those explicitly staged. See `OUTSTANDING.md`. |
 
