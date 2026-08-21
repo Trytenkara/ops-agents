@@ -498,9 +498,9 @@ const MUTATIONS = [
     expect: "retry/bound-must-be-declared",
     label: "an existing bound is renamed, so the rules folder no longer names it",
     mutate: rename(
-      "src/agents-runtime/agents/lead-creator/index.ts",
-      "SOURCEREADY_MAX_DRY_PASSES",
-      "SOURCEREADY_MAX_EMPTY_ATTEMPTS",
+      "src/agents-runtime/agents/marketplace-validation/lead-price-pull.ts",
+      "FLAG_AFTER_ATTEMPTS",
+      "REVIEW_ATTEMPTS_BEFORE_CASE",
     ),
   },
   {
@@ -642,6 +642,76 @@ const MUTATIONS = [
     mutate: fixture(
       "src/__selftest__/confidence-copied.ts",
       'export function fill(payload: Record<string, unknown>, r: Record<string, unknown>) {\n  payload.contact_confidence = r["confidence"];\n}\n',
+    ),
+  },
+  {
+    expect: "discovery/zero-must-not-be-terminal",
+    label: "the shared helper drops the infra outcome and goes back to two",
+    mutate: rename("src/lib/dry-pass.ts", 'export type PassOutcome = "found" | "dry" | "infra";', 'export type PassOutcome = "found" | "dry";'),
+  },
+  {
+    expect: "discovery/zero-must-not-be-terminal",
+    label: "the import client reads a 200 with no rows array as an empty market",
+    mutate: rename(
+      "src/lib/importyeti-client.ts",
+      'rowsOrThrow(body, "data", "ImportYeti") as ImportYetiSupplier[]',
+      "Array.isArray(body.data) ? body.data : []",
+    ),
+  },
+  {
+    expect: "discovery/zero-must-not-be-terminal",
+    label: "an empty alias list goes back to being cached as the answer",
+    mutate: edit("src/lib/material-aliases.ts", (t) =>
+      t.replace(/const pass = advanceDryPass\([\s\S]*?\);/, "const pass = { dry: 0, done: true };"),
+    ),
+  },
+  {
+    expect: "discovery/zero-must-not-be-terminal",
+    label: "the price pull retires an umbrella lead on one clean zero again",
+    mutate: edit("src/agents-runtime/agents/marketplace-validation/lead-price-pull.ts", (t) =>
+      t.replace(/const pass = advanceDryPass\([\s\S]*?\);/, "const pass = { dry: 1, done: true };"),
+    ),
+  },
+  {
+    expect: "discovery/zero-must-not-be-terminal",
+    label: "a site that printed nothing freezes its fields on the first read",
+    mutate: edit("src/agents-runtime/agents/data-enrichment/web-fill-run.ts", (t) =>
+      t.replace(/advanceDryPass\(/g, "noCount("),
+    ),
+  },
+  {
+    expect: "discovery/zero-must-not-be-terminal",
+    label: "a blocked document page rests for sixty days as if it were read",
+    mutate: rename(
+      "src/agents-runtime/agents/document-retrieval/index.ts",
+      "retry_after: wall && !pass.done ? retryAfter(pass.dry, BLOCKED_RETRY_DAYS) : null,",
+      "retry_after: null,",
+    ),
+  },
+  {
+    expect: "discovery/zero-must-not-be-terminal",
+    label: "SourceReady goes back to its own private copy of the counter",
+    mutate: edit("src/agents-runtime/agents/lead-creator/index.ts", (t) =>
+      t.replace(/const \{ dry, done, persist \} = advanceDryPass\([\s\S]*?\);/, "const { dry, done, persist } = { dry: 0, done: true, persist: true };"),
+    ),
+  },
+  {
+    expect: "discovery/zero-must-not-be-terminal",
+    label: "a crashed re-check is written back as an operator finding",
+    mutate: edit("src/agents-runtime/agents/marketplace-validation/index.ts", (t) =>
+      t.replace(
+        "        return null;\n      }\n\n      // Same class",
+        '        result = { classification: "needs_review", notes: `Re-check failed: ${e.message}` } as any;\n      }\n\n      // Same class',
+      ),
+    ),
+  },
+  {
+    expect: "discovery/zero-must-not-be-terminal",
+    label: "the re-check ignores an infra failure that arrived by return value",
+    mutate: rename(
+      "src/agents-runtime/agents/marketplace-validation/index.ts",
+      "if (result.infra_failure) {",
+      "if (false) {",
     ),
   },
   {

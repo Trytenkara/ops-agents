@@ -681,6 +681,110 @@ export function runChecks(files, rulesDir) {
     }
   }
 
+  // PERS-03. A pass that returned nothing has three meanings — found, dry,
+  // infra — and every one of these nine sites collapsed two of them. The
+  // distinction now lives in `src/lib/dry-pass.ts`, once, so a source cannot
+  // quietly re-invent a two-outcome version of it.
+  {
+    const helper = anchor("src/lib/dry-pass.ts", {
+      rule: "discovery/zero-must-not-be-terminal",
+      why: "the found/dry/infra distinction lives in one place so nine sources cannot each get it wrong differently",
+      fix: "restore src/lib/dry-pass.ts",
+    });
+    if (
+      helper &&
+      !/type\s+PassOutcome\s*=\s*"found"\s*\|\s*"dry"\s*\|\s*"infra"/.test(helper.text)
+    ) {
+      violations.push({
+        rule: "discovery/zero-must-not-be-terminal",
+        why: "collapsing infra into dry burns a real attempt on an outage, and collapsing dry into found writes 'searched, nothing here' on a single zero",
+        fix: "keep all three outcomes in PassOutcome",
+        where: helper.path,
+        line: "dry-pass.ts no longer names all three outcomes",
+      });
+    }
+
+    // Per site, because each one settles a different record and there is no one
+    // shape to match. The token is what that site's fix turns on.
+    const PERS03_SITES = [
+      [
+        "src/lib/importyeti-client.ts",
+        /\browsOrThrow\s*\(/,
+        "a 200 carrying an error envelope or a renamed field parsed to zero suppliers and logged a healthy pass, which is how an outage reads as an empty market",
+        "take the rows through rowsOrThrow(body, field, source)",
+      ],
+      [
+        "src/lib/material-aliases.ts",
+        /\badvanceDryPass\s*\(/,
+        "an empty alias list cached with no expiry is accepted forever and blinds all three discovery sources for that material, the exact failure this file was written to fix",
+        "bank an empty answer as a dry pass instead of caching it as the answer",
+      ],
+      [
+        "src/agents-runtime/agents/marketplace-validation/lead-price-pull.ts",
+        /\badvanceDryPass\s*\(/,
+        "a model call that succeeds and names no sellers is indistinguishable from a JS-rendered page or a bot wall, and retiring on one killed the umbrella lead and its sellers for good",
+        "bank a dry pass and retire only at DRY_PASS_LIMITS.aggregator_index",
+      ],
+      [
+        "src/agents-runtime/agents/data-enrichment/web-fill-run.ts",
+        /\badvanceDryPass\s*\(/,
+        "a read that printed no fields stamped web_checked_at on the first pass, froze all twelve fields as never-published, and dropped the profile out of every future run",
+        "settle not_published only once the read has printed nothing DRY_PASS_LIMITS.supplier_web_fill times",
+      ],
+      [
+        "src/agents-runtime/agents/document-retrieval/index.ts",
+        /\bretryAfter\s*\(/,
+        "a 403 or 429 wrote last_scanned_at like a clean scan, resting a page that was never read for sixty days, and bot-blocking is this agent's measured ceiling",
+        "give a blocked page a short retry_after ladder instead of the sixty-day clock",
+      ],
+      [
+        "src/agents-runtime/agents/lead-creator/index.ts",
+        /\badvanceDryPass\s*\(/,
+        "this is the source that had the found/dry/infra split right first; a private copy of it is how the other eight drifted",
+        "keep the SourceReady counter on the shared helper",
+      ],
+    ];
+    for (const [path, token, why, fix] of PERS03_SITES) {
+      const site = anchor(path, { rule: "discovery/zero-must-not-be-terminal", why, fix });
+      if (site && !token.test(site.text)) {
+        violations.push({
+          rule: "discovery/zero-must-not-be-terminal",
+          why,
+          fix,
+          where: site.path,
+          line: `no longer distinguishes a dry pass from an answer (${token.source})`,
+        });
+      }
+    }
+
+    // The re-check crash is its own shape: it did not fail to write, it wrote a
+    // finding. A pending_review row locks the quote out of every future run, so
+    // laundering a crash into an ordinary verdict is permanent.
+    const recheck = anchor("src/agents-runtime/agents/marketplace-validation/index.ts", {
+      rule: "discovery/zero-must-not-be-terminal",
+      why: "the marketplace re-check decides whether a failed read becomes an operator finding",
+      fix: "restore src/agents-runtime/agents/marketplace-validation/index.ts",
+    });
+    if (recheck && /notes:\s*[`"']Re-check failed/.test(recheck.text)) {
+      violations.push({
+        rule: "discovery/zero-must-not-be-terminal",
+        why: "a crashed re-check written as a needs_review finding parks the quote at pending_review, and the pendingFor skip then excludes it from every future run until an operator dismisses a finding whose only content is the error message",
+        fix: "log the failure and return null so the quote stays in the queue",
+        where: recheck.path,
+        line: "a re-check crash is still written as a finding",
+      });
+    }
+    if (recheck && !/result\.infra_failure/.test(recheck.text)) {
+      violations.push({
+        rule: "discovery/zero-must-not-be-terminal",
+        why: "the same failure arrives by return value as well as by throw: the model answered with something that was not JSON, so the page was never read",
+        fix: "skip the finding when result.infra_failure is set",
+        where: recheck.path,
+        line: "infra_failure returned by the re-check is not checked",
+      });
+    }
+  }
+
   // PERS-08. The clarification draft staged on a parked message names that
   // message, so an idempotency check keyed on the name alone reads the record of
   // a failure as proof the work was done, and no later attempt can ever undo it.
@@ -1254,6 +1358,22 @@ export function runChecks(files, rulesDir) {
           where: `${f.path}:${i + 1}`,
           line: line.trim().slice(0, 120),
         });
+      });
+    }
+
+    // The shared dry-pass bounds are object keys, not SHOUTING_CONSTANTS, so
+    // the scan above cannot see them. Collecting them in one place must not be
+    // the way a bound stops being declared.
+    const limits = files.find((f) => f.path.endsWith("src/lib/dry-pass.ts"));
+    const body = limits?.text.match(/DRY_PASS_LIMITS\s*=\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
+    for (const m of body.matchAll(/^\s{2}([a-z][a-z0-9_]*):\s*\d/gm)) {
+      if (declared.includes(`DRY_PASS_LIMITS.${m[1]}`)) continue;
+      violations.push({
+        rule,
+        why: "a bound nobody wrote down is indistinguishable from a verdict, and gathering the bounds into one object does not declare them",
+        fix: `name DRY_PASS_LIMITS.${m[1]} and why it is a spend control in rules/40-persistence.md under PERS-04`,
+        where: limits.path,
+        line: `undeclared dry-pass bound: ${m[1]}`,
       });
     }
   }

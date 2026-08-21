@@ -270,29 +270,57 @@ the expedited report, which is a client deliverable that never passes through
 staging at all. All 28 fixed; the guard now has five mutations behind it per
 META-09.
 
-## P1 — Zero results are accepted as an answer in nine places
+## Closed 2026-08-21 — zero results were accepted as an answer in nine places
 
-Breaks PERS-03. The worst: a price pull writes a permanent terminal state on
-zero readable sellers without checking the infrastructure-failure flag that the
-same file honours elsewhere, so one flaky model call kills an umbrella lead and
-its sellers for good.
+Broke PERS-03. All nine now go through `src/lib/dry-pass.ts`, which names the
+three outcomes a pass can have — found, dry, infra — and holds every cross-run
+dry-pass bound in one readable place per PERS-04. The shape is lifted from the
+one source that already had it right, Agent 01's SourceReady counter, which was
+moved onto the helper rather than left as a private copy: a private copy is how
+the other eight drifted.
 
-An empty alias list is cached with no expiry and accepted as a valid answer
-forever, which permanently blinds all three discovery sources for that
-material. That is precisely the failure the alias resolver was built to fix.
+What each site was doing:
 
-The import-data client only throws on a server error, so a changed schema or an
-error envelope returns zero suppliers and logs a healthy pass. The equivalent
-guard was added to the other source after an outage; this one never got it.
+1. **The price pull retired an umbrella lead on one clean zero.** The
+   `infra_failure` clause had already been added on 2026-08-20, so this was
+   half fixed, but `infra_failure` only knows about a call that *broke*. A call
+   that succeeds and returns valid JSON naming no sellers — a JS-rendered
+   listing, a bot wall serving a stub, a read that stopped short — carried no
+   flag and was terminal forever. It now banks a dry pass and hands the row to
+   the ordinary needs_review backoff, retiring only at three.
+2. **An empty alias list was cached with no expiry** and short-circuited every
+   future run, blinding all three discovery sources for that material — exactly
+   the Rapeseed Fatty Acid failure the resolver was written to prevent. An
+   empty answer now banks a dry pass; only three of them settle it. A missing
+   `ANTHROPIC_API_KEY` used to return `[]` with no log at all, which is what a
+   rotated key looks like from the outside; it warns now.
+3. **The ImportYeti client read a 200 with no `data` array as an empty
+   market.** An error envelope, a renamed field or a truncated body all logged
+   a cheerful "staged 0 of 0" and burned a dry page. `rowsOrThrow` demands the
+   field and throws, which is what the caller's existing catch already knows
+   how to handle — it leaves the page cursor unadvanced. SourceReady got this
+   guard after its 2026-08-08 outage; this one never did.
+4. **A crashed marketplace re-check was laundered into a `needs_review`
+   finding.** That is worse than losing the read: a `pending_review` row locks
+   the quote out of every future run, so one model-call failure on an expiring
+   quote meant it was never re-checked until an operator dismissed a finding
+   whose only content was the error message. It now writes nothing and leaves
+   the quote in the queue. The same failure arriving by return value
+   (`infra_failure`, the model answered with something that was not JSON) is
+   skipped the same way.
+5. **A supplier site that loaded but printed nothing froze all twelve fields**
+   as `not_published` on the first pass and dropped the profile out of every
+   future run — and `supplier-profile-fill` then reads that stamp as proof the
+   site was exhausted and promotes the profile to `pending_review`. The
+   unreachable branch three lines away already counted attempts correctly; this
+   one now shares that counter.
+6. **A 403 or 429 rested a document page for sixty days** as if it had been
+   read, and bot-blocking is this agent's measured ceiling: 10 of 80 pages on
+   the first live run. Migration 0128 adds `blocked_passes` and `retry_after`,
+   and a blocked page comes back on a 1/3/7-day ladder instead.
 
-Also: a crash fallback parks an expiring quote until a human dismisses it; a
-site that loads but yields no fields is excluded permanently while a site that
-fails to load correctly gets three attempts; a rate-limited document page is
-excluded for 60 days.
-
-**Owed:** one shared dry-pass helper that distinguishes a real zero from a
-failure, applied at all nine sites; `check-rules` id
-`discovery/zero-must-not-be-terminal`.
+**Enforcement:** `discovery/zero-must-not-be-terminal`, nine mutations. PERS-03
+moves from Check owed to Guard.
 
 ## P1 — Deliberate caps hide work in eighteen places
 

@@ -205,31 +205,31 @@ registerAgent({
           unit: q.unit_of_measurement,
         });
       } catch (e: any) {
-        await ctx.log(`Re-check failed for quote ${q.id}: ${e.message}`, {
+        // PERS-03. This used to launder the crash into an ordinary
+        // `needs_review` finding, which is worse than it sounds: a
+        // pending_review row locks the quote out of every future run (see the
+        // pendingFor skip above), so one model-call failure on an expiring
+        // quote meant it was never re-checked again until an operator dismissed
+        // a finding whose only content was the error message. A call that did
+        // not answer is not a reading of the page. Write nothing, leave the
+        // quote in the queue, and let the next run read it.
+        await ctx.log(`Re-check failed for quote ${q.id}, leaving it in the queue: ${e.message}`, {
           level: "warn",
           step: "recheck",
-          data: { quote_id: q.id, supplier: q.supplier_name, material: q.material_name },
+          data: { quote_id: q.id, supplier: q.supplier_name, material: q.material_name, infra_failure: true },
         });
-        result = {
-          classification: "needs_review",
-          market_kind: aggregatorNameOf(q.product_url) ? "aggregator" : "marketplace",
-          aggregator: aggregatorNameOf(q.product_url),
-          current_price: null,
-          currency: null,
-          pack_size: null,
-          unit_price: null,
-          tiers: [],
-          moq: null,
-          lead_time: null,
-          shipping: null,
-          stock_status: null,
-          stock_note: null,
-          source_url: q.product_url,
-          source_citations: [],
-          notes: `Re-check failed: ${e.message}`,
-          index_page: false,
-          sellers: [],
-        };
+        return null;
+      }
+
+      // Same class, arriving by return value rather than by throw: the model
+      // answered with something that was not JSON, so the page was never read.
+      if (result.infra_failure) {
+        await ctx.log(`Re-check unreadable for quote ${q.id}, leaving it in the queue: ${result.notes ?? "no JSON"}`, {
+          level: "warn",
+          step: "recheck",
+          data: { quote_id: q.id, supplier: q.supplier_name, infra_failure: true },
+        });
+        return null;
       }
 
       // Normalize non-USD listings to USD so the baseline (USD) comparison is

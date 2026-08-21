@@ -1,6 +1,8 @@
 // Direct ImportYeti API client. Replaces the container-hosted `query-importyeti`
 // skill so discovery no longer depends on an out-of-band agent holding the key.
 
+import { rowsOrThrow } from "@/lib/dry-pass";
+
 const BASE = "https://data.importyeti.com";
 
 export interface ImportYetiSupplier {
@@ -64,8 +66,11 @@ export async function fetchProductSuppliers(
     const text = await res.text();
     if (!res.ok) throw new Error(`ImportYeti ${res.status}: ${text.slice(0, 300)}`);
     const body = text ? JSON.parse(text) : {};
+    // A 200 with no `data` array is an outage wearing a success, not an empty
+    // market: an error envelope, a renamed field, a truncated body. Reading it
+    // as zero suppliers logs a cheerful "staged 0 of 0" and burns a dry page.
     return {
-      suppliers: Array.isArray(body.data) ? body.data : [],
+      suppliers: rowsOrThrow(body, "data", "ImportYeti") as ImportYetiSupplier[],
       creditsRemaining:
         typeof body.creditsRemaining === "number" ? body.creditsRemaining : null,
     };

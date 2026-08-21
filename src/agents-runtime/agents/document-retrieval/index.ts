@@ -5,6 +5,7 @@ import { loadOrgStatuses, sourcingAllowed } from "@/lib/org-status";
 import { retrieveDocumentsFromUrl } from "@/lib/document-retrieve";
 import { syncDocRequirementsMet } from "@/lib/document-requirements";
 import { orgScopedKey } from "@/lib/org-isolation";
+import { advanceDryPass, retryAfter } from "@/lib/dry-pass";
 
 // Agent 09 - Document Retrieval.
 //
@@ -35,6 +36,9 @@ const RUN_BUDGET_MS = 600_000;
 // Revisit cadence. Suppliers post documents late and replace them with new
 // revisions, but far more slowly than they change prices.
 const RESCAN_AFTER_DAYS = 60;
+// A page we were blocked from was never read, so it does not get the 60-day
+// rest. It comes back on this ladder, up to DRY_PASS_LIMITS.document_page times.
+const BLOCKED_RETRY_DAYS = [1, 3, 7] as const;
 
 function pageHash(url: string): string {
   return crypto.createHash("sha1").update(url).digest("hex").slice(0, 24);
@@ -147,17 +151,25 @@ registerAgent({
     // recorded too, so the queue actually advances instead of re-fetching the
     // same misses every run.
     const cutoff = new Date(Date.now() - RESCAN_AFTER_DAYS * 86_400_000).toISOString();
+    const nowIso = new Date().toISOString();
     const scannedRecently = new Set<string>();
+    const blockedPasses = new Map<string, number>();
     const hashes = targets.map((t) => pageHash(t.pageUrl));
     for (let i = 0; i < hashes.length; i += 500) {
       const { data } = await admin
         .from("document_page_scans")
-        .select("org_id, page_hash")
-        .in("page_hash", hashes.slice(i, i + 500))
-        .gte("last_scanned_at", cutoff);
+        .select("org_id, page_hash, last_scanned_at, retry_after, blocked_passes")
+        .in("page_hash", hashes.slice(i, i + 500));
       // Scoped by client: documents are stored per-org, so one client scanning a
       // page must not skip it for every other client for the next 60 days.
-      for (const r of (data ?? []) as any[]) scannedRecently.add(orgScopedKey(r.org_id, r.page_hash));
+      for (const r of (data ?? []) as any[]) {
+        const key = orgScopedKey(r.org_id, r.page_hash);
+        blockedPasses.set(key, Number(r.blocked_passes ?? 0));
+        // A page we were blocked from carries a short retry clock that overrides
+        // the sixty-day one: it was never read, so it was never scanned.
+        const due = r.retry_after != null && r.retry_after <= nowIso;
+        if (r.last_scanned_at >= cutoff && !due) scannedRecently.add(key);
+      }
     }
 
     // Real clients before internal test orgs: this is a capped queue and the
@@ -236,6 +248,18 @@ registerAgent({
         .select("scan_count")
         .eq("page_hash", h)
         .maybeSingle();
+      // PERS-03. A 403, a 429 and the synthesised `errors: 1` from the catch
+      // above are not readings of the page — nothing was seen — yet the row was
+      // written the same way as a clean scan, which rests the page for
+      // RESCAN_AFTER_DAYS. Give those a short lengthening retry clock instead,
+      // bounded so a permanently walled page eventually settles.
+      const wall = /\b(403|429)\b/.test(res.note ?? "") || (res.note ?? "").startsWith("error:");
+      const key = orgScopedKey(t.orgId, h);
+      const pass = advanceDryPass(
+        { dry: blockedPasses.get(key) ?? 0, done: false },
+        wall ? "dry" : "found",
+        "document_page"
+      );
       await admin.from("document_page_scans").upsert(
         {
           page_hash: h,
@@ -247,6 +271,8 @@ registerAgent({
           scan_count: ((prior as any)?.scan_count ?? 0) + 1,
           docs_found: res.inserted + res.healed,
           note: res.note ?? null,
+          blocked_passes: wall ? pass.dry : 0,
+          retry_after: wall && !pass.done ? retryAfter(pass.dry, BLOCKED_RETRY_DAYS) : null,
         },
         { onConflict: "org_id,page_hash" }
       );

@@ -1,12 +1,15 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupplierProfiles, type SupplierProfile } from "@/lib/supplier-profiles";
 import { webFillSupplierProfile } from "./supplier-web-fill";
+import { advanceDryPass, passOutcome, DRY_PASS_LIMITS } from "@/lib/dry-pass";
 
 // Long-tail completion for suppliers Tenkara has never dealt with and whose
 // leads carry no contact: read their own site. Capped per run and per org.
 //
-// A supplier whose site we actually read is done: fields it does not print are
-// recorded as not_published so we never pay to look for them twice. A supplier
+// A supplier whose site we actually read AND that printed at least one field is
+// done: the fields it did not print are recorded as not_published so we never
+// pay to look for them twice. A read that printed nothing is not that; it is a
+// dry pass, and it is retried on the same counter. A supplier
 // whose site we could not reach is NOT done — that attempt found nothing about
 // them, so it is retried on a cooldown up to RETRY_LIMIT before we give up. The
 // difference matters because a lead often gains a website days after the
@@ -19,7 +22,7 @@ const WEB_FILLABLE = [
 ] as const;
 
 const CONCURRENCY = 3;
-const RETRY_LIMIT = 3;
+const RETRY_LIMIT = DRY_PASS_LIMITS.supplier_web_fill;
 const RETRY_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
 
 const isEmpty = (v: any): boolean => v === null || v === undefined || v === "";
@@ -95,14 +98,15 @@ export async function runSupplierWebFill(
 
       // Never reached their site: bank the attempt and come back later rather
       // than freezing every field as "not published by supplier".
+      const priorPasses = { dry: Number(p.field_sources?.web_attempts ?? 0), done: false };
       if (!result.site_found) {
-        const attempts = Number(p.field_sources?.web_attempts ?? 0) + 1;
+        const pass = advanceDryPass(priorPasses, "dry", "supplier_web_fill");
         const sources: Record<string, string> = {
           ...(p.field_sources ?? {}),
-          web_attempts: String(attempts),
+          web_attempts: String(pass.dry),
           web_last_attempt: new Date().toISOString(),
         };
-        if (attempts >= RETRY_LIMIT) sources.web_checked_at = new Date().toISOString();
+        if (pass.done) sources.web_checked_at = new Date().toISOString();
         stats.unreachable += 1;
         await admin.from("supplier_profiles").update({ field_sources: sources }).eq("id", p.id);
         continue;
@@ -110,19 +114,53 @@ export async function runSupplierWebFill(
 
       const host = result.source_url ? `web:${hostOf(result.source_url)}` : "web";
       const updates: Record<string, any> = {};
-      const sources: Record<string, string> = { web_checked_at: new Date().toISOString() };
+      const sources: Record<string, string> = {};
+      let filled = 0;
       for (const f of missing) {
         const v = (result as any)[f];
-        if (isEmpty(v)) {
-          sources[f] = "not_published";
-          stats.exhausted += 1;
-        } else {
-          updates[f] = v;
-          sources[f] = host;
-          stats.fieldsFilled += 1;
-        }
+        if (isEmpty(v)) continue;
+        updates[f] = v;
+        sources[f] = host;
+        filled += 1;
+        stats.fieldsFilled += 1;
       }
       if (result.source_url) sources.web_source_url = result.source_url;
+
+      // PERS-03. `site_found` is the model's own word for "I read a page of
+      // theirs, even if it stated none of the fields". A cookie wall, an
+      // interstitial and a half-rendered page all satisfy that while printing
+      // nothing. Stamping `web_checked_at` on such a pass froze all twelve
+      // fields as never-published on the FIRST read and dropped the profile out
+      // of every future run — and `supplier-profile-fill` then reads that stamp
+      // as proof the supplier's own site was exhausted and promotes the profile
+      // to pending_review. A read that printed nothing is a dry pass. The other
+      // branch three lines up already knew that; this one did not.
+      const pass = advanceDryPass(priorPasses, passOutcome(filled > 0, false), "supplier_web_fill");
+      if (!pass.done) {
+        await admin
+          .from("supplier_profiles")
+          .update({
+            ...updates,
+            field_sources: {
+              ...(p.field_sources ?? {}),
+              ...sources,
+              web_attempts: String(pass.dry),
+              web_last_attempt: new Date().toISOString(),
+            },
+          })
+          .eq("id", p.id);
+        continue;
+      }
+
+      // Either the site printed something, or it has printed nothing on
+      // DRY_PASS_LIMITS.supplier_web_fill separate reads. Now "not published" is
+      // a reading rather than a guess.
+      sources.web_checked_at = new Date().toISOString();
+      for (const f of missing) {
+        if (!isEmpty((result as any)[f])) continue;
+        sources[f] = "not_published";
+        stats.exhausted += 1;
+      }
 
       await admin
         .from("supplier_profiles")

@@ -23,6 +23,7 @@ import {
 import { importYetiEnabled, runImportYetiDiscovery, ImportYetiUnavailableError } from "./importyeti";
 import { runDbReuse } from "./reuse";
 import { getMaterialAliases } from "@/lib/material-aliases";
+import { advanceDryPass, passOutcome } from "@/lib/dry-pass";
 import { classifyFailure } from "@/lib/retry-verdict";
 import { loadDueOrgIds, recordOrgRuns } from "@/lib/org-tier";
 
@@ -73,8 +74,8 @@ const PAGE_CURSOR_KEY = (source: string, materialId: string) => `discovery_page:
 const SCOUT_RETRY_KEY = (materialId: string) => `scout_retry_passes:${materialId}`;
 const SOURCEREADY_SEARCHED_KEY = (materialId: string) => `sourceready_searched:${materialId}`;
 // How many passes that return nothing before a material stops being re-queried
-// against SourceReady. One empty answer is not evidence the market is empty.
-const SOURCEREADY_MAX_DRY_PASSES = 3;
+// against SourceReady lives in DRY_PASS_LIMITS with every other dry-pass bound.
+// One empty answer is not evidence the market is empty.
 const SOURCEREADY_TERM_KEY = (materialId: string) => `sourceready_term:${materialId}`;
 
 // Starvation bypass. A material under this many leads is not "sourced" yet, and
@@ -1513,11 +1514,13 @@ registerAgent({
           // dry streak is spent. A retryable failure (the endpoint was down) is
           // not a pass at all, costs no credits, and is not counted.
           const found = ok && (srDetail.received ?? 0) > 0;
-          const prior = sourceReadyPasses.get(material.id)?.dry ?? 0;
           const infra = !!srError && srVerdict?.verdict === "retry";
-          const dry = found || infra ? prior : prior + 1;
-          const done = found || dry >= SOURCEREADY_MAX_DRY_PASSES;
-          if (!infra) {
+          const { dry, done, persist } = advanceDryPass(
+            sourceReadyPasses.get(material.id) ?? null,
+            passOutcome(found, infra),
+            "sourceready_search"
+          );
+          if (persist) {
             sourceReadyPasses.set(material.id, { dry, done });
             await admin.from("agent_state").upsert(
               {

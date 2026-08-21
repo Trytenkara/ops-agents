@@ -46,25 +46,66 @@ Zero is indistinguishable from a naming miss, a bad query, a silent transport
 failure or a crashed run. A dry pass is requeued and retried like a crash. No
 source may write a terminal "searched, nothing here" state on a single zero.
 
-Any NEW discovery source has to make this choice itself; the guard is
-per-source today.
+A pass has three outcomes, not two, and every break of this rule is the same
+mistake: two of them get collapsed.
 
-**Enforcement:** Check owed — `discovery/zero-must-not-be-terminal`, over
-one shared dry-pass helper. Honoured per source today. See `OUTSTANDING.md`.
+- **found** — the source answered and named something.
+- **dry** — the source answered and named nothing. Retryable, on a bound.
+- **infra** — the source did not answer. It costs nothing and writes nothing.
+
+Collapsing infra into dry spends a real attempt on an outage. Collapsing dry
+into found writes the terminal state on a single zero. Nine sites did one or
+the other, and the shapes are worth recognising: a 200 whose body is an error
+envelope read as an empty market; an empty answer cached with no expiry; a
+crashed re-check laundered into an operator finding that then locked the row
+out of every future run; a page that loaded but printed nothing treated as a
+page that printed "nothing is published"; a 403 rested for sixty days as if it
+had been read.
+
+Any NEW discovery source has to make this choice itself, but it makes it with
+the shared helper rather than its own copy.
+
+**Enforcement:** Guard — `src/lib/dry-pass.ts` (`passOutcome`,
+`advanceDryPass`, `retryAfter`, `rowsOrThrow`) and
+`discovery/zero-must-not-be-terminal`, which fails the build if the helper
+stops naming all three outcomes, if any of the six sites stops going through
+it, or if the marketplace re-check goes back to writing a crash as a finding.
 
 ## PERS-04 — Retry limits are a spend control, and must be named
 
 Where a source does bound retries, the bound must be stated in this folder and
 in the run summary. A silent bound is a break of PERS-01.
 
-Every bound in the fleet, by name. Only the first is a bound across runs; the
-rest bound attempts inside one run, which is a spend control on a synchronous
-request and never a verdict about the work:
+Every bound in the fleet, by name, in two groups: the dry-pass bounds, which
+count across runs, and the in-run attempt ceilings, which are a spend control on
+one synchronous request and never a verdict about the work.
 
-- `SOURCEREADY_MAX_DRY_PASSES` (3) — the discovery path stops re-querying a
-  material against SourceReady after three consecutive passes that returned
-  nothing. A deliberate credit control, and the only one here that can end a
-  line of enquiry.
+The cross-run bounds are gathered in `DRY_PASS_LIMITS` in `src/lib/dry-pass.ts`,
+all of them 3, all of them counting *consecutive dry passes* — a pass the source
+answered and named nothing on. An infrastructure failure advances none of them,
+and a single find resets the line of enquiry to open. Each is a spend control on
+a repeated call that has so far bought nothing:
+
+- `DRY_PASS_LIMITS.sourceready_search` (3) — stop re-querying a material against
+  SourceReady, which is billed per search. Formerly the constant
+  `SOURCEREADY_MAX_DRY_PASSES`, and still the only bound that can end a line of
+  enquiry outright.
+- `DRY_PASS_LIMITS.aggregator_index` (3) — stop re-reading an aggregator index
+  page no sellers could be read off. Each attempt is a model page-read.
+- `DRY_PASS_LIMITS.supplier_web_fill` (3) — stop re-reading a supplier site that
+  was reachable but printed none of the missing fields. On exhaustion the fields
+  are marked `not_published`, which is a finding, not a failure.
+- `DRY_PASS_LIMITS.document_page` (3) — stop re-fetching a document page that
+  answered with a wall (403/429) rather than documents. Paired with the retry
+  ladder below, so the last word is a cooldown, not a stop.
+- `DRY_PASS_LIMITS.material_aliases` (3) — stop re-asking the model for trade
+  synonyms for a material it has already found none for three times.
+
+`BLOCKED_RETRY_DAYS` (1, 3, 7) in the document agent is the ladder, not a bound:
+it lengthens the wait and never ends it.
+
+The in-run ceilings, none of which ends a line of enquiry:
+
 - `MAX_ATTEMPTS` in `src/lib/tenkara-readonly.ts` (3) — the Tenkara pooler
   hangs intermittently and each failure rebuilds the pool.
 - `MAX_ATTEMPTS` in `src/lib/thread-tailor.ts` (3) — on exhaustion the draft is

@@ -14,6 +14,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { advanceDryPass, passOutcome, DRY_PASS_LIMITS, type DryPassState } from "@/lib/dry-pass";
 
 const MODEL = "claude-sonnet-5";
 const MAX_ALIASES = 4;
@@ -92,10 +93,16 @@ function parseAliases(text: string, exclude: Set<string>): string[] {
   return out;
 }
 
-// Resolved once per material and cached in agent_state — the answer does not
-// change between runs, and every discovery source asks for the same material.
-// Fails open to []: a missing alias list costs breadth, a thrown error costs
-// the whole discovery pass.
+// Resolved per material and cached in agent_state — every discovery source asks
+// for the same material. Fails open to []: a missing alias list costs breadth, a
+// thrown error costs the whole discovery pass.
+//
+// PERS-03: an EMPTY answer is not cached as the answer. A truncated response, a
+// JSON-parse miss and a material whose name really is the catalogue name all
+// produce the same [], and caching that with no expiry blinds all three sources
+// for that material permanently — the exact failure the header describes. An
+// empty result banks a dry pass instead and is re-resolved until
+// DRY_PASS_LIMITS.material_aliases of them agree. A failure banks nothing.
 export async function getMaterialAliases(
   admin: SupabaseClient,
   agentId: string,
@@ -109,6 +116,7 @@ export async function getMaterialAliases(
   );
   if (!material.name) return [];
 
+  let prior: DryPassState | null = null;
   try {
     const { data } = await admin
       .from("agent_state")
@@ -116,13 +124,28 @@ export async function getMaterialAliases(
       .eq("agent_id", agentId)
       .eq("key", ALIAS_KEY(material.id))
       .maybeSingle();
-    const cached = (data?.value as any)?.aliases;
-    if (Array.isArray(cached)) return cached.filter((a: any) => typeof a === "string");
+    const value = data?.value as any;
+    const cached = value?.aliases;
+    if (Array.isArray(cached)) {
+      const names = cached.filter((a: any) => typeof a === "string");
+      if (names.length) return names;
+      prior = { dry: Number(value?.dry ?? 0), done: !!value?.done };
+      if (prior.done) return [];
+    }
   } catch {
     // Cache miss and cache failure are the same thing here: resolve it fresh.
   }
 
-  if (!process.env.ANTHROPIC_API_KEY) return [];
+  // No key is an infrastructure failure, not an answer. Say so: silently
+  // degrading every source to literal-name-only searching is what a rotated
+  // key looks like from the outside.
+  if (!process.env.ANTHROPIC_API_KEY) {
+    await log?.(`Alias resolution unavailable for ${material.name}: ANTHROPIC_API_KEY not set`, {
+      level: "warn",
+      material_id: material.id,
+    });
+    return [];
+  }
   let aliases: string[] = [];
   try {
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -148,12 +171,13 @@ export async function getMaterialAliases(
     return [];
   }
 
+  const pass = advanceDryPass(prior, passOutcome(aliases.length > 0, false), "material_aliases");
   try {
     await admin.from("agent_state").upsert(
       {
         agent_id: agentId,
         key: ALIAS_KEY(material.id),
-        value: { aliases, at: new Date().toISOString() },
+        value: { aliases, at: new Date().toISOString(), dry: pass.dry, done: pass.done },
       },
       { onConflict: "agent_id,key" }
     );
@@ -163,7 +187,8 @@ export async function getMaterialAliases(
   await log?.(
     aliases.length
       ? `Trade aliases for ${material.name}: ${aliases.join(", ")}`
-      : `No trade aliases for ${material.name} (name is already the catalogue name)`,
+      : `No trade aliases for ${material.name} on dry pass ${pass.dry} of ${DRY_PASS_LIMITS.material_aliases}` +
+          (pass.done ? " — settled: the name is the catalogue name" : ", will re-resolve next run"),
     { material_id: material.id, aliases }
   );
   return aliases;

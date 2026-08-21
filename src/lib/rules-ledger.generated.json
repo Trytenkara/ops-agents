@@ -339,8 +339,8 @@
     {
       "id": "PERS-03",
       "title": "A zero-result pass is never \"this market is empty\"",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "PERS-04",
@@ -736,7 +736,7 @@
     "P1 — The prices already captured wrong — one row, corrected 2026-08-21",
     "P1 — Dead-lettered supplier replies — replayed 2026-08-21, two causes left",
     "P1 — Two draft paths bypass the staging chokepoint",
-    "P1 — Zero results are accepted as an answer in nine places",
+    "Closed 2026-08-21 — zero results were accepted as an answer in nine places",
     "P1 — Deliberate caps hide work in eighteen places",
     "P1 — Call tasks reach nobody",
     "P1 — The dealbreaker-grade guard arms intermittently, and has never fired",

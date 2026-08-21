@@ -12,6 +12,7 @@ import { leadMarketKind } from "@/lib/lead-market";
 import { splitPriceDelta } from "@/lib/price-delta";
 import { loadSelfSuppliedMaterialIds } from "@/lib/self-supplied-materials";
 import { partitionRealVsInternal } from "@/lib/org-priority";
+import { advanceDryPass, DRY_PASS_LIMITS } from "@/lib/dry-pass";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -644,26 +645,54 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
     // an API was briefly down. No row has died this way yet — measured
     // 2026-08-20, all 83 `aggregator_index_page` retirements name a real page —
     // so this closes it before it happens rather than after.
+    // `infra_failure` only knows about a call that broke. A call that SUCCEEDS
+    // and returns valid JSON naming no sellers is the other half, and it is
+    // indistinguishable from a JS-rendered listing, a bot wall serving a stub,
+    // or a read that stopped short — so PERS-03 says one of them is not a
+    // verdict either. Bank a dry pass and retire only once the bound agrees.
     if (platformAsSupplier && !noCheckout && result.infra_failure !== true) {
-      await admin
-        .from("leads_in_flight")
-        .update({
-          status: "terminal",
-          stage: "terminal",
-          drop_reason: "aggregator_index_page",
-          payload: {
-            ...(l.payload ?? {}),
-            site_type: "A",
+      const priorSplit = (l.payload as any)?.aggregator_split ?? null;
+      const pass = advanceDryPass(
+        priorSplit ? { dry: Number(priorSplit.dry ?? 0), done: !!priorSplit.done } : null,
+        "dry",
+        "aggregator_index"
+      );
+      const split = {
+        at: new Date().toISOString(),
+        index_url: url,
+        sellers_found: 0,
+        sellers_staged: 0,
+        notes: result.notes ?? null,
+        dry: pass.dry,
+        done: pass.done,
+      };
+      if (!pass.done) {
+        // Carry the counter and hand the row to the ordinary needs_review path
+        // below, whose backoff already knows how to come back to it.
+        l.payload = { ...(l.payload ?? {}), aggregator_split: split };
+        result.classification = "needs_review";
+        result.notes = `No sellers readable on this ${aggregatorNameOf(url) ?? "platform"} index page — dry pass ${pass.dry} of ${DRY_PASS_LIMITS.aggregator_index}. ${result.notes ?? ""}`.trim();
+      } else {
+        await admin
+          .from("leads_in_flight")
+          .update({
+            status: "terminal",
+            stage: "terminal",
             drop_reason: "aggregator_index_page",
-            aggregator_split: { at: new Date().toISOString(), index_url: url, sellers_found: 0, sellers_staged: 0, notes: result.notes ?? null },
-          },
-        })
-        .eq("id", l.id);
-      await log(`Aggregator platform recorded as the supplier and no sellers were readable — retiring the row: ${l.supplier_name} × ${l.material_name}`, {
-        step: "mp_aggregator_split",
-        data: { lead_id: l.id, index_url: url, notes: result.notes ?? null },
-      });
-      return "expanded";
+            payload: {
+              ...(l.payload ?? {}),
+              site_type: "A",
+              drop_reason: "aggregator_index_page",
+              aggregator_split: split,
+            },
+          })
+          .eq("id", l.id);
+        await log(`Aggregator platform recorded as the supplier and no sellers were readable on ${DRY_PASS_LIMITS.aggregator_index} separate reads — retiring the row: ${l.supplier_name} × ${l.material_name}`, {
+          step: "mp_aggregator_split",
+          data: { lead_id: l.id, index_url: url, notes: result.notes ?? null, dry: pass.dry },
+        });
+        return "expanded";
+      }
     }
 
     // The row links to whatever is in the payload, so a lead left pointing at a
