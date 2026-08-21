@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-121 rules. 84 are actually enforced, 26 owe a check or a job,
+121 rules. 85 are actually enforced, 25 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 15 of the enforced rules hold only part of their invariant and say so in
@@ -12,9 +12,9 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 76 |
+| **Guard** | A shared module or build check makes it impossible. | 77 |
 | **Audit** | A scheduled job reports the break after the fact. | 8 |
-| **Check owed** | A build check is possible and is not built yet. | 11 |
+| **Check owed** | A build check is possible and is not built yet. | 10 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
 | **None** | Outside this repository. Cannot be checked here. | 2 |
@@ -31,7 +31,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (76)
+## Guard (77)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -69,6 +69,7 @@ this ledger read as enforced.
 | `PRICING-07` | A marketplace that deals by email becomes a second, direct supplier | Guard — `splitDirectLeadFromMarketplace` in `src/lib/marketplace-direct-split.ts`, which refuses a platform address, refuses a lead already split, and reuses an existing direct sibling instead of stacking a second one. |
 | `PRICING-08` | A price row belongs to one lane and no writer may cross | Guard — `quote_profiles.lane`, not null, no default at the call site: `insertQuoteProfile` requires it, `seedQuoteProfilesFromStaged` reads and writes `direct` only, `syncQuoteProfilesFromMarketplace` reads and writes `marketplace` only, and the quotes tab groups by supplier and lane. |
 | `PERS-01` | Only a structural verdict is terminal | Guard — `src/lib/retry-verdict.ts` `classifyFailure`. Check owed — `retry/verdict-must-use-shared-classifier`: only three call sites use it and two hand-rolled classifiers remain. See `OUTSTANDING.md`. |
+| `PERS-02` | "Needs a human" is a display flag, never a queue exit | Guard — `queues/flag-must-not-exit-queue`, four mutations. No read may filter the flagged rows away, and a lead may only be parked against a case through `src/lib/lead-queue-holds.ts`, which records the case id and whose `releaseClosedHolds` gives the lead back the moment that case stops being open. Both halves are checked: deleting the sweep fails the build, and so does leaving it uncalled. |
 | `PERS-03` | A zero-result pass is never "this market is empty" | Guard — `src/lib/dry-pass.ts` (`passOutcome`, `advanceDryPass`, `retryAfter`, `rowsOrThrow`) and `discovery/zero-must-not-be-terminal`, which fails the build if the helper stops naming all three outcomes, if any of the six sites stops going through it, or if the marketplace re-check goes back to writing a crash as a finding. |
 | `PERS-04` | Retry limits are a spend control, and must be named | Guard — `retry/bound-must-be-declared`: a constant whose name says it bounds attempts, retries or dry passes must be named in this file. The guard holds the half that can be read from the source; the run-summary half is still owed and is listed in `OUTSTANDING.md`. |
 | `PERS-05` | Never give up on a lead with no contact | Guard — `outreach/contactless-must-park-not-drop`. This used to name OUT-02's check. They are not the same break: OUT-02 is a storefront that was never given a channel, PERS-05 is a direct supplier actively set to `dropped` so the re-queue cannot see it. Sharing one id meant guarding either one would report both as held. |
@@ -125,7 +126,7 @@ this ledger read as enforced.
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
-## Check owed (11)
+## Check owed (10)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -133,7 +134,6 @@ this ledger read as enforced.
 | `PRICING-02` | Delivery cost is per pack tier when pack size changes it | Check owed — `shipping/cost-per-tier`. |
 | `PRICING-03` | Delivery-cost extraction is opt-in per client | Check owed — `shipping/extraction-org-opt-in`. |
 | `PRICING-05` | A delivery cost is never fabricated | Check owed — `shipping/no-fabricated-costs`. |
-| `PERS-02` | "Needs a human" is a display flag, never a queue exit | Check owed — `queues/flag-must-not-exit-queue`. |
 | `DISC-05` | A platform is never the supplier | Check owed — `discovery/platform-is-never-manufacturer`. |
 | `DISC-09` | A self-supplied material is not sourced | Check owed — `discovery/self-supplied-gate-must-fail-closed`: the gates are fail-open today. |
 | `OUT-08` | Supplier asks are staggered | Check owed — `outreach/asks-must-be-staged`. |

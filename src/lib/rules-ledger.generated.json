@@ -333,8 +333,8 @@
     {
       "id": "PERS-02",
       "title": "\"Needs a human\" is a display flag, never a queue exit",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "PERS-03",
@@ -738,6 +738,7 @@
     "P1 — Two draft paths bypass the staging chokepoint",
     "Closed 2026-08-21 — zero results were accepted as an answer in nine places",
     "Closed 2026-08-21 — deliberate caps hid work in thirty-odd places",
+    "Closed 2026-08-21 — a lead parked against a case never came back",
     "Closed 2026-08-21 — call tasks reached nobody",
     "P1 — The dealbreaker-grade guard arms intermittently, and has never fired",
     "P2 — Guessed contacts can be synthesised at a directory",

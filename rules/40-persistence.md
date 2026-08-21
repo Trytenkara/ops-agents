@@ -38,7 +38,18 @@ use it and two hand-rolled classifiers remain. See `OUTSTANDING.md`.
 Marking a record as needing attention must not remove it from the work queue.
 If it leaves the queue it stops being retried and nobody ever sees it again.
 
-**Enforcement:** Check owed — `queues/flag-must-not-exit-queue`.
+A mark may move a record to a person's queue rather than out of every queue —
+a lead parked against an escalation case is still work, it is waiting on a
+person. That parking is a loan and not a disposal: when the case is dismissed
+or resolved, the lead comes back. An operator's own verdict is different and
+stands; this rule is about the machine's marks, not a person's decision.
+
+**Enforcement:** Guard — `queues/flag-must-not-exit-queue`, four mutations. No
+read may filter the flagged rows away, and a lead may only be parked against a
+case through `src/lib/lead-queue-holds.ts`, which records the case id and whose
+`releaseClosedHolds` gives the lead back the moment that case stops being open.
+Both halves are checked: deleting the sweep fails the build, and so does
+leaving it uncalled.
 
 ## PERS-03 — A zero-result pass is never "this market is empty"
 

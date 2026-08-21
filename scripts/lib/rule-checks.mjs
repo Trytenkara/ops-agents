@@ -2003,6 +2003,83 @@ export function runChecks(files, rulesDir) {
     test: (l) => /xoxp-|SLACK_USER_TOKEN|slack_user_token/.test(l),
   });
 
+  // PERS-02. A "needs a human" mark may move a record to a person's queue. It
+  // may never take it out of every queue. Two shapes break that: a read that
+  // filters the marked rows away, and a write that parks a record against a
+  // person and leaves it parked after the person is gone. The second is the one
+  // that happened: 147 leads sat `dropped` pointing at a case, and nothing
+  // anywhere gave them back when that case was dismissed or resolved.
+  {
+    const rule = "queues/flag-must-not-exit-queue";
+    const HOLDS = "src/lib/lead-queue-holds.ts";
+
+    // A read that hides the flagged rows. The flag is for the operator's eyes;
+    // it is not a reason the machine stops looking.
+    for (const f of files) {
+      if (!f.path.startsWith("src/") || f.path === HOLDS) continue;
+      codeLines(f).forEach((line, i) => {
+        if (
+          /\.(eq|is)\(\s*"needs_review"\s*,\s*false/.test(line) ||
+          /\.neq\(\s*"[a-z_]*(status|classification)"\s*,\s*"needs_review"/.test(line) ||
+          /filter\([^)]*=>\s*!\w+\.needs_review/.test(line)
+        ) {
+          violations.push({
+            rule,
+            why: "filtering the flagged rows out of the work read is how a record marked for a human stops being retried and is never seen again",
+            fix: "leave the flagged rows in the queue and render the flag; a flag is for the operator's eyes, not a reason to stop looking",
+            where: f.path,
+            line: `${i + 1}: ${line.trim().slice(0, 100)}`,
+          });
+        }
+      });
+    }
+
+    // A write that parks a lead against a case. Allowed, and only through the
+    // module that also knows how to give it back.
+    const holds = anchor(HOLDS, {
+      rule,
+      why: "parking a lead against a case is a loan, and this is the only place that records the loan and calls it in",
+      fix: "restore src/lib/lead-queue-holds.ts",
+    });
+    if (holds && !/export async function releaseClosedHolds/.test(holds.text)) {
+      violations.push({
+        rule,
+        why: "without the release sweep a parked lead has no way back, which is the exact state the rule forbids",
+        fix: "keep releaseClosedHolds in src/lib/lead-queue-holds.ts",
+        where: HOLDS,
+        line: "the sweep that gives a held lead back is gone",
+      });
+    }
+    const escalation = anchor("src/agents-runtime/agents/escalation/index.ts", {
+      rule,
+      why: "the escalation agent both parks leads and is the run that gives them back",
+      fix: "restore src/agents-runtime/agents/escalation/index.ts",
+    });
+    if (escalation && !/releaseClosedHolds\(/.test(escalation.text)) {
+      violations.push({
+        rule,
+        why: "a sweep nothing calls is the same as no sweep, and the leads stay dropped",
+        fix: "call releaseClosedHolds at the start of the escalation run",
+        where: escalation.path,
+        line: "nothing releases leads held by a closed case",
+      });
+    }
+    for (const f of files) {
+      if (!f.path.startsWith("src/") || f.path === HOLDS) continue;
+      codeLines(f).forEach((line, i) => {
+        if (!/drop_reason\s*:/.test(line)) return;
+        if (!/"(escalated_to_case|duplicate_open_case)"/.test(line)) return;
+        violations.push({
+          rule,
+          why: "a hold written by hand records no case id and no sweep can find it, so the lead never comes back",
+          fix: "park the lead with holdLeadForCase from src/lib/lead-queue-holds.ts",
+          where: f.path,
+          line: `${i + 1}: ${line.trim().slice(0, 100)}`,
+        });
+      });
+    }
+  }
+
   // AUTO-08. A call task is owned by a call operator or by nobody. The pool
   // filter in `poolForWork` already refuses to degrade a call to the email desk,
   // and that was read as the rule being held — but the filter only governs a

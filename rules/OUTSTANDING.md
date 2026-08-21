@@ -373,6 +373,31 @@ windows are waived in `DECLARED_WINDOWS`, keyed by path *and* by the limit
 expression: rename the constant and the waiver stops applying. PERS-06 moves
 from Check owed to Guard.
 
+## Closed 2026-08-21 — a lead parked against a case never came back
+
+Broke PERS-02. The escalation sweep takes a stale lead out of the active queue
+two ways: it opens a case for it, or it finds a case already open for that
+supplier and material and parks the lead behind it. Either way the lead is set
+`dropped`, and that is defensible — the work moved to a person's queue rather
+than stopping.
+
+What was missing is the other end. A case is dismissed or resolved and nothing
+gives the lead back. 147 leads are parked this way today. Every one of their
+cases happens to still be open, so nothing has been lost yet, but 1,232 cases
+are dismissed and 1,077 resolved, so this was a matter of time rather than a
+question. The duplicate path was worse: it recorded no case id at all, and 121
+of the 147 have no supplier resolved, so supplier and material was not enough
+to find their case again.
+
+`src/lib/lead-queue-holds.ts` is now the only place that parks a lead. It always
+records the case id, and `releaseClosedHolds` runs at the top of every
+escalation pass across every org, returning any lead whose holder has closed.
+Leads parked before the module existed carry no id and are matched null-safely
+on org, supplier and material, which is the key they were deduped on.
+
+**Enforcement:** `queues/flag-must-not-exit-queue`, four mutations. PERS-02
+moves from Check owed to Guard.
+
 ## Closed 2026-08-21 — call tasks reached nobody
 
 Broke AUTO-08. Measured first: California Chemicals' 132 open call tasks are all
@@ -639,7 +664,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | COMM-08 | the scope's edges. `copy/no-rfq-or-em-dash-in-templates` holds a named list of outbound-copy files and `copy/scope-must-cover-every-draft-site` makes a `stageDraft` caller missing from it a violation. Copy reaching a supplier by some other path is still unseen. |
 | DATA-05 | the shared host list. `contacts/guessed-combo-requires-own-domain-and-flag` shipped 2026-08-20 and holds the gate and the flag together. The gate still reads a hand-copied list in `enrich.ts` that has drifted 15 hosts behind `src/lib/aggregator-hosts.ts`, so a guess is allowed on those hosts. Merging the lists is a behaviour change for every other caller of the shared one, which is why it is not folded in here. |
 | PERS-01 | `retry/verdict-must-use-shared-classifier`. Three call sites use `classifyFailure` and two hand-rolled classifiers remain — see the P2 above. |
-| PERS-02 | `queues/flag-must-not-exit-queue` |
 | PERS-04 | the run-summary half. `retry/bound-must-be-declared` shipped 2026-08-20 and holds the rules-folder half: all seven bounds are now named under PERS-04 and an eighth fails the build. A bound must also appear in the run summary, which cannot be read from the source. |
 | PERS-09 | `runs/paced-loop-must-carry-deadline`. `deadlineAt` holds the one job it was written for; a new per-item push loop with no deadline passes the build today. |
 | DISC-05 | `discovery/platform-is-never-manufacturer` |

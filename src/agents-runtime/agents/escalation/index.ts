@@ -4,6 +4,7 @@ import { cappedRead } from "@/lib/capped-read";
 import { selectAllPaged } from "@/lib/supabase-paging";
 import { postSlackMessage, deepLink } from "@/lib/slack";
 import { shouldPostDigest, recordDigestPosted } from "@/lib/alert-policy";
+import { releaseClosedHolds, holdLeadForCase, HOLD_REASONS } from "@/lib/lead-queue-holds";
 import {
   getOrgAssignmentContext,
   orgAutoKey,
@@ -71,6 +72,28 @@ registerAgent({
     // needs to run to chase un-actioned drafts/leads.
     await ctx.log(stale.note, { step: "pull", data: { backlog: stale.total, remainder: stale.remainder } });
 
+    // 0. Give back every lead a closed case is still holding (PERS-02). A lead
+    // parked against a case has not stopped being work; it is waiting on a
+    // person. When that person dismisses or resolves the case, nothing used to
+    // put the lead back, and it sat `dropped` with no sweep able to see it.
+    // Across every org, not just the ones with stale leads this run, because a
+    // hold outlives the run that wrote it.
+    try {
+      const allOrgs = await selectAllPaged<{ id: string }>((from, to) =>
+        admin.from("orgs").select("id").order("id").range(from, to)
+      );
+      const released = await releaseClosedHolds(admin, allOrgs.map((o) => o.id));
+      if (released.revived > 0 || released.stillHeld > 0) {
+        await ctx.log(
+          `Released ${released.revived} lead(s) whose holding case has closed; ${released.stillHeld} still held` +
+            (released.unmatched > 0 ? `, ${released.unmatched} of the released carried no case id and were matched on supplier x material` : ""),
+          { step: "release_holds", data: released }
+        );
+      }
+    } catch (e: any) {
+      await ctx.log(`Hold release failed: ${e.message}`, { level: "warn", step: "release_holds" });
+    }
+
     // Assignment context per org, once. A stale lead is routed to whoever owns
     // that supplier for the client, so the case lands next to the rest of that
     // supplier's work rather than on a single default desk.
@@ -92,16 +115,20 @@ registerAgent({
     const dedupKey = (orgId: string, supplierId: string | null, materialId: string | null) =>
       supplierId || materialId ? `${orgId}|${supplierId ?? ""}|${materialId ?? ""}` : null;
 
-    const openCaseKeys = new Set<string>();
+    // key -> the case holding it. The id matters: a lead deduped away is parked
+    // against that case and has to be given back when it closes (PERS-02), and
+    // supplier x material is not enough to find it again when the lead has no
+    // supplier resolved.
+    const openCaseKeys = new Map<string, string>();
     if (orgIds.length) {
       const { data: openCases } = await admin
         .from("cases")
-        .select("org_id, supplier_id, material_id")
+        .select("id, org_id, supplier_id, material_id")
         .in("org_id", orgIds)
         .in("status", ["open", "in_progress"]);
       for (const c of (openCases ?? []) as any[]) {
         const k = dedupKey(c.org_id, c.supplier_id, c.material_id);
-        if (k) openCaseKeys.add(k);
+        if (k && !openCaseKeys.has(k)) openCaseKeys.set(k, c.id);
       }
     }
 
@@ -134,22 +161,15 @@ registerAgent({
       // the lead so it stops tripping the sweep, and point it at the existing
       // pile instead of opening a duplicate.
       const key = dedupKey(lead.org_id, lead.supplier_id, lead.material_id);
-      if (key && openCaseKeys.has(key)) {
-        const { error: dupDropErr } = await admin
-          .from("leads_in_flight")
-          .update({
-            status: "dropped",
-            drop_reason: "duplicate_open_case",
-            payload: {
-              ...(lead.payload ?? {}),
-              escalation: {
-                deduped_against_open_case: true,
-                escalated_by_run_id: ctx.runId,
-                stale_days: ageDays,
-              },
-            },
-          })
-          .eq("id", lead.id);
+      const holdingCaseId = key ? openCaseKeys.get(key) : undefined;
+      if (holdingCaseId) {
+        const { error: dupDropErr } = await holdLeadForCase(admin, lead, {
+          reason: HOLD_REASONS.duplicateOpenCase,
+          caseId: holdingCaseId,
+          runId: ctx.runId,
+          staleDays: ageDays,
+          extra: { deduped_against_open_case: true },
+        });
         if (dupDropErr) {
           errored++;
           await ctx.log(`Dedup drop failed for lead ${lead.id}: ${dupDropErr.message}`, {
@@ -213,22 +233,12 @@ registerAgent({
         continue;
       }
 
-      const { error: upErr } = await admin
-        .from("leads_in_flight")
-        .update({
-          status: "dropped",
-          drop_reason: "escalated_to_case",
-          payload: {
-            ...(lead.payload ?? {}),
-            escalation: {
-              case_id: inserted.id,
-              escalated_at: new Date().toISOString(),
-              escalated_by_run_id: ctx.runId,
-              stale_days: ageDays,
-            },
-          },
-        })
-        .eq("id", lead.id);
+      const { error: upErr } = await holdLeadForCase(admin, lead, {
+        reason: HOLD_REASONS.escalatedToCase,
+        caseId: inserted.id,
+        runId: ctx.runId,
+        staleDays: ageDays,
+      });
 
       if (upErr) {
         errored++;
@@ -240,7 +250,7 @@ registerAgent({
         continue;
       }
       escalated++;
-      if (key) openCaseKeys.add(key);
+      if (key) openCaseKeys.set(key, inserted.id);
       await ctx.log(`Escalated ${lead.supplier_name} × ${lead.material_name} → case ${inserted.id} (${ageDays}d stale)`, {
         step: "escalated",
         data: { lead_id: lead.id, case_id: inserted.id, stale_days: ageDays },

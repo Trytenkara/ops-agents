@@ -44,6 +44,37 @@ const drop = (suffix) => (files) => files.filter((f) => !f.path.endsWith(suffix)
 
 const MUTATIONS = [
   // Line scanners. A synthetic file is enough: these read one line at a time.
+  // PERS-02. Four: the read that hides the flag, the write that skips the
+  // module, and both halves of the sweep that gives a held lead back.
+  {
+    expect: "queues/flag-must-not-exit-queue",
+    label: "a work read filters out everything marked for a human",
+    mutate: fixture(
+      "src/__selftest__/hide-flagged.ts",
+      `const { data } = await admin\n  .from("staged_quotes")\n  .select("id")\n  .eq("needs_review", false);\n`,
+    ),
+  },
+  {
+    expect: "queues/flag-must-not-exit-queue",
+    label: "a lead is parked against a case by hand, recording no case id",
+    mutate: fixture(
+      "src/__selftest__/hand-hold.ts",
+      `await admin.from("leads_in_flight").update({\n  status: "dropped",\n  drop_reason: "escalated_to_case",\n}).eq("id", lead.id);\n`,
+    ),
+  },
+  {
+    expect: "queues/flag-must-not-exit-queue",
+    label: "the sweep that gives a held lead back is deleted",
+    mutate: rename("src/lib/lead-queue-holds.ts", "export async function releaseClosedHolds", "async function unusedReleaseClosedHolds"),
+  },
+  {
+    expect: "queues/flag-must-not-exit-queue",
+    label: "the sweep survives but nothing calls it",
+    mutate: edit("src/agents-runtime/agents/escalation/index.ts", (t) =>
+      t.split("releaseClosedHolds(").join("noopRelease(")
+    ),
+  },
+
   // AUTO-08. Six, because the invariant has six limbs and each one on its own
   // is enough to put a phone task on somebody who does not make calls.
   {
@@ -948,7 +979,7 @@ const RULES_MUTATIONS = [
     mutate: (dir) => {
       const p = join(dir, "OUTSTANDING.md");
       const text = readFileSync(p, "utf8");
-      const row = text.match(/^\| PERS-02 \|.*$/m);
+      const row = text.slice(text.indexOf("## The full enforcement debt")).match(/^\| [A-Z]+-\d+ \|.*$/m);
       if (!row) return;
       writeFileSync(p, text.replace(row[0] + "\n", ""));
     },
@@ -959,7 +990,7 @@ const RULES_MUTATIONS = [
     mutate: (dir) => {
       const p = join(dir, "OUTSTANDING.md");
       const text = readFileSync(p, "utf8");
-      const row = text.match(/^\| PERS-02 \|.*$/m);
+      const row = text.slice(text.indexOf("## The full enforcement debt")).match(/^\| [A-Z]+-\d+ \|.*$/m);
       if (!row) return;
       writeFileSync(p, text.replace(row[0], row[0] + "\n| META-01 | long since settled |"));
     },
