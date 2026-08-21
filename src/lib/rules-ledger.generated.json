@@ -381,8 +381,8 @@
     {
       "id": "PERS-10",
       "title": "Blocked is not empty",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "DISC-01",

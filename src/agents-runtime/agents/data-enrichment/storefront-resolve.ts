@@ -524,6 +524,13 @@ export async function resolveStorefrontSupplier(input: StorefrontInput): Promise
   if (!listing) {
     return done({ ...empty, note: "Listing page could not be read; retrying on a later pass" });
   }
+  // A 403 or 429 body is a challenge page, not the supplier's listing. Parsing
+  // it finds no legal name and no phone, which is indistinguishable from a
+  // listing that genuinely publishes neither, and the supplier then carries our
+  // block as their own missing data (PERS-10).
+  if (!listing.ok) {
+    return done({ ...empty, note: "Listing page refused the request; retrying on a later pass" });
+  }
   const id = identityFromListing(listing.html);
   const identity_found = !!(id.legal_name || id.city || id.postal_code || id.phone);
   const base = { ...empty, ...id, identity_found, note: "" };

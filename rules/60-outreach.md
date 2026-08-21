@@ -119,8 +119,11 @@ nothing sent, and separately the ones exempt only because a draft has sat
 staged on them for more than fourteen days. The exemption is the half worth
 watching: a thread is not chased while an operator has something waiting on it,
 and that is evaluated over the whole thread, so one draft nobody ever actioned
-stops the sequence for good. 3,064 threads sat under that exemption when the
-audit shipped, against one genuinely overdue.
+stops the sequence for good. On its first production run the audit found the
+cadence itself healthy — nothing overdue with an empty outbox — and one thread
+held by a draft staged more than fourteen days earlier. That is the shape to
+watch, not the count: 3,461 drafts are sitting staged fleet-wide, so the number
+of threads this can silence is bounded by how many of them go unactioned.
 
 The audit runs on the sweep's own loader rather than a copy of its logic. An
 audit that re-derives the clock drifts from the producer and then reports on a

@@ -544,6 +544,43 @@ const MUTATIONS = [
     mutate: fixture("src/__selftest__/Price.tsx", `export const P = () => <input placeholder="450.00" />;\n`),
   },
   {
+    expect: "fetch/blocked-must-not-read-as-empty",
+    label: "a new fetcher's refusal flag is never read at the call site",
+    mutate: fixture(
+      "src/__selftest__/crawl.ts",
+      [
+        "async function grabPage(url: string): Promise<{ ok: boolean; html: string } | null> {",
+        "  const res = await fetch(url);",
+        "  return { ok: res.ok, html: await res.text() };",
+        "}",
+        "export async function scan(url: string) {",
+        "  const page = await grabPage(url);",
+        "  return page ? page.html.length : 0;",
+        "}",
+        "",
+      ].join("\n"),
+    ),
+  },
+  {
+    expect: "fetch/blocked-must-not-read-as-empty",
+    label: "the crawl parses a refused page's body anyway",
+    mutate: edit("src/agents-runtime/agents/data-enrichment/enrich.ts", (t) =>
+      t.replace(
+        /\} else \{\n(?:[^\n]*\n){5}\s*continue;\n\s*\}/,
+        "}",
+      ),
+    ),
+  },
+  {
+    expect: "fetch/blocked-must-not-read-as-empty",
+    label: "a challenge page is read as the supplier's listing",
+    mutate: rename(
+      "src/agents-runtime/agents/data-enrichment/storefront-resolve.ts",
+      "if (!listing.ok)",
+      "if (false)",
+    ),
+  },
+  {
     expect: "contacts/guessed-combo-requires-own-domain-and-flag",
     label: "the guess is no longer gated on the supplier's own domain",
     mutate: rename(

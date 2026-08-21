@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-120 rules. 78 are actually enforced, 22 owe a check or a job,
+120 rules. 79 are actually enforced, 21 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 6 of the enforced rules hold only part of their invariant and say so in
@@ -12,9 +12,9 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 70 |
+| **Guard** | A shared module or build check makes it impossible. | 71 |
 | **Audit** | A scheduled job reports the break after the fact. | 8 |
-| **Check owed** | A build check is possible and is not built yet. | 16 |
+| **Check owed** | A build check is possible and is not built yet. | 15 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
 | **None** | Outside this repository. Cannot be checked here. | 2 |
@@ -31,7 +31,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (70)
+## Guard (71)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -72,6 +72,7 @@ this ledger read as enforced.
 | `PERS-06` | No hidden caps on a worklist | Guard for the accidental cut — `src/lib/supabase-paging.ts` `selectAllPaged` and `src/lib/supabase/truncation-guard.ts`, `reads/client-must-guard-truncation`. Check owed — `reads/limit-must-report-remainder` for deliberate windows. |
 | `PERS-08` | The record of a failure is never proof of success | Guard — the reply-drafted check in `src/lib/tenkara-inbound.ts` excludes `unmatched_inbound_clarification` and `retireUnmatchedTriage` closes the case and the draft on a successful match; `replies/idempotency-must-exclude-triage-artefacts` fails the build if the check stops distinguishing them or the retirement is dropped. |
 | `PERS-09` | A paced job stops itself and says where it stopped | Guard — `deadlineAt` on `syncOrgThreadOwners` (`src/lib/sync-thread-owners.ts`), threaded into both push loops, with `unpushed` in the run summary and the re-assert cursor rewound to the last thread actually pushed; `INTERACTIVE_SYNC_BUDGET_MS` at the server-action call sites. Check owed for the class — `runs/paced-loop-must-carry-deadline`, so a new per-item push loop with no deadline fails the build. See `OUTSTANDING.md`. |
+| `PERS-10` | Blocked is not empty | Guard — `fetch/blocked-must-not-read-as-empty`, in three parts, because the rule breaks at two different points and the code broke at both while looking correct. |
 | `DISC-01` | Search the trade's name, not ours | Guard — `discovery/source-must-use-alias-resolver`. Keyed on the write, not on a list of the sources we have: anything under `agents/lead-creator/` that inserts into `leads_in_flight` is a discovery source by definition, and has to name the aliases. A new source cannot skip it by not being on the list, because there is no list. |
 | `DISC-02` | Aliases must reach the relevance filter too | Guard — `discovery/relevance-filter-must-accept-aliases`, anchored per filtering source, so deleting or renaming one is the violation rather than a quiet loss of coverage. |
 | `DISC-03` | Aliases never re-specify (see DATA-09) | Guard — see DATA-09. |
@@ -115,11 +116,11 @@ this ledger read as enforced.
 | `PRICING-04` | Delivery-cost extraction is audited every run | Audit — Agent 26 counts four things daily and reports the gap between them: listings pulled, rows carrying the delivery-cost keys, attempts made, and numbers captured. The distinction matters more than the rate. A key present with a null under it says the writer ran; a number says it produced something; zero attempts against thousands of pulls says the feature is inert, which is exactly the state it shipped in and held for weeks. The audit reports the inert case as its own finding rather than as a capture rate of zero. |
 | `PERS-07` | A withheld price is a job, not an outcome | Audit — Agent 26 counts withheld prices carrying no reason every morning and reports them with the oldest date. On the day it shipped all 19 withheld prices in the system had no reason recorded, so the count is a real measure and not a formality. Check owed for the second half: the surface itself on the client's own tab (UI-06). Until that exists a person still has to read the audit to find these rows, which is why the audit is the weaker of the two. See `OUTSTANDING.md`. |
 | `DISC-08` | A source's own paging must advance | Audit — Agent 26 reads the discovery agent's stored state daily and reports two shapes of the same fault: a credit-gate marker saved without the `done` key the reader looks for, and a page cursor nobody writes any more. The first is the dangerous one, because the reader treats a missing `done` as finished, so a marker written under the wrong shape gates its material off that source permanently. All 15 SourceReady markers were in that state when the audit shipped, alongside 52 orphaned page cursors. |
-| `OUT-09` | Stalled conversations get chased | Audit — Agent 26 reports conversations past the gap with nothing sent, and separately the ones exempt only because a draft has sat staged on them for more than fourteen days. The exemption is the half worth watching: a thread is not chased while an operator has something waiting on it, and that is evaluated over the whole thread, so one draft nobody ever actioned stops the sequence for good. 3,064 threads sat under that exemption when the audit shipped, against one genuinely overdue. |
+| `OUT-09` | Stalled conversations get chased | Audit — Agent 26 reports conversations past the gap with nothing sent, and separately the ones exempt only because a draft has sat staged on them for more than fourteen days. The exemption is the half worth watching: a thread is not chased while an operator has something waiting on it, and that is evaluated over the whole thread, so one draft nobody ever actioned stops the sequence for good. On its first production run the audit found the cadence itself healthy — nothing overdue with an empty outbox — and one thread held by a draft staged more than fourteen days earlier. That is the shape to watch, not the count: 3,461 drafts are sitting staged fleet-wide, so the number of threads this can silence is bounded by how many of them go unactioned. |
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
-## Check owed (16)
+## Check owed (15)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -131,7 +132,6 @@ this ledger read as enforced.
 | `PRICING-05` | A delivery cost is never fabricated | Check owed — `shipping/no-fabricated-costs`. |
 | `PERS-02` | "Needs a human" is a display flag, never a queue exit | Check owed — `queues/flag-must-not-exit-queue`. |
 | `PERS-03` | A zero-result pass is never "this market is empty" | Check owed — `discovery/zero-must-not-be-terminal`, over one shared dry-pass helper. Honoured per source today. See `OUTSTANDING.md`. |
-| `PERS-10` | Blocked is not empty | Check owed — `fetch/blocked-must-not-read-as-empty`: a non-2xx response may not reach a content parser, and the blocked reason is stored. See `OUTSTANDING.md`. |
 | `DISC-05` | A platform is never the supplier | Check owed — `discovery/platform-is-never-manufacturer`. |
 | `DISC-09` | A self-supplied material is not sourced | Check owed — `discovery/self-supplied-gate-must-fail-closed`: the gates are fail-open today. |
 | `OUT-08` | Supplier asks are staggered | Check owed — `outreach/asks-must-be-staged`. |

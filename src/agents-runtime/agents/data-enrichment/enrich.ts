@@ -676,6 +676,13 @@ export async function discoverContacts(website: string, maxPages = MAX_PAGES): P
     if (page.ok) {
       anyOk = true;
       okPages.push({ url: page.finalUrl, html: page.html });
+    } else {
+      // The flag above records the refusal; this stops the refusal's own body
+      // being read as the supplier's page. A challenge page has no emails and
+      // no company name in it, so parsing it writes our block into their
+      // record as absent data, and a legitimacy score computed off a captcha
+      // is a judgement about Cloudflare (PERS-10).
+      continue;
     }
 
     // Capture homepage HTML for legitimacy analysis (first page = homepage).

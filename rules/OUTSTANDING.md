@@ -517,7 +517,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | PERS-03 | `discovery/zero-must-not-be-terminal` — see the P1 above |
 | PERS-04 | the run-summary half. `retry/bound-must-be-declared` shipped 2026-08-20 and holds the rules-folder half: all seven bounds are now named under PERS-04 and an eighth fails the build. A bound must also appear in the run summary, which cannot be read from the source. |
 | PERS-06 | `reads/limit-must-report-remainder` — see the P1 above |
-| PERS-10 | `fetch/blocked-must-not-read-as-empty` — a non-2xx may not reach a content parser; the same shape as the P0 storefront drop above |
 | DISC-05 | `discovery/platform-is-never-manufacturer` |
 | DISC-09 | `discovery/self-supplied-gate-must-fail-closed` — gates are fail-open today |
 | OUT-08 | `outreach/asks-must-be-staged` |
@@ -546,7 +545,7 @@ What the audit does NOT close, and what each one found on its first pass:
 | PERS-07 | the surface. All 19 withheld prices carry no reason at all, and until UI-06 ships there is nowhere on the client's tab for them to appear, so somebody has to read the audit to find them. |
 | PRICING-04 | the fix. Zero attempts against 4,044 pulled listings, because `getOrgShipToAddress` selects `ship_to_*` columns that do not exist on this project's `orgs` table and the catch swallows it. The audit now says so out loud; it does not move the columns. |
 | DISC-08 | the 52 orphaned cursors and the 15 markers written without `done`, all of which currently read as finished and gate their material off SourceReady permanently. Deleting them is a one-off repair nobody has run. |
-| OUT-09 | the exemption itself. 3,064 threads are held by a staged draft rather than chased; capping how long a staged draft may suppress the sequence is a product decision. |
+| OUT-09 | the exemption itself. A staged draft suppresses the chase for as long as it sits there, with no cap; the first audit run found one thread in that state and 3,461 staged drafts fleet-wide that could put others there. Capping it is a product decision. |
 | DATA-08 | the 7 materials where arming disagrees with Tenkara, and the widening phrasings the blocking code still misses. |
 
 ## Open decisions

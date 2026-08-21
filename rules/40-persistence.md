@@ -227,6 +227,19 @@ triggered by our own crawler user agent (COMM-09). The same shape produced the
 storefront drop in `OUTSTANDING.md`, which is why this is a rule and not a
 note on one agent.
 
-**Enforcement:** Check owed — `fetch/blocked-must-not-read-as-empty`: a non-2xx
-response may not reach a content parser, and the blocked reason is stored.
-See `OUTSTANDING.md`.
+**Enforcement:** Guard — `fetch/blocked-must-not-read-as-empty`, in three
+parts, because the rule breaks at two different points and the code broke at
+both while looking correct.
+
+The first part derives the fetchers from the corpus instead of listing them: a
+function returning both an `ok` flag and a body is a fetcher, so the seventh
+one written is covered the day it exists, and every call site must read that
+flag. The other two are anchored on the only two places in the fleet that parse
+fetched HTML, and assert the refusal is acted on and not merely read. Both were
+breaking this rule on 2026-08-20 while consulting `ok` correctly elsewhere in
+the same file: the storefront resolver parsed a challenge page as the listing,
+and the enrichment crawl set its `blocked` flag and then ran the extractors
+over the refusal's body anyway. Fixed with the check.
+
+What is still not covered: a fetcher whose refusal is read and stored but whose
+retry treats it as a verdict. That is PERS-01's half of the same failure.

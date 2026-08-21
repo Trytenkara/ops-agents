@@ -1365,6 +1365,120 @@ export function runChecks(files, rulesDir) {
     }
   }
 
+  // PERS-10. A 403 body is a challenge page. Parsing it finds no email and no
+  // company name, which is indistinguishable from a page that publishes
+  // neither, so our own block ends up stored as the supplier's missing data.
+  //
+  // The helper list is derived from the corpus rather than written down: any
+  // function that returns both an `ok` flag and a body is a fetcher, so a
+  // seventh fetcher written next month is covered the day it exists. That is
+  // the half a hand-maintained list always loses.
+  {
+    const rule = "fetch/blocked-must-not-read-as-empty";
+    const fetchers = new Map();
+    for (const f of files) {
+      if (!/\.tsx?$/.test(f.path)) continue;
+      const text = codeLines(f).join("\n");
+      const decl = /(?:async function|const)\s+(\w+)\s*(?:=\s*async\s*)?\([^)]*\)\s*:\s*Promise<([^\n]*)>/g;
+      let m;
+      while ((m = decl.exec(text))) {
+        const [, name, ret] = m;
+        if (!/\bok\s*:/.test(ret)) continue;
+        if (!/\b(?:html|text|body)\s*:/.test(ret)) continue;
+        fetchers.set(name, f.path);
+      }
+    }
+    for (const f of files) {
+      if (!/\.tsx?$/.test(f.path)) continue;
+      const text = codeLines(f).join("\n");
+      for (const name of fetchers.keys()) {
+        const call = new RegExp(`\\b${name}\\s*\\(`, "g");
+        let m;
+        while ((m = call.exec(text))) {
+          // Skip the declaration itself.
+          if (/(?:function|const)\s+$/.test(text.slice(Math.max(0, m.index - 20), m.index))) continue;
+          const after = text.slice(m.index, m.index + 700);
+          if (/\.ok\b|\.status\b|\bstatus\s*===|\bok\s*\?/.test(after)) continue;
+          violations.push({
+            rule,
+            why: `${name} reports whether the page was refused and this call site never reads it, so a 403 body is parsed as the page`,
+            fix: `consult .ok or .status on the result before touching its body; record the refusal separately from "publishes nothing"`,
+            where: f.path,
+            line: text.slice(m.index, m.index + 90).split("\n")[0].trim(),
+          });
+        }
+      }
+    }
+  }
+
+  // The call-site half above proves the refusal was READ. These two prove it
+  // was ACTED ON, at the only two places in the fleet that parse fetched HTML.
+  // Both shipped breaking this rule while consulting `ok` elsewhere in the same
+  // file, which is exactly why one conjunct is not enough.
+  {
+    const rule = "fetch/blocked-must-not-read-as-empty";
+    const enrich = anchor("src/agents-runtime/agents/data-enrichment/enrich.ts", {
+      rule,
+      why: "this is the crawl that reads a supplier's own site for contacts",
+      fix: "restore src/agents-runtime/agents/data-enrichment/enrich.ts",
+    });
+    if (enrich) {
+      const text = codeLines(enrich).join("\n");
+      const parse = /for \(const e of extractEmails\(page\.html\)\)/.exec(text);
+      if (!parse) {
+        violations.push({
+          rule,
+          why: "the crawl's contact extraction is what this rule gates, and it cannot be found to check",
+          fix: "keep the page extraction identifiable inside the crawl loop",
+          where: enrich.path,
+          line: "no extractEmails(page.html) found in the crawl loop",
+        });
+      } else {
+        // Between the loop's last look at `page.ok` and the extraction there
+        // has to be a way out. Any `continue` in a fixed-size window would also
+        // count the two guards at the top of the loop, which say nothing about
+        // whether the page was refused.
+        const okAt = text.lastIndexOf("page.ok", parse.index);
+        const between = okAt === -1 ? "" : text.slice(okAt, parse.index);
+        if (okAt === -1 || !/\bcontinue;/.test(between)) {
+          violations.push({
+            rule,
+            why: "a refused page's body reaches the extractors, so our block is written into the supplier's record as absent data",
+            fix: "keep the non-ok branch continuing past the extractors, above the extraction",
+            where: enrich.path,
+            line: "extraction is reachable for a page that was refused",
+          });
+        }
+      }
+    }
+    const store = anchor("src/agents-runtime/agents/data-enrichment/storefront-resolve.ts", {
+      rule,
+      why: "this is the resolver that reads a marketplace listing for the supplier's identity",
+      fix: "restore src/agents-runtime/agents/data-enrichment/storefront-resolve.ts",
+    });
+    if (store) {
+      const text = codeLines(store).join("\n");
+      const parse = /identityFromListing\(listing\.html\)/.exec(text);
+      if (!parse) {
+        violations.push({
+          rule,
+          why: "the listing parse is what this rule gates, and it cannot be found to check",
+          fix: "keep the listing parse identifiable",
+          where: store.path,
+          line: "no identityFromListing(listing.html) found",
+        });
+      } else if (!/!listing\.ok/.test(text.slice(Math.max(0, parse.index - 700), parse.index))) {
+        violations.push({
+          rule,
+          why: "a challenge page is parsed as the listing, so the supplier carries our block as their own missing identity",
+          fix: "return early on !listing.ok, with a note saying the page refused the request",
+          where: store.path,
+          line: "the listing is parsed without checking whether it was refused",
+        });
+      }
+    }
+  }
+
   // OUT-04. A supplier gets one thread, so the consolidation key is per supplier
   // and per org and nothing else. Adding the material to the key is the plausible
   // regression — it looks like it fixes subject-line collisions and instead sends
