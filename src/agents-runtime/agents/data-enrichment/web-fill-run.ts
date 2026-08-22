@@ -39,6 +39,13 @@ export interface WebFillStats {
   fieldsFilled: number;
   exhausted: number;
   unreachable: number;
+  /**
+   * PERS-04. Every dry-pass bound this run spent to exhaustion, in the shared
+   * wording. This module has no logger of its own, so the sentences travel out
+   * with the stats and the agent puts them in its run summary. A bound reached
+   * in silence is a bound nobody can audit.
+   */
+  boundNotes: string[];
 }
 
 export async function runSupplierWebFill(
@@ -47,7 +54,7 @@ export async function runSupplierWebFill(
   cap: number,
   deadline: number
 ): Promise<WebFillStats> {
-  const stats: WebFillStats = { attempted: 0, fieldsFilled: 0, exhausted: 0, unreachable: 0 };
+  const stats: WebFillStats = { attempted: 0, fieldsFilled: 0, exhausted: 0, unreachable: 0, boundNotes: [] };
   if (cap <= 0 || Date.now() >= deadline) return stats;
 
   const profiles = await getSupplierProfiles(admin, orgId);
@@ -107,6 +114,7 @@ export async function runSupplierWebFill(
           web_last_attempt: new Date().toISOString(),
         };
         if (pass.done) sources.web_checked_at = new Date().toISOString();
+        if (pass.note) stats.boundNotes.push(`${p.supplier_name} ${pass.note}`);
         stats.unreachable += 1;
         await admin.from("supplier_profiles").update({ field_sources: sources }).eq("id", p.id);
         continue;
@@ -136,6 +144,7 @@ export async function runSupplierWebFill(
       // to pending_review. A read that printed nothing is a dry pass. The other
       // branch three lines up already knew that; this one did not.
       const pass = advanceDryPass(priorPasses, passOutcome(filled > 0, false), "supplier_web_fill");
+      if (pass.note) stats.boundNotes.push(`${p.supplier_name} ${pass.note}`);
       if (!pass.done) {
         await admin
           .from("supplier_profiles")

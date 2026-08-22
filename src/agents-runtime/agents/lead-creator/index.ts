@@ -1524,11 +1524,14 @@ registerAgent({
           // not a pass at all, costs no credits, and is not counted.
           const found = ok && (srDetail.received ?? 0) > 0;
           const infra = !!srError && srVerdict?.verdict === "retry";
-          const { dry, done, persist } = advanceDryPass(
+          const { dry, done, persist, note: boundNote } = advanceDryPass(
             sourceReadyPasses.get(material.id) ?? null,
             passOutcome(found, infra),
             "sourceready_search"
           );
+          // PERS-04: the bound is a spend decision, so it is said out loud in
+          // the run summary rather than left as a counter in a jsonb column.
+          if (boundNote) await ctx.log(`Retry bound reached — ${material.name}: ${boundNote}`, { step: "sourceready" });
           if (persist) {
             sourceReadyPasses.set(material.id, { dry, done });
             await admin.from("agent_state").upsert(

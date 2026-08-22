@@ -184,6 +184,7 @@ export async function getMaterialAliases(
   } catch {
     // Uncached is fine, it just costs one call next run.
   }
+  if (pass.note) await log?.(`Retry bound reached — ${material.name}: ${pass.note}`, { material_id: material.id });
   await log?.(
     aliases.length
       ? `Trade aliases for ${material.name}: ${aliases.join(", ")}`

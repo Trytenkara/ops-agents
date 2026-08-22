@@ -145,14 +145,22 @@ is rendered rather than staged. The expedited report told clients about "Weeks
 of manual RFQ work" for months in exactly that gap, because it never passes
 through staging at all. See `CONFLICTS.md` K for what the ban does not bind.
 
-**Enforcement:** Guard — `sanitizeDraft` inside `stageDraft` at runtime, and
+Enforcing it inside `stageDraft` left a way around it. The operator redraft
+action and the quote-revalidation reply both called the Tenkara transport
+directly, so no ban ever ran on their copy. The sanitiser moved down a level on
+2026-08-22: it now runs inside `createTenkaraDraft` and
+`createTenkaraConversation`, which is the last thing every path goes through,
+and the HTML is rebuilt from the cleaned plain text rather than cleaned in place
+so the concession strips cannot cut across a tag.
+
+**Enforcement:** Guard — `sanitizeDraft` inside the Tenkara transport at
+runtime, so no path can create a draft that skipped it, and
 `copy/no-rfq-or-em-dash-in-templates` at build time over a named scope of
 outbound-copy files, held closed by two companion checks: the scope paths are
 anchors, so renaming one fails the build rather than silently dropping it, and
 `copy/scope-must-cover-every-draft-site` makes any `stageDraft` caller missing
-from that scope a violation. Check owed — `copy/no-direct-draft-create`: two
-paths still create a draft on the platform without going through `stageDraft`,
-so neither guard sees them. See `OUTSTANDING.md`.
+from that scope a violation. `copy/no-direct-draft-create` holds the sanitiser
+in the transport and both entry points to it.
 
 ## COMM-09 — Never announce as a bot in a crawler user agent
 

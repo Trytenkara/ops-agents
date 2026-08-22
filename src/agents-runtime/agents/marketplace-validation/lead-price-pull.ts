@@ -687,6 +687,7 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
         "dry",
         "aggregator_index"
       );
+      if (pass.note) await log(`Retry bound reached — ${l.supplier_name}: ${pass.note}`, { step: "aggregator_index" });
       const split = {
         at: new Date().toISOString(),
         index_url: url,

@@ -100,7 +100,7 @@
       "id": "COMM-08",
       "title": "Copy bans",
       "bucket": "Guard",
-      "owes": true
+      "owes": false
     },
     {
       "id": "COMM-09",
@@ -346,7 +346,7 @@
       "id": "PERS-04",
       "title": "Retry limits are a spend control, and must be named",
       "bucket": "Guard",
-      "owes": true
+      "owes": false
     },
     {
       "id": "PERS-05",
@@ -735,7 +735,8 @@
     "P0 — Withheld prices were a complete dead end — FIXED 2026-08-21",
     "P1 — The prices already captured wrong — one row, corrected 2026-08-21",
     "P1 — Dead-lettered supplier replies — replayed 2026-08-21, two causes left",
-    "P1 — Two draft paths bypass the staging chokepoint",
+    "Closed 2026-08-22 — PERS-04: the run-summary half",
+    "Closed 2026-08-22 — COMM-08: two draft paths bypassed the chokepoint",
     "Closed 2026-08-21 — zero results were accepted as an answer in nine places",
     "Closed 2026-08-21 — deliberate caps hid work in thirty-odd places",
     "Closed 2026-08-22 — the ask cadence was real but nothing held it in place",

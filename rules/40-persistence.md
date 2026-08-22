@@ -141,10 +141,19 @@ The in-run ceilings, none of which ends a line of enquiry:
 - `FLAG_AFTER_ATTEMPTS` (3) — not a retry bound at all: it is how many times
   `needs_review` is seen before a case is opened. Retries continue.
 
+A bound reached used to be visible only as a counter in a jsonb column. No run
+said it out loud, so a material we had stopped asking about looked exactly like
+a source that had gone quiet, and the spend control was unauditable from the
+outside. `advanceDryPass` now returns the sentence on exhaustion — written once,
+so five bounds cannot describe themselves five different ways — and every caller
+puts it in its run summary. `runSupplierWebFill` has no logger of its own, so it
+hands the notes up with its stats.
+
 **Enforcement:** Guard — `retry/bound-must-be-declared`: a constant whose name
-says it bounds attempts, retries or dry passes must be named in this file. The
-guard holds the half that can be read from the source; the run-summary half is
-still owed and is listed in `OUTSTANDING.md`.
+says it bounds attempts, retries or dry passes must be named in this file, the
+shared `DRY_PASS_LIMITS` keys must be named here too, `advanceDryPass` must
+return its exhaustion note, and any caller that advances a bound without
+surfacing that note fails the build.
 
 ## PERS-05 — Never give up on a lead with no contact
 

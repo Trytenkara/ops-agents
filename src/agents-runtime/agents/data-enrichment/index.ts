@@ -195,6 +195,9 @@ registerAgent({
         const s = await runSupplierWebFill(admin, orgId, webBudget, webDeadline);
         webBudget -= s.attempted;
         webFilled += s.fieldsFilled;
+        for (const note of s.boundNotes) {
+          await ctx.log(`Retry bound reached — ${note}`, { step: "web-fill-profiles", data: { org_id: orgId } });
+        }
         if (s.attempted) {
           await ctx.log(
             `Web-filled ${s.fieldsFilled} fields over ${s.attempted} suppliers (${s.exhausted} fields not published, ${s.unreachable} sites unreachable, will retry)`,

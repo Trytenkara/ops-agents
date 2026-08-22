@@ -49,12 +49,21 @@ export function advanceDryPass(
   prior: DryPassState | null | undefined,
   outcome: PassOutcome,
   bound: DryPassBound
-): DryPassState & { persist: boolean } {
+): DryPassState & { persist: boolean; note: string | null } {
   const priorDry = prior?.dry ?? 0;
-  if (outcome === "infra") return { dry: priorDry, done: prior?.done ?? false, persist: false };
-  if (outcome === "found") return { dry: priorDry, done: true, persist: true };
+  if (outcome === "infra") return { dry: priorDry, done: prior?.done ?? false, persist: false, note: null };
+  if (outcome === "found") return { dry: priorDry, done: true, persist: true, note: null };
   const dry = priorDry + 1;
-  return { dry, done: dry >= DRY_PASS_LIMITS[bound], persist: true };
+  const limit = DRY_PASS_LIMITS[bound];
+  const done = dry >= limit;
+  // PERS-04's second half. A bound being reached is a decision to stop spending
+  // on a line of enquiry, and it was only ever visible as a counter in a jsonb
+  // column: nothing said it out loud, so no run summary carried it and nobody
+  // could tell a source that had gone quiet from one we had stopped asking.
+  // The sentence is written here rather than at each call site so the five
+  // bounds cannot describe themselves five different ways.
+  const note = done ? `${bound}: bound of ${limit} consecutive dry passes reached, no further attempts` : null;
+  return { dry, done, persist: true, note };
 }
 
 /**

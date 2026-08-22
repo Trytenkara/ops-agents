@@ -293,6 +293,7 @@ registerAgent({
         wall ? "dry" : "found",
         "document_page"
       );
+      if (pass.note) await ctx.log(`Retry bound reached — ${t.pageUrl}: ${pass.note}`, { step: "document_page" });
       await admin.from("document_page_scans").upsert(
         {
           page_hash: h,

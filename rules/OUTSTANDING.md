@@ -248,16 +248,40 @@ the 25 in place, which exposed a further 13 conversations to the replay.
    owner or none, because picking between two would be the guess ORG-04
    forbids.
 
-## P1 — Two draft paths bypass the staging chokepoint
+## Closed 2026-08-22 — PERS-04: the run-summary half
 
-Breaks COMM-08 and META-03. Two paths create a draft on the platform without
-going through `stageDraft`, so neither `sanitizeDraft` at runtime nor
-`copy/scope-must-cover-every-draft-site` at build time can see them. They are
-safe today only because their own drafters happen to sanitise; the next caller
-that skips it is unguarded.
+The rules-folder half shipped 2026-08-20: every bound is named under PERS-04 and
+an eighth fails the build. The other half was thought unreadable from the
+source, and it is, but only because nothing wrote the sentence.
 
-**Owed:** `copy/no-direct-draft-create`, or better, route both through
-`stageDraft` and delete the second path rather than guarding it.
+`advanceDryPass` now returns an exhaustion note, so the wording lives in one
+place and the five bounds cannot describe themselves five different ways. All
+five callers surface it; `runSupplierWebFill` has no logger of its own, so it
+carries the notes out with its stats and Agent 06 logs them. Before this, a
+bound reached was a number in a jsonb column and nothing else: a material we had
+stopped asking about was indistinguishable from a source that had gone quiet.
+
+**Enforcement:** `retry/bound-must-be-declared` gained two limbs and two
+mutations — the shared helper no longer naming its own exhaustion, and a caller
+advancing a bound without surfacing the note.
+
+## Closed 2026-08-22 — COMM-08: two draft paths bypassed the chokepoint
+
+Broke COMM-08 and META-03. The operator redraft action
+(`src/app/actions/rewrite-draft.ts`) and the quote-revalidation reply both
+called `createTenkaraDraft` directly, so `sanitizeDraft` never ran on their
+copy: an em dash or the word RFQ written by either went to the supplier intact.
+
+Guarding the two call sites would have been the spot fix. The sanitiser moved
+down to the transport instead, which is the last thing every path goes through,
+so there is no longer a way to put an email on the platform that skipped it. The
+HTML is rebuilt from the cleaned plain text rather than cleaned in place,
+because the concession strips are sentence-level regexes and would cut across
+tags; every caller already passed `bodyToHtml(bodyText)`, so the HTML they send
+is unchanged apart from the banned copy.
+
+**Enforcement:** `copy/no-direct-draft-create`, two mutations — the sanitiser
+removed from the transport, and one entry point sending the caller's body.
 
 *Resolved 2026-08-20 (the rest of this item):* the check itself flagged zero of
 1,083 candidate lines because its pattern required the offending line to BEGIN
@@ -767,8 +791,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 
 | Rule | The check |
 | --- | --- |
-| COMM-08 | the scope's edges. `copy/no-rfq-or-em-dash-in-templates` holds a named list of outbound-copy files and `copy/scope-must-cover-every-draft-site` makes a `stageDraft` caller missing from it a violation. Copy reaching a supplier by some other path is still unseen. |
-| PERS-04 | the run-summary half. `retry/bound-must-be-declared` shipped 2026-08-20 and holds the rules-folder half: all seven bounds are now named under PERS-04 and an eighth fails the build. A bound must also appear in the run summary, which cannot be read from the source. |
 | PERS-09 | `runs/paced-loop-must-carry-deadline`. `deadlineAt` holds the one job it was written for; a new per-item push loop with no deadline passes the build today. |
 | OUT-02 | the aggregator inquiry channel itself. `outreach/no-terminal-drop-without-channel` stops a storefront being dropped for having no email; it cannot make the inquiry form a channel we can actually send through. |
 | UI-02 | the seven existing global review routes. `ui/no-global-review-route` shipped 2026-08-20 as a ratchet, so no eighth can be added, but the seven that predate it are still live and still cross-client. Removing them is a product decision. |

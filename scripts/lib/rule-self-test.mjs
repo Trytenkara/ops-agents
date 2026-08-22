@@ -1055,7 +1055,7 @@ const MUTATIONS = [
     expect: "discovery/zero-must-not-be-terminal",
     label: "SourceReady goes back to its own private copy of the counter",
     mutate: edit("src/agents-runtime/agents/lead-creator/index.ts", (t) =>
-      t.replace(/const \{ dry, done, persist \} = advanceDryPass\([\s\S]*?\);/, "const { dry, done, persist } = { dry: 0, done: true, persist: true };"),
+      t.replace(/const \{ dry, done, persist, note: boundNote \} = advanceDryPass\([\s\S]*?\);/, "const { dry, done, persist, note: boundNote } = { dry: 0, done: true, persist: true, note: null };"),
     ),
   },
   {
@@ -1191,6 +1191,27 @@ const MUTATIONS = [
     expect: "outreach/no-send-outside-operator-action",
     label: "auto-send arrives as a flag on the draft body",
     mutate: fixture("src/__selftest__/send2.ts", `const body = { subject, auto_send: true };\n`),
+  },
+  {
+    expect: "retry/bound-must-be-declared",
+    label: "the shared bound stops naming its own exhaustion",
+    mutate: rename("lib/dry-pass.ts", "note: string | null", "quiet: string | null"),
+  },
+  {
+    expect: "retry/bound-must-be-declared",
+    label: "a caller spends a bound to exhaustion without saying so",
+    mutate: edit("lib/material-aliases.ts", (t) =>
+      t.replace("if (pass.note) await log?.(`Retry bound reached", "if (false) await log?.(`Retry bound reached").replace(/pass\.note/g, "pass.done")),
+  },
+  {
+    expect: "copy/no-direct-draft-create",
+    label: "the transport stops sanitising outbound copy",
+    mutate: rename("lib/tenkara.ts", "function sanitizeOutbound(", "function unusedSanitizeOutbound("),
+  },
+  {
+    expect: "copy/no-direct-draft-create",
+    label: "a new conversation sends the caller's unsanitised body",
+    mutate: rename("lib/tenkara.ts", "body_html: conv.bodyHtml", "body_html: input.bodyHtml"),
   },
   {
     expect: "data/required-grade-resolved-at-staging",

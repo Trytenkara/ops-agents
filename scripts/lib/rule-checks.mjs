@@ -1452,6 +1452,35 @@ export function runChecks(files, rulesDir) {
         line: `undeclared dry-pass bound: ${m[1]}`,
       });
     }
+
+    // The run-summary half. A bound reached is a decision to stop spending on a
+    // line of enquiry, and it used to be visible only as a counter in a jsonb
+    // column — no run said it, so a source we had stopped asking looked exactly
+    // like a source that had gone quiet. `advanceDryPass` writes the sentence
+    // once, and every caller has to carry it out.
+    if (limits && !/note: string \| null/.test(limits.text)) {
+      violations.push({
+        rule,
+        why: "a bound that is only a number in a column cannot appear in any run summary",
+        fix: "have advanceDryPass return the exhaustion note, so the wording is written once",
+        where: limits.path,
+        line: "advanceDryPass no longer names the bound it reached",
+      });
+    }
+    for (const f of files) {
+      if (!/^src\//.test(f.path) || f.path.endsWith("src/lib/dry-pass.ts")) continue;
+      if (!/\badvanceDryPass\(/.test(f.text)) continue;
+      // Either the caller surfaces the note itself, or it hands it out with its
+      // stats for the agent above it to surface.
+      if (/\.note\b|\bnote: boundNote\b|boundNotes/.test(f.text)) continue;
+      violations.push({
+        rule,
+        why: "a bound spent in silence is one nobody can audit, and it reads as a source that went quiet",
+        fix: "log the note advanceDryPass returns, or pass it up with the run stats",
+        where: f.path,
+        line: "advances a dry-pass bound without ever naming its exhaustion",
+      });
+    }
   }
 
   // SHIP-07. Deploy and schema move together. ENG-1036 went out reading a
@@ -2836,6 +2865,35 @@ export function runChecks(files, rulesDir) {
         where: "scripts/lib/rule-checks.mjs",
         line: `${id} no longer fires at ${path}`,
       });
+    }
+  }
+
+  // COMM-08. The copy bans ran inside stageDraft, so anything that put an email
+  // on the platform another way was never sanitised — the operator redraft
+  // action and the quote-revalidation reply both did. The sanitiser moved down
+  // to the transport, which is the last thing every path goes through, and this
+  // holds it there.
+  {
+    const rule = "copy/no-direct-draft-create";
+    const f = anchor("src/lib/tenkara.ts", {
+      rule,
+      why: "the transport is the one place every outbound draft passes through",
+      fix: "restore src/lib/tenkara.ts",
+    });
+    if (f) {
+      if (!/function sanitizeOutbound\(/.test(f.text)) {
+        violations.push({ rule, why: "a ban enforced one level above the transport is a ban anything can walk around", fix: "sanitise in tenkara.ts via sanitizeOutbound, not only in stageDraft", where: f.path, line: "the transport no longer sanitises outbound copy" });
+      }
+      // Both entry points, and the payload has to carry the cleaned values
+      // rather than the caller's.
+      for (const [fn, v] of [["createTenkaraDraft", "clean"], ["createTenkaraConversation", "conv"]]) {
+        const i = f.text.indexOf(`export async function ${fn}(`);
+        if (i < 0) continue;
+        const block = f.text.slice(i, i + 2000);
+        if (!new RegExp(`const ${v} = sanitizeOutbound\\(input\\)`).test(block) || !new RegExp(`body_html: ${v}\\.bodyHtml`).test(block)) {
+          violations.push({ rule, why: "an unsanitised body reaches the supplier whichever entry point wrote it", fix: `run ${fn}'s payload through sanitizeOutbound and send the cleaned subject, html and text`, where: f.path, line: `${fn} sends the caller's copy unsanitised` });
+        }
+      }
     }
   }
 

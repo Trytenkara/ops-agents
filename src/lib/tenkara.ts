@@ -27,6 +27,8 @@ export const TENKARA_INBOX_BASE = "https://tenkara-inbox-nine.vercel.app";
 // that so links survive a routing change on their side. This hand-built form
 // still covers rows staged before we captured it and the reply path (POST
 // /api/drafts), which does not return a URL.
+import { sanitizeDraft, bodyToHtml } from "@/lib/email-style";
+
 export function tenkaraInboxUrl(conversationId?: string | null): string {
   if (!conversationId) return TENKARA_INBOX_BASE;
   return `${TENKARA_INBOX_BASE}/#conversation=${encodeURIComponent(conversationId)}`;
@@ -77,6 +79,26 @@ function toPlainText(s: string): string {
     .trim();
 }
 
+
+// COMM-08. The copy bans are enforced by `sanitizeDraft` inside `stageDraft`,
+// which is fine right up until something creates a draft without going through
+// staging — the operator redraft action and the quote-revalidation reply both
+// did, so neither ban ever ran on their copy. Sanitising here instead makes the
+// transport the chokepoint: there is no way to put an email on the platform
+// that has not been through it.
+//
+// The HTML is rebuilt from the sanitised plain text rather than cleaned in
+// place, because the concession strips are sentence-level regexes and would cut
+// across tags. Every caller already passes `bodyToHtml(bodyText)`, so this is
+// the same HTML they were sending, minus the banned copy.
+function sanitizeOutbound(input: { subject: string; bodyHtml: string; bodyText?: string }) {
+  if (!input.bodyText) {
+    return { subject: sanitizeDraft({ subject: input.subject, body: "" }).subject, bodyHtml: input.bodyHtml, bodyText: input.bodyText };
+  }
+  const c = sanitizeDraft({ subject: input.subject, body: input.bodyText });
+  return { subject: c.subject, bodyHtml: bodyToHtml(c.body), bodyText: c.body };
+}
+
 export async function createTenkaraDraft(input: CreateTenkaraDraftInput): Promise<TenkaraDraft> {
   const token = process.env.TENKARA_API_TOKEN;
   if (!token) throw new Error("TENKARA_API_TOKEN not configured");
@@ -84,16 +106,17 @@ export async function createTenkaraDraft(input: CreateTenkaraDraftInput): Promis
     throw new Error("createTenkaraDraft requires conversationId (Phase 1 supports replies only)");
   }
 
+  const clean = sanitizeOutbound(input);
   const payload: Record<string, unknown> = {
     conversation_id: input.conversationId,
     to_addresses: formatAddress(input.to),
-    subject: input.subject,
-    body_html: input.bodyHtml,
+    subject: clean.subject,
+    body_html: clean.bodyHtml,
     source: "agent",
   };
   if (input.cc) payload.cc_addresses = input.cc;
   if (input.bcc) payload.bcc_addresses = input.bcc;
-  if (input.bodyText) payload.body_text = toPlainText(input.bodyText);
+  if (clean.bodyText) payload.body_text = toPlainText(clean.bodyText);
   if (input.emailAccountId) payload.email_account_id = input.emailAccountId;
 
   const res = await fetch(`${TENKARA_INBOX_BASE}/api/drafts`, {
@@ -169,15 +192,16 @@ export async function createTenkaraConversation(input: CreateTenkaraConversation
   if (!token) throw new Error("TENKARA_API_TOKEN not configured");
   if (!input.externalId) throw new Error("createTenkaraConversation requires externalId");
 
+  const conv = sanitizeOutbound(input);
   const payload: Record<string, unknown> = {
     external_id: input.externalId,
     to_email: input.to.address,
-    subject: input.subject,
-    body_html: input.bodyHtml,
+    subject: conv.subject,
+    body_html: conv.bodyHtml,
   };
   if (input.to.name) payload.to_name = input.to.name;
   if (input.cc) payload.cc_addresses = input.cc;
-  if (input.bodyText) payload.body_text = toPlainText(input.bodyText);
+  if (conv.bodyText) payload.body_text = toPlainText(conv.bodyText);
   if (input.emailAccountId) payload.email_account_id = input.emailAccountId;
   if (input.supplierContact) {
     const sc = input.supplierContact;
