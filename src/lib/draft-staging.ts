@@ -12,6 +12,7 @@ import { tailorToThread, needsTailorRetry } from "@/lib/thread-tailor";
 import { isDraftSuppressed } from "@/lib/draft-suppression";
 import { isDoNotContact, tenkaraOrgIdFor } from "@/lib/do-not-contact";
 import { cappedRead } from "@/lib/capped-read";
+import { resolveMaterialGradeSpecs } from "@/lib/tenkara-names";
 
 // Shared draft → QA building block. Every intake agent (02 expiries,
 // 04 new-material outreach) and the Tenkara inbound webhook composes its own
@@ -144,6 +145,41 @@ export interface StageDraftResult {
   blocked?: boolean;
 }
 
+/**
+ * The grade a client has marked a dealbreaker, for every material in the draft.
+ *
+ * Three states, not two (the DISC-09 shape): a grade, no grade, or we could not
+ * ask. An unreachable Tenkara used to be indistinguishable from "nothing is a
+ * dealbreaker", which unarms the widening block silently. It is recorded here
+ * so the audit can count the drafts nobody could check rather than reading them
+ * as clean.
+ */
+async function resolveRequiredGrade(
+  callerMeta: Record<string, unknown>,
+  materialId: string | null
+): Promise<Record<string, unknown>> {
+  const already = typeof callerMeta.required_grade === "string" ? callerMeta.required_grade.trim() : "";
+  if (already) return {};
+  const ids = Array.from(
+    new Set(
+      [
+        ...(Array.isArray(callerMeta.material_ids) ? (callerMeta.material_ids as string[]) : []),
+        materialId,
+      ].filter((x): x is string => !!x)
+    )
+  );
+  if (ids.length === 0) return {};
+  try {
+    const specs = await resolveMaterialGradeSpecs(ids);
+    const required = Array.from(
+      new Set(ids.flatMap((id) => (specs.get(id)?.required ?? "").split(", ").filter(Boolean)))
+    ).join(", ");
+    return required ? { required_grade: required } : {};
+  } catch (e: any) {
+    return { grade_spec_unavailable: String(e?.message ?? e).slice(0, 200) };
+  }
+}
+
 export async function stageDraft(input: StageDraftInput): Promise<StageDraftResult> {
   const { admin, agentId, runId, orgId, materialId, quoteId, to, assignedOperator } = input;
   const callerMeta = input.metadata ?? {};
@@ -260,7 +296,16 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
     to.address,
     ...ccList.map((c) => c.address),
   ];
-  const lintMeta = { ...callerMeta, approved_contacts: approvedContacts };
+  // DATA-08. The dealbreaker grade used to be resolved by the cold-outbound
+  // drafter alone, so that was the only draft kind the widening block could arm
+  // on. Over 30 days 521 no-reply follow-ups, 330 call follow-ups, 317 replies
+  // and 31 stalled chases went out with the guard switched off — and a chase is
+  // exactly where "let us know what else you stock in this range" gets written.
+  // It is resolved here instead, at the one chokepoint every draft path passes
+  // through. A caller that already resolved it still wins.
+  const gradeMeta = await resolveRequiredGrade(callerMeta, materialId ?? null);
+  const meta = { ...callerMeta, ...gradeMeta };
+  const lintMeta = { ...meta, approved_contacts: approvedContacts };
 
   // Lint at creation time, on the same shape the scheduled QA sweep uses.
   const qaFindings = lintDraft({
@@ -322,7 +367,7 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
           body_preview: body.slice(0, 1500),
           assigned_operator: assignedOperator ?? null,
           status: "blocked",
-          metadata: { ...callerMeta, approved_contacts: approvedContacts, qa_findings: qaFindings, qa_linted_at: new Date().toISOString() },
+          metadata: { ...meta, approved_contacts: approvedContacts, qa_findings: qaFindings, qa_linted_at: new Date().toISOString() },
         })
         .select("id")
         .maybeSingle();
@@ -448,7 +493,7 @@ export async function stageDraft(input: StageDraftInput): Promise<StageDraftResu
   }
 
   const metadata = {
-    ...callerMeta,
+    ...meta,
     approved_contacts: approvedContacts,
     qa_findings: qaFindings,
     qa_linted_at: new Date().toISOString(),

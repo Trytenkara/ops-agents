@@ -2839,6 +2839,79 @@ export function runChecks(files, rulesDir) {
     }
   }
 
+  // DATA-08. The widening guard can only fire on a draft that carries the
+  // client's dealbreaker grade, and for thirty days exactly one of six drafters
+  // resolved it. That is not a coin toss, it is coverage: the guard was armed on
+  // cold outbound and off for every follow-up and reply. Resolution belongs at
+  // the staging chokepoint every draft passes through, so a new drafter cannot
+  // be born unarmed.
+  {
+    const rule = "data/required-grade-resolved-at-staging";
+    const f = anchor("src/lib/draft-staging.ts", {
+      rule,
+      why: "the one chokepoint every draft passes through is where the dealbreaker grade is resolved",
+      fix: "restore src/lib/draft-staging.ts",
+    });
+    if (f) {
+      if (!/await resolveRequiredGrade\(/.test(f.text)) {
+        violations.push({ rule, why: "a drafter that resolves its own dealbreaker grade arms the widening guard for itself and nobody else", fix: "resolve it in stageDraft via resolveRequiredGrade so every draft_kind is armed", where: f.path, line: "stageDraft no longer resolves the required grade" });
+      }
+      // The resolution is worthless if the linted shape does not carry it.
+      if (!/const lintMeta = \{ \.\.\.meta,/.test(f.text)) {
+        violations.push({ rule, why: "the linter reads the metadata it is handed, so a resolved grade left out of it arms nothing", fix: "lint and persist the merged `meta`, not the caller's metadata", where: f.path, line: "the linted metadata does not carry the resolved grade" });
+      }
+      // Three states, not two: an unreachable Tenkara must be distinguishable
+      // from a material with no dealbreaker, or the guard unarms in silence.
+      if (!/grade_spec_unavailable/.test(f.text)) {
+        violations.push({ rule, why: "not being able to ask is not the same answer as nothing being a dealbreaker", fix: "record grade_spec_unavailable when the lookup throws", where: f.path, line: "a failed grade lookup is indistinguishable from no dealbreaker" });
+      }
+    }
+    const lint = anchor("src/agents-runtime/agents/outreach-qa/lint.ts", {
+      rule,
+      why: "the widening block is the consumer of the resolved grade",
+      fix: "restore src/agents-runtime/agents/outreach-qa/lint.ts",
+    });
+    if (lint && !/grade_ask_widened:/.test(lint.text)) {
+      violations.push({ rule, why: "resolving the grade is only half of it; something has to score the copy against it", fix: "keep the grade_ask_widened check in the shared linter", where: lint.path, line: "the widening check is gone" });
+    }
+  }
+
+  // DISC-08. A marker is only an answer in the shape the reader understands.
+  // The credit gate defaulted a missing `done` to true, so 15 markers written
+  // before the field existed each read as "finished" and gated their material
+  // off SourceReady permanently — for the crime of having been searched once.
+  {
+    const rule = "discovery/marker-shape-must-fail-closed";
+    const f = anchor("src/agents-runtime/agents/lead-creator/index.ts", {
+      rule,
+      why: "the credit gate that decides whether a material is ever searched again lives here",
+      fix: "restore src/agents-runtime/agents/lead-creator/index.ts",
+    });
+    if (f) {
+      if (!/done:\s*r\.value\?\.done === true/.test(f.text)) {
+        violations.push({
+          rule,
+          why: "a marker in a shape this reader does not understand is not an answer, and must not be the final one",
+          fix: "read the gate as `done: r.value?.done === true` — unknown means not finished",
+          where: f.path,
+          line: "the credit gate can default an unrecognised marker to finished again",
+        });
+      }
+      // The other half: a writer that omits the key recreates the same
+      // unreadable marker the reader was just taught to distrust.
+      const write = f.text.slice(f.text.indexOf("SOURCEREADY_SEARCHED_KEY(material.id)"));
+      if (!/^[\s\S]{0,400}\bdone,/.test(write)) {
+        violations.push({
+          rule,
+          why: "a marker written without the key the reader looks for is the fault, not the reading of it",
+          fix: "write `done` into the sourceready_searched value alongside `dry`",
+          where: f.path,
+          line: "the credit-gate marker is written without a done key",
+        });
+      }
+    }
+  }
+
   // Every rule id these checks can emit must be claimed by a rule in rules/.
   // ORG-06 shipped with a working guard that no rule named, so the ledger
   // reported it as unguarded for two days and the debt register carried a row

@@ -170,37 +170,34 @@ client had named one of them as a dealbreaker. Inviting the nearby grade reads
 to the supplier as though the specification is negotiable, and the quote that
 comes back cannot be used.
 
-The guard is real but its trigger is not. `grade_ask_widened` only arms when
-`metadata.required_grade` is set on the draft, and that value is resolved from
-Tenkara at draft time: only grades flagged `isDealbreaker` count. Measured on
-2026-08-20 across 5,519 staged drafts, that arming is unstable. For one
-California Chemicals material (Propylene Glycol, unchanged in Tenkara since
-2026-08-07) the same agent on the same code path armed 7 drafts and left 203
-unarmed over the following thirteen days. Nothing in our code is
-non-deterministic here, so the flag itself is moving underneath us. A guard
-that fires on 3% of identical cases is not protection, it is a coin toss.
+The trigger was read as unstable and it was not. `grade_ask_widened` only arms
+when `metadata.required_grade` is on the draft, and on 2026-08-22 a count by
+draft kind showed why that looked like a coin toss: of six kinds, exactly one
+ever carried the value. Cold outbound armed 1,173 of 3,835 drafts; no-reply
+follow-ups 0 of 521, call follow-ups 55 of 330, replies 49 of 317, stalled
+chases 0 of 31. Only the cold-outbound drafter called
+`resolveMaterialGradeSpecs`, so every other path went out with the guard
+switched off — and a chase is exactly where the softer widening gets written.
+The 7-armed / 203-unarmed split on one Propylene Glycol material was the same
+fact seen per-material: not a flag moving underneath us, a mix of draft kinds.
 
-Separately, the guard has never once fired: zero blocks across the 1,129
-drafts that were armed. Its pattern does catch the phrasing from the original
-incident, so it is not inert in the way COMM-08's was, but it is narrow. It
-misses softer invitations that break the rule just as effectively, among them
-"coconut-based as well if palm isn't available" and "let us know what else you
-stock in this range".
+Resolution now happens once inside `stageDraft`, the chokepoint every draft
+passes through, so a new drafter cannot be born unarmed, and a lookup that
+throws records `grade_spec_unavailable` rather than reading as "nothing is a
+dealbreaker". The pattern also gained the three softer phrasings it missed:
+"coconut-based as well if palm isn't available", "let us know what else you
+stock in this range", and "happy to consider alternatives".
 
-**Enforcement:** Audit — Agent 26 compares, per material, what our drafts
-actually asked for against what Tenkara flags as a dealbreaker today, and
-reports every material where the two disagree in either direction: armed when
-the client flags nothing, unarmed when the client flags a grade. It is keyed on
-the resolved grade string and not on `updated_at`, because Tenkara rewrites
-every material nightly at 00:00:02 UTC, so a staleness test keyed on the
-timestamp sees a changed record every day and reports nothing. The audit
-reports and repairs nothing: the 7 disagreeing materials, and the widening
-phrasings the blocking code still misses, are owed.
-
-`grade_ask_widened` is a blocking code inside `stageDraft` and holds part of
-this, but it is deliberately NOT counted as a guard: it arms on a value that
-moved on 97% of one material's drafts with no Tenkara edit behind it, and a
-guard that fires on 3% of identical cases makes nothing impossible. If Tenkara
+**Enforcement:** Guard — `data/required-grade-resolved-at-staging` requires the
+grade to be resolved in `stageDraft`, carried into the metadata the linter
+reads, and a failed lookup to be distinguishable from an absent dealbreaker; it
+also holds the widening block in the shared linter. Audit — Agent 26 compares,
+per material, what our drafts actually asked for against what Tenkara flags as a
+dealbreaker today, and reports every material where the two disagree in either
+direction. It is keyed on the resolved grade string and not on `updated_at`,
+because Tenkara rewrites every material nightly at 00:00:02 UTC, so a staleness
+test keyed on the timestamp sees a changed record every day and reports nothing.
+The audit reports; it does not rewrite sent copy. If Tenkara
 is unreachable the audit says so and skips the comparison rather than reporting
 every material as unflagged. See `OUTSTANDING.md` and `CONFLICTS.md` L.
 

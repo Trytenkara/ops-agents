@@ -1193,6 +1193,38 @@ const MUTATIONS = [
     mutate: fixture("src/__selftest__/send2.ts", `const body = { subject, auto_send: true };\n`),
   },
   {
+    expect: "data/required-grade-resolved-at-staging",
+    label: "the dealbreaker grade goes back to being one drafter's job",
+    mutate: rename("lib/draft-staging.ts", "await resolveRequiredGrade(", "await Promise.resolve({}); void ("),
+  },
+  {
+    expect: "data/required-grade-resolved-at-staging",
+    label: "the resolved grade is dropped before the linter sees it",
+    mutate: rename("lib/draft-staging.ts", "const lintMeta = { ...meta,", "const lintMeta = { ...callerMeta,"),
+  },
+  {
+    expect: "data/required-grade-resolved-at-staging",
+    label: "an unreachable Tenkara reads as no dealbreaker",
+    mutate: edit("lib/draft-staging.ts", (t) => t.split("grade_spec_unavailable").join("grade_ok")),
+  },
+  {
+    expect: "discovery/marker-shape-must-fail-closed",
+    label: "an unreadable credit-gate marker defaults back to finished",
+    mutate: rename(
+      "agents/lead-creator/index.ts",
+      "done: r.value?.done === true",
+      "done: r.value?.done !== undefined ? !!r.value.done : true",
+    ),
+  },
+  {
+    expect: "discovery/marker-shape-must-fail-closed",
+    label: "the marker is written without the key the reader looks for",
+    mutate: edit("agents/lead-creator/index.ts", (t) => {
+      const i = t.indexOf("SOURCEREADY_SEARCHED_KEY(material.id)");
+      return t.slice(0, i) + t.slice(i).replace("\n                  done,", "");
+    }),
+  },
+  {
     expect: "rules/no-orphaned-check-id",
     label: "a check is added under an id no rule names",
     mutate: fixture(

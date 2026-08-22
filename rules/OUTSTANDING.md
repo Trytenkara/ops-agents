@@ -508,35 +508,34 @@ the call pool and set unowned when no caller remains.
 **Enforcement:** `assignment/call-owner-must-be-call-operator`, six mutations,
 one per limb. AUTO-08 moves from Check owed to Guard.
 
-## P1 — The dealbreaker-grade guard arms intermittently, and has never fired
+## Closed 2026-08-22 — DATA-08: the guard was not a coin toss, it was off
 
-Breaks DATA-08. Found 2026-08-20 while ruling `CONFLICTS.md` L. Two separate
-faults in the one guard.
+Read as intermittent on 2026-08-20 while ruling `CONFLICTS.md` L: for
+California Chemicals' Propylene Glycol, whose Tenkara record had not changed
+since 2026-08-07, 7 drafts armed and 203 did not over thirteen days, with armed
+and unarmed on the same day and nothing non-deterministic in the code. That
+looked like the flag moving underneath us.
 
-**It arms on an unstable value.** `grade_ask_widened` only runs when
-`metadata.required_grade` is set, which is resolved from Tenkara at draft time.
-For California Chemicals' Propylene Glycol, whose Tenkara record has not
-changed since 2026-08-07, Agent 04 armed 7 drafts and left 203 unarmed over the
-following thirteen days, with armed and unarmed drafts on the same day. Same
-material id, same code path, no branch in our code that could explain it, so
-the flag is moving on the Tenkara side without touching `updated_at`, or the
-read is not returning a stable row. Until that is understood, a client who does
-set a dealbreaker grade is protected on an unpredictable fraction of drafts.
+It was coverage. Counted by draft kind across 30 days, exactly one of six kinds
+ever carried `required_grade`: cold outbound 1,173 of 3,835, call follow-ups 55
+of 330, replies 49 of 317, no-reply follow-ups 0 of 521, stalled chases 0 of 31,
+unkinded 0 of 126. Only `run-outreach.ts` called `resolveMaterialGradeSpecs`.
+Every follow-up and reply went out with the widening block switched off, which
+is the worst possible half to lose: a chase is where "let us know what else you
+stock in this range" gets written. The per-material split was the same fact seen
+from one row.
 
-**It has never fired.** Zero blocks across the 1,129 armed drafts. The pattern
-does match the phrasing from the incident the rule was written for, so unlike
-COMM-08 it is not inert, but it is five narrow alternations and misses softer
-invitations that break the rule identically: "coconut-based as well if palm
-isn't available", "we'd also welcome your coconut option", "let us know what
-else you stock in this range". A model writing the copy is not obliged to use
-the phrasings we thought of.
+The resolution moved into `stageDraft`, the chokepoint every draft path passes
+through, so a drafter cannot be written unarmed. A lookup that throws records
+`grade_spec_unavailable` instead of returning the same empty answer a material
+with no dealbreaker returns — three states, the DISC-09 shape. The pattern
+gained the three softer phrasings it missed.
 
-**Owed:** first, find out why the arming value moves, since a fix to the
-pattern is worthless while the trigger is a coin toss. Then widen the pattern,
-or better, stop pattern-matching outbound copy for this and check the ask
-against the stated grade directly, per the standing preference for reading over
-another regex. The check needs a mutation behind it per META-09, which today it
-does not have.
+**Enforcement:** `data/required-grade-resolved-at-staging`, three mutations —
+resolution removed, the resolved value dropped before the linter reads it, and
+an unreachable Tenkara made indistinguishable from no dealbreaker. DATA-08 moves
+from Audit to Guard plus Audit; the audit stays, because only a person can say
+what a sent email should have asked for.
 
 ## CLOSED 2026-08-22 — Guessed contacts could be synthesised at a directory
 
@@ -782,7 +781,7 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 
 ### Reported by an audit, and the audit closes nothing
 
-Agent 26 reports DATA-08, PRICING-04, PERS-07, DISC-08 and OUT-09 every morning
+Agent 26 reports PRICING-04, PERS-07 and OUT-09 every morning
 and repairs nothing. Each needs a person to decide what the right value was, so
 an audit that wrote its own answer would be guessing. What is left owing, and
 what each one found on its first pass:
@@ -791,9 +790,7 @@ what each one found on its first pass:
 | --- | --- |
 | PERS-07 | the surface. All 19 withheld prices carry no reason at all, and until UI-06 ships there is nowhere on the client's tab for them to appear, so somebody has to read the audit to find them. |
 | PRICING-04 | the fix. Zero attempts against 4,044 pulled listings, because `getOrgShipToAddress` selects `ship_to_*` columns that do not exist on this project's `orgs` table and the catch swallows it. The audit now says so out loud; it does not move the columns. |
-| DISC-08 | the 52 orphaned cursors and the 15 markers written without `done`, all of which currently read as finished and gate their material off SourceReady permanently. Deleting them is a one-off repair nobody has run. |
 | OUT-09 | the exemption itself. A staged draft suppresses the chase for as long as it sits there, with no cap; the first audit run found one thread in that state and 3,461 staged drafts fleet-wide that could put others there. Capping it is a product decision. |
-| DATA-08 | the 7 materials where arming disagrees with Tenkara, and the widening phrasings the blocking code still misses. |
 
 ## Closed 2026-08-22 — META-04: the ratchet nobody could count
 
@@ -833,6 +830,27 @@ running out of attempts. Fixed. It keeps its own rate-limit predicate, because
 it is a separate node runtime in a separate repository and cannot import the
 shared classifier; the behaviour that diverged is pinned from the ops-agents
 side instead.
+
+## Closed 2026-08-22 — DISC-08: fifteen materials switched off SourceReady for good
+
+The credit gate asks whether a material has already been searched. It reads a
+`done` flag off the stored marker, and a missing flag defaulted to finished. All
+15 SourceReady markers predated that field, so every one read as finished and
+its material was never searched on SourceReady again — for having been searched
+once. Nothing failed; the materials simply stopped appearing.
+
+Unknown now means not finished (`done === true`), which is the same fail-closed
+reading PERS-03 forced on empty results, and the writer is held to emitting the
+key from the other side so the shape cannot drift apart again.
+
+Repaired in production the same day, both backed up to `/workspace` first: the
+15 markers rewritten with `done: false`, so they come back on the next pass and
+write a marker in the shape the reader understands; and the 52 orphaned page
+cursors deleted, having confirmed nothing writes them and the only lookup is
+under an `importyeti:` key.
+
+One marker was already in the right shape and legitimately `done`. It was left
+alone.
 
 ## Open decisions
 

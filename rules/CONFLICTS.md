@@ -134,8 +134,13 @@ both directions. Checked against live Tenkara and 5,519 staged drafts on
 - The enforcement is neither inert nor sound. It is **intermittent**, which the
   conflict never considered. The same material on the same code path armed 7
   drafts and left 203 unarmed across thirteen days with no Tenkara edit in
-  between. The measurement is in DATA-08 and the repair is owed in
-  `OUTSTANDING.md`.
+  between.
+
+  *Amended 2026-08-22:* "intermittent" was still the wrong word. Counted by
+  draft kind, only cold outbound ever resolved the grade at all; every
+  follow-up and reply drafter omitted it, so the split within one material was
+  a mix of kinds, not a flag moving. Closed in `OUTSTANDING.md`, and the
+  resolution now happens once in `stageDraft`.
 
 Two things that looked like defects and are not. McGinley's 10 drafts all
 predate 2026-08-04, when the arming code landed, so its 0-of-10 is history and

@@ -219,8 +219,8 @@
     {
       "id": "DATA-08",
       "title": "A dealbreaker grade is a hard specification",
-      "bucket": "Audit",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "DATA-09",
@@ -429,8 +429,8 @@
     {
       "id": "DISC-08",
       "title": "A source's own paging must advance",
-      "bucket": "Audit",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "DISC-09",
@@ -743,7 +743,7 @@
     "Closed 2026-08-21 — a directory's own inbox counted as a supplier's contact",
     "Closed 2026-08-21 — a lead parked against a case never came back",
     "Closed 2026-08-21 — call tasks reached nobody",
-    "P1 — The dealbreaker-grade guard arms intermittently, and has never fired",
+    "Closed 2026-08-22 — DATA-08: the guard was not a coin toss, it was off",
     "CLOSED 2026-08-22 — Guessed contacts could be synthesised at a directory",
     "P2 — Nothing stops a paced loop from outrunning its function",
     "CLOSED 2026-08-22 — Two hand-rolled retry classifiers, and a third fault behind them",
@@ -755,6 +755,7 @@
     "Closed 2026-08-20 — a guard only bound the repository, and the skills were not in it",
     "The full enforcement debt",
     "Closed 2026-08-22 — META-04: the ratchet nobody could count",
+    "Closed 2026-08-22 — DISC-08: fifteen materials switched off SourceReady for good",
     "Open decisions",
     "Closed 2026-08-22 — a cancelled email left its supplier's other materials shelved for good",
     "Closed 2026-08-22 — the shared supplier table, and a guard no rule had claimed",

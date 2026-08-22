@@ -75,15 +75,22 @@ A page cursor that resets every run re-reads page one forever: it burns credits
 and returns the same suppliers. Every paged source stores and advances its
 cursor, and the marker it writes must be the marker it reads.
 
-**Enforcement:** Audit — Agent 26 reads the discovery agent's stored state
-daily and reports two shapes of the same fault: a credit-gate marker saved
-without the `done` key the reader looks for, and a page cursor nobody writes
-any more. The first is the dangerous one, because the reader treats a missing
-`done` as finished, so a marker written under the wrong shape gates its
-material off that source permanently. All 15 SourceReady markers were in that
-state when the audit shipped, alongside 52 orphaned page cursors. Clearing
-them is owed — until somebody does, each one reads as finished and gates its
-material off SourceReady for good.
+A marker is only an answer in the shape the reader understands. One it cannot
+read is not a finished pass, and must not be treated as one.
+
+**Enforcement:** Guard — `discovery/marker-shape-must-fail-closed`: the credit
+gate reads `done === true`, so an unrecognised marker means not finished, and
+the writer must emit the key the reader looks for. Plus Audit — Agent 26 reads
+the discovery agent's stored state daily and reports both shapes of the fault:
+a credit-gate marker saved without `done`, and a page cursor nobody writes any
+more.
+
+The reader used to default a missing `done` to finished. All 15 SourceReady
+markers predated the field, so each read as finished and gated its material off
+SourceReady permanently, for having been searched once. Repaired 2026-08-22:
+the 15 markers were rewritten with `done: false` and the 52 orphaned cursors —
+written by nobody, and only ever looked up under an `importyeti:` key — were
+deleted, both backed up first.
 
 ## DISC-09 — A self-supplied material is not sourced
 

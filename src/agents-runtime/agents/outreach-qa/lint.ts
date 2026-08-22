@@ -31,6 +31,16 @@ const GRADE_WIDENING_RE = new RegExp(
     String.raw`\bboth\s+[\w-]+(?:\s+and\s+|\s*/\s*)[\w-]+\s+(?:grades?|sources?|derivations?|variants?|options?)\b`,
     // "we're flexible on the source"
     String.raw`\bwe(?:'re| are)\s+(?:also\s+)?(?:open|flexible)\s+(?:to|on)\b[^.?!]{0,30}\b(?:grade|source|derivation)\b`,
+    // The three phrasings the follow-up and reply drafters actually reach for.
+    // They read as politeness rather than a widened ask, which is why they were
+    // missed: the guard had never been armed on those draft kinds at all, so
+    // nothing was scoring their copy. See DATA-08.
+    // "let us know what else you stock in this range"
+    String.raw`\blet (?:us|me) know\b[^.?!]{0,40}?\b(?:what|anything) else\b[^.?!]{0,40}?\b(?:carry|offer|supply|stock|have|available)\b`,
+    // "coconut-based as well, if palm isn't available"
+    String.raw`\b(?:as well|instead)\b[^.?!]{0,20}?\bif\b[^.?!]{0,40}?\b(?:isn'?t|is not|aren'?t|are not|unavailable|not available|out of stock)\b`,
+    // "happy to consider alternatives"
+    String.raw`\b(?:happy|glad|open)\s+to\s+(?:look at|consider|hear about|review)\b[^.?!]{0,30}?\b(?:alternatives?|substitutes?|equivalents?|other options?)\b`,
   ].join("|"),
   "i"
 );

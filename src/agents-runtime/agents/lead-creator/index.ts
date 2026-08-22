@@ -490,9 +490,14 @@ registerAgent({
       for (const r of batch) {
         sourceReadyPasses.set(r.key.slice("sourceready_searched:".length), {
           dry: Number(r.value?.dry) || 0,
-          // Markers written before this field existed meant "searched once",
-          // which under the old intent was final.
-          done: r.value?.done !== undefined ? !!r.value.done : true,
+          // A marker written under a shape this reader does not recognise is
+          // not an answer, so it does not get to be the final one. Defaulting
+          // the missing key to `true` gated every one of the 15 markers that
+          // predate the field off SourceReady permanently, for a material that
+          // had simply been searched once — DISC-08, and the same fail-open
+          // shape as PERS-03. Unknown means not finished: the material comes
+          // back on the next pass and the pass writes a marker in this shape.
+          done: r.value?.done === true,
         });
       }
       if (batch.length < 1000) break;
