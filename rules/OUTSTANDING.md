@@ -154,9 +154,22 @@ iterated rather than listed, the panel renders the registry rather than naming
 sets it knows, the overview renders the panel, and an agent that calls the
 publish gate must also record the mark.
 
-**Still owed:** audit findings. UI-06 names them as a flagged set, but Agent 26
-posts to Slack and nothing persists a finding, so there is no row for the
-registry to count. Until they have a table they cannot have a surface.
+**Closed 2026-08-22.** Audit findings were the last set with no home. Agent 26
+computed five of them a day and posted them to Slack, so a finding could not be
+scoped to the client it was about, could not say how long it had been true, and
+gave the registry no row to render. Migration 0129 adds `audit_findings`, one
+open row per rule per client; the audit now attributes each of its five checks
+to the client whose data raised it, writes through `recordAuditFindings()`, and
+that same call closes the findings the run no longer reports. The registry
+gained an `audit_finding` set, so they land on the client's own tab beside the
+withheld prices they are usually about. The guard grew two limbs to hold it: an
+audit that reports and never persists fails the build, and so does a store that
+opens findings without closing the cleared ones.
+
+That second limb is the one worth keeping. Writing was the obvious half; a
+findings table that only ever inserts is worse than no table, because every
+fault ever seen stays on the client's tab and the panel stops meaning anything
+within a week.
 
 ## P1 — The prices already captured wrong — one row, corrected 2026-08-21
 
@@ -852,18 +865,16 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | --- | --- |
 | OUT-02 | the aggregator inquiry channel itself. `outreach/no-terminal-drop-without-channel` stops a storefront being dropped for having no email; it cannot make the inquiry form a channel we can actually send through. |
 | UI-02 | the seven existing global review routes. `ui/no-global-review-route` shipped 2026-08-20 as a ratchet, so no eighth can be added, but the seven that predate it are still live and still cross-client. Removing them is a product decision. |
-| UI-06 | somewhere to persist an audit finding. `ui/flagged-set-must-have-a-surface` makes every set in the registry render; findings that live nowhere never reach the registry, so the guard cannot see them. |
 
 ### Reported by an audit, and the audit closes nothing
 
-Agent 26 reports PRICING-04, PERS-07 and OUT-09 every morning
+Agent 26 reports PRICING-04 and OUT-09 every morning
 and repairs nothing. Each needs a person to decide what the right value was, so
 an audit that wrote its own answer would be guessing. What is left owing, and
 what each one found on its first pass:
 
 | Rule | Still owed |
 | --- | --- |
-| PERS-07 | the surface. All 19 withheld prices carry no reason at all, and until UI-06 ships there is nowhere on the client's tab for them to appear, so somebody has to read the audit to find them. |
 | OUT-09 | the exemption itself. A staged draft suppresses the chase for as long as it sits there, with no cap; the first audit run found one thread in that state and 3,461 staged drafts fleet-wide that could put others there. Capping it is a product decision. |
 
 ## Closed 2026-08-22 — META-04: the ratchet nobody could count

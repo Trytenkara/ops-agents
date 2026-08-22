@@ -1089,6 +1089,16 @@ const MUTATIONS = [
   },
   {
     expect: "ui/flagged-set-must-have-a-surface",
+    label: "the rule audit stops persisting the findings it reports",
+    mutate: rename("src/agents-runtime/agents/rule-audits/index.ts", "await recordAuditFindings(", "await reportOnly("),
+  },
+  {
+    expect: "ui/flagged-set-must-have-a-surface",
+    label: "findings are opened and never closed, so cleared faults read as open work",
+    mutate: edit("src/lib/audit-findings.ts", (t) => t.replace(/\.update\(\{ resolved_at: now \}\)/, ".update({ count: 0 })")),
+  },
+  {
+    expect: "ui/flagged-set-must-have-a-surface",
     label: "the client's own tab stops rendering the flagged panel",
     mutate: rename("src/app/(app)/work/orgs/[slug]/page.tsx", "<FlaggedWorkPanel", "<FlaggedWorkPanelDisabled"),
   },

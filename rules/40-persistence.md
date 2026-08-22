@@ -224,10 +224,11 @@ written and never surfaced is a silent failure wearing a reason code.
 **Enforcement:** Audit — Agent 26 counts withheld prices carrying no reason
 every morning and reports them with the oldest date. On the day it shipped all
 19 withheld prices in the system had no reason recorded, so the count is a real
-measure and not a formality. Check owed for the second half: the surface itself
-on the client's own tab (UI-06). Until that exists a person still has to read
-the audit to find these rows, which is why the audit is the weaker of the two.
-See `OUTSTANDING.md`.
+measure and not a formality. The surface is the other half and now exists: the
+`withheld_price` set in `src/lib/flagged-work.ts` renders on the owning
+client's own tab, and the audit's own count reaches the same tab as an
+`audit_finding` row rather than only a chat message, so the finding is scoped
+to the client it is about and dated from the first run that saw it (UI-06).
 
 ## PERS-08 — The record of a failure is never proof of success
 

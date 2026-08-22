@@ -6,6 +6,7 @@ import { resolveMaterialGradeSpecs } from "@/lib/tenkara-names";
 import { stalledFollowupGapMs } from "@/lib/agent-timing";
 import { loadOrgStatuses, outreachAllowed } from "@/lib/org-status";
 import { loadRecentThreadIds, loadStalledThreadState } from "../reply-manager/stalled-followup";
+import { recordAuditFindings, type AuditFinding } from "@/lib/audit-findings";
 
 // Agent 26 - Rule Audits.
 //
@@ -22,11 +23,31 @@ const LOOKBACK_DAYS = 14;
 const STALE_STAGED_DAYS = 14;
 const SAMPLE = 5;
 
-interface Finding {
-  rule: string;
-  count: number;
-  detail: string;
-  sample: string[];
+type Finding = AuditFinding;
+
+// Every rule this run evaluates, including the ones that come back clean. A
+// finding is only closed if the rule that raised it was looked at again, so
+// this list is what bounds the close (UI-06).
+const AUDITED_RULES = ["PERS-07", "PRICING-04", "DISC-08", "OUT-09", "DATA-08"];
+
+// A finding attributed to no client. DISC-08 is the fleet's own discovery
+// state, so there is no client tab it belongs on.
+const FLEET = null;
+
+/**
+ * Split rows by the client they belong to, so each finding lands on that
+ * client's own tab rather than in one fleet-wide pile nobody owns (UI-06).
+ * Rows with no org are grouped as fleet-wide rather than dropped.
+ */
+function byOrg<T>(rows: T[], orgOf: (row: T) => string | null): [string | null, T[]][] {
+  const groups = new Map<string | null, T[]>();
+  for (const row of rows) {
+    const id = orgOf(row);
+    const list = groups.get(id);
+    if (list) list.push(row);
+    else groups.set(id, [row]);
+  }
+  return [...groups.entries()];
 }
 
 const day = 86_400_000;
@@ -61,13 +82,14 @@ registerAgent({
       await ctx.log(`${withheld.length} withheld price(s), ${silent.length} with no reason recorded`, {
         step: "pers-07",
       });
-      if (silent.length) {
-        const oldest = silent.reduce((a, b) => (a.created_at < b.created_at ? a : b));
+      for (const [orgId, rows] of byOrg(silent, (q) => q.org_id ?? null)) {
+        const oldest = rows.reduce((a, b) => (a.created_at < b.created_at ? a : b));
         findings.push({
           rule: "PERS-07",
-          count: silent.length,
-          detail: `withheld price(s) with no reason recorded, of ${withheld.length} withheld. Oldest ${oldest.created_at?.slice(0, 10)}`,
-          sample: silent.slice(0, SAMPLE).map((q) => q.id),
+          orgId,
+          count: rows.length,
+          detail: `withheld price(s) with no reason recorded, of ${withheld.length} withheld fleet-wide. Oldest ${oldest.created_at?.slice(0, 10)}`,
+          sample: rows.slice(0, SAMPLE).map((q) => q.id),
         });
       }
     }
@@ -81,7 +103,7 @@ registerAgent({
       const pulls = await selectAllPaged<any>((from, to) =>
         admin
           .from("leads_in_flight")
-          .select("id, payload->marketplace_pull")
+          .select("id, org_id, payload->marketplace_pull")
           .not("payload->marketplace_pull", "is", null)
           .order("id")
           .range(from, to)
@@ -91,7 +113,7 @@ registerAgent({
       let attempted = 0;
       let numeric = 0;
       let reasoned = 0;
-      const stuck: string[] = [];
+      const stuck: { id: string; org_id: string | null }[] = [];
       for (const row of pulls) {
         const mp = row.marketplace_pull as Record<string, unknown> | null;
         if (!mp) continue;
@@ -100,28 +122,29 @@ registerAgent({
         if (mp.shipping_cost_attempted_at != null) attempted++;
         if (typeof mp.shipping_cost === "number") numeric++;
         if (mp.shipping_cost_failed_reason != null) reasoned++;
-        else if ("shipping_cost" in mp && mp.shipping_cost == null && stuck.length < SAMPLE) stuck.push(row.id);
+        else if ("shipping_cost" in mp && mp.shipping_cost == null) stuck.push({ id: row.id, org_id: row.org_id ?? null });
       }
       await ctx.log(
         `delivery cost: ${pulled} pulled, ${withKeys} carry the keys, ${attempted} attempted, ${numeric} captured, ${reasoned} explained`,
         { step: "pricing-04" }
       );
-      if (pulled > 0 && attempted === 0) {
-        findings.push({
-          rule: "PRICING-04",
-          count: withKeys,
-          detail:
-            `row(s) carry the delivery-cost keys and not one attempt was made (${pulled} listings pulled). ` +
-            `An attempt needs a ship-to address; if none resolves, nothing is tried and nothing says so`,
-          sample: stuck,
-        });
-      } else if (withKeys > 0 && numeric === 0) {
-        findings.push({
-          rule: "PRICING-04",
-          count: attempted,
-          detail: `attempt(s) at a delivery cost produced no number, and ${withKeys - reasoned} of them recorded no reason either`,
-          sample: stuck,
-        });
+      const broken =
+        pulled > 0 && attempted === 0
+          ? `row(s) carry the delivery-cost keys and not one attempt was made (${pulled} listings pulled fleet-wide). ` +
+            `An attempt needs a ship-to address; if none resolves, nothing is tried and nothing says so`
+          : withKeys > 0 && numeric === 0
+            ? `attempt(s) at a delivery cost produced no number, and ${withKeys - reasoned} of them recorded no reason either`
+            : null;
+      if (broken) {
+        for (const [orgId, rows] of byOrg(stuck, (r) => r.org_id)) {
+          findings.push({
+            rule: "PRICING-04",
+            orgId,
+            count: rows.length,
+            detail: broken,
+            sample: rows.slice(0, SAMPLE).map((r) => r.id),
+          });
+        }
       }
     }
 
@@ -158,6 +181,7 @@ registerAgent({
         if (shapeless.length) {
           findings.push({
             rule: "DISC-08",
+            orgId: FLEET,
             count: shapeless.length,
             detail:
               `credit-gate marker(s) of ${gates.length} saved without the \`done\` key. The reader treats a missing ` +
@@ -168,6 +192,7 @@ registerAgent({
         if (orphanCursors.length) {
           findings.push({
             rule: "DISC-08",
+            orgId: FLEET,
             count: orphanCursors.length,
             detail: "SourceReady page cursor(s) written by nobody and read by nobody, still loaded on every discovery run",
             sample: orphanCursors.slice(0, SAMPLE).map((s) => s.key),
@@ -190,8 +215,8 @@ registerAgent({
       const state = await loadStalledThreadState(admin, threadIds);
       const orgStatuses = await loadOrgStatuses(admin);
 
-      const overdue: string[] = [];
-      const suppressed: string[] = [];
+      const overdue: { id: string; org_id: string | null }[] = [];
+      const suppressed: { id: string; org_id: string | null }[] = [];
       for (const [threadId, t] of state) {
         if (!t.lastInboundAt) continue;
         if (t.terminal || t.conversationComplete) continue;
@@ -199,30 +224,33 @@ registerAgent({
         if (t.lastInboundAt > t.lastOutboundAt) continue;
         if (!outreachAllowed(orgStatuses.byOaId.get(t.anchor.org_id) ?? "off")) continue;
         if (now < t.lastOutboundAt + stalledFollowupGapMs(t.anchor.org_id, t.priorNudges)) continue;
+        const at = { id: threadId, org_id: t.anchor.org_id ?? null };
         if (t.awaitingOperator) {
           const age = t.awaitingSince === null ? 0 : now - t.awaitingSince;
-          if (age > STALE_STAGED_DAYS * day) suppressed.push(threadId);
+          if (age > STALE_STAGED_DAYS * day) suppressed.push(at);
           continue;
         }
-        overdue.push(threadId);
+        overdue.push(at);
       }
       await ctx.log(`${overdue.length} thread(s) past their chase cadence, ${suppressed.length} held by a stale staged draft`, {
         step: "out-09",
       });
-      if (overdue.length) {
+      for (const [orgId, rows] of byOrg(overdue, (r) => r.org_id)) {
         findings.push({
           rule: "OUT-09",
-          count: overdue.length,
+          orgId,
+          count: rows.length,
           detail: "conversation(s) on a sending client past the follow-up gap with nothing sent",
-          sample: overdue.slice(0, SAMPLE),
+          sample: rows.slice(0, SAMPLE).map((r) => r.id),
         });
       }
-      if (suppressed.length) {
+      for (const [orgId, rows] of byOrg(suppressed, (r) => r.org_id)) {
         findings.push({
           rule: "OUT-09",
-          count: suppressed.length,
+          orgId,
+          count: rows.length,
           detail: `conversation(s) exempt from chasing because a draft has sat staged for more than ${STALE_STAGED_DAYS} days`,
-          sample: suppressed.slice(0, SAMPLE),
+          sample: rows.slice(0, SAMPLE).map((r) => r.id),
         });
       }
     }
@@ -237,7 +265,7 @@ registerAgent({
       const refs = await selectAllPaged<any>((from, to) =>
         admin
           .from("draft_references")
-          .select("id, material_id, metadata")
+          .select("id, org_id, material_id, metadata")
           .not("material_id", "is", null)
           .gte("created_at", since)
           .order("id")
@@ -245,10 +273,12 @@ registerAgent({
       );
       const armed = new Map<string, number>();
       const unarmed = new Map<string, number>();
+      const orgOfMaterial = new Map<string, string | null>();
       let blocks = 0;
       for (const r of refs) {
         const md = (r.metadata ?? {}) as any;
         const required = typeof md.required_grade === "string" && md.required_grade.trim() ? md.required_grade : null;
+        if (!orgOfMaterial.has(r.material_id)) orgOfMaterial.set(r.material_id, r.org_id ?? null);
         const bucket = required ? armed : unarmed;
         bucket.set(r.material_id, (bucket.get(r.material_id) ?? 0) + 1);
         for (const f of md.qa_findings ?? []) if (f?.code === "grade_ask_widened") blocks++;
@@ -266,30 +296,43 @@ registerAgent({
         });
       }
       if (specs) {
-        const disagree: string[] = [];
+        const disagree: { id: string; org_id: string | null }[] = [];
         for (const id of ids) {
           const required = specs.get(id)?.required ?? null;
           const a = armed.get(id) ?? 0;
           const u = unarmed.get(id) ?? 0;
-          if (required && u > 0) disagree.push(`${id} ${u} unarmed of ${a + u} (Tenkara requires ${required})`);
-          if (!required && a > 0) disagree.push(`${id} ${a} armed of ${a + u} (Tenkara flags no dealbreaker)`);
+          const org = orgOfMaterial.get(id) ?? null;
+          if (required && u > 0) disagree.push({ id: `${id} ${u} unarmed of ${a + u} (Tenkara requires ${required})`, org_id: org });
+          if (!required && a > 0) disagree.push({ id: `${id} ${a} armed of ${a + u} (Tenkara flags no dealbreaker)`, org_id: org });
         }
         await ctx.log(
           `${ids.length} material(s) drafted in ${LOOKBACK_DAYS}d, ${disagree.length} where arming disagrees with Tenkara, ${blocks} grade block(s)`,
           { step: "data-08" }
         );
-        if (disagree.length) {
+        for (const [orgId, rows] of byOrg(disagree, (r) => r.org_id)) {
           findings.push({
             rule: "DATA-08",
-            count: disagree.length,
+            orgId,
+            count: rows.length,
             detail: `material(s) where what we asked for and what the client flags as a dealbreaker do not agree`,
-            sample: disagree.slice(0, SAMPLE),
+            sample: rows.slice(0, SAMPLE).map((r) => r.id),
           });
         }
       }
     }
 
     ctx.setItemsProcessed(findings.reduce((n, f) => n + f.count, 0));
+
+    // UI-06. Persist before reporting. A finding that only ever reached Slack
+    // could not be scoped to the client it was about, could not say how long it
+    // had been true, and gave the flagged-work registry nothing to render - so
+    // the one set UI-06 names by name had no surface at all. Writing here is
+    // also what closes the findings that cleared since yesterday.
+    const written = await recordAuditFindings(admin, findings, AUDITED_RULES);
+    await ctx.log(
+      `findings persisted: ${written.opened} new, ${written.updated} restated, ${written.resolved} cleared since the last run`,
+      { step: "persist" }
+    );
 
     if (!findings.length) {
       ctx.setStatus("success");

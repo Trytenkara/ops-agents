@@ -73,9 +73,22 @@ no count. The registry in `src/lib/flagged-work.ts` is the list of such sets;
 the panel must render whatever is in it rather than the sets it happens to know
 the names of, or a new set added to the registry is invisible again.
 
-**Enforcement:** Guard — `ui/flagged-set-must-have-a-surface`. A home for
-audit findings is owed: they are persisted nowhere, so they are not yet in the
-registry the guard reads; see `OUTSTANDING.md`.
+Audit findings were the last set with no home. Agent 26 checked five rules a
+day and posted the result to Slack, which is not a surface: a chat message is
+not scoped to the client it is about, it cannot say how long the fault has been
+true, and it leaves the registry nothing to render. They are now rows in
+`audit_findings`, one per rule per client while open, restated rather than
+duplicated by each run and closed when the run that raised them stops finding
+them — closing matters as much as opening, because an audit that only ever
+wrote would show last month's fixed faults as today's open work.
+
+**Enforcement:** Guard — `ui/flagged-set-must-have-a-surface`. Four limbs: the
+registry is iterated rather than listed, the panel renders the registry rather
+than the sets it knows by name, the client's own tab renders the panel, and an
+agent that raises a finding or runs the publish gate must persist what it
+found — through `recordAuditFindings()` for an audit, `withheldMark()` for a
+gated price. The store itself has to close cleared findings, not only open new
+ones.
 
 ## UI-07 — Seed a real client before judging a view
 

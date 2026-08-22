@@ -14,6 +14,7 @@
 
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { reconcileQuoteRow } from "@/lib/price-reconcile";
+import { loadOpenAuditFindings } from "@/lib/audit-findings";
 
 type Admin = ReturnType<typeof createAdminClient>;
 
@@ -164,6 +165,26 @@ export const FLAGGED_SETS: FlaggedSet[] = [
         at: l.created_at ?? null,
       }));
       return { items, total: count ?? items.length };
+    },
+  },
+  {
+    key: "audit_finding",
+    label: "Audit findings still open",
+    rule: "UI-06",
+    description:
+      "The daily rule audit checks the standing rules no build check can see, and these are the ones it is still finding true for this client. Each one was raised on the date shown and has not cleared since, so an open finding here is a fault that has survived every run in between.",
+    href: (slug) => `/work/orgs/${slug}`,
+    load: async (admin, orgId) => {
+      const { items, total } = await loadOpenAuditFindings(admin, orgId, SHOW);
+      return {
+        items: items.map((f) => ({
+          id: f.id,
+          title: `${f.rule} — ${f.count} affected`,
+          reason: `${f.detail}. Open since ${f.firstSeenAt.slice(0, 10)}${f.sample.length ? `; e.g. ${f.sample.slice(0, 3).join(", ")}` : ""}.`,
+          at: f.lastSeenAt,
+        })),
+        total,
+      };
     },
   },
 ];

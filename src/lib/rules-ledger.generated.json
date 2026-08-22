@@ -364,7 +364,7 @@
       "id": "PERS-07",
       "title": "A withheld price is a job, not an outcome",
       "bucket": "Audit",
-      "owes": true
+      "owes": false
     },
     {
       "id": "PERS-08",
@@ -646,7 +646,7 @@
       "id": "UI-06",
       "title": "Flagged work needs a home",
       "bucket": "Guard",
-      "owes": true
+      "owes": false
     },
     {
       "id": "UI-07",

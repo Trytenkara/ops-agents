@@ -2025,6 +2025,42 @@ export function runChecks(files, rulesDir) {
         line: "publishable* called with no withheldMark()",
       });
     }
+
+    // The audit half. A finding computed and posted to chat has no surface: it
+    // is not scoped to a client, it cannot be counted, and the registry above
+    // has no row to render. So the audit must write through the one store that
+    // owns findings, and that store must close what cleared as well as open
+    // what is new — an audit that only ever wrote would show yesterday's fixed
+    // faults as open work, which is worse than showing nothing.
+    const store = anchor("src/lib/audit-findings.ts", {
+      rule,
+      why: "a finding needs somewhere to live between the run that found it and the person who fixes it",
+      fix: "restore src/lib/audit-findings.ts",
+    });
+    if (store) {
+      const text = codeLines(store).join("\n");
+      if (!/resolved_at:\s*now/.test(text)) {
+        violations.push({
+          rule,
+          why: "findings are opened but never closed, so a fault that cleared months ago still reads as open work on the client's tab",
+          fix: "resolve the open findings a run no longer reports, bounded by the rules that run actually audited",
+          where: store.path,
+          line: "no resolve pass in recordAuditFindings",
+        });
+      }
+    }
+    for (const f of files) {
+      if (!f.path.includes("src/agents-runtime/agents/rule-audits/")) continue;
+      const text = codeLines(f).join("\n");
+      if (/recordAuditFindings\s*\(/.test(text)) continue;
+      violations.push({
+        rule,
+        why: "the rule audit reports its findings and persists none of them, so nothing can scope them to a client or say how long one has been open",
+        fix: "write every finding through recordAuditFindings() before reporting it",
+        where: f.path,
+        line: "audit findings never persisted",
+      });
+    }
   }
 
   // PERS-10. A 403 body is a challenge page. Parsing it finds no email and no
