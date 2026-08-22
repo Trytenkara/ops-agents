@@ -2003,6 +2003,80 @@ export function runChecks(files, rulesDir) {
     test: (l) => /xoxp-|SLACK_USER_TOKEN|slack_user_token/.test(l),
   });
 
+  // DISC-09. Whether a client makes a material themselves is read from Tenkara
+  // over a link that timed out or throttled 18 times in one day. Every one of
+  // the five gates resolved that failure to "nothing is self-supplied", which
+  // is the one answer that resumes sourcing on all of it — 217 California
+  // Chemicals leads on Glycerin, held out 1,118 times, would have gone back
+  // through enrichment and outreach on the first outage. So the lookup reports
+  // whether it knows, and a caller that does not know stops.
+  {
+    const rule = "discovery/self-supplied-gate-must-fail-closed";
+    const MOD = "src/lib/self-supplied-materials.ts";
+
+    const mod = anchor(MOD, {
+      rule,
+      why: "one lookup, and it is the thing that has to distinguish a no from a silence",
+      fix: "restore src/lib/self-supplied-materials.ts",
+    });
+    if (mod) {
+      if (!/export async function loadSelfSuppliedMaterials\b/.test(mod.text)) {
+        violations.push({
+          rule,
+          why: "a loader that returns a bare Set cannot say it failed, so every caller reads an outage as an empty answer",
+          fix: "keep loadSelfSuppliedMaterials returning { known: true; ids } | { known: false; reason }",
+          where: MOD,
+          line: "the three-state lookup is gone",
+        });
+      }
+      if (!/known:\s*false/.test(mod.text) || !/known:\s*true/.test(mod.text)) {
+        violations.push({
+          rule,
+          why: "'could not ask' has to be a value a caller can branch on, not an empty set that looks like a no",
+          fix: "return { known: false, reason } on a Tenkara error and { known: true, ids } otherwise",
+          where: MOD,
+          line: "the lookup no longer reports whether it knows",
+        });
+      }
+    }
+
+    // Every caller has to branch on it, and none may swallow the failure.
+    const CALLERS = [
+      "src/agents-runtime/agents/lead-creator/index.ts",
+      "src/agents-runtime/agents/data-enrichment/index.ts",
+      "src/agents-runtime/agents/outreach/index.ts",
+      "src/agents-runtime/agents/marketplace-validation/lead-price-pull.ts",
+      "src/app/api/agent/leads/route.ts",
+    ];
+    for (const caller of CALLERS) {
+      const f = anchor(caller, {
+        rule,
+        why: "this is one of the five places that source, enrich, email or price a material",
+        fix: `restore ${caller}`,
+      });
+      if (!f) continue;
+      if (!/loadSelfSuppliedMaterials\(/.test(f.text)) {
+        violations.push({
+          rule,
+          why: "a path that never asks whether the client makes it themselves will source it",
+          fix: "call loadSelfSuppliedMaterials() before the pass does any work",
+          where: f.path,
+          line: "the self-supplied lookup is gone from this path",
+        });
+        continue;
+      }
+      if (!/if\s*\(!\s*\w+(\.\w+)*\.known\)/.test(f.text)) {
+        violations.push({
+          rule,
+          why: "reading `.ids` without checking `.known` is the fail-open again under a new name",
+          fix: "stop the pass when the lookup is not known, before filtering on it",
+          where: f.path,
+          line: "the unknown answer is no longer handled",
+        });
+      }
+    }
+  }
+
   // DISC-05. A platform is a route to a supplier, never the supplier. Two
   // halves, and only the first was held. Discovery refuses to stage a platform
   // as a company (`isAggregatorPlatformName` in the scout), but nothing stopped

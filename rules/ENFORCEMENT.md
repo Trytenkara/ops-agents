@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-121 rules. 86 are actually enforced, 24 owe a check or a job,
+121 rules. 87 are actually enforced, 23 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 15 of the enforced rules hold only part of their invariant and say so in
@@ -12,9 +12,9 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 78 |
+| **Guard** | A shared module or build check makes it impossible. | 79 |
 | **Audit** | A scheduled job reports the break after the fact. | 8 |
-| **Check owed** | A build check is possible and is not built yet. | 9 |
+| **Check owed** | A build check is possible and is not built yet. | 8 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
 | **None** | Outside this repository. Cannot be checked here. | 2 |
@@ -31,7 +31,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (78)
+## Guard (79)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -83,6 +83,7 @@ this ledger read as enforced.
 | `DISC-05` | A platform is never the supplier | Guard — `discovery/platform-is-never-manufacturer`, four mutations. Both halves, because only the first was ever held: the scout refuses to stage a platform's own name as a company, and `stageDraft` refuses a recipient at a platform's own domain unless the platform is itself the company being written to. Both tests live in `src/lib/aggregator-hosts.ts` (`isAggregatorPlatformName`, `isPlatformOwnedContact`). The gate sits at the send rather than at each write because eighteen places stamp a contact email on a lead and one place sends to it. |
 | `DISC-06` | Duplicate suppliers have one definition | Guard — `src/lib/lead-dupe-guard.ts`. |
 | `DISC-07` | Same name, different grade, is not a duplicate | Guard — `materials/never-merge-on-name-alone`. It asserts the grade test runs in the same loop as the name match, so a pair cannot reach the candidate list on the name alone, and that nothing outside `src/lib/material-merge-flags.ts` writes `material_merge_flags` (META-04). |
+| `DISC-09` | A self-supplied material is not sourced | Guard — `discovery/self-supplied-gate-must-fail-closed`, twelve mutations. `loadSelfSuppliedMaterials` returns whether it knows, and each of the five callers is checked both for asking and for handling the answer it may not get. |
 | `DISC-10` | Checkout decides what a marketplace is | Guard — the price read downgrades any marketplace-labelled page with no checkout at the single read chokepoint (`marketplace_checkout` downgrade in `lead-price-pull.ts`), and the scout prompt applies the same test at classification time. |
 | `OUT-02` | Marketplace storefronts get drafted, on a different channel | Guard — `outreach/no-terminal-drop-without-channel`. The aggregator inquiry channel itself is still owed; see `OUTSTANDING.md`. |
 | `OUT-04` | One email per supplier, one thread | Guard — `outreach/one-thread-per-supplier`: the consolidation key must stay org-and-supplier only, and the single staging call must be fed the whole group. Adding the material to the key is the regression to expect — it looks like a fix for subject-line collisions and it sends one person four emails. Agent 22's operator path is not covered by this check; it stages one lead per call by design and avoids a second thread by CCing onto the existing one, which no static check can tell apart from the fault. |
@@ -127,7 +128,7 @@ this ledger read as enforced.
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
-## Check owed (9)
+## Check owed (8)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -135,7 +136,6 @@ this ledger read as enforced.
 | `PRICING-02` | Delivery cost is per pack tier when pack size changes it | Check owed — `shipping/cost-per-tier`. |
 | `PRICING-03` | Delivery-cost extraction is opt-in per client | Check owed — `shipping/extraction-org-opt-in`. |
 | `PRICING-05` | A delivery cost is never fabricated | Check owed — `shipping/no-fabricated-costs`. |
-| `DISC-09` | A self-supplied material is not sourced | Check owed — `discovery/self-supplied-gate-must-fail-closed`: the gates are fail-open today. |
 | `OUT-08` | Supplier asks are staggered | Check owed — `outreach/asks-must-be-staged`. |
 | `OUT-10` | A cancelled outreach must release its alias | Check owed — `outreach/cancel-must-release-alias`. |
 | `ORG-06` | Cross-client lookups are scoped at the query, not filtered after | Check owed — `orgs/name-lookup-must-scope-query`, plus an outstanding repair of the records already mislabelled. See `OUTSTANDING.md`. |

@@ -11,7 +11,7 @@ import { suppliersWithPriorRelationship } from "@/lib/tenkara-relationships";
 import { getSourcingExclusions, exclusionReason } from "@/lib/tenkara-sourcing-exclusions";
 import { getNoteDerivedCountryExclusions } from "@/lib/client-sourcing-rules";
 import { resolveMaterialNames } from "@/lib/tenkara-names";
-import { loadSelfSuppliedMaterialIds } from "@/lib/self-supplied-materials";
+import { loadSelfSuppliedMaterials, selfSuppliedUnavailable } from "@/lib/self-supplied-materials";
 import { corporateDomainForMatch } from "@/lib/mailbox-domain";
 import { orgScopedKey } from "@/lib/org-isolation";
 import { randomUUID } from "crypto";
@@ -166,17 +166,21 @@ registerAgent({
     // Never draft for a material the client supplies themselves. Agent 03 stops
     // staging these, but a lead created before the client flipped the switch is
     // still sitting at stage='enriched' and would otherwise get emailed.
-    // Fail-open: a Tenkara error leaves the pull untouched.
-    try {
-      const selfSupplied = await loadSelfSuppliedMaterialIds();
-      if (selfSupplied.size) {
-        const before = leads.length;
-        leads = leads.filter((l) => !(l.material_id && selfSupplied.has(l.material_id)));
-        const skipped = before - leads.length;
-        if (skipped) await ctx.log(`Skipped ${skipped} lead(s) on self-supplied materials`, { step: "pull" });
+    // DISC-09: fails closed, and this is the site that matters most — an email
+    // asking a supplier to quote a material the client already makes cannot be
+    // taken back, so no drafts go out on an unknown flag.
+    {
+      const selfSupplied = await loadSelfSuppliedMaterials();
+      if (!selfSupplied.known) {
+        await ctx.log(selfSuppliedUnavailable(selfSupplied.reason), { level: "warn", step: "pull" });
+        ctx.setStatus("partial");
+        ctx.setSummary("Self-supplied lookup unavailable; no outreach this pass.");
+        return;
       }
-    } catch (e: any) {
-      await ctx.log(`Self-supplied lookup failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "pull" });
+      const before = leads.length;
+      leads = leads.filter((l) => !(l.material_id && selfSupplied.ids.has(l.material_id)));
+      const skipped = before - leads.length;
+      if (skipped) await ctx.log(`Skipped ${skipped} lead(s) on self-supplied materials`, { step: "pull" });
     }
     if (!leads.length) {
       ctx.setItemsProcessed(0);

@@ -10,7 +10,7 @@ import { aggregatorNameOf, isAggregatorIndexUrl, isAggregatorPlatformName, shoul
 import { getOrgAssignmentContext, orgAutoKey, resolveOperatorId, type AssignmentContext } from "@/lib/operator-assignment";
 import { leadMarketKind } from "@/lib/lead-market";
 import { splitPriceDelta } from "@/lib/price-delta";
-import { loadSelfSuppliedMaterialIds } from "@/lib/self-supplied-materials";
+import { loadSelfSuppliedMaterials, selfSuppliedUnavailable } from "@/lib/self-supplied-materials";
 import { partitionRealVsInternal } from "@/lib/org-priority";
 import { advanceDryPass, DRY_PASS_LIMITS } from "@/lib/dry-pass";
 
@@ -379,13 +379,14 @@ export async function pullPricesForNewMarketplaceLeads(opts: {
   const internalOrgIds = split.internal.map((o: any) => o.id);
 
   // Materials the client supplies themselves aren't being sourced, so there is no
-  // price index to keep warm for them. Fail-open: an empty set on error.
-  let selfSupplied = new Set<string>();
-  try {
-    selfSupplied = await loadSelfSuppliedMaterialIds();
-  } catch (e: any) {
-    await log(`Self-supplied lookup failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "mp_leads" });
+  // price index to keep warm for them. DISC-09: fails closed — no reads are spent
+  // on an unknown flag; the queue is untouched and the next run pulls it.
+  const selfSuppliedLookup = await loadSelfSuppliedMaterials();
+  if (!selfSuppliedLookup.known) {
+    await log(selfSuppliedUnavailable(selfSuppliedLookup.reason), { level: "warn", step: "mp_leads" });
+    return empty;
   }
+  const selfSupplied = selfSuppliedLookup.ids;
 
   const cols = "id, org_id, supplier_id, supplier_name, material_id, material_name, source, payload";
   const marketplaceFilter = "payload->>site_type.in.(M,MS,A),payload->>supplier_role.eq.Marketplace,payload->enrichment->tenkara_supplier->>is_marketplace.eq.true";

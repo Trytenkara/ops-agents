@@ -4,7 +4,7 @@ import { authenticateAgent, unauthorized } from "@/lib/agent-auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { normalizeCompanyName } from "@/lib/tenkara-sourcing-exclusions";
 import { isSameCompanyName } from "@/lib/fuzzy";
-import { loadSelfSuppliedMaterialIds } from "@/lib/self-supplied-materials";
+import { loadSelfSuppliedMaterials } from "@/lib/self-supplied-materials";
 
 function hostOf(url: string | null | undefined): string | null {
   if (!url) return null;
@@ -86,14 +86,23 @@ export async function POST(request: NextRequest) {
 
   // Materials the client supplies themselves are never sourced, so refuse them at
   // the door — this route is how the discovery skills and webhook ingesters stage
-  // leads, and they don't see the Tenkara flag. Fail-open on a Tenkara error.
+  // leads, and they don't see the Tenkara flag. DISC-09: fails closed. The batch
+  // is rejected as retryable rather than staged blind, so the caller keeps it and
+  // re-posts; the dedup above makes the re-post safe.
   let selfSupplied = new Set<string>();
   if (materialIds.length) {
-    try {
-      selfSupplied = await loadSelfSuppliedMaterialIds();
-    } catch (e: any) {
-      console.warn("[api/agent/leads] self-supplied lookup failed (non-fatal):", e?.message ?? e);
+    const lookup = await loadSelfSuppliedMaterials();
+    if (!lookup.known) {
+      return NextResponse.json(
+        {
+          error: "self-supplied lookup unavailable; batch not staged",
+          detail: lookup.reason,
+          retryable: true,
+        },
+        { status: 503 }
+      );
     }
+    selfSupplied = lookup.ids;
   }
 
   let skippedDuplicate = 0;

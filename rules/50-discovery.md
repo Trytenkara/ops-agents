@@ -89,9 +89,16 @@ material off SourceReady for good.
 
 Where a client makes the material themselves, discovery does not run for it.
 
-**Enforcement:** Check owed —
-`discovery/self-supplied-gate-must-fail-closed`: the gates are fail-open
-today.
+Five paths ask the question — discovery, enrichment, outreach, the price pull
+and the lead ingest route — and the answer has three states, not two: the
+client makes it, the client does not, and we could not ask. A path that cannot
+ask stops. It does not proceed on the assumption that nothing is self-supplied,
+because that is the one assumption that sources all of it.
+
+**Enforcement:** Guard — `discovery/self-supplied-gate-must-fail-closed`,
+twelve mutations. `loadSelfSuppliedMaterials` returns whether it knows, and
+each of the five callers is checked both for asking and for handling the answer
+it may not get.
 
 ## DISC-10 — Checkout decides what a marketplace is
 

@@ -44,6 +44,68 @@ const drop = (suffix) => (files) => files.filter((f) => !f.path.endsWith(suffix)
 
 const MUTATIONS = [
   // Line scanners. A synthetic file is enough: these read one line at a time.
+  // DISC-09. Twelve: the two halves of the three-state lookup, and for each of
+  // the five gates both the asking and the handling of "could not ask".
+  {
+    expect: "discovery/self-supplied-gate-must-fail-closed",
+    label: "the lookup goes back to returning a bare set",
+    mutate: rename("src/lib/self-supplied-materials.ts", "export async function loadSelfSuppliedMaterials", "async function unusedLoadSelfSuppliedMaterials"),
+  },
+  {
+    expect: "discovery/self-supplied-gate-must-fail-closed",
+    label: "a Tenkara outage resolves to \"nothing is self-supplied\" again",
+    mutate: edit("src/lib/self-supplied-materials.ts", (t) => t.split("known: false").join("ids: new Set()  // known: no")),
+  },
+  {
+    expect: "discovery/self-supplied-gate-must-fail-closed",
+    label: "discovery stops asking whether the client makes it themselves",
+    mutate: edit("src/agents-runtime/agents/lead-creator/index.ts", (t) => t.split("loadSelfSuppliedMaterials(").join("neverSelfSupplied(")),
+  },
+  {
+    expect: "discovery/self-supplied-gate-must-fail-closed",
+    label: "discovery reads the answer without checking it got one",
+    mutate: edit("src/agents-runtime/agents/lead-creator/index.ts", (t) => t.replace(/if\s*\(!\s*(\w+(?:\.\w+)*)\.known\)/, "if (false)")),
+  },
+  {
+    expect: "discovery/self-supplied-gate-must-fail-closed",
+    label: "enrichment stops asking whether the client makes it themselves",
+    mutate: edit("src/agents-runtime/agents/data-enrichment/index.ts", (t) => t.split("loadSelfSuppliedMaterials(").join("neverSelfSupplied(")),
+  },
+  {
+    expect: "discovery/self-supplied-gate-must-fail-closed",
+    label: "enrichment reads the answer without checking it got one",
+    mutate: edit("src/agents-runtime/agents/data-enrichment/index.ts", (t) => t.replace(/if\s*\(!\s*(\w+(?:\.\w+)*)\.known\)/, "if (false)")),
+  },
+  {
+    expect: "discovery/self-supplied-gate-must-fail-closed",
+    label: "outreach stops asking whether the client makes it themselves",
+    mutate: edit("src/agents-runtime/agents/outreach/index.ts", (t) => t.split("loadSelfSuppliedMaterials(").join("neverSelfSupplied(")),
+  },
+  {
+    expect: "discovery/self-supplied-gate-must-fail-closed",
+    label: "outreach reads the answer without checking it got one",
+    mutate: edit("src/agents-runtime/agents/outreach/index.ts", (t) => t.replace(/if\s*\(!\s*(\w+(?:\.\w+)*)\.known\)/, "if (false)")),
+  },
+  {
+    expect: "discovery/self-supplied-gate-must-fail-closed",
+    label: "the price pull stops asking whether the client makes it themselves",
+    mutate: edit("src/agents-runtime/agents/marketplace-validation/lead-price-pull.ts", (t) => t.split("loadSelfSuppliedMaterials(").join("neverSelfSupplied(")),
+  },
+  {
+    expect: "discovery/self-supplied-gate-must-fail-closed",
+    label: "the price pull reads the answer without checking it got one",
+    mutate: edit("src/agents-runtime/agents/marketplace-validation/lead-price-pull.ts", (t) => t.replace(/if\s*\(!\s*(\w+(?:\.\w+)*)\.known\)/, "if (false)")),
+  },
+  {
+    expect: "discovery/self-supplied-gate-must-fail-closed",
+    label: "the lead ingest route stops asking whether the client makes it themselves",
+    mutate: edit("src/app/api/agent/leads/route.ts", (t) => t.split("loadSelfSuppliedMaterials(").join("neverSelfSupplied(")),
+  },
+  {
+    expect: "discovery/self-supplied-gate-must-fail-closed",
+    label: "the lead ingest route reads the answer without checking it got one",
+    mutate: edit("src/app/api/agent/leads/route.ts", (t) => t.replace(/if\s*\(!\s*(\w+(?:\.\w+)*)\.known\)/, "if (false)")),
+  },
   // DISC-05. Four: the two shared tests, and the two chokepoints that use them.
   {
     expect: "discovery/platform-is-never-manufacturer",

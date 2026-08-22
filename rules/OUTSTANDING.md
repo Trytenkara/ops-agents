@@ -373,6 +373,34 @@ windows are waived in `DECLARED_WINDOWS`, keyed by path *and* by the limit
 expression: rename the constant and the waiver stops applying. PERS-06 moves
 from Check owed to Guard.
 
+## Closed 2026-08-22 — a Tenkara timeout would have resumed sourcing a material the client makes
+
+Broke DISC-09. The gate itself worked: two materials are flagged self-supplied
+in Tenkara (Glycerin and Xylitol), California Chemicals has 217 Glycerin leads
+staged before the switch was flipped, and the fleet skipped them 1,118 times in
+the logs. What was not held was the failure case. All five gates read the flag
+over the Tenkara read-only link and resolved any error to an empty set, and an
+empty set means "nothing is self-supplied" — so the first outage would have put
+all 217 leads back through enrichment, the price pull and outreach.
+
+That link is not theoretical. It throttled or timed out 18 times on 2026-08-21
+alone, and `tenkaraQuery` already retries three times against a fresh pool, so
+a failure that reaches the caller is a real outage rather than a blip.
+
+The lookup now returns whether it knows. A caller that does not know stops its
+pass: discovery stages nothing, enrichment leaves the claimed leads to roll
+over, the price pull spends no reads, outreach sends no drafts, and the ingest
+route answers 503 retryable so the batch stays with the caller — the dedup
+already there makes the re-post safe. The agents run every few minutes, so a
+skipped pass costs a delay and nothing else.
+
+Nothing was mis-sourced: no lookup failure has been logged, so this closes
+before it happened rather than after.
+
+**Enforcement:** `discovery/self-supplied-gate-must-fail-closed`, twelve
+mutations — the two halves of the three-state lookup, and for each of the five
+callers both the asking and the handling of the answer it may not get.
+
 ## Closed 2026-08-21 — a directory's own inbox counted as a supplier's contact
 
 Broke DISC-05. The classification half was held: the scout rejects a result
@@ -693,7 +721,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | PERS-01 | `retry/verdict-must-use-shared-classifier`. Three call sites use `classifyFailure` and two hand-rolled classifiers remain — see the P2 above. |
 | PERS-04 | the run-summary half. `retry/bound-must-be-declared` shipped 2026-08-20 and holds the rules-folder half: all seven bounds are now named under PERS-04 and an eighth fails the build. A bound must also appear in the run summary, which cannot be read from the source. |
 | PERS-09 | `runs/paced-loop-must-carry-deadline`. `deadlineAt` holds the one job it was written for; a new per-item push loop with no deadline passes the build today. |
-| DISC-09 | `discovery/self-supplied-gate-must-fail-closed` — gates are fail-open today |
 | OUT-02 | the aggregator inquiry channel itself. `outreach/no-terminal-drop-without-channel` stops a storefront being dropped for having no email; it cannot make the inquiry form a channel we can actually send through. |
 | OUT-08 | `outreach/asks-must-be-staged` |
 | OUT-10 | `outreach/cancel-must-release-alias` |
