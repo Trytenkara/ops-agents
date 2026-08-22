@@ -652,6 +652,23 @@ ran an install, and it is bypassed by a single flag.
 
 **Owed:** widen the token's scope, then commit the workflow.
 
+## Closed 2026-08-22 — SHIP-07: the column, not just the table
+
+The table-level check shipped 2026-08-20 and was a ratchet from day one: all 49
+tables and 15 functions read today are created by a migration. The shape that
+actually caused ENG-1036 was smaller — the table was there and the column was
+not — and PRICING-04 was the same fault again two days ago: `ship_to_*` selected
+off `orgs`, which has no such columns, swallowed and read as "no address".
+
+Every column named in a literal `.select(...)` is now matched against the
+columns the migrations create. It came up clean on the first run, so this is a
+ratchet too. The one thing that made it hard: SQL comments and string literals
+have to come out before the CREATE TABLE bodies are walked, because a single
+unbalanced parenthesis inside a comment truncates a table's column list and
+produces 226 false violations that all look real.
+
+`ship/migration-must-accompany-schema-read`, two more mutations.
+
 ## Closed 2026-08-22 — PRICING-01/02/05: the number, the currency, the weight
 
 Held back for weeks on the reasoning that the feature had never produced a
@@ -836,7 +853,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | OUT-02 | the aggregator inquiry channel itself. `outreach/no-terminal-drop-without-channel` stops a storefront being dropped for having no email; it cannot make the inquiry form a channel we can actually send through. |
 | UI-02 | the seven existing global review routes. `ui/no-global-review-route` shipped 2026-08-20 as a ratchet, so no eighth can be added, but the seven that predate it are still live and still cross-client. Removing them is a product decision. |
 | UI-06 | somewhere to persist an audit finding. `ui/flagged-set-must-have-a-surface` makes every set in the registry render; findings that live nowhere never reach the registry, so the guard cannot see them. |
-| SHIP-07 | column granularity. `ship/migration-must-accompany-schema-read` shipped 2026-08-20 over tables and RPCs; all 49 tables and 15 functions read today are created by a migration, so it is a ratchet. A read of a *column* that no migration adds is still invisible, and that is the shape ENG-1036 took. |
 
 ### Reported by an audit, and the audit closes nothing
 

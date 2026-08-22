@@ -95,9 +95,15 @@ errors, not anything that said "the schema is behind".
 
 **Enforcement:** Guard — `ship/migration-must-accompany-schema-read`: every
 table read through `.from(...)` and every `.rpc(...)` must be created by a
-migration in this repo. That is the granularity that can be read statically and
-the one that fails every call rather than one field; a missing *column* is
-still owed and is listed in `OUTSTANDING.md`. The check also fails if no
+migration in this repo. That is read statically at three
+granularities: the table, the RPC, and — since 2026-08-22 — every column named
+in a literal `.select(...)` list, which is the granularity ENG-1036 actually
+broke at. Reading the columns out of the migrations means stripping SQL
+comments and string literals first: one unbalanced parenthesis inside either
+truncates a CREATE TABLE body and turns every real column on that table into a
+false violation. An embedded select names columns on another table and is left
+to that table's own reads; a view has no column list to read, so the table-level
+limb covers it. The check also fails if no
 migrations are in the corpus at all, since an empty schema would otherwise read
 as "nothing to check".
 

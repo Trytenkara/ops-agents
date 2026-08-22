@@ -718,7 +718,7 @@
       "id": "SHIP-07",
       "title": "Deploy and schema move together",
       "bucket": "Guard",
-      "owes": true
+      "owes": false
     },
     {
       "id": "SHIP-08",
@@ -749,6 +749,7 @@
     "Closed 2026-08-22 — PERS-09: a paced loop outrunning its function",
     "CLOSED 2026-08-22 — Two hand-rolled retry classifiers, and a third fault behind them",
     "P2 — No pre-merge build gate",
+    "Closed 2026-08-22 — SHIP-07: the column, not just the table",
     "Closed 2026-08-22 — PRICING-01/02/05: the number, the currency, the weight",
     "Closed 2026-08-22 — PRICING-03/04: the delivery cost that was never attempted",
     "P2 — A discard on a revalidation draft can be answered but not acted on",

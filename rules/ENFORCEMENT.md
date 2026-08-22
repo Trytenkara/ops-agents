@@ -4,10 +4,10 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-121 rules. 95 are actually enforced, 6 owe a check or a job,
+121 rules. 95 are actually enforced, 5 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
-6 of the enforced rules hold only part of their invariant and say so in
+5 of the enforced rules hold only part of their invariant and say so in
 their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
@@ -122,7 +122,7 @@ this ledger read as enforced.
 | `SHIP-02` | Never stage everything | Guard — `shipping/no-blanket-stage`, three mutations: deleting the hook, the hook no longer looking at what the stage added, and a script that runs `git add -A`. What is left after those is judgement. |
 | `SHIP-03` | A red build is silent, so build before you push | Guard — pre-push hook, on machines that ran `npm install`. |
 | `SHIP-04` | Rules are checked before the build | Guard — `rules/enforcement-ledger-must-match` regenerates the ledger and the runtime snapshot in memory and fails on any diff; `rules/every-rule-declares-enforcement` rejects an enforcement value outside the shared vocabulary; `rules/owed-enforcement-must-be-outstanding` and `rules/debt-register-must-match-the-ledger` hold the debt register to the ledger in both directions; `rules/no-orphaned-check-id` reads every check id out of `rule-checks.mjs` and fails on one no rule names. |
-| `SHIP-07` | Deploy and schema move together | Guard — `ship/migration-must-accompany-schema-read`: every table read through `.from(...)` and every `.rpc(...)` must be created by a migration in this repo. That is the granularity that can be read statically and the one that fails every call rather than one field; a missing *column* is still owed and is listed in `OUTSTANDING.md`. The check also fails if no migrations are in the corpus at all, since an empty schema would otherwise read as "nothing to check". |
+| `SHIP-07` | Deploy and schema move together | Guard — `ship/migration-must-accompany-schema-read`: every table read through `.from(...)` and every `.rpc(...)` must be created by a migration in this repo. That is read statically at three granularities: the table, the RPC, and — since 2026-08-22 — every column named in a literal `.select(...)` list, which is the granularity ENG-1036 actually broke at. Reading the columns out of the migrations means stripping SQL comments and string literals first: one unbalanced parenthesis inside either truncates a CREATE TABLE body and turns every real column on that table into a false violation. An embedded select names columns on another table and is left to that table's own reads; a view has no column list to read, so the table-level limb covers it. The check also fails if no migrations are in the corpus at all, since an empty schema would otherwise read as "nothing to check". |
 
 ## Audit (6)
 

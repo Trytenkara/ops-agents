@@ -1513,8 +1513,86 @@ export function runChecks(files, rulesDir) {
       const fns = new Set(
         [...sql.matchAll(/create\s+(?:or\s+replace\s+)?function\s+(?:public\.)?([a-z_0-9]+)/g)].map((m) => m[1]),
       );
+      // Column granularity. SHIP-07's remaining half, and the shape ENG-1036
+      // actually took: the table existed, the column did not, and the symptom
+      // was an ordinary-looking agent error. The comments and string literals
+      // come out first because an unbalanced parenthesis inside either one
+      // throws off the depth walk over a CREATE TABLE body, which silently
+      // truncates that table's column list and turns every real column into a
+      // false violation.
+      const clean = sql
+        .replace(/--[^\n]*/g, "")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/'(?:[^']|'')*'/g, "''");
+      const columns = new Map();
+      const addColumn = (t, c) => {
+        if (!columns.has(t)) columns.set(t, new Set());
+        columns.get(t).add(c);
+      };
+      const NOT_A_COLUMN = /^(primary|unique|constraint|foreign|check|exclude|like)$/;
+      const CREATE = /create\s+table\s+(?:if\s+not\s+exists\s+)?(?:public\.)?([a-z_0-9]+)\s*\(/g;
+      for (let m; (m = CREATE.exec(clean)); ) {
+        let i = m.index + m[0].length;
+        const start = i;
+        for (let depth = 1; i < clean.length && depth > 0; i++) {
+          if (clean[i] === "(") depth++;
+          else if (clean[i] === ")") depth--;
+        }
+        const body = clean.slice(start, i - 1);
+        // Split on top-level commas only: a check constraint or a numeric type
+        // carries its own commas inside parentheses.
+        const parts = [];
+        let depth = 0;
+        let cur = "";
+        for (const ch of body) {
+          if (ch === "(") depth++;
+          else if (ch === ")") depth--;
+          if (ch === "," && depth === 0) {
+            parts.push(cur);
+            cur = "";
+          } else cur += ch;
+        }
+        parts.push(cur);
+        for (const part of parts) {
+          const c = part.trim().match(/^"?([a-z_0-9]+)"?\s+[a-z]/);
+          if (c && !NOT_A_COLUMN.test(c[1])) addColumn(m[1], c[1]);
+        }
+      }
+      for (const m of clean.matchAll(/alter\s+table\s+(?:if\s+exists\s+)?(?:public\.)?([a-z_0-9]+)([\s\S]*?);/g)) {
+        for (const a of m[2].matchAll(/add\s+(?:column\s+)?(?:if\s+not\s+exists\s+)?"?([a-z_0-9]+)"?/g)) {
+          if (!NOT_A_COLUMN.test(a[1])) addColumn(m[1], a[1]);
+        }
+      }
+      // A view's columns come from its query, not a column list, so they are not
+      // readable here. The table-level limb above still covers the view itself.
+      const viewNames = new Set(
+        [
+          ...clean.matchAll(
+            /create\s+(?:or\s+replace\s+)?(?:materialized\s+)?view\s+(?:if\s+not\s+exists\s+)?(?:public\.)?([a-z_0-9]+)/g,
+          ),
+        ].map((m) => m[1]),
+      );
       for (const f of files) {
         if (!/^src\/.*\.tsx?$/.test(f.path)) continue;
+        // The select list is matched against the whole file rather than a line,
+        // because `.from(...)` and `.select(...)` are usually chained across
+        // lines. An embedded select (`supplier:suppliers(name)`) names columns
+        // on another table, so those are left to that table's own reads.
+        for (const m of f.text.matchAll(/\.from\("([a-z_0-9]+)"\)[\s\S]{0,120}?\.select\(\s*"([^"]*)"/g)) {
+          const table = m[1];
+          if (viewNames.has(table) || !columns.has(table) || /[()]/.test(m[2])) continue;
+          for (const raw of m[2].split(",")) {
+            const col = raw.trim();
+            if (!/^[a-z_0-9]+$/.test(col) || columns.get(table).has(col)) continue;
+            violations.push({
+              rule,
+              why: "this reads a column no migration in this repo adds, which is exactly the shape ENG-1036 took: the table is there, the field is not, and the symptom is an ordinary agent error",
+              fix: `add the migration that adds ${table}.${col} in the same change, or correct the name`,
+              where: f.path,
+              line: `${table}.${col}`,
+            });
+          }
+        }
         codeLines(f).forEach((line, i) => {
           for (const [re, known, kind] of [
             [/\.from\("([a-z_0-9]+)"\)/g, tables, "table"],

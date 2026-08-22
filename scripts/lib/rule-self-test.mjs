@@ -1193,6 +1193,16 @@ const MUTATIONS = [
     mutate: fixture("src/__selftest__/send2.ts", `const body = { subject, auto_send: true };\n`),
   },
   {
+    expect: "ship/migration-must-accompany-schema-read",
+    label: "a select names a column no migration adds",
+    mutate: fixture("src/__selftest__/col.ts", 'await admin.from("orgs").select("id, slug, ship_to_zip");\n'),
+  },
+  {
+    expect: "ship/migration-must-accompany-schema-read",
+    label: "a column is read after its migration is dropped",
+    mutate: rename("migrations/0001_init.sql", "slug text not null unique", "handle text not null unique"),
+  },
+  {
     expect: "shipping/cost-is-numeric-and-unfabricated",
     label: "the per-tier estimate stops being written per tier",
     mutate: rename("agents/browserbase-escalation/index.ts", "tiers[idx].shipping_cost_estimate = ", "tiers[idx].shipping_cost = "),
