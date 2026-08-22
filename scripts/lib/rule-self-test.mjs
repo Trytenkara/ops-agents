@@ -409,6 +409,22 @@ const MUTATIONS = [
     ),
   },
   {
+    expect: "orgs/supplier-query-must-scope-to-client",
+    label: "an unscoped read rides in on a scoped one in the same file",
+    mutate: fixture(
+      "src/__selftest__/supplier-query-two.ts",
+      `const scoped = \`select id from public.suppliers where $1 = any(organization_ids)\`;\n` +
+        `const all = \`select id, name, poc_email from public.suppliers order by name\`;\n`,
+    ),
+  },
+  {
+    expect: "orgs/supplier-query-must-scope-to-client",
+    label: "the whole table read back and filtered in JS",
+    mutate: edit("src/lib/supplier-profile-fill.ts", (s) =>
+      s.replace("     WHERE $1::uuid = any(organization_ids)`,\n    [tenkaraOrgId]", "`")
+    ),
+  },
+  {
     expect: "orgs/supplier-id-written-must-be-scoped",
     label: "id copied off a row",
     mutate: fixture(

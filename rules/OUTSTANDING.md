@@ -572,12 +572,6 @@ despite its own comment saying exhaustion is per-run.
 
 **Owed:** `check-rules` id `retry/no-inline-classifier`.
 
-## P2 — Cross-client name lookups
-
-Breaks ORG-06. A name search over the shared supplier table mislabelled 907
-conversations. The scoping rule exists; the repair of the affected records and
-the identifier backfill are still outstanding.
-
 ## P2 — No pre-merge build gate
 
 Breaks SHIP-06. A workflow file exists on disk and has never been committed:
@@ -750,7 +744,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | PERS-04 | the run-summary half. `retry/bound-must-be-declared` shipped 2026-08-20 and holds the rules-folder half: all seven bounds are now named under PERS-04 and an eighth fails the build. A bound must also appear in the run summary, which cannot be read from the source. |
 | PERS-09 | `runs/paced-loop-must-carry-deadline`. `deadlineAt` holds the one job it was written for; a new per-item push loop with no deadline passes the build today. |
 | OUT-02 | the aggregator inquiry channel itself. `outreach/no-terminal-drop-without-channel` stops a storefront being dropped for having no email; it cannot make the inquiry form a channel we can actually send through. |
-| ORG-06 | `orgs/name-lookup-must-scope-query` — see the P2 above |
 | UI-02 | the seven existing global review routes. `ui/no-global-review-route` shipped 2026-08-20 as a ratchet, so no eighth can be added, but the seven that predate it are still live and still cross-client. Removing them is a product decision. |
 | UI-06 | somewhere to persist an audit finding. `ui/flagged-set-must-have-a-surface` makes every set in the registry render; findings that live nowhere never reach the registry, so the guard cannot see them. |
 | SHIP-02 | pre-commit hook refusing unstaged paths — see the P2 above |
@@ -811,3 +804,40 @@ Four hand-written copies of the live-draft status list turned up the moment the
 guard could see them (the operator-email agent, both lead and supplier-email
 server actions, and a second one inside the outreach agent itself). All four now
 read the shared constant.
+
+## Closed 2026-08-22 — the shared supplier table, and a guard no rule had claimed
+
+ORG-06 was owed two things: a check, and the repair of the 907 conversations the
+unscoped name lookup mislabelled.
+
+The repair was done on 2026-08-19 (867 re-pointed at their own client's record,
+47 cleared to name-only) and it holds: of 3,348 draft references carrying a
+supplier id on 2026-08-22, **zero** point at a supplier the client does not own,
+across all eight clients. 75 point at a Tenkara supplier row that no longer
+exists, which is a dangling id and a different question.
+
+The check turned out to already exist — `orgs/supplier-query-must-scope-to-client`
+had been running in the build since a78e947 — but no rule named it, so the ledger
+went on reporting ORG-06 as debt while the guard quietly did its job. Nothing
+detects an orphaned check; that is worth a `SHIP-08` line.
+
+Made honest, and in reading it two real holes appeared:
+
+- The check bailed out of a whole file if the string `organization_ids` appeared
+  anywhere in it. A file with one properly scoped query therefore gave every
+  other query in it a free pass.
+- Selecting `organization_ids` counted as scoping it. `supplier-profile-fill`
+  read all 17,148 rows and filtered in JS at the point of use, which is the
+  literal thing ORG-06 forbids, and its name map is where another client's
+  contact once came from.
+
+Both closed. The query now takes the client (`WHERE $1::uuid = any(organization_ids)`)
+and the cache is keyed per client; no client id means no Tenkara fill at all,
+rather than an unscoped read to get something. The check requires a filter on
+`organization_ids` inside the same query, and matches with a lookahead so a
+second read sitting inside the first one's window is not swallowed.
+
+Still open and unchanged: `src/agents-runtime/agents/lead-creator/sql.ts`
+surfaces suppliers who quoted a material for *any* client as candidates for the
+requesting client, `poc_email` included. It is keyed by supplier id so the rule
+passes it, and it may well be intended, but nobody has ruled on it.

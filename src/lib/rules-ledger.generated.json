@@ -567,8 +567,8 @@
     {
       "id": "ORG-06",
       "title": "Cross-client lookups are scoped at the query, not filtered after",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "ORG-08",
@@ -747,7 +747,6 @@
     "P2 — Guessed contacts can be synthesised at a directory",
     "P2 — Nothing stops a paced loop from outrunning its function",
     "P2 — Two hand-rolled retry classifiers remain",
-    "P2 — Cross-client name lookups",
     "P2 — No pre-merge build gate",
     "P2 — Nothing prevents staging everything",
     "P2 — Shipping extraction success rate is not monitored",
@@ -757,7 +756,8 @@
     "Closed 2026-08-20 — a guard only bound the repository, and the skills were not in it",
     "The full enforcement debt",
     "Open decisions",
-    "Closed 2026-08-22 — a cancelled email left its supplier's other materials shelved for good"
+    "Closed 2026-08-22 — a cancelled email left its supplier's other materials shelved for good",
+    "Closed 2026-08-22 — the shared supplier table, and a guard no rule had claimed"
   ],
   "conflicts": [
     "A — Short replies vs. paste the evidence — RESOLVED",

@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-121 rules. 89 are actually enforced, 21 owe a check or a job,
+121 rules. 90 are actually enforced, 20 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 15 of the enforced rules hold only part of their invariant and say so in
@@ -12,9 +12,9 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 81 |
+| **Guard** | A shared module or build check makes it impossible. | 82 |
 | **Audit** | A scheduled job reports the break after the fact. | 8 |
-| **Check owed** | A build check is possible and is not built yet. | 6 |
+| **Check owed** | A build check is possible and is not built yet. | 5 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
 | **None** | Outside this repository. Cannot be checked here. | 2 |
@@ -31,7 +31,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (81)
+## Guard (82)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -101,6 +101,7 @@ this ledger read as enforced.
 | `ORG-02` | Never fold leads from two clients into one draft | Guard — `foreignOrgRows`. |
 | `ORG-03` | Shared natural keys carry the organisation in the database too | Guard — `orgs/upsert-conflict-key-must-include-org` plus the schema migrations. |
 | `ORG-04` | An ambiguous inbound reply goes to triage, not to a guess | Guard — `soleOrgOwner`. |
+| `ORG-06` | Cross-client lookups are scoped at the query, not filtered after | Guard — `orgs/supplier-query-must-scope-to-client`, three mutations. A `public.suppliers` read that is not keyed on a supplier id must filter on `organization_ids` in that same query; selecting the column is not a filter, and a scoped query elsewhere in the file does not cover an unscoped one. `src/lib/tenkara-supplier-linker.ts` is waived by path, because it builds the `(client, name)` owner map every other caller is pointed at and needs every row to do it. |
 | `ORG-08` | Membership in `organization_ids` tests the whole set, never a fixed slot | Guard — `orgs/no-fixed-index-org-membership`. |
 | `ORG-09` | A supplier shared across clients never suppresses a client-owned supplier | Guard — `orgs/duplicate-guard-requires-exclusive-supplier`. |
 | `ORG-10` | A supplier id is checked against its owners before it is stored | Guard — the shared resolver `scopedSupplierId` in `src/lib/tenkara-supplier-linker.ts`, and `orgs/supplier-id-written-must-be-scoped`, which fails the build on both arrival paths: a `draft_references` write taking an id off a row, and any agent API route storing an id off the request body. |
@@ -130,7 +131,7 @@ this ledger read as enforced.
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
-## Check owed (6)
+## Check owed (5)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -138,7 +139,6 @@ this ledger read as enforced.
 | `PRICING-02` | Delivery cost is per pack tier when pack size changes it | Check owed — `shipping/cost-per-tier`. |
 | `PRICING-03` | Delivery-cost extraction is opt-in per client | Check owed — `shipping/extraction-org-opt-in`. |
 | `PRICING-05` | A delivery cost is never fabricated | Check owed — `shipping/no-fabricated-costs`. |
-| `ORG-06` | Cross-client lookups are scoped at the query, not filtered after | Check owed — `orgs/name-lookup-must-scope-query`, plus an outstanding repair of the records already mislabelled. See `OUTSTANDING.md`. |
 | `SHIP-02` | Never stage everything | Check owed — a pre-commit hook that refuses paths outside those explicitly staged. See `OUTSTANDING.md`. |
 
 ## Judgement (20)

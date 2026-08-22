@@ -551,12 +551,24 @@ export function runChecks(files, rulesDir) {
   // crossed clients, so a read that is not keyed on a supplier id has to say
   // whose suppliers it wants.
   for (const f of files) {
-    if (f.path.endsWith("src/lib/tenkara-supplier-linker.ts")) continue;
-    if (/organization_ids/.test(f.text)) continue;
-    for (const m of f.text.matchAll(/public\.suppliers([\s\S]{0,160})/g)) {
+    // Lookahead, not a capture: consuming the tail would swallow a second
+    // `public.suppliers` sitting inside the first query's 200-char window.
+    for (const m of f.text.matchAll(/public\.suppliers(?=([\s\S]{0,200}))/g)) {
       const tail = m[1];
       // `join public.suppliers s on s.id = q.supplier_id`, `where id = $1`.
       if (/\bon\s+\w*\.?id\s*=|\bwhere\s+id\s*=/i.test(tail)) continue;
+      // The scope has to be a filter in THIS query. Two weaker tests were tried
+      // first and both let the real fault through: a file-wide search for the
+      // column let a second unscoped read ride in on a scoped one, and reading
+      // the column in the select list is not a scope at all — that is exactly
+      // what supplier-profile-fill did, pulling all 17,148 rows and filtering
+      // in JS, which is the same answer only while every reader remembers to
+      // filter, and the name map in that very file did not.
+      if (/(=|<@|@>|&&)\s*any\(organization_ids\)|organization_ids\s*(@>|&&)/.test(tail)) continue;
+      // The linker builds the (client, name) owner map itself and is the one
+      // reader that must see every row to do it. Waived by path, and it is the
+      // module every other caller is pointed at.
+      if (f.path.endsWith("src/lib/tenkara-supplier-linker.ts")) continue;
       violations.push({
         rule: "orgs/supplier-query-must-scope-to-client",
         why: "Tenkara's suppliers table is shared between clients, so searching it by name can return another client's supplier (this labelled 907 conversations and filled profiles with the wrong client's contact)",

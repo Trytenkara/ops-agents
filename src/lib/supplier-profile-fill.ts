@@ -57,19 +57,27 @@ interface TenkaraSupplier {
   organization_ids: string[] | null;
 }
 
-let supplierCache: { rows: TenkaraSupplier[]; at: number } | null = null;
+const supplierCache = new Map<string, { rows: TenkaraSupplier[]; at: number }>();
 const CACHE_MS = 10 * 60 * 1000;
 
-async function loadTenkaraSuppliers(): Promise<TenkaraSupplier[]> {
-  if (supplierCache && Date.now() - supplierCache.at < CACHE_MS) return supplierCache.rows;
+// ORG-06. One suppliers table serves every client and `organization_ids` says
+// whose each row is, so the client goes in the WHERE clause. This used to read
+// all 17,148 rows and filter in JS, which is the same answer only while every
+// reader remembers to filter — and the name map here did not, which is how a
+// client's profile was filled with another client's contact person.
+async function loadTenkaraSuppliers(tenkaraOrgId: string): Promise<TenkaraSupplier[]> {
+  const hit = supplierCache.get(tenkaraOrgId);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.rows;
   const rows = await tenkaraQuery<TenkaraSupplier>(
     `SELECT id, name, poc_name, poc_email, poc_phone, address, city, state, zip,
             shipping_terms, shipping_email, billing_email, payment_terms,
             ddp_minimum_limit, ddp_maximum_limit, accessorial_charges,
             organization_ids
-     FROM public.suppliers`
+     FROM public.suppliers
+     WHERE $1::uuid = any(organization_ids)`,
+    [tenkaraOrgId]
   );
-  supplierCache = { rows, at: Date.now() };
+  supplierCache.set(tenkaraOrgId, { rows, at: Date.now() });
   return rows;
 }
 
@@ -186,18 +194,14 @@ export async function fillProfilesFromKnownSources(
   let tenkaraById = new Map<string, TenkaraSupplier>();
   let tenkaraByName = new Map<string, TenkaraSupplier>();
   try {
-    const rows = await loadTenkaraSuppliers();
+    // No client to scope to means no Tenkara fill at all. Reading the table
+    // unscoped to "get something" is the fault this rule is about.
+    const rows = tenkaraOrgId ? await loadTenkaraSuppliers(tenkaraOrgId) : [];
     tenkaraById = new Map(rows.map((r) => [r.id, r]));
     tenkaraByName = new Map();
     for (const r of rows) {
       const k = norm(r.name);
       if (!k || tenkaraByName.has(k)) continue;
-      // Only this client's suppliers may be reached by name. Tenkara keeps one
-      // suppliers table for everyone and names collide constantly, so a
-      // fleet-wide name map filled a client's profile with another client's
-      // contact person, phone and payment terms.
-      if (!tenkaraOrgId) continue;
-      if (!(r.organization_ids ?? []).map(String).includes(tenkaraOrgId)) continue;
       tenkaraByName.set(k, r);
     }
   } catch {

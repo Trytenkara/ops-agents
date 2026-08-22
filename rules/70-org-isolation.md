@@ -57,10 +57,35 @@ Add a check there whenever you add a guard here.
 ## ORG-06 — Cross-client lookups are scoped at the query, not filtered after
 
 A name search across a shared table returns other clients' rows unless the
-query itself is scoped.
+query itself is scoped. Tenkara keeps one `public.suppliers` table for every
+client — 17,148 rows — and `organization_ids` says whose each row is. Names
+collide constantly: 1,555 normalized names cover 3,302 rows and 1,554 of those
+groups span more than one client.
 
-**Enforcement:** Check owed — `orgs/name-lookup-must-scope-query`, plus an
-outstanding repair of the records already mislabelled. See `OUTSTANDING.md`.
+`resolveSupplierIdByName` matched on normalized name across the whole table and
+took the first row, which pointed 907 of 3,141 conversations at another client's
+supplier record on 2026-08-19. Ownership, quotes and profiles all hang off that
+record. It was a labelling fault, not a mis-delivery: recipients are chosen at
+contact-finding, and in 784 of the 907 we had emailed exactly the contact the
+client's own record holds.
+
+Filtering afterwards is not scoping. It gives the same answer only for as long
+as every reader remembers to filter, and one did not: `supplier-profile-fill`
+loaded the whole table into a fleet-wide cache and built its name map from all
+of it, so another client's contact person, phone and payment terms were copied
+onto a profile. The client belongs in the `WHERE` clause, and the query is then
+right for every reader of its result.
+
+Fetching a supplier you have already identified is safe — an id names one row.
+Searching for one is what crosses clients.
+
+**Enforcement:** Guard — `orgs/supplier-query-must-scope-to-client`, three
+mutations. A `public.suppliers` read that is not keyed on a supplier id must
+filter on `organization_ids` in that same query; selecting the column is not a
+filter, and a scoped query elsewhere in the file does not cover an unscoped one.
+`src/lib/tenkara-supplier-linker.ts` is waived by path, because it builds the
+`(client, name)` owner map every other caller is pointed at and needs every row
+to do it.
 
 ## ORG-08 — Membership in `organization_ids` tests the whole set, never a fixed slot
 
