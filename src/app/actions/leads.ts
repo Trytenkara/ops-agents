@@ -1,5 +1,6 @@
 "use server";
 import { revalidatePath } from "next/cache";
+import { LIVE_DRAFT_STATUSES } from "@/lib/outreach-holds";
 import { DROP_REASONS, type DropReason } from "@/app/actions/lead-drop-reasons";
 import { addDoNotContact } from "@/app/actions/do-not-contact";
 import { getSession, hasAnyRole } from "@/lib/auth";
@@ -307,7 +308,7 @@ export async function requestOutreachRetry(leadId: string): Promise<ActionResult
   // window is not a cost control, it is a wrong answer — the 5,001st row is the
   // thread we then write over the top of. Ask the database the actual question
   // instead of scanning a slice of the client's drafts in JS.
-  const LIVE_STATUSES = ["staged", "reviewed", "sent", "linked"];
+  const LIVE_STATUSES = LIVE_DRAFT_STATUSES;
   const liveThread = admin
     .from("draft_references")
     .select("id")

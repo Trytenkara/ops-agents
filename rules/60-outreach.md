@@ -143,12 +143,34 @@ The audit runs on the sweep's own loader rather than a copy of its logic. An
 audit that re-derives the clock drifts from the producer and then reports on a
 pipeline that does not exist.
 
-## OUT-10 — A cancelled outreach must release its alias
+## OUT-10 — A cancelled outreach must release what it was holding
 
 Cancelling in bulk without deleting the email alias leaves a ghost address that
-still receives replies nobody reads.
+still receives replies nobody reads. Agent 04 was taught to ignore an alias
+whose draft is dead (b3c49ea), which closed the ghost-reply half. The alias rows
+themselves are deliberately kept: re-cold-emailing a supplier we really did
+write to is worse than holding one we did not.
 
-**Enforcement:** Check owed — `outreach/cancel-must-release-alias`.
+The half that stayed open is the leads. When a first email goes out, the
+supplier's remaining materials are held on `payload.phased_hold` so the reply
+loop can introduce them once the supplier engages, and held leads are excluded
+from the outreach fetch window. So a hold waiting on an email that no longer
+exists is both permanent and invisible — nothing but a dedicated sweep can ever
+see it again. On 2026-08-22 that was 24 leads held on a discarded draft, 11 on a
+superseded one, 23 pointing at a draft row that no longer exists, and 101
+recording no draft at all.
+
+A hold is a loan against a specific thing, so it records what it waits on — the
+draft reference and the thread — and the outreach pass releases it the moment
+that thing stops being live. What counts as live has one definition,
+`LIVE_DRAFT_STATUSES`; a second copy is the drift that leaves a lead held on a
+draft the other copy already calls dead.
+
+**Enforcement:** Guard — `outreach/cancel-must-release-alias`. Five mutations:
+renaming either export of `src/lib/outreach-holds.ts`, removing the sweep call
+from the outreach agent, dropping `first_pool_thread_id` from the hold payload,
+and a second hand-written copy of the live-draft status list anywhere under
+`src/`.
 
 ## OUT-11 — A rejected draft is not redrafted
 

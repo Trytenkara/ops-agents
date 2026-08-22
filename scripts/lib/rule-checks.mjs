@@ -2003,6 +2003,81 @@ export function runChecks(files, rulesDir) {
     test: (l) => /xoxp-|SLACK_USER_TOKEN|slack_user_token/.test(l),
   });
 
+  // OUT-10. A phased hold waits on a first email. The held leads are excluded
+  // from the outreach fetch window, so when that email is cancelled the hold is
+  // both permanent and invisible — 128 blocked drafts on 2026-08-03 shelved 219
+  // suppliers, and on 2026-08-22 59 leads were still waiting on a draft that had
+  // been discarded, superseded or deleted outright.
+  {
+    const rule = "outreach/cancel-must-release-alias";
+    const MOD = "src/lib/outreach-holds.ts";
+    const AGENT = "src/agents-runtime/agents/outreach/index.ts";
+
+    const mod = anchor(MOD, {
+      rule,
+      why: "one sweep gives a held lead back, and one list says what a live draft is",
+      fix: "restore src/lib/outreach-holds.ts",
+    });
+    if (mod) {
+      for (const [sym, why] of [
+        ["releaseDeadPhasedHolds", "without the sweep a cancelled email shelves its supplier's other materials for good"],
+        ["LIVE_DRAFT_STATUSES", "two copies of what counts as a live draft drift, and the half that drifts holds leads on drafts that are gone"],
+      ]) {
+        if (!new RegExp(`export (async function|const) ${sym}\\b`).test(mod.text)) {
+          violations.push({
+            rule,
+            why,
+            fix: `keep ${sym} exported from ${MOD}`,
+            where: MOD,
+            line: `${sym} is gone`,
+          });
+        }
+      }
+    }
+
+    const agent = anchor(AGENT, {
+      rule,
+      why: "the outreach sweep is the only pass that can see these leads at all",
+      fix: `restore ${AGENT}`,
+    });
+    if (agent) {
+      if (!/releaseDeadPhasedHolds\(/.test(agent.text)) {
+        violations.push({
+          rule,
+          why: "held leads are filtered out of every fetch, so if this pass does not release them nothing will",
+          fix: "call releaseDeadPhasedHolds before pulling candidates",
+          where: agent.path,
+          line: "nothing gives a dead hold back",
+        });
+      }
+      if (!/first_pool_thread_id/.test(agent.text)) {
+        violations.push({
+          rule,
+          why: "a hold that names neither a draft nor a thread cannot be released when that thing dies",
+          fix: "record first_pool_thread_id alongside first_pool_draft_ref_id when holding",
+          where: agent.path,
+          line: "a hold no longer records what it waits on",
+        });
+      }
+    }
+
+    // One definition of a live draft, everywhere.
+    for (const f of files) {
+      if (!f.path.startsWith("src/") || f.path.endsWith(MOD)) continue;
+      codeLines(f).forEach((line, i) => {
+        if (/"staged",\s*"reviewed",\s*"sent",\s*"linked"/.test(line)) {
+          violations.push({
+            rule,
+            why: "a second copy of the live-draft list is the drift that leaves a lead held on a draft this copy still calls alive",
+            fix: "import LIVE_DRAFT_STATUSES from src/lib/outreach-holds.ts",
+            where: `${f.path}:${i + 1}`,
+            line: line.trim().slice(0, 120),
+          });
+        }
+      });
+    }
+  }
+
   // OUT-08. Asking a supplier for every blank field at once is what ops flagged
   // on 2026-08-15 ("It sounds too AI because its asking all of the blank
   // fields"), and suppliers stopped answering. The cadence that fixed it is

@@ -750,7 +750,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | PERS-04 | the run-summary half. `retry/bound-must-be-declared` shipped 2026-08-20 and holds the rules-folder half: all seven bounds are now named under PERS-04 and an eighth fails the build. A bound must also appear in the run summary, which cannot be read from the source. |
 | PERS-09 | `runs/paced-loop-must-carry-deadline`. `deadlineAt` holds the one job it was written for; a new per-item push loop with no deadline passes the build today. |
 | OUT-02 | the aggregator inquiry channel itself. `outreach/no-terminal-drop-without-channel` stops a storefront being dropped for having no email; it cannot make the inquiry form a channel we can actually send through. |
-| OUT-10 | `outreach/cancel-must-release-alias` |
 | ORG-06 | `orgs/name-lookup-must-scope-query` — see the P2 above |
 | UI-02 | the seven existing global review routes. `ui/no-global-review-route` shipped 2026-08-20 as a ratchet, so no eighth can be added, but the seven that predate it are still live and still cross-client. Removing them is a product decision. |
 | UI-06 | somewhere to persist an audit finding. `ui/flagged-set-must-have-a-surface` makes every set in the registry render; findings that live nowhere never reach the registry, so the guard cannot see them. |
@@ -783,3 +782,32 @@ None open.
 `CONFLICTS.md` K (scope of the em dash ban), L (the dealbreaker grade rule) and
 M (whether COMM-05 admits an explicit "post this as me") were all ruled on
 2026-08-20. M was ruled no: COMM-05 is absolute.
+
+## Closed 2026-08-22 — a cancelled email left its supplier's other materials shelved for good
+
+OUT-10 was written about ghost alias rows, and that half was fixed in b3c49ea:
+Agent 04 ignores an alias whose draft is dead. The rows are kept on purpose, so
+a supplier we really did write to is never cold-emailed twice.
+
+What nobody had looked at was the leads standing behind the cancelled email.
+Sending a first email holds the supplier's remaining materials on
+`payload.phased_hold`, and the outreach fetch filters held leads out. The hold
+is only ever released by the supplier replying to an email that, after a bulk
+cancel, does not exist. Measured on 2026-08-22 across 1,526 held leads: 24 held
+on a discarded draft, 11 on a superseded one, 23 on a draft reference that no
+longer resolves, and 101 that recorded no draft at all — roughly 159 leads that
+no pass in the fleet could see.
+
+`releaseDeadPhasedHolds` in the new `src/lib/outreach-holds.ts` runs at the top
+of every outreach pass. It pages the held leads for the eligible orgs, checks
+their draft references against `LIVE_DRAFT_STATUSES` in batches, and gives back
+any lead whose draft is gone — recording why on `phased_hold_released` rather
+than deleting the history. A hold that names no draft but does name a thread is
+left alone, because the email did go out; that is why the hold now writes
+`first_pool_thread_id` alongside the draft reference. No manual backfill: the
+sweep repairs the live rows on its next run.
+
+Four hand-written copies of the live-draft status list turned up the moment the
+guard could see them (the operator-email agent, both lead and supplier-email
+server actions, and a second one inside the outreach agent itself). All four now
+read the shared constant.

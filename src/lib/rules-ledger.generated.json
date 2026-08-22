@@ -506,9 +506,9 @@
     },
     {
       "id": "OUT-10",
-      "title": "A cancelled outreach must release its alias",
-      "bucket": "Check owed",
-      "owes": true
+      "title": "A cancelled outreach must release what it was holding",
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "OUT-11",
@@ -756,7 +756,8 @@
     "Closed 2026-08-20 — the quotes table now carries a lane",
     "Closed 2026-08-20 — a guard only bound the repository, and the skills were not in it",
     "The full enforcement debt",
-    "Open decisions"
+    "Open decisions",
+    "Closed 2026-08-22 — a cancelled email left its supplier's other materials shelved for good"
   ],
   "conflicts": [
     "A — Short replies vs. paste the evidence — RESOLVED",

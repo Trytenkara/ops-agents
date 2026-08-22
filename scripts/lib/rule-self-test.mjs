@@ -44,6 +44,36 @@ const drop = (suffix) => (files) => files.filter((f) => !f.path.endsWith(suffix)
 
 const MUTATIONS = [
   // Line scanners. A synthetic file is enough: these read one line at a time.
+  // OUT-10. Five: both halves of the shared module, the sweep that runs it, the
+  // hold that has to say what it waits on, and a second copy of the live list.
+  {
+    expect: "outreach/cancel-must-release-alias",
+    label: "the sweep that gives a dead hold back is deleted",
+    mutate: rename("src/lib/outreach-holds.ts", "export async function releaseDeadPhasedHolds", "async function unusedReleaseDeadPhasedHolds"),
+  },
+  {
+    expect: "outreach/cancel-must-release-alias",
+    label: "the shared definition of a live draft is deleted",
+    mutate: rename("src/lib/outreach-holds.ts", "export const LIVE_DRAFT_STATUSES", "const unusedLiveDraftStatuses"),
+  },
+  {
+    expect: "outreach/cancel-must-release-alias",
+    label: "outreach stops releasing leads held behind a cancelled email",
+    mutate: edit("src/agents-runtime/agents/outreach/index.ts", (t) => t.split("releaseDeadPhasedHolds(").join("noRelease(")),
+  },
+  {
+    expect: "outreach/cancel-must-release-alias",
+    label: "a hold stops recording the thread it waits on",
+    mutate: edit("src/agents-runtime/agents/outreach/index.ts", (t) => t.split("first_pool_thread_id").join("first_pool_unused_id")),
+  },
+  {
+    expect: "outreach/cancel-must-release-alias",
+    label: "a second copy of the live-draft list appears",
+    mutate: fixture(
+      "src/__selftest__/live-draft-copy.ts",
+      `const { data } = await admin\n  .from("draft_references")\n  .select("id")\n  .in("status", ["staged", "reviewed", "sent", "linked"]);\n`,
+    ),
+  },
   // OUT-08. Six: a new askable field with no stage, the cap, the narrowing to
   // one stage, both drafting paths, and the backstop that must stay a backstop.
   {

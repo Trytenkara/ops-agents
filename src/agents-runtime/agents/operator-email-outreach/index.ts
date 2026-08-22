@@ -1,4 +1,5 @@
 import { registerAgent } from "../../registry";
+import { LIVE_DRAFT_STATUSES } from "@/lib/outreach-holds";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { cappedRead } from "@/lib/capped-read";
 import { getOrgAssignmentContext, spreadOwnerId, orgAutoKey, type AssignmentContext } from "@/lib/operator-assignment";
@@ -36,7 +37,7 @@ import { isRetiredContact } from "@/lib/contact-change";
 type Admin = ReturnType<typeof createAdminClient>;
 
 const MAX_LEADS_PER_RUN = 120;
-const LIVE_THREAD_STATUSES = ["staged", "reviewed", "sent", "linked"];
+const LIVE_THREAD_STATUSES = LIVE_DRAFT_STATUSES;
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 // Plain-text note that brings a newly-found contact onto a thread that is

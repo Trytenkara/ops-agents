@@ -1,12 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { LIVE_DRAFT_STATUSES } from "@/lib/outreach-holds";
 import { getSession, hasAnyRole } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAssignedOrgIds, seesAllOrgs } from "@/lib/org-access";
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-const LIVE_THREAD_STATUSES = ["staged", "reviewed", "sent", "linked"];
+const LIVE_THREAD_STATUSES = LIVE_DRAFT_STATUSES;
 
 async function canActOnOrg(orgId: string) {
   const session = await getSession();

@@ -12,6 +12,7 @@ import { getSourcingExclusions, exclusionReason } from "@/lib/tenkara-sourcing-e
 import { getNoteDerivedCountryExclusions } from "@/lib/client-sourcing-rules";
 import { resolveMaterialNames } from "@/lib/tenkara-names";
 import { loadSelfSuppliedMaterials, selfSuppliedUnavailable } from "@/lib/self-supplied-materials";
+import { LIVE_DRAFT_STATUSES, releaseDeadPhasedHolds } from "@/lib/outreach-holds";
 import { corporateDomainForMatch } from "@/lib/mailbox-domain";
 import { orgScopedKey } from "@/lib/org-isolation";
 import { randomUUID } from "crypto";
@@ -108,6 +109,21 @@ registerAgent({
       .map(([id]) => id);
     const realOrgIds = eligibleOrgIds.filter((id) => !isInternalById.get(id));
     const internalOrgIds = eligibleOrgIds.filter((id) => isInternalById.get(id));
+
+    // OUT-10. Give back every lead held behind a first email that no longer
+    // exists. Held leads are excluded from the fetch below, so nothing else can
+    // ever see them; a bulk cancel would otherwise shelve them for good.
+    try {
+      const freed = await releaseDeadPhasedHolds(admin, eligibleOrgIds);
+      if (freed.released) {
+        await ctx.log(
+          `Released ${freed.released} lead(s) held behind a draft that is no longer live (${freed.unidentified} of them recorded no draft at all); ${freed.stillHeld} still held`,
+          { step: "release_holds" }
+        );
+      }
+    } catch (e: any) {
+      await ctx.log(`Phased-hold release failed (non-fatal): ${e?.message ?? e}`, { level: "warn", step: "release_holds" });
+    }
 
     const leadCols =
       "id, org_id, supplier_id, assigned_operator_id, assigned_operator_at, supplier_name, material_id, material_name, payload, confidence_score, outreach_approved_at";
@@ -749,7 +765,7 @@ registerAgent({
           .from("draft_references")
           .select("id")
           .in("id", refIds)
-          .in("status", ["staged", "reviewed", "sent", "linked"]);
+          .in("status", LIVE_DRAFT_STATUSES);
         for (const d of liveDrafts ?? []) liveRefIds.add(d.id);
       }
       let staleAliases = 0;
@@ -803,7 +819,15 @@ registerAgent({
 
     // Stamp payload.phased_hold on leads whose material isn't in the first email —
     // queued for a follow-up once the supplier engages (Phase 2, reply loop).
-    const holdForFollowup = async (leadsToHold: Candidate[], poolMaterialIds: string[], draftRefId?: string) => {
+    // A hold records what it is waiting on — the draft, and the thread if there
+    // is one. A hold that names neither cannot be released when that thing dies,
+    // which is how 101 leads came to sit in one permanently (OUT-10).
+    const holdForFollowup = async (
+      leadsToHold: Candidate[],
+      poolMaterialIds: string[],
+      draftRefId?: string | null,
+      threadId?: string | null,
+    ) => {
       for (const c of leadsToHold) {
         // Drop any stale compile-hold — this material is now past first contact.
         const { outreach_hold, ...p } = (c.lead.payload ?? {}) as any;
@@ -816,6 +840,7 @@ registerAgent({
                 reason: "awaiting_engagement",
                 first_pool_material_ids: poolMaterialIds,
                 first_pool_draft_ref_id: draftRefId ?? null,
+                first_pool_thread_id: threadId ?? null,
                 held_at: new Date().toISOString(),
                 run_id: ctx.runId,
               },
@@ -881,7 +906,7 @@ registerAgent({
           .map((candidate) => candidate.email ? aliasByOrgEmail.get(`${candidate.lead.org_id}:${candidate.email.toLowerCase()}`) : null)
           .find(Boolean);
         if (alias) {
-          await holdForFollowup(group, [], alias.draftRefId ?? undefined);
+          await holdForFollowup(group, [], alias.draftRefId, alias.threadId);
           continue;
         }
         let existing: any[] = [];
@@ -890,7 +915,7 @@ registerAgent({
             .from("draft_references")
             .select("id")
             .eq("org_id", primary.lead.org_id)
-            .in("status", ["staged", "reviewed", "sent", "linked"])
+            .in("status", LIVE_DRAFT_STATUSES)
             .eq("supplier_id", supplierId)
             .limit(1);
           existing = data ?? [];
@@ -910,7 +935,7 @@ registerAgent({
             .from("draft_references")
             .select("id")
             .eq("org_id", primary.lead.org_id)
-            .in("status", ["staged", "reviewed", "sent", "linked"])
+            .in("status", LIVE_DRAFT_STATUSES)
             .limit(1);
           if (corporate) {
             q = q.or(`metadata->>supplier_contact_email.ilike.${emailAddr},metadata->>supplier_contact_email.ilike.%@${corporate}`);
@@ -1016,7 +1041,7 @@ registerAgent({
         if (retryRequestId) {
           await admin.rpc("clear_outreach_retry", { p_request_id: retryRequestId });
         }
-        if (remainder.length) await holdForFollowup(remainder, poolMaterialIds, res.draftRefId);
+        if (remainder.length) await holdForFollowup(remainder, poolMaterialIds, res.draftRefId, res.conversationId);
       } else {
         await admin.rpc("release_supplier_email_reservation", { p_org_id: primary.lead.org_id, p_reservation_id: reservationId });
         draftErrors++;
