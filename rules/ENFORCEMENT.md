@@ -4,10 +4,10 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-121 rules. 91 are actually enforced, 18 owe a check or a job,
+121 rules. 91 are actually enforced, 17 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
-14 of the enforced rules hold only part of their invariant and say so in
+13 of the enforced rules hold only part of their invariant and say so in
 their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
@@ -68,7 +68,7 @@ this ledger read as enforced.
 | `DATA-17` | A later source fills a blank, it does not overwrite a checked value | Guard — `applySupplierStatedDetails` in `src/lib/supplier-profiles.ts`, the only path the reply handler writes a profile through; the direct-contact exception is carried by both `site_type` writes in `src/agents-runtime/agents/marketplace-validation/lead-price-pull.ts`. |
 | `PRICING-07` | A marketplace that deals by email becomes a second, direct supplier | Guard — `splitDirectLeadFromMarketplace` in `src/lib/marketplace-direct-split.ts`, which refuses a platform address, refuses a lead already split, and reuses an existing direct sibling instead of stacking a second one. |
 | `PRICING-08` | A price row belongs to one lane and no writer may cross | Guard — `quote_profiles.lane`, not null, no default at the call site: `insertQuoteProfile` requires it, `seedQuoteProfilesFromStaged` reads and writes `direct` only, `syncQuoteProfilesFromMarketplace` reads and writes `marketplace` only, and the quotes tab groups by supplier and lane. |
-| `PERS-01` | Only a structural verdict is terminal | Guard — `src/lib/retry-verdict.ts` `classifyFailure`. Check owed — `retry/verdict-must-use-shared-classifier`: only three call sites use it and two hand-rolled classifiers remain. See `OUTSTANDING.md`. |
+| `PERS-01` | Only a structural verdict is terminal | Guard — `src/lib/retry-verdict.ts` `classifyFailure`, held by `retry/no-inline-classifier`: the classifier must stay exported, the two loops that used to hand-roll their own (the Browserbase pull and the Tenkara owner push) must call it, the browser pull may not invent a `login_required` verdict of its own, and a second rate-limit regex anywhere in a runtime file fails the build. |
 | `PERS-02` | "Needs a human" is a display flag, never a queue exit | Guard — `queues/flag-must-not-exit-queue`, four mutations. No read may filter the flagged rows away, and a lead may only be parked against a case through `src/lib/lead-queue-holds.ts`, which records the case id and whose `releaseClosedHolds` gives the lead back the moment that case stops being open. Both halves are checked: deleting the sweep fails the build, and so does leaving it uncalled. |
 | `PERS-03` | A zero-result pass is never "this market is empty" | Guard — `src/lib/dry-pass.ts` (`passOutcome`, `advanceDryPass`, `retryAfter`, `rowsOrThrow`) and `discovery/zero-must-not-be-terminal`, which fails the build if the helper stops naming all three outcomes, if any of the six sites stops going through it, or if the marketplace re-check goes back to writing a crash as a finding. |
 | `PERS-04` | Retry limits are a spend control, and must be named | Guard — `retry/bound-must-be-declared`: a constant whose name says it bounds attempts, retries or dry passes must be named in this file. The guard holds the half that can be read from the source; the run-summary half is still owed and is listed in `OUTSTANDING.md`. |

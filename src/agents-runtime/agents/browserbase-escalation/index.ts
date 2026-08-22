@@ -178,14 +178,26 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 function dropZeroPrices(r: PullResult): PullResult {
   const bad = (p: any) => p == null || !Number.isFinite(Number(p)) || Number(p) <= 0;
   const tiers = (r.tiers ?? []).filter((t) => !bad(t.price));
-  if (tiers.length === (r.tiers ?? []).length && !bad(r.current_price)) return r;
+  // Only act when a price was actually thrown away. The old test was
+  // `bad(r.current_price)`, which is true of every result that never had a
+  // price, so a login wall and a dead link both came out of here relabelled
+  // `needs_review` — 307 leads, every failure kind flattened into one, and
+  // `login_required` (the one that escalates to a human) unreachable from this
+  // agent entirely.
+  const droppedTiers = (r.tiers ?? []).length - tiers.length;
+  const droppedCurrent = r.current_price != null && bad(r.current_price);
+  if (!droppedTiers && !droppedCurrent) return r;
   const current = bad(r.current_price) ? tiers[0]?.price ?? null : r.current_price;
   return {
     ...r,
     tiers,
     current_price: current,
-    classification: current == null ? "needs_review" : r.classification,
-    notes: current == null ? `${r.notes} (dropped non-positive price(s); nothing real left to publish)` : r.notes,
+    // A found price that turns out to be a placeholder is no longer a found
+    // price. Any other verdict stands: dropping a bad number says nothing about
+    // why the page could not be read.
+    classification:
+      current == null && r.classification === "current_price_found" ? "needs_review" : r.classification,
+    notes: `${r.notes} (dropped non-positive price(s); nothing real left to publish)`,
   };
 }
 

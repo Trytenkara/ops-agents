@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAllPaged } from "@/lib/supabase-paging";
 import { getOrgAssignmentContext, recordOwnerId } from "@/lib/operator-assignment";
 import { setTenkaraConversationAssignee } from "@/lib/tenkara";
+import { classifyFailure } from "@/lib/retry-verdict";
 
 // Re-derive the owner of an org's OPEN threads and push it to the Tenkara inbox.
 //
@@ -85,7 +86,14 @@ async function pushOwner(threadId: string, email: string, attempts = 3): Promise
       usedInWindow = RATE_PER_MIN;
       continue;
     }
-    await sleep(500 * 2 ** attempt);
+    // Everything else goes through the shared classifier, so this loop cannot
+    // grow a second idea of what is worth another attempt (PERS-01). The two
+    // verdicts above are the deliberate exceptions and are argued for beside
+    // them. What this adds: a 401 stops here instead of spending three attempts
+    // on credentials that will not improve.
+    const v = classifyFailure({ status: res.status }, { attempt, maxAttempts: attempts });
+    if (v.verdict === "terminal") return "failed";
+    await sleep(v.backoffMs);
   }
   return "failed";
 }

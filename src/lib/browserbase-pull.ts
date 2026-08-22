@@ -17,6 +17,7 @@
 import { Stagehand } from "@browserbasehq/stagehand";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
+import { classifyFailure } from "@/lib/retry-verdict";
 
 export interface PullTier {
   pack_size: string | null;
@@ -481,12 +482,9 @@ async function attempt(opts: {
   }
 }
 
-const isRateLimit = (msg: string) => /\b429\b|rate.?limit|too many requests/i.test(msg);
-
-// Jittered exponential backoff. Under concurrency the workers must NOT retry a
-// 429 in lockstep, which just re-hits the limit.
-async function backoff(i: number) {
-  const ms = 3000 * 2 ** i + Math.floor(Math.random() * 2000);
+// Under concurrency the workers must NOT retry a 429 in lockstep, which just
+// re-hits the limit; the shared classifier's backoff is jittered for that.
+async function backoff(ms: number) {
   await new Promise((r) => setTimeout(r, ms));
 }
 
@@ -513,25 +511,27 @@ export async function agenticPull(opts: {
     } catch (e: any) {
       lastErr = e;
       const msg = String(e?.message ?? e);
-      const rateLimited = isRateLimit(msg);
-      const retryable =
-        e?.ban ||
-        e?.retry ||
-        rateLimited ||
-        /Target (page|closed)|browser has been closed|session .*(closed|expired|disconnect)|websocket|CDP|Connection closed/i.test(
-          msg,
-        );
-      if (!retryable) return emptyResult("needs_review", `agentic pull error: ${msg.slice(0, 180)}`, url);
-      if (rateLimited && i < maxAttempts - 1) await backoff(i);
+      // PERS-01: one classifier for the whole fleet. This loop used to keep its
+      // own, narrower idea of retryable, so anything it did not recognise was
+      // given up on after a single attempt. `scope: "page"` is what makes a 403
+      // a bot wall to route around rather than a verdict about credentials.
+      const v = classifyFailure(e, { attempt: i, scope: "page" });
+      // Stagehand sets this itself when it wants the step replayed; there is no
+      // status or message behind it for the classifier to read.
+      if (v.verdict !== "retry" && e?.retry !== true) {
+        return emptyResult("needs_review", `agentic pull error (${v.reason}): ${msg.slice(0, 160)}`, url);
+      }
+      if (v.rateLimited && i < maxAttempts - 1) await backoff(v.backoffMs);
     }
   }
-  // Exhausted retries. Label honestly: a persistent 429 is a transient block that
-  // may clear by the next run, NOT a login wall.
+  // Exhausted retries. `login_required` is only ever the model's reading of an
+  // actual sign-in wall on the page: it escalates to a human on the first hit,
+  // and sending one to a page that is not gated wastes the trip. A block, a 429
+  // and an unclassified failure are all "we could not read it", so they say so
+  // and stay in the retry rotation.
   const msg = String(lastErr?.message ?? lastErr);
-  if (isRateLimit(msg)) {
-    return emptyResult("needs_review", `rate-limited (429) after ${maxAttempts} attempts: ${msg.slice(0, 120)}`, url);
-  }
-  return emptyResult("login_required", `blocked across ${maxAttempts} proxy IPs: ${msg.slice(0, 140)}`, url);
+  const v = classifyFailure(lastErr, { attempt: maxAttempts - 1, scope: "page" });
+  return emptyResult("needs_review", `${v.reason} after ${maxAttempts} attempts: ${msg.slice(0, 120)}`, url);
 }
 
 // Shipping cost extraction from marketplace checkouts. After capturing product

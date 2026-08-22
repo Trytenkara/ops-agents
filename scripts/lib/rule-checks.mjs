@@ -1534,6 +1534,76 @@ export function runChecks(files, rulesDir) {
   // them together: the failure mode is one of the two being moved or dropped in
   // a cleanup, since each looks redundant next to the other.
   {
+    const rule = "retry/no-inline-classifier";
+    const shared = anchor("src/lib/retry-verdict.ts", {
+      rule,
+      why: "this is the one place that decides whether a failure earns another attempt",
+      fix: "restore src/lib/retry-verdict.ts",
+    });
+    if (shared && !/export function classifyFailure\(/.test(shared.text)) {
+      violations.push({
+        rule,
+        why: "with nothing shared to call, every loop goes back to its own idea of terminal",
+        fix: "keep exporting classifyFailure from src/lib/retry-verdict.ts",
+        where: shared.path,
+        line: "classifyFailure is no longer exported",
+      });
+    }
+    // A 401/403 means opposite things to an API caller and to a page fetcher.
+    // Without the distinction the browser pull cannot use the shared classifier
+    // at all, because a banned proxy IP would read as a permanent verdict.
+    if (shared && !/scope === "page"/.test(shared.text)) {
+      violations.push({
+        rule,
+        why: "a page refusing a visitor is a block to route around, not a verdict about our credentials",
+        fix: "keep the scope === \"page\" branch on the 401/403 case",
+        where: shared.path,
+        line: "the page scope is gone, so a bot wall reads as terminal",
+      });
+    }
+    for (const [path, what] of [
+      ["src/lib/browserbase-pull.ts", "the browser pull's retry loop"],
+      ["src/lib/sync-thread-owners.ts", "the owner push loop"],
+    ]) {
+      const f = anchor(path, { rule, why: `${what} is one of the loops this rule is about`, fix: `restore ${path}` });
+      if (f && !/classifyFailure\(/.test(f.text)) {
+        violations.push({
+          rule,
+          why: "a loop that classifies its own failures drifts from every other loop, and the divergence is invisible until something is missing for a week",
+          fix: "call classifyFailure from @/lib/retry-verdict",
+          where: f.path,
+          line: `${what} no longer uses the shared classifier`,
+        });
+      }
+    }
+    // Exhausting the attempts is not a reading of the page. This label escalates
+    // to a human on the first hit, so it may only come from the model actually
+    // seeing a sign-in wall.
+    const pull = anchor("src/lib/browserbase-pull.ts", {
+      rule,
+      why: "the exhaustion path here used to invent an operator-facing verdict",
+      fix: "restore src/lib/browserbase-pull.ts",
+    });
+    if (pull && /emptyResult\(\s*"login_required"/.test(pull.text)) {
+      violations.push({
+        rule,
+        why: "a proxy block reported as a login wall sends an operator to a page that is not gated",
+        fix: "return needs_review with the classifier's reason; login_required is the model's reading only",
+        where: pull.path,
+        line: "the pull synthesises a login_required verdict of its own",
+      });
+    }
+    forbid({
+      rule,
+      why: "a second rate-limit test is a second retry policy, and the two stop agreeing without anything failing",
+      fix: "use classifyFailure from @/lib/retry-verdict, which reports rateLimited",
+      // Hunter's is not a retry decision: it stands a paid provider down for the
+      // rest of the run on any pacing complaint, including ones with no status.
+      allow: ["src/lib/retry-verdict.ts", "src/lib/hunter.ts"],
+      test: (l) => /\/[^/\n]*(rate.?limit|too many requests)[^/\n]*\/[gimsuy]*\s*\.test\(|=\s*\/[^/\n]*too many requests/i.test(l),
+    });
+  }
+  {
     const rule = "contacts/guessed-combo-requires-own-domain-and-flag";
     const enrich = anchor("src/agents-runtime/agents/data-enrichment/enrich.ts", {
       rule,

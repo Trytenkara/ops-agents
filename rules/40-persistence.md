@@ -29,9 +29,23 @@ Three mechanics follow from it and are easy to get wrong:
 Each retry persists what it learned, such as a repaired source URL, so
 attempts compound instead of repeating the same failure.
 
-**Enforcement:** Guard — `src/lib/retry-verdict.ts` `classifyFailure`.
-Check owed — `retry/verdict-must-use-shared-classifier`: only three call sites
-use it and two hand-rolled classifiers remain. See `OUTSTANDING.md`.
+**Enforcement:** Guard — `src/lib/retry-verdict.ts` `classifyFailure`, held by
+`retry/no-inline-classifier`: the classifier must stay exported, the two loops
+that used to hand-roll their own (the Browserbase pull and the Tenkara owner
+push) must call it, the browser pull may not invent a `login_required` verdict
+of its own, and a second rate-limit regex anywhere in a runtime file fails the
+build.
+
+Two things the classifier says that look like exceptions and are not. A 401 or
+403 is terminal for an API call and retryable for a page fetch — the caller
+passes `scope: "page"` when it is a site refusing a visitor rather than a
+service refusing our credentials. And exhausting `maxAttempts` returns terminal
+with a `_attempts_exhausted` reason: that ends the loop, it does not settle the
+question, and requeueing for a later run stays the caller's decision.
+
+The owner push keeps one local verdict on purpose: 404/403/422 from Tenkara mean
+the conversation is gone, not that the request failed. It is argued for in the
+comment beside it and measured at 123 threads.
 
 ## PERS-02 — "Needs a human" is a display flag, never a queue exit
 

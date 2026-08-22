@@ -64,6 +64,10 @@ function statusOf(err: unknown): number | null {
 /**
  * Classify a thrown error or a failed HTTP response.
  *
+ * Pass `scope: "page"` when the failure came from fetching a page rather than
+ * calling an API, so a refusal is read as a block to route around rather than
+ * as a verdict about our credentials.
+ *
  * Pass `attempt` (0-based) so the caller gets a backoff that widens, and
  * `maxAttempts` so an otherwise-retryable failure becomes terminal once the
  * budget is spent rather than looping forever inside one run. Exhausting the
@@ -72,7 +76,7 @@ function statusOf(err: unknown): number | null {
  */
 export function classifyFailure(
   err: unknown,
-  opts: { attempt?: number; maxAttempts?: number } = {}
+  opts: { attempt?: number; maxAttempts?: number; scope?: "api" | "page" } = {}
 ): RetryVerdict {
   const attempt = opts.attempt ?? 0;
   const msg = messageOf(err);
@@ -97,7 +101,14 @@ export function classifyFailure(
   // Structural: the remote understood us and says this specific thing is wrong.
   // 404 is deliberately NOT here. A dead product URL is repairable by search,
   // and treating it as final is how a live listing gets written off.
-  if (status === 401 || status === 403) return TERMINAL("not_authorised");
+  // 401/403 from an API is a verdict about our credentials and will not change
+  // however often we ask. From a fetched PAGE it is the site refusing this
+  // visitor — a bot wall, or a proxy IP that has been banned — and a different
+  // IP or a later run clears it. Same status, opposite meaning, so the caller
+  // says which question it is asking.
+  if (status === 401 || status === 403) {
+    return opts.scope === "page" ? budget(RETRY("blocked", wait)) : TERMINAL("not_authorised");
+  }
   if (status === 400 || status === 422) return TERMINAL("rejected_by_remote");
   if (status === 402) return TERMINAL("out_of_credit");
 

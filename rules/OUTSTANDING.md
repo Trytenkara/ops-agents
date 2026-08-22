@@ -582,17 +582,34 @@ pull, the Tier B escalation) each have their own ad hoc bound or none.
 **Owed:** `check-rules` id `runs/paced-loop-must-carry-deadline`, plus one
 shared deadline helper the loops take instead of each inventing a bound.
 
-## P2 — Two hand-rolled retry classifiers remain
+## CLOSED 2026-08-22 — Two hand-rolled retry classifiers, and a third fault behind them
 
-Breaks PERS-01 and META-04. The shared classifier is referenced in three places
-repo-wide; one true duplicate remains in the browser-based pull. A persistent
-rate limit or anti-bot block there is laundered into an operator-facing "login
-wall" verdict, which is wrong and sends a human to look at a page that is not
-gated. One 404 is folded in with genuinely terminal codes in the owner sync.
-The shared classifier itself returns a terminal verdict on attempt exhaustion
-despite its own comment saying exhaustion is per-run.
+Broke PERS-01 and META-04. The browser-based pull kept its own, narrower test of
+what deserved another attempt, so anything it did not recognise was given up on
+after one try, and an exhausted run was labelled `login_required` — the verdict
+that escalates to a human on the first hit, sending one to look at a page that
+is not gated.
 
-**Owed:** `check-rules` id `retry/no-inline-classifier`.
+Going to measure it turned up the larger fault. `dropZeroPrices` in Agent 19
+tested `bad(r.current_price)`, which is true of every result that never had a
+price, so it rewrote the classification of every failure to `needs_review` on its
+way past: 307 leads in production, a dead link and a login wall and a proxy block
+all filed identically, and `login_required` unreachable from that agent at all.
+Its own laundering hid the pull's. It now acts only when a price was actually
+thrown away, and only downgrades a `current_price_found` that lost its number.
+
+Both loops now call `classifyFailure`. The shared classifier grew a `scope`
+option because a 401/403 is a verdict about credentials to an API caller and a
+bot wall to a page fetcher — without that distinction the browser pull could not
+have used it. The owner push keeps one deliberate local verdict (404/403/422 from
+Tenkara means the conversation is gone) and takes the shared backoff for the rest,
+which also stops a 401 burning three attempts.
+
+Not a break, and now said plainly in the rule instead: exhausting `maxAttempts`
+returns terminal with an `_attempts_exhausted` reason. That ends the loop; it is
+not a verdict about the work, and requeueing is the caller's decision.
+
+`retry/no-inline-classifier` holds all of it with six mutations.
 
 ## P2 — No pre-merge build gate
 
@@ -752,7 +769,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | --- | --- |
 | META-04 | `meta/no-second-copy-of-a-shared-guard`, beyond the invariants already covered |
 | COMM-08 | the scope's edges. `copy/no-rfq-or-em-dash-in-templates` holds a named list of outbound-copy files and `copy/scope-must-cover-every-draft-site` makes a `stageDraft` caller missing from it a violation. Copy reaching a supplier by some other path is still unseen. |
-| PERS-01 | `retry/verdict-must-use-shared-classifier`. Three call sites use `classifyFailure` and two hand-rolled classifiers remain — see the P2 above. |
 | PERS-04 | the run-summary half. `retry/bound-must-be-declared` shipped 2026-08-20 and holds the rules-folder half: all seven bounds are now named under PERS-04 and an eighth fails the build. A bound must also appear in the run summary, which cannot be read from the source. |
 | PERS-09 | `runs/paced-loop-must-carry-deadline`. `deadlineAt` holds the one job it was written for; a new per-item push loop with no deadline passes the build today. |
 | OUT-02 | the aggregator inquiry channel itself. `outreach/no-terminal-drop-without-channel` stops a storefront being dropped for having no email; it cannot make the inquiry form a channel we can actually send through. |

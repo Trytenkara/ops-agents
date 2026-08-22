@@ -872,6 +872,49 @@ const MUTATIONS = [
     ),
   },
   {
+    expect: "retry/no-inline-classifier",
+    label: "the shared classifier stops being exported",
+    mutate: rename(
+      "src/lib/retry-verdict.ts",
+      "export function classifyFailure(",
+      "function classifyFailure(",
+    ),
+  },
+  {
+    expect: "retry/no-inline-classifier",
+    label: "a page refusing a visitor goes back to reading as a credentials verdict",
+    mutate: rename("src/lib/retry-verdict.ts", 'scope === "page"', 'scope === "api"'),
+  },
+  {
+    expect: "retry/no-inline-classifier",
+    label: "the browser pull hand-rolls its retry test again",
+    mutate: edit("src/lib/browserbase-pull.ts", (t) =>
+      t.replace(/classifyFailure\(/g, "localVerdict("),
+    ),
+  },
+  {
+    expect: "retry/no-inline-classifier",
+    label: "the browser pull calls an exhausted retry a login wall",
+    mutate: edit("src/lib/browserbase-pull.ts", (t) =>
+      t.replace('emptyResult("needs_review", `${v.reason} after', 'emptyResult("login_required", `${v.reason} after'),
+    ),
+  },
+  {
+    expect: "retry/no-inline-classifier",
+    label: "the owner push loop hand-rolls its retry test again",
+    mutate: edit("src/lib/sync-thread-owners.ts", (t) =>
+      t.replace(/classifyFailure\(/g, "localVerdict("),
+    ),
+  },
+  {
+    expect: "retry/no-inline-classifier",
+    label: "a second rate-limit test appears in a runtime file",
+    mutate: fixture(
+      "src/lib/scratch-retry.ts",
+      'const isRateLimit = (msg: string) => /\\b429\\b|rate.?limit|too many requests/i.test(msg);\n',
+    ),
+  },
+  {
     expect: "contacts/guessed-combo-requires-own-domain-and-flag",
     label: "the guess is no longer gated on the supplier's own domain",
     mutate: rename(

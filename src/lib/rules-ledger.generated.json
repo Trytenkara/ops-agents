@@ -328,7 +328,7 @@
       "id": "PERS-01",
       "title": "Only a structural verdict is terminal",
       "bucket": "Guard",
-      "owes": true
+      "owes": false
     },
     {
       "id": "PERS-02",
@@ -746,7 +746,7 @@
     "P1 — The dealbreaker-grade guard arms intermittently, and has never fired",
     "CLOSED 2026-08-22 — Guessed contacts could be synthesised at a directory",
     "P2 — Nothing stops a paced loop from outrunning its function",
-    "P2 — Two hand-rolled retry classifiers remain",
+    "CLOSED 2026-08-22 — Two hand-rolled retry classifiers, and a third fault behind them",
     "P2 — No pre-merge build gate",
     "P2 — Shipping extraction success rate is not monitored",
     "P2 — A discard on a revalidation draft can be answered but not acted on",
