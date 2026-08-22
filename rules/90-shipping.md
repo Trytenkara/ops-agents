@@ -17,8 +17,17 @@ shared and often holds other people's uncommitted work; a blanket stage once
 swept another agent's in-progress files into an unrelated commit. Check what a
 commit actually contains before pushing, including commits you did not make.
 
-**Enforcement:** Check owed — a pre-commit hook that refuses paths outside
-those explicitly staged. See `OUTSTANDING.md`.
+A hook cannot read intent, so nothing can tell your edit from theirs. The rule
+is enforced from the two ends that are knowable. `.githooks/pre-commit` refuses
+the residue only a blanket stage leaves — a newly added file at the repository
+root — and prints the staged list and the count of paths it is leaving alone,
+so reading the commit is not a step you can skip. The build refuses the command
+itself in any tracked file, which is the half that recurs: a person is
+corrected once, a script repeats forever.
+
+**Enforcement:** Guard — `shipping/no-blanket-stage`, three mutations: deleting
+the hook, the hook no longer looking at what the stage added, and a script that
+runs `git add -A`. What is left after those is judgement.
 
 ## SHIP-03 — A red build is silent, so build before you push
 

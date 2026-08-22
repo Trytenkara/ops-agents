@@ -1,0 +1,38 @@
+#!/bin/sh
+# SHIP-02. This checkout is shared and usually holds somebody else's
+# uncommitted work. A blanket `git add -A` once swept another session's
+# in-progress files into an unrelated commit and pushed it to main.
+#
+# A hook cannot read intent, so it cannot tell your files from theirs. What it
+# can do is refuse the residue that only a blanket stage produces, and put the
+# staged list in front of you so "check what the commit contains" is not a step
+# you can skip.
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$staged" ] && exit 0
+
+# A NEW file at the repository root is almost always scratch. Eight of them are
+# already committed to main (tq.mjs, watch-tmp.mjs, check_bad_quotes.mjs and
+# friends), every one swept in by a stage nobody read. Root config files are a
+# closed set and they all already exist, so adding to it is the rare case.
+new_root=$(git diff --cached --name-only --diff-filter=A | grep -v '/' || true)
+if [ -n "$new_root" ]; then
+  echo "pre-commit: refusing new files at the repository root:"
+  echo "$new_root" | sed 's/^/  /'
+  echo
+  echo "Scratch belongs outside the repo, or in scripts/. If this really is a"
+  echo "root config file, commit it with: git commit --no-verify"
+  exit 1
+fi
+
+echo "pre-commit: staging $(echo "$staged" | wc -l | tr -d ' ') file(s):"
+echo "$staged" | sed 's/^/  /'
+
+# Anything left dirty is somebody's work in progress. Naming it is the whole
+# point: a blanket stage leaves this list empty, and an empty list next to a
+# large commit in a shared checkout is the fingerprint.
+rest=$(git status --porcelain --untracked-files=normal | grep -v '^[MADRC] ' || true)
+if [ -n "$rest" ]; then
+  echo "pre-commit: leaving $(echo "$rest" | wc -l | tr -d ' ') path(s) uncommitted (not yours to commit)."
+fi
+exit 0

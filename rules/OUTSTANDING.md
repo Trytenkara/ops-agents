@@ -581,15 +581,6 @@ ran an install, and it is bypassed by a single flag.
 
 **Owed:** widen the token's scope, then commit the workflow.
 
-## P2 — Nothing prevents staging everything
-
-Breaks SHIP-02. A blanket stage once swept another agent's in-progress work
-into an unrelated commit.
-
-**Owed:** a pre-commit hook that refuses a commit containing paths outside
-those explicitly staged for the current task, or at minimum refuses untracked
-scratch files at the repository root.
-
 ## P2 — Shipping extraction success rate is not monitored
 
 Breaks PRICING-04. Agent 19 logs `shippingAttempted` and `shippingCaptured` per
@@ -746,7 +737,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | OUT-02 | the aggregator inquiry channel itself. `outreach/no-terminal-drop-without-channel` stops a storefront being dropped for having no email; it cannot make the inquiry form a channel we can actually send through. |
 | UI-02 | the seven existing global review routes. `ui/no-global-review-route` shipped 2026-08-20 as a ratchet, so no eighth can be added, but the seven that predate it are still live and still cross-client. Removing them is a product decision. |
 | UI-06 | somewhere to persist an audit finding. `ui/flagged-set-must-have-a-surface` makes every set in the registry render; findings that live nowhere never reach the registry, so the guard cannot see them. |
-| SHIP-02 | pre-commit hook refusing unstaged paths — see the P2 above |
 | SHIP-07 | column granularity. `ship/migration-must-accompany-schema-read` shipped 2026-08-20 over tables and RPCs; all 49 tables and 15 functions read today are created by a migration, so it is a ratchet. A read of a *column* that no migration adds is still invisible, and that is the shape ENG-1036 took. |
 | PRICING-01 | `shipping/cost-must-be-numeric` |
 | PRICING-02 | `shipping/cost-per-tier` |
@@ -841,3 +831,32 @@ Still open and unchanged: `src/agents-runtime/agents/lead-creator/sql.ts`
 surfaces suppliers who quoted a material for *any* client as candidates for the
 requesting client, `poc_email` included. It is keyed by supplier id so the rule
 passes it, and it may well be intended, but nobody has ruled on it.
+
+## Closed 2026-08-22 — staging everything, from the two ends that are knowable
+
+SHIP-02 asked for a hook that refuses paths outside those explicitly staged.
+That hook cannot be written: git sees an index, not an intention, and in a
+checkout two sessions share there is nothing that distinguishes your edit from
+theirs. Waiting for it is why this sat open.
+
+What is knowable is the residue and the command.
+
+The residue: a blanket stage adds whatever untracked file happens to be lying
+around, and scratch lands at the repository root. Eight such files are already
+committed to main — `tq.mjs`, `watch-tmp.mjs`, `check_bad_quotes.mjs`,
+`test-quote-sample1.mjs` and friends — every one swept in by a stage nobody
+read. `.githooks/pre-commit` now refuses a newly added root file, names it, and
+gives the override. It also prints the staged list and a count of the paths it
+is leaving uncommitted, because "check what the commit contains" is only a rule
+if something puts the contents in front of you.
+
+The command: `git add -A`, `git add .` and `git add --all` now fail the build in
+any tracked file. There are none today, so this is a ratchet. It is the half
+that recurs — a person is corrected once, a script repeats every run — and it
+covers the skills corpus, which has no build of its own.
+
+Verified by staging a root file and running the hook: refused, exit 1.
+
+What is left is judgement, and the rule now says so rather than promising a
+check that cannot exist. SHIP-06 (no pre-merge gate off this machine) is
+unaffected and still open.

@@ -57,6 +57,14 @@ const read = (p, base) => ({ path: relative(base, p), text: readFileSync(p, "utf
 
 const files = walk(join(ROOT, "src")).map((p) => read(p, ROOT));
 
+// The hooks are the only checks that run before a commit or a push, and they
+// are shell with no file extension, so the walker cannot see them. A hook that
+// is missing reads exactly like one that passed.
+for (const h of ["pre-commit", "pre-push"]) {
+  const p = join(ROOT, ".githooks", h);
+  if (existsSync(p)) files.push(read(p, ROOT));
+}
+
 // The schema is part of the corpus because SHIP-07 is about code and schema
 // moving together: a check that reads only the code can see a table being
 // queried but not whether anything creates it.

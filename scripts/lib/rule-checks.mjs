@@ -2090,6 +2090,42 @@ export function runChecks(files, rulesDir) {
     }
   }
 
+  // SHIP-02. This checkout is shared and usually holds another session's
+  // uncommitted work. `git add -A` once swept an in-progress file into an
+  // unrelated commit and pushed it to main, and the eight scratch files sitting
+  // at the repository root today (tq.mjs, watch-tmp.mjs, check_bad_quotes.mjs
+  // and friends) are the same fault, already landed.
+  //
+  // Intent is not machine-knowable: nothing can tell your edit from theirs. So
+  // the rule is enforced from both ends of what IS knowable. The hook refuses
+  // the residue only a blanket stage leaves, and this check refuses the command
+  // itself anywhere it could be run again unattended, which is the half that
+  // recurs -- a person is corrected once, a script repeats forever.
+  {
+    const rule = "shipping/no-blanket-stage";
+    const hook = anchor(".githooks/pre-commit", {
+      rule,
+      why: "with no pre-commit hook a blanket stage lands silently, and a missing hook reads exactly like one that passed",
+      fix: "restore .githooks/pre-commit",
+    });
+    if (hook && !/diff-filter=A\b/.test(hook.text)) {
+      violations.push({
+        rule,
+        why: "the hook only stops a sweep if it looks at what the stage ADDED; without that it is decoration",
+        fix: "refuse newly added files at the repository root in .githooks/pre-commit",
+        where: hook.path,
+        line: "the hook no longer inspects added paths",
+      });
+    }
+    forbid({
+      rule,
+      why: "a blanket stage cannot tell your work from the work of whoever else has this checkout open, and once it is in a script it repeats forever",
+      fix: "stage explicit paths: git add <path> <path>",
+      allow: [".githooks/pre-commit"],
+      test: (l) => /\bgit\s+add\s+(-A\b|--all\b|\.(\s|$))/.test(l),
+    });
+  }
+
   // OUT-08. Asking a supplier for every blank field at once is what ops flagged
   // on 2026-08-15 ("It sounds too AI because its asking all of the blank
   // fields"), and suppliers stopped answering. The cadence that fixed it is

@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-121 rules. 90 are actually enforced, 20 owe a check or a job,
+121 rules. 91 are actually enforced, 19 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 15 of the enforced rules hold only part of their invariant and say so in
@@ -12,9 +12,9 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 82 |
+| **Guard** | A shared module or build check makes it impossible. | 83 |
 | **Audit** | A scheduled job reports the break after the fact. | 8 |
-| **Check owed** | A build check is possible and is not built yet. | 5 |
+| **Check owed** | A build check is possible and is not built yet. | 4 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
 | **None** | Outside this repository. Cannot be checked here. | 2 |
@@ -31,7 +31,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (82)
+## Guard (83)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -114,6 +114,7 @@ this ledger read as enforced.
 | `UI-09` | A one-click write needs a way back | Guard — `src/lib/call-undo.ts` `undoLastAttemptPatch`, surfaced by `UndoCallAttempt` on both the open call task and the recently-closed table. Judgement for other one-click controls. |
 | `UI-10` | A withheld value shows its reason where it renders | Guard — the withheld-price cells in `src/components/staged-quote-row.tsx` and `src/components/direct-prices-on-file.tsx` (`priceNote`), which render the capture reason and carry it into the CSV. Judgement for other withheld fields. |
 | `UI-11` | A placeholder must never look like a value | Guard — `ui/no-numeric-placeholder-in-value-field`: a placeholder whose whole text is a number fails the build. A unit (`kg`), a format (`price per unit`) or an explicit `e.g.` stays legal, which is what the fix looks like. The three live breaks on the marketplace-pricing card — case size, case price, unit price — were fixed with the check. |
+| `SHIP-02` | Never stage everything | Guard — `shipping/no-blanket-stage`, three mutations: deleting the hook, the hook no longer looking at what the stage added, and a script that runs `git add -A`. What is left after those is judgement. |
 | `SHIP-03` | A red build is silent, so build before you push | Guard — pre-push hook, on machines that ran `npm install`. |
 | `SHIP-04` | Rules are checked before the build | Guard. |
 | `SHIP-07` | Deploy and schema move together | Guard — `ship/migration-must-accompany-schema-read`: every table read through `.from(...)` and every `.rpc(...)` must be created by a migration in this repo. That is the granularity that can be read statically and the one that fails every call rather than one field; a missing *column* is still owed and is listed in `OUTSTANDING.md`. The check also fails if no migrations are in the corpus at all, since an empty schema would otherwise read as "nothing to check". |
@@ -131,7 +132,7 @@ this ledger read as enforced.
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
-## Check owed (5)
+## Check owed (4)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -139,7 +140,6 @@ this ledger read as enforced.
 | `PRICING-02` | Delivery cost is per pack tier when pack size changes it | Check owed — `shipping/cost-per-tier`. |
 | `PRICING-03` | Delivery-cost extraction is opt-in per client | Check owed — `shipping/extraction-org-opt-in`. |
 | `PRICING-05` | A delivery cost is never fabricated | Check owed — `shipping/no-fabricated-costs`. |
-| `SHIP-02` | Never stage everything | Check owed — a pre-commit hook that refuses paths outside those explicitly staged. See `OUTSTANDING.md`. |
 
 ## Judgement (20)
 

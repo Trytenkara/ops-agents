@@ -409,6 +409,21 @@ const MUTATIONS = [
     ),
   },
   {
+    expect: "shipping/no-blanket-stage",
+    label: "the pre-commit hook is gone",
+    mutate: drop(".githooks/pre-commit"),
+  },
+  {
+    expect: "shipping/no-blanket-stage",
+    label: "the hook stops looking at what was added",
+    mutate: rename(".githooks/pre-commit", "diff-filter=A", "diff-filter=X"),
+  },
+  {
+    expect: "shipping/no-blanket-stage",
+    label: "a script stages everything",
+    mutate: fixture("scripts/__selftest__/ship.sh", `git add -A\ngit commit -m x\n`),
+  },
+  {
     expect: "orgs/supplier-query-must-scope-to-client",
     label: "an unscoped read rides in on a scoped one in the same file",
     mutate: fixture(
