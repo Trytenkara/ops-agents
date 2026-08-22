@@ -376,7 +376,7 @@
       "id": "PERS-09",
       "title": "A paced job stops itself and says where it stopped",
       "bucket": "Guard",
-      "owes": true
+      "owes": false
     },
     {
       "id": "PERS-10",
@@ -746,7 +746,7 @@
     "Closed 2026-08-21 — call tasks reached nobody",
     "Closed 2026-08-22 — DATA-08: the guard was not a coin toss, it was off",
     "CLOSED 2026-08-22 — Guessed contacts could be synthesised at a directory",
-    "P2 — Nothing stops a paced loop from outrunning its function",
+    "Closed 2026-08-22 — PERS-09: a paced loop outrunning its function",
     "CLOSED 2026-08-22 — Two hand-rolled retry classifiers, and a third fault behind them",
     "P2 — No pre-merge build gate",
     "P2 — Shipping extraction success rate is not monitored",

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAllPaged } from "@/lib/supabase-paging";
 import { collectOrgSuppliers } from "@/lib/freeze-assignments";
+import { mapLimit, NEVER_STOPS } from "@/lib/map-limit";
 import { mirrorDraftAssignee } from "@/lib/draft-staging";
 import {
   ALL_SUPPLIER_TYPES,
@@ -59,6 +60,9 @@ export interface RebalanceResult {
   // Threads Control Room moved but Tenkara refused, i.e. the inbox still shows
   // the old owner. Non-zero means run the reset again to catch them up.
   mirrorsFailed: number;
+  // Threads the mirror budget cut off before it reached them. Not a failure:
+  // the nightly owner sync re-asserts them. PERS-09.
+  unmirrored: number;
   // Suppliers per operator once the reset lands, counted over the org's whole
   // book (every active lead plus every claimed supplier), deduped by assignment
   // key so a supplier's material rows count once.
@@ -90,16 +94,12 @@ const WRITE_CONCURRENCY = 12;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const item = items[next++];
-      await fn(item);
-    }
-  });
-  await Promise.all(workers);
-}
+// PERS-09. The mirror below is paced against Tenkara's rate limiter, so the run
+// is as long as the org's thread count. Without a cut-off the reset simply ran
+// until the platform killed it and reported nothing, which is the same fault
+// the nightly owner sync hit on 2026-08-20.
+const MIRROR_BUDGET_MS = 60_000;
+
 
 export async function rebalanceOrgAssignments(
   admin: SupabaseClient,
@@ -140,6 +140,7 @@ export async function rebalanceOrgAssignments(
     leadsMoved: 0,
     draftsMoved: 0,
     mirrorsFailed: 0,
+    unmirrored: 0,
     projected: [],
     unowned: 0,
   };
@@ -337,6 +338,8 @@ export async function rebalanceOrgAssignments(
   // failed the run part-way, so this is bounded like the mirror pass, and each
   // row retries: a dropped socket must not strand half the org's threads on the
   // old owner.
+  // Local writes only, unpaced, and Control Room is wrong until they all land:
+  // stopping half way would leave the org split between two owners.
   await mapLimit(draftMoves, WRITE_CONCURRENCY, async (m) => {
     let lastError = "";
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -349,20 +352,30 @@ export async function rebalanceOrgAssignments(
       lastError = error.message;
     }
     throw new Error(`moving thread assignees: ${lastError}`);
-  });
+  }, NEVER_STOPS);
   // Mirror last: a Tenkara outage must not roll back a completed rebalance. But
   // hundreds of assignee PATCHes in a row trip Tenkara's rate limiter, and a
   // dropped mirror leaves the inbox showing an owner Control Room no longer
   // agrees with, so 429s back off and retry rather than being swallowed.
   result.mirrorsFailed = 0;
-  await mapLimit(draftMoves, MIRROR_CONCURRENCY, async (m) => {
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const ok = await mirrorDraftAssignee(admin, m.threadId, m.operatorId).catch(() => false);
-      if (ok) return;
-      await sleep(500 * 2 ** attempt);
-    }
-    result.mirrorsFailed += 1;
-  });
+  const mirrorDeadline = Date.now() + MIRROR_BUDGET_MS;
+  const unmirrored = await mapLimit(
+    draftMoves,
+    MIRROR_CONCURRENCY,
+    async (m) => {
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const ok = await mirrorDraftAssignee(admin, m.threadId, m.operatorId).catch(() => false);
+        if (ok) return;
+        await sleep(500 * 2 ** attempt);
+      }
+      result.mirrorsFailed += 1;
+    },
+    () => Date.now() >= mirrorDeadline
+  );
+  // Reported, not thrown: the reset itself is committed and Control Room is
+  // correct. These threads are behind in the inbox and the nightly owner sync
+  // re-asserts them.
+  result.unmirrored = unmirrored.length;
 
   await admin.from("audit_log").insert({
     actor_user_id: actorUserId,

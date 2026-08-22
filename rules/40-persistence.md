@@ -287,12 +287,23 @@ waiting on the response; the local writes are what make Control Room correct
 and they are not paced, so the mirror gets a budget and the nightly walk
 finishes it.
 
+The class turned out to be exactly one helper. There were two private copies of
+the same bounded-concurrency walk, and the difference between them was the
+whole rule: the owner sync's copy took a stop predicate, the org reset's copy
+did not, so the reset's paced Tenkara mirror ran until the platform killed it.
+One copy now, in `src/lib/map-limit.ts`, with `stop` a required parameter — a
+caller with no clock passes `NEVER_STOPS` and says why beside it. The org reset
+gained `MIRROR_BUDGET_MS` and reports `unmirrored`, which the nightly walk
+re-asserts.
+
 **Enforcement:** Guard — `deadlineAt` on `syncOrgThreadOwners`
 (`src/lib/sync-thread-owners.ts`), threaded into both push loops, with
 `unpushed` in the run summary and the re-assert cursor rewound to the last
 thread actually pushed; `INTERACTIVE_SYNC_BUDGET_MS` at the server-action call
-sites. Check owed for the class — `runs/paced-loop-must-carry-deadline`, so a
-new per-item push loop with no deadline fails the build. See `OUTSTANDING.md`.
+sites. `runs/paced-loop-must-carry-deadline` holds the class: the shared walk's
+`stop` must stay required, a second private copy of it fails the build, and a
+`for ... of` loop that paces inside its own body with no deadline in scope is a
+violation.
 
 ## PERS-10 — Blocked is not empty
 

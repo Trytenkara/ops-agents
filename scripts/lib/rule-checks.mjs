@@ -2868,6 +2868,66 @@ export function runChecks(files, rulesDir) {
     }
   }
 
+  // PERS-09. A run whose length is set from outside the code has to stop itself
+  // and say where it stopped. The thread owner sync learned it twice: its
+  // deadline was checked between clients, which bounds the number of clients
+  // and not the work, so one client with a thousand threads to push at 45 a
+  // minute overran the function ceiling and reported nothing at all.
+  //
+  // The readable shape of the fault is a loop over a worklist that paces itself
+  // inside the body. A loop bounded by a literal counter (a merge-hop walk, a
+  // retry ladder) is not one, and neither is the rate gate itself, so only
+  // `for (const x of xs)` and `for await` are looked at.
+  {
+    const rule = "runs/paced-loop-must-carry-deadline";
+    // The concurrency helper is the shape this fault actually took: there were
+    // two private copies, one with a stop predicate and one without, and the one
+    // without was the paced Tenkara mirror in the org reset. One copy now, and
+    // `stop` is a required parameter so the question cannot be skipped.
+    const ml = anchor("src/lib/map-limit.ts", {
+      rule,
+      why: "the one bounded-concurrency walk every paced push loop goes through",
+      fix: "restore src/lib/map-limit.ts",
+    });
+    if (ml && !/stop: \(\) => boolean/.test(ml.text)) {
+      violations.push({ rule, why: "an optional stop predicate is one a caller can leave out, which is how the org reset came to have no cut-off at all", fix: "keep `stop` a required parameter; a caller with no clock passes NEVER_STOPS and says why", where: ml.path, line: "the stop predicate is optional again" });
+    }
+    for (const f of files) {
+      if (!/^src\//.test(f.path) || f.path.endsWith("src/lib/map-limit.ts")) continue;
+      if (/async function mapLimit</.test(f.text)) {
+        violations.push({ rule, why: "a second copy of the walk is a second chance to write one with no cut-off", fix: "import mapLimit from @/lib/map-limit", where: f.path, line: "a private copy of mapLimit" });
+      }
+    }
+    const PACE = /await\s+(?:sleep|delay|pause|rateGate)\(|await new Promise\(\(?r\)?\s*=>\s*setTimeout/;
+    for (const f of files) {
+      if (!/^src\//.test(f.path)) continue;
+      const re = /for\s+await\s*\(|for\s*\(\s*const\s+[^;)]*\bof\b[^)]*\)\s*\{/g;
+      let m;
+      while ((m = re.exec(f.text))) {
+        const open = f.text.indexOf("{", m.index + m[0].length - 1);
+        if (open < 0) continue;
+        let depth = 1;
+        let i = open + 1;
+        while (i < f.text.length && depth > 0) {
+          const c = f.text[i];
+          if (c === "{") depth++;
+          else if (c === "}") depth--;
+          i++;
+        }
+        const body = f.text.slice(open, i);
+        if (!PACE.test(body)) continue;
+        if (/deadline|Deadline|budgetMs|BUDGET_MS/.test(body)) continue;
+        violations.push({
+          rule,
+          why: "a paced loop over a worklist is as long as the worklist, so the platform decides when it ends and the work it did do is not reported",
+          fix: "carry a deadline into the loop, stop starting work past it, and report the remainder with a cursor to resume from",
+          where: `${f.path}:${f.text.slice(0, m.index).split("\n").length}`,
+          line: m[0].replace(/\s+/g, " ").trim().slice(0, 100),
+        });
+      }
+    }
+  }
+
   // COMM-08. The copy bans ran inside stageDraft, so anything that put an email
   // on the platform another way was never sanitised — the operator redraft
   // action and the quote-revalidation reply both did. The sanitiser moved down

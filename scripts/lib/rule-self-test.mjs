@@ -1193,6 +1193,24 @@ const MUTATIONS = [
     mutate: fixture("src/__selftest__/send2.ts", `const body = { subject, auto_send: true };\n`),
   },
   {
+    expect: "runs/paced-loop-must-carry-deadline",
+    label: "the stop predicate goes back to being optional",
+    mutate: rename("lib/map-limit.ts", "stop: () => boolean", "stop?: () => boolean"),
+  },
+  {
+    expect: "runs/paced-loop-must-carry-deadline",
+    label: "a module grows its own copy of the concurrency walk",
+    mutate: fixture("src/lib/rebalance-assignments.ts", "async function mapLimit<T>(items: T[]) {}\n"),
+  },
+  {
+    expect: "runs/paced-loop-must-carry-deadline",
+    label: "a paced for-of loop over a worklist carries no deadline",
+    mutate: fixture(
+      "src/lib/paced-fixture.ts",
+      "export async function push(items: string[]) {\n  for (const item of items) {\n    await sleep(100);\n  }\n}\n",
+    ),
+  },
+  {
     expect: "retry/bound-must-be-declared",
     label: "the shared bound stops naming its own exhaustion",
     mutate: rename("lib/dry-pass.ts", "note: string | null", "quiet: string | null"),

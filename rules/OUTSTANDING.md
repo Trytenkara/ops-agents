@@ -593,17 +593,26 @@ META-04's. Agent 19's `RFQ_WALL_HOSTS` overlaps heavily but is a different
 predicate (hosts that print no price even to a logged-in buyer, including real
 suppliers like Azelis), so it is not a copy of this list and was left alone.
 
-## P2 — Nothing stops a paced loop from outrunning its function
+## Closed 2026-08-22 — PERS-09: a paced loop outrunning its function
 
-Breaks PERS-09. The thread owner sync now carries a `deadlineAt` through both
-of its push loops, but nothing prevents the next per-item loop over a rate
-limited API from being written without one, and that failure is invisible by
-construction: the run is killed, so it reports no counts and no cursor. Other
-loops that push or fetch one item at a time (the outreach sender, the price
-pull, the Tier B escalation) each have their own ad hoc bound or none.
+Broke PERS-09. The thread owner sync carried a `deadlineAt` through both of its
+push loops, but nothing stopped the next per-item loop over a rate-limited API
+from being written without one, and that failure is invisible by construction:
+the run is killed, so it reports no counts and no cursor.
 
-**Owed:** `check-rules` id `runs/paced-loop-must-carry-deadline`, plus one
-shared deadline helper the loops take instead of each inventing a bound.
+The class was narrower and worse than it looked. There were two private copies
+of the same bounded-concurrency walk — the owner sync's took a stop predicate,
+the org reset's did not — and the reset's Tenkara mirror is paced against the
+inbox's rate limiter, so it was the second live instance of the fault, not a
+hypothetical one. One shared `src/lib/map-limit.ts` now, with `stop` a required
+parameter rather than an optional one, which is the whole point: a caller with
+no clock has to pass `NEVER_STOPS` and say why. The org reset gained
+`MIRROR_BUDGET_MS` and reports `unmirrored`; those threads are behind in the
+inbox on purpose and the nightly walk re-asserts them.
+
+**Enforcement:** `runs/paced-loop-must-carry-deadline`, three mutations — the
+stop predicate made optional, a module growing its own copy of the walk, and a
+`for ... of` loop that paces in its own body with no deadline in scope.
 
 ## CLOSED 2026-08-22 — Two hand-rolled retry classifiers, and a third fault behind them
 
@@ -791,7 +800,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 
 | Rule | The check |
 | --- | --- |
-| PERS-09 | `runs/paced-loop-must-carry-deadline`. `deadlineAt` holds the one job it was written for; a new per-item push loop with no deadline passes the build today. |
 | OUT-02 | the aggregator inquiry channel itself. `outreach/no-terminal-drop-without-channel` stops a storefront being dropped for having no email; it cannot make the inquiry form a channel we can actually send through. |
 | UI-02 | the seven existing global review routes. `ui/no-global-review-route` shipped 2026-08-20 as a ratchet, so no eighth can be added, but the seven that predate it are still live and still cross-client. Removing them is a product decision. |
 | UI-06 | somewhere to persist an audit finding. `ui/flagged-set-must-have-a-surface` makes every set in the registry render; findings that live nowhere never reach the registry, so the guard cannot see them. |

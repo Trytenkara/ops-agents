@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAllPaged } from "@/lib/supabase-paging";
 import { getOrgAssignmentContext, recordOwnerId } from "@/lib/operator-assignment";
+import { mapLimit } from "@/lib/map-limit";
 import { setTenkaraConversationAssignee } from "@/lib/tenkara";
 import { classifyFailure } from "@/lib/retry-verdict";
 
@@ -96,26 +97,6 @@ async function pushOwner(threadId: string, email: string, attempts = 3): Promise
     await sleep(v.backoffMs);
   }
   return "failed";
-}
-
-// Returns the items that were never started, so a sweep that runs out of time
-// can report the remainder instead of the caller inferring it.
-async function mapLimit<T>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<void>,
-  stop?: () => boolean
-): Promise<T[]> {
-  let next = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, async () => {
-      while (next < items.length) {
-        if (stop?.()) return;
-        await fn(items[next++]);
-      }
-    })
-  );
-  return items.slice(next);
 }
 
 export interface ThreadOwnerSyncOptions {
