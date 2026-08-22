@@ -458,6 +458,12 @@ registerAgent({
     let shippingAttempted = 0; // leads where we tried to extract shipping
     let shippingCaptured = 0; // leads where shipping cost was successfully extracted
     let shippingFailed = 0; // leads where shipping extraction was attempted but failed
+    // PRICING-04. Four counts, not a rate. A rate of zero out of zero is what
+    // this feature reported for weeks while it was inert, and it read the same
+    // as a quiet day. Priced leads whose client has no destination are counted
+    // separately so "nobody has a ship-to configured" can never be mistaken for
+    // "extraction is failing", and neither can hide behind a null percentage.
+    let shippingNoAddress = 0;
     let stoppedForTime = false;
 
     const worker = async () => {
@@ -521,7 +527,9 @@ registerAgent({
 
           // Track shipping extraction attempt & result
           // Shipping is only attempted if price was captured and org has an address
-          if (shipToAddress && result.classification === "current_price_found" && result.current_price != null) {
+          const priced = result.classification === "current_price_found" && result.current_price != null;
+          if (priced && !shipToAddress) shippingNoAddress++;
+          if (shipToAddress && priced) {
             shippingAttempted++;
             if (result.shippingCost != null) {
               shippingCaptured++;
@@ -587,12 +595,17 @@ registerAgent({
       shippingAttempted,
       shippingCaptured,
       shippingFailed,
+      shippingNoAddress,
       shippingRate: shippingAttempted > 0 ? Math.round((shippingCaptured / shippingAttempted) * 100) : null,
     });
     ctx.setStatus(pulled === 0 && attempted > 0 ? "partial" : "success");
     ctx.setSummary(
       `Browserbase escalation: priced ${pulled}/${attempted} lead(s)` +
-        (shippingAttempted > 0 ? ` · shipping captured for ${shippingCaptured}/${shippingAttempted} (${shippingAttempted > 0 ? Math.round((shippingCaptured / shippingAttempted) * 100) : 0}%)` : "") +
+        (shippingAttempted > 0
+          ? ` · shipping captured for ${shippingCaptured}/${shippingAttempted} (${Math.round((shippingCaptured / shippingAttempted) * 100)}%)`
+          : shippingNoAddress > 0
+            ? ` · shipping not attempted on ${shippingNoAddress} priced lead(s): no ship-to configured`
+            : "") +
         (skippedWalls ? ` · ${skippedWalls} quote-request walls skipped` : "") +
         (stoppedForTime ? ` · stopped at time budget (${ordered.length - attempted} left for tomorrow)` : "") +
         (outsideWindow ? ` · ${outsideWindow} outside the read window` : ""),

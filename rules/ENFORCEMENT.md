@@ -4,17 +4,17 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-121 rules. 91 are actually enforced, 11 owe a check or a job,
+121 rules. 92 are actually enforced, 9 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
-7 of the enforced rules hold only part of their invariant and say so in
+6 of the enforced rules hold only part of their invariant and say so in
 their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 85 |
+| **Guard** | A shared module or build check makes it impossible. | 86 |
 | **Audit** | A scheduled job reports the break after the fact. | 6 |
-| **Check owed** | A build check is possible and is not built yet. | 4 |
+| **Check owed** | A build check is possible and is not built yet. | 3 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
 | **None** | Outside this repository. Cannot be checked here. | 2 |
@@ -31,7 +31,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (85)
+## Guard (86)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -67,6 +67,7 @@ this ledger read as enforced.
 | `DATA-14` | A captured price carries the words it was read from | Guard — `price/capture-must-carry-source-text`: `verifyPriceProvenance` in `src/lib/price-provenance.ts` is applied by `insertStagedQuotes` before the publish gate and again on the lead-headline mirror in `src/lib/tenkara-inbound.ts`; a price it cannot trace is stored as null with the reason and `needs_review`. The check also holds the two extractors to asking for the fragment, and holds `staged_quotes` to a `price_source_text` column (migration 0124). The backward half is the `unreconciled_quote` set in `src/lib/flagged-work.ts`, which runs the same reconciliation over stored rows on every load of the client's Overview tab, and `scripts/repair-unreconciled-quotes.mts`, which corrects the one class arithmetic can settle — a per-tonne price charged to a case that is not a tonne — and reports the rest rather than guessing. |
 | `DATA-16` | Every rung of a tiered quote is its own row | Guard — `price/tier-rungs-never-collapse`: `dupKey`, `echoKey` and `pricelessKey` in `src/lib/staged-quotes.ts` fall back to `provenanceKey(price_source_text)` when there is no basis to tell two rungs apart, so rungs separate on the words they were read from. The check holds all three keys to it. |
 | `DATA-17` | A later source fills a blank, it does not overwrite a checked value | Guard — `applySupplierStatedDetails` in `src/lib/supplier-profiles.ts`, the only path the reply handler writes a profile through; the direct-contact exception is carried by both `site_type` writes in `src/agents-runtime/agents/marketplace-validation/lead-price-pull.ts`. |
+| `PRICING-03` | Delivery-cost extraction is opt-in per client | Guard — `shipping/ship-to-from-one-table`. The destination is read through one accessor over `client_tenkara_settings`, and a client with no usable address returns null so the pull declines to attempt. The checkout formatter used to answer a missing destination with a hard-coded Los Angeles address; a cost quoted to that is a real number for the wrong place, which is the fabrication PRICING-05 forbids. It returns null now. |
 | `PRICING-07` | A marketplace that deals by email becomes a second, direct supplier | Guard — `splitDirectLeadFromMarketplace` in `src/lib/marketplace-direct-split.ts`, which refuses a platform address, refuses a lead already split, and reuses an existing direct sibling instead of stacking a second one. |
 | `PRICING-08` | A price row belongs to one lane and no writer may cross | Guard — `quote_profiles.lane`, not null, no default at the call site: `insertQuoteProfile` requires it, `seedQuoteProfilesFromStaged` reads and writes `direct` only, `syncQuoteProfilesFromMarketplace` reads and writes `marketplace` only, and the quotes tab groups by supplier and lane. |
 | `PERS-01` | Only a structural verdict is terminal | Guard — `src/lib/retry-verdict.ts` `classifyFailure`, held by `retry/no-inline-classifier`: the classifier must stay exported, the two loops that used to hand-roll their own (the Browserbase pull and the Tenkara owner push) must call it, the browser pull may not invent a `login_required` verdict of its own, and a second rate-limit regex anywhere in a runtime file fails the build. |
@@ -126,19 +127,18 @@ this ledger read as enforced.
 | Rule | | Enforcement |
 |---|---|---|
 | `DATA-15` | Extraction records what it did not take | Audit — `agent-24-price-capture-reconcile`. Every inbound message writes `message_price_capture` (migration 0125) with the price points the extractor counted before extracting and the rows actually accounted for; Agent 24 re-reads the shortfalls daily and alerts on the confirmed ones. Per META-07 the second read is a model read, never a price regex, and it reports rather than stages — the first read already got that message wrong once. |
-| `PRICING-04` | Delivery-cost extraction is audited every run | Audit — Agent 26 counts four things daily and reports the gap between them: listings pulled, rows carrying the delivery-cost keys, attempts made, and numbers captured. The distinction matters more than the rate. A key present with a null under it says the writer ran; a number says it produced something; zero attempts against thousands of pulls says the feature is inert, which is exactly the state it shipped in and held for weeks. The audit reports the inert case as its own finding rather than as a capture rate of zero. The fix is owed: `getOrgShipToAddress` selects `ship_to_*` columns that do not exist on this project's `orgs` table and the catch swallows it, which is why there are zero attempts against 4,044 pulled listings. |
+| `PRICING-04` | Delivery-cost extraction is audited every run | Audit — Agent 26 counts four things daily and reports the gap between them: listings pulled, rows carrying the delivery-cost keys, attempts made, and numbers captured. The distinction matters more than the rate. A key present with a null under it says the writer ran; a number says it produced something; zero attempts against thousands of pulls says the feature is inert, which is exactly the state it shipped in and held for weeks. The audit reports the inert case as its own finding rather than as a capture rate of zero. Guard — `shipping/ship-to-from-one-table` holds the cause. `getOrgShipToAddress` was selecting `ship_to_*` columns that do not exist on this project's `orgs` table; PostgREST answers that with an error, the catch swallowed it, and every caller read the null as "this client has no ship-to" — zero attempts against 4,044 pulled listings, reported as a capture rate of null, which reads the same as a quiet day. The addresses live on `client_tenkara_settings`, mirrored hourly by Agent 12. The escalation run now counts priced leads with no destination separately and names them in its summary, so the inert case cannot hide behind a percentage again. |
 | `PERS-07` | A withheld price is a job, not an outcome | Audit — Agent 26 counts withheld prices carrying no reason every morning and reports them with the oldest date. On the day it shipped all 19 withheld prices in the system had no reason recorded, so the count is a real measure and not a formality. Check owed for the second half: the surface itself on the client's own tab (UI-06). Until that exists a person still has to read the audit to find these rows, which is why the audit is the weaker of the two. See `OUTSTANDING.md`. |
 | `OUT-09` | Stalled conversations get chased | Audit — Agent 26 reports conversations past the gap with nothing sent, and separately the ones exempt only because a draft has sat staged on them for more than fourteen days. The exemption is the half worth watching: a thread is not chased while an operator has something waiting on it, and that is evaluated over the whole thread, so one draft nobody ever actioned stops the sequence for good. On its first production run the audit found the cadence itself healthy — nothing overdue with an empty outbox — and one thread held by a draft staged more than fourteen days earlier. That is the shape to watch, not the count: 3,461 drafts are sitting staged fleet-wide, so the number of threads this can silence is bounded by how many of them go unactioned. Capping the exemption is owed, and is a product decision rather than a check. |
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
-## Check owed (4)
+## Check owed (3)
 
 | Rule | | Enforcement |
 |---|---|---|
 | `PRICING-01` | A shipping cost is a number or it is nothing | Check owed — `shipping/cost-must-be-numeric`. |
 | `PRICING-02` | Delivery cost is per pack tier when pack size changes it | Check owed — `shipping/cost-per-tier`. |
-| `PRICING-03` | Delivery-cost extraction is opt-in per client | Check owed — `shipping/extraction-org-opt-in`. |
 | `PRICING-05` | A delivery cost is never fabricated | Check owed — `shipping/no-fabricated-costs`. |
 
 ## Judgement (20)

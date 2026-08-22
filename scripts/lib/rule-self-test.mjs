@@ -1193,6 +1193,26 @@ const MUTATIONS = [
     mutate: fixture("src/__selftest__/send2.ts", `const body = { subject, auto_send: true };\n`),
   },
   {
+    expect: "shipping/ship-to-from-one-table",
+    label: "the ship-to read stops going through the one accessor",
+    mutate: rename("lib/tenkara-ship-to.ts", "getClientShipTo(", "getSomeOtherThing("),
+  },
+  {
+    expect: "shipping/ship-to-from-one-table",
+    label: "the orgs query comes back",
+    mutate: rename("lib/tenkara-ship-to.ts", "if (!orgId) return null;", 'if (!orgId) return null;\n  await admin.from("orgs").select("ship_to_city");'),
+  },
+  {
+    expect: "shipping/ship-to-from-one-table",
+    label: "the checkout formatter invents an address again",
+    mutate: rename("lib/tenkara-ship-to.ts", "if (!address) return null;", "if (!address) return { formatted: \"Los Angeles, CA\", components: {} };"),
+  },
+  {
+    expect: "shipping/ship-to-from-one-table",
+    label: "the run stops counting priced leads that had no destination",
+    mutate: rename("agents/browserbase-escalation/index.ts", "shippingNoAddress", "shippingSkipped"),
+  },
+  {
     expect: "runs/paced-loop-must-carry-deadline",
     label: "the stop predicate goes back to being optional",
     mutate: rename("lib/map-limit.ts", "stop: () => boolean", "stop?: () => boolean"),

@@ -33,7 +33,12 @@ The pull attempts delivery costs only for clients that turned it on, using
 that client's ship-to destination. No destination configured means no attempt
 and no cost, not an attempt against a guessed address.
 
-**Enforcement:** Check owed — `shipping/extraction-org-opt-in`.
+**Enforcement:** Guard — `shipping/ship-to-from-one-table`. The destination is
+read through one accessor over `client_tenkara_settings`, and a client with no
+usable address returns null so the pull declines to attempt. The checkout
+formatter used to answer a missing destination with a hard-coded Los Angeles
+address; a cost quoted to that is a real number for the wrong place, which is
+the fabrication PRICING-05 forbids. It returns null now.
 
 ## PRICING-04 — Delivery-cost extraction is audited every run
 
@@ -49,10 +54,16 @@ made, and numbers captured. The distinction matters more than the rate. A key
 present with a null under it says the writer ran; a number says it produced
 something; zero attempts against thousands of pulls says the feature is inert,
 which is exactly the state it shipped in and held for weeks. The audit reports
-the inert case as its own finding rather than as a capture rate of zero. The
-fix is owed: `getOrgShipToAddress` selects `ship_to_*` columns that do not
-exist on this project's `orgs` table and the catch swallows it, which is why
-there are zero attempts against 4,044 pulled listings.
+the inert case as its own finding rather than as a capture rate of zero. Guard —
+`shipping/ship-to-from-one-table` holds the cause. `getOrgShipToAddress` was
+selecting `ship_to_*` columns that do not exist on this project's `orgs` table;
+PostgREST answers that with an error, the catch swallowed it, and every caller
+read the null as "this client has no ship-to" — zero attempts against 4,044
+pulled listings, reported as a capture rate of null, which reads the same as a
+quiet day. The addresses live on `client_tenkara_settings`, mirrored hourly by
+Agent 12. The escalation run now counts priced leads with no destination
+separately and names them in its summary, so the inert case cannot hide behind
+a percentage again.
 
 ## PRICING-05 — A delivery cost is never fabricated
 

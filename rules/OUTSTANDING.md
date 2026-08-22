@@ -652,17 +652,26 @@ ran an install, and it is bypassed by a single flag.
 
 **Owed:** widen the token's scope, then commit the workflow.
 
-## P2 — Shipping extraction success rate is not monitored
+## Closed 2026-08-22 — PRICING-03/04: the delivery cost that was never attempted
 
-Breaks PRICING-04. Agent 19 logs `shippingAttempted` and `shippingCaptured` per
-run, but nothing queries these metrics to alert if extraction rate falls below
-50% (or a configured threshold). A feature that is not monitored is a feature
-that silently stops working.
+The feature was not failing, it was inert. `getOrgShipToAddress` selected
+`ship_to_*` off `orgs`, where those columns do not exist on this project;
+PostgREST returns an error, the catch swallowed it, and the null read as "this
+client has no ship-to". Zero attempts against 4,044 pulled listings, reported as
+a capture rate of null, which looks exactly like a quiet day.
 
-**Owed:** daily health job querying leads where `marketplace_pull.shipping_cost
-!= null` divided by leads where org has `ship_to_address AND
-marketplace_pull.status='pulled'`, alert if ratio drops below threshold;
-`check-rules` id `shipping/health-must-monitor-extraction-rate`.
+The addresses live on `client_tenkara_settings`, mirrored hourly by Agent 12, so
+the read now goes through `getClientShipTo` — one accessor over one table, and a
+second reader of `ship_to_*` off `orgs` fails the build. Found alongside it: the
+checkout formatter answered a missing destination with a hard-coded Los Angeles
+address, so any cost it did capture would have been a real number quoted to
+somewhere the client does not ship. It returns null now and the pull declines.
+
+The audit half is the counting. A rate is not an audit when zero out of zero
+reads as fine: priced leads with no destination are counted apart from attempts
+and named in the run summary, so the inert case reports itself.
+
+`shipping/ship-to-from-one-table`, four mutations.
 
 ## P2 — A discard on a revalidation draft can be answered but not acted on
 
@@ -806,7 +815,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | SHIP-07 | column granularity. `ship/migration-must-accompany-schema-read` shipped 2026-08-20 over tables and RPCs; all 49 tables and 15 functions read today are created by a migration, so it is a ratchet. A read of a *column* that no migration adds is still invisible, and that is the shape ENG-1036 took. |
 | PRICING-01 | `shipping/cost-must-be-numeric` |
 | PRICING-02 | `shipping/cost-per-tier` |
-| PRICING-03 | `shipping/extraction-org-opt-in` |
 | PRICING-05 | `shipping/no-fabricated-costs` — the per-tier estimator breaks it today, see the P2 above |
 
 ### Reported by an audit, and the audit closes nothing
@@ -819,7 +827,6 @@ what each one found on its first pass:
 | Rule | Still owed |
 | --- | --- |
 | PERS-07 | the surface. All 19 withheld prices carry no reason at all, and until UI-06 ships there is nowhere on the client's tab for them to appear, so somebody has to read the audit to find them. |
-| PRICING-04 | the fix. Zero attempts against 4,044 pulled listings, because `getOrgShipToAddress` selects `ship_to_*` columns that do not exist on this project's `orgs` table and the catch swallows it. The audit now says so out loud; it does not move the columns. |
 | OUT-09 | the exemption itself. A staged draft suppresses the chase for as long as it sits there, with no cap; the first audit run found one thread in that state and 3,461 staged drafts fleet-wide that could put others there. Capping it is a product decision. |
 
 ## Closed 2026-08-22 — META-04: the ratchet nobody could count

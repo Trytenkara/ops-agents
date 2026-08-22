@@ -246,6 +246,9 @@ export async function syncAllClientSettings(admin: SupabaseClient): Promise<Sync
 export interface ClientShipTo {
   region: string | null;
   full: string | null;
+  // The individual fields, for callers that have to fill a checkout form rather
+  // than print an address (PRICING-04).
+  parts: { city: string | null; state: string | null; zip: string | null; country: string | null };
   addressCount: number;
   syncedAt: string | null;
 }
@@ -273,6 +276,7 @@ export async function getClientShipTo(admin: SupabaseClient, orgId: string | nul
   return {
     region,
     full: formatFullAddress(a),
+    parts: { city: a.city ?? null, state: a.state ?? null, zip: a.zip ?? null, country: a.country ?? null },
     addressCount: Array.isArray(data.shipping_addresses) ? data.shipping_addresses.length : 0,
     syncedAt: data.synced_at ?? null,
   };

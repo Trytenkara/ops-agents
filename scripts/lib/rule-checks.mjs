@@ -2994,6 +2994,74 @@ export function runChecks(files, rulesDir) {
     }
   }
 
+  // PRICING-04. A ship-to read against the wrong table returns null, and null is
+  // indistinguishable from "this client has no destination", which is how the
+  // delivery-cost feature stayed inert for weeks against 4,044 pulls. One
+  // accessor, one table, and a run summary that says the inert case out loud.
+  {
+    const rule = "shipping/ship-to-from-one-table";
+    const f = anchor("src/lib/tenkara-ship-to.ts", {
+      rule,
+      why: "the destination a delivery cost is quoted to has one home, and reading it anywhere else fails silently",
+      fix: "keep `getOrgShipToAddress` in src/lib/tenkara-ship-to.ts, reading through `getClientShipTo`",
+    });
+    if (f) {
+      if (!/getClientShipTo\(/.test(f.text)) {
+        violations.push({
+          rule,
+          why: "the ship-to columns live on client_tenkara_settings, not orgs; selecting them off orgs errors and the error reads as 'no address'",
+          fix: "read the destination through `getClientShipTo` rather than querying a table directly",
+          where: "src/lib/tenkara-ship-to.ts",
+          line: 1,
+        });
+      }
+      if (/from\("orgs"\)/.test(f.text)) {
+        violations.push({
+          rule,
+          why: "orgs has no ship_to_* columns on this project, so this query cannot return an address",
+          fix: "delete the orgs query; the mirror lives on client_tenkara_settings",
+          where: "src/lib/tenkara-ship-to.ts",
+          line: 1,
+        });
+      }
+      // PRICING-03/05: a default address is a fabricated destination.
+      if (!/if \(!address\) return null;/.test(f.text)) {
+        violations.push({
+          rule,
+          why: "a fallback address quotes a real delivery cost to somewhere the client does not ship, which is a fabricated cost that looks captured",
+          fix: "return null for a missing destination and let the caller decline to attempt",
+          where: "src/lib/tenkara-ship-to.ts",
+          line: 1,
+        });
+      }
+    }
+    for (const g of files) {
+      if (!/^src\//.test(g.path) || g.path.endsWith("src/lib/tenkara-ship-to.ts")) continue;
+      if (!/\.from\("orgs"\)[\s\S]{0,200}ship_to_/.test(g.text)) continue;
+      violations.push({
+        rule,
+        why: "a second reader of ship_to_* off orgs, the exact query that made the feature inert",
+        fix: "call `getOrgShipToAddress` instead",
+        where: g.path,
+        line: 1,
+      });
+    }
+    const esc = anchor("src/agents-runtime/agents/browserbase-escalation/index.ts", {
+      rule,
+      why: "the run that pulls delivery costs is the run that has to report whether it attempted any",
+      fix: "keep the escalation agent at src/agents-runtime/agents/browserbase-escalation/index.ts",
+    });
+    if (esc && !/shippingNoAddress/.test(esc.text)) {
+      violations.push({
+        rule,
+        why: "zero attempts reported as a null capture rate reads the same as a quiet day, which is how the inert feature went unnoticed",
+        fix: "count priced leads with no destination separately and name them in the run summary",
+        where: "src/agents-runtime/agents/browserbase-escalation/index.ts",
+        line: 1,
+      });
+    }
+  }
+
   // DISC-08. A marker is only an answer in the shape the reader understands.
   // The credit gate defaulted a missing `done` to true, so 15 markers written
   // before the field existed each read as "finished" and gated their material

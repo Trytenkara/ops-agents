@@ -1,76 +1,59 @@
-import type { PostgrestSingleResponse } from "@supabase/supabase-js";
-import type { createAdminClient } from "@/lib/supabase/admin";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { getClientShipTo } from "@/lib/tenkara-client-settings";
 
-type Admin = ReturnType<typeof createAdminClient>;
-
-// Fetch the ship-to address for an org from Tenkara's orgs table
-export async function getOrgShipToAddress(
-  admin: Admin,
-  tenkaraOrgId: string,
-): Promise<{ country: string; state: string; city: string; zip: string } | null> {
-  if (!tenkaraOrgId) return null;
-
-  try {
-    // Query Tenkara's orgs table for the configured shipping address
-    // Expected fields: ship_to_address (JSON object) or ship_to_* (separate fields)
-    const { data: org, error } = (await admin
-      .from("orgs")
-      .select("ship_to_address, ship_to_country, ship_to_state, ship_to_city, ship_to_zip")
-      .eq("id", tenkaraOrgId)
-      .single()) as PostgrestSingleResponse<any>;
-
-    if (error || !org) {
-      return null;
-    }
-
-    // Handle both struct formats: JSON object or separate fields
-    if (org.ship_to_address && typeof org.ship_to_address === "object") {
-      return {
-        country: org.ship_to_address.country || "United States",
-        state: org.ship_to_address.state || "",
-        city: org.ship_to_address.city || "",
-        zip: org.ship_to_address.zip || "",
-      };
-    }
-
-    // Fallback to separate fields
-    if (org.ship_to_country || org.ship_to_state || org.ship_to_city || org.ship_to_zip) {
-      return {
-        country: org.ship_to_country || "United States",
-        state: org.ship_to_state || "",
-        city: org.ship_to_city || "",
-        zip: org.ship_to_zip || "",
-      };
-    }
-
-    return null;
-  } catch (error) {
-    console.error(`Failed to fetch ship-to address for org ${tenkaraOrgId}:`, error);
-    return null;
-  }
+export interface ShipToDestination {
+  country: string;
+  state: string;
+  city: string;
+  zip: string;
 }
 
-// Format address object into a readable string for checkout forms
-export function formatAddressForCheckout(
-  address: { country: string; state: string; city: string; zip: string } | null,
-): { formatted: string; components: Record<string, string> } {
-  if (!address) {
-    // Return a safe default US address for testing
-    const defaultAddr = {
-      country: "United States",
-      state: "CA",
-      city: "Los Angeles",
-      zip: "90001",
-    };
-    return {
-      formatted: `${defaultAddr.city}, ${defaultAddr.state}, ${defaultAddr.zip}, ${defaultAddr.country}`,
-      components: defaultAddr,
-    };
-  }
-
-  const parts = [address.city, address.state, address.zip, address.country].filter(Boolean);
+/**
+ * The destination a delivery cost is quoted to, or null if the client has not
+ * configured one.
+ *
+ * PRICING-04. This used to select `ship_to_*` off `orgs`, where those columns
+ * do not exist. PostgREST answers that with an error rather than empty columns,
+ * the error was swallowed, and every caller read the null as "this client has
+ * no ship-to" — so the whole feature was inert for weeks: 4,044 listings pulled,
+ * zero delivery-cost attempts, and a capture rate that never looked wrong
+ * because nothing was ever attempted. The addresses live on
+ * `client_tenkara_settings`, mirrored hourly from Tenkara by Agent 12, and are
+ * read here through the one accessor that owns that table so a second idea of
+ * where a ship-to lives cannot grow back.
+ */
+export async function getOrgShipToAddress(
+  admin: SupabaseClient,
+  orgId: string,
+): Promise<ShipToDestination | null> {
+  if (!orgId) return null;
+  const settings = await getClientShipTo(admin, orgId);
+  if (!settings?.parts) return null;
+  const { city, state, zip, country } = settings.parts;
+  // A cost quoted to a country alone is not the client's landed cost. Requiring
+  // enough of the address to reach a real checkout is PRICING-03: no
+  // destination means no attempt, never an attempt against a guess.
+  if (!zip && !(city && state)) return null;
   return {
-    formatted: parts.join(", "),
-    components: address,
+    country: country || "United States",
+    state: state || "",
+    city: city || "",
+    zip: zip || "",
   };
+}
+
+/**
+ * Format a destination for a checkout form.
+ *
+ * PRICING-03/05. This used to return a hard-coded Los Angeles address when it
+ * was handed null, which is a fabricated destination: any cost read back would
+ * have been a real number quoted to somewhere the client does not ship. Null in
+ * means null out, and the caller declines to attempt.
+ */
+export function formatAddressForCheckout(
+  address: ShipToDestination | null,
+): { formatted: string; components: Record<string, string> } | null {
+  if (!address) return null;
+  const parts = [address.city, address.state, address.zip, address.country].filter(Boolean);
+  return { formatted: parts.join(", "), components: { ...address } };
 }
