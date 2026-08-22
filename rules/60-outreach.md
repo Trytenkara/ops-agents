@@ -105,9 +105,22 @@ as well as templates, plus rule 5 of the `src/lib/thread-tailor.ts` prompt;
 ## OUT-08 — Supplier asks are staggered
 
 Do not ask a supplier for everything at once. Asks are spread across stages of
-the conversation.
+the conversation: commercial first (is this worth pursuing), then logistics
+(how it packs and ships), then onboarding (who we transact with), at most three
+asks per email. Only the earliest stage with anything outstanding is put in
+front of the model, and nothing is lost — the missing set is recomputed from
+live data on every reply, so a deferred field comes back next turn.
 
-**Enforcement:** Check owed — `outreach/asks-must-be-staged`.
+Every field that can be asked for is staged deliberately. A field with no stage
+falls to the default, which is the last stage, which means it is asked only
+once we already intend to buy.
+
+**Enforcement:** Guard — `outreach/asks-must-be-staged`, six mutations. The
+stage map is checked against the fields the module can actually ask for, so a
+new askable field with no stage fails the build; the cap and the narrowing to
+one stage are both anchored; the reply drafter and the stalled-conversation
+chase must each select through `selectStagedAsks`; and the appended paragraph
+must stay a backstop that fires only when the drafted body asks nothing.
 
 ## OUT-09 — Stalled conversations get chased
 

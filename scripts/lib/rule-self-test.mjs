@@ -44,6 +44,44 @@ const drop = (suffix) => (files) => files.filter((f) => !f.path.endsWith(suffix)
 
 const MUTATIONS = [
   // Line scanners. A synthetic file is enough: these read one line at a time.
+  // OUT-08. Six: a new askable field with no stage, the cap, the narrowing to
+  // one stage, both drafting paths, and the backstop that must stay a backstop.
+  {
+    expect: "outreach/asks-must-be-staged",
+    label: "a new askable field is added with no stage",
+    mutate: edit("src/lib/quote-completeness.ts", (t) =>
+      t.replace('if (!any((row) => has(row.price)))', 'if (!has(supplier?.vat_number)) add("vat_number", "your VAT number", /vat/i);\n  if (!any((row) => has(row.price)))')
+    ),
+  },
+  {
+    expect: "outreach/asks-must-be-staged",
+    label: "the per-reply cap is deleted",
+    mutate: rename("src/lib/quote-completeness.ts", "export const MAX_ASKS_PER_REPLY", "const UNUSED_MAX_ASKS_PER_REPLY"),
+  },
+  {
+    expect: "outreach/asks-must-be-staged",
+    label: "the selector caps but no longer narrows to one stage",
+    mutate: edit("src/lib/quote-completeness.ts", (t) =>
+      t.split("askStage(f.key) === stage").join("f.key !== undefined")
+    ),
+  },
+  {
+    expect: "outreach/asks-must-be-staged",
+    label: "the reply drafter asks without staging",
+    mutate: edit("src/lib/reply-drafter.ts", (t) => t.split("selectStagedAsks(").join("selectEverything(")),
+  },
+  {
+    expect: "outreach/asks-must-be-staged",
+    label: "the stalled-conversation chase asks without staging",
+    mutate: edit("src/agents-runtime/agents/reply-manager/stalled-followup.ts", (t) =>
+      t.split("selectStagedAsks(").join("selectEverything(")
+    ),
+  },
+  {
+    expect: "outreach/asks-must-be-staged",
+    label: "the appended ask fires alongside the model's own asks again",
+    mutate: edit("src/lib/reply-drafter.ts", (t) => t.split("countAsksInBody(draft.body) === 0").join("true")),
+  },
   // DISC-09. Twelve: the two halves of the three-state lookup, and for each of
   // the five gates both the asking and the handling of "could not ask".
   {

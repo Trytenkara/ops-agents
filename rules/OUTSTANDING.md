@@ -373,6 +373,34 @@ windows are waived in `DECLARED_WINDOWS`, keyed by path *and* by the limit
 expression: rename the constant and the waiver stops applying. PERS-06 moves
 from Check owed to Guard.
 
+## Closed 2026-08-22 — the ask cadence was real but nothing held it in place
+
+OUT-08 was built on 2026-08-18 after ops flagged a draft that enumerated
+thirteen blank platform fields in one sentence — "It sounds too AI because its
+asking all of the blank fields in our platform" — and suppliers stopped
+answering. Three stages, three asks per email, only the earliest open stage.
+That shipped and works. What did not exist was anything stopping it being
+undone, and each way of undoing it is silent.
+
+The sharpest is the stage map. `askStage` falls back to stage 3 for a key it
+does not know, so a new askable field added to `computeMissingApprovalFields`
+without a matching entry is exiled to the end of the conversation — asked only
+once we already intend to buy, which for most threads is never. The build now
+parses both lists and fails when they disagree; all 23 askable keys are staged
+today.
+
+The rest are anchored the same way: the cap, the narrowing to a single stage,
+both drafting paths (a reply and a stalled-conversation chase, which have to
+agree or the supplier is asked two different things), and the appended
+paragraph, which is only safe as a backstop — firing it alongside the model's
+own asks is what produced the duplicate checklist in the first place.
+
+`selectCompletenessAsks`, a flat stage-agnostic selector left behind by the
+original change and used by nothing but a demo script, is deleted. An exported
+way to select asks without a stage is the fail-open.
+
+**Enforcement:** `outreach/asks-must-be-staged`, six mutations.
+
 ## Closed 2026-08-22 — a Tenkara timeout would have resumed sourcing a material the client makes
 
 Broke DISC-09. The gate itself worked: two materials are flagged self-supplied
@@ -722,7 +750,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | PERS-04 | the run-summary half. `retry/bound-must-be-declared` shipped 2026-08-20 and holds the rules-folder half: all seven bounds are now named under PERS-04 and an eighth fails the build. A bound must also appear in the run summary, which cannot be read from the source. |
 | PERS-09 | `runs/paced-loop-must-carry-deadline`. `deadlineAt` holds the one job it was written for; a new per-item push loop with no deadline passes the build today. |
 | OUT-02 | the aggregator inquiry channel itself. `outreach/no-terminal-drop-without-channel` stops a storefront being dropped for having no email; it cannot make the inquiry form a channel we can actually send through. |
-| OUT-08 | `outreach/asks-must-be-staged` |
 | OUT-10 | `outreach/cancel-must-release-alias` |
 | ORG-06 | `orgs/name-lookup-must-scope-query` — see the P2 above |
 | UI-02 | the seven existing global review routes. `ui/no-global-review-route` shipped 2026-08-20 as a ratchet, so no eighth can be added, but the seven that predate it are still live and still cross-client. Removing them is a product decision. |

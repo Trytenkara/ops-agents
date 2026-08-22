@@ -4,7 +4,7 @@
 import {
   buildCompletenessAsk,
   computeMissingApprovalFields,
-  selectCompletenessAsks,
+  selectStagedAsks,
   MAX_ASKS_PER_REPLY,
 } from "../src/lib/quote-completeness";
 import { insertBeforeSignoff } from "../src/lib/reply-drafter";
@@ -36,8 +36,8 @@ const before = buildCompletenessAsk(missing);
 console.log(before);
 console.log(`\n[chars: ${before.length}, fields asked: ${missing.length}]\n`);
 
-console.log("=== AFTER (selectCompletenessAsks: drop covered, then cap) ===");
-const { ask, deferred } = selectCompletenessAsks(MODEL_BODY, missing);
+console.log("=== AFTER (selectStagedAsks: drop covered, keep the earliest open stage, then cap) ===");
+const { ask, deferred } = selectStagedAsks(MODEL_BODY, missing);
 const after = buildCompletenessAsk(ask);
 console.log(after || "(nothing to append)");
 console.log(`\n[chars: ${after.length}, fields asked: ${ask.length}, deferred to next reply: ${deferred.length}]\n`);

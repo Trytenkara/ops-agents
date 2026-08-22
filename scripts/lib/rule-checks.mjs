@@ -2003,6 +2003,106 @@ export function runChecks(files, rulesDir) {
     test: (l) => /xoxp-|SLACK_USER_TOKEN|slack_user_token/.test(l),
   });
 
+  // OUT-08. Asking a supplier for every blank field at once is what ops flagged
+  // on 2026-08-15 ("It sounds too AI because its asking all of the blank
+  // fields"), and suppliers stopped answering. The cadence that fixed it is
+  // three stages and a cap of three asks, and every part of it is quiet when it
+  // breaks: a new askable field with no stage is exiled to the end of the
+  // conversation by a `?? 3` default, and a second drafting path that skips the
+  // selector reads as a working email right up until the supplier goes silent.
+  {
+    const rule = "outreach/asks-must-be-staged";
+    const MOD = "src/lib/quote-completeness.ts";
+
+    const mod = anchor(MOD, {
+      rule,
+      why: "one stage map, one cap, one selector — the cadence only holds if there is a single copy of it",
+      fix: "restore src/lib/quote-completeness.ts",
+    });
+    if (mod) {
+      // Every field this module can ask for has to be staged on purpose.
+      const stageMap = mod.text.match(/const ASK_STAGE_BY_KEY[^{]*\{([\s\S]*?)\n\};/);
+      const staged = new Set(
+        stageMap ? Array.from(stageMap[1].matchAll(/^\s*([a-z_]+)\s*:\s*[123]\s*,/gm)).map((m) => m[1]) : []
+      );
+      const askable = new Set([
+        ...Array.from(mod.text.matchAll(/\badd\("([a-z_]+)"/g)).map((m) => m[1]),
+        ...Array.from(mod.text.matchAll(/merged:\s*\{\s*\n?\s*key:\s*"([a-z_]+)"/g)).map((m) => m[1]),
+      ]);
+      for (const key of askable) {
+        if (!staged.has(key)) {
+          violations.push({
+            rule,
+            why: "an unstaged field falls to the `?? 3` default, which asks for it only once we already intend to buy — silently, and possibly never",
+            fix: `add "${key}" to ASK_STAGE_BY_KEY with the stage the next decision actually needs`,
+            where: MOD,
+            line: `${key} is askable but has no stage`,
+          });
+        }
+      }
+      if (!/export const MAX_ASKS_PER_REPLY\s*=\s*\d+/.test(mod.text)) {
+        violations.push({
+          rule,
+          why: "without a declared cap the reply goes back to enumerating every blank field",
+          fix: "keep MAX_ASKS_PER_REPLY exported as the default limit of the selector",
+          where: MOD,
+          line: "the per-reply cap is gone",
+        });
+      }
+      if (!/askStage\(f\.key\)\s*===\s*stage/.test(mod.text)) {
+        violations.push({
+          rule,
+          why: "capping without narrowing to one stage lets a logistics question ride along with a price question, which is the checklist again",
+          fix: "keep selectStagedAsks narrowing to the earliest stage that still has anything outstanding",
+          where: MOD,
+          line: "the selector no longer narrows to one stage",
+        });
+      }
+    }
+
+    // Both paths that put an ask in front of a supplier go through the selector.
+    for (const caller of ["src/lib/reply-drafter.ts", "src/agents-runtime/agents/reply-manager/stalled-followup.ts"]) {
+      const f = anchor(caller, {
+        rule,
+        why: "a reply and a chase both ask, and if they disagree the supplier is asked for two different things",
+        fix: `restore ${caller}`,
+      });
+      if (f && !/selectStagedAsks\(/.test(f.text)) {
+        violations.push({
+          rule,
+          why: "an ask assembled outside the selector is unstaged and uncapped, which is exactly the draft ops rejected",
+          fix: "select what to ask with selectStagedAsks",
+          where: f.path,
+          line: "this path asks without staging",
+        });
+      }
+    }
+
+    // Anywhere the ask sentence is built, it is built from a staged selection.
+    for (const f of files) {
+      if (!f.path.startsWith("src/") || f.path.endsWith(MOD)) continue;
+      if (!/buildCompletenessAsk\(/.test(f.text)) continue;
+      if (!/selectStagedAsks\(/.test(f.text)) {
+        violations.push({
+          rule,
+          why: "building the sentence from the raw missing set is the original break: nineteen blank fields in one paragraph",
+          fix: "pass buildCompletenessAsk the output of selectStagedAsks, never the full missing set",
+          where: f.path,
+          line: "the ask sentence is built from an unstaged set",
+        });
+      }
+      if (!/countAsksInBody\([^)]*\)\s*===\s*0/.test(f.text)) {
+        violations.push({
+          rule,
+          why: "appended alongside the model's own asks it doubles them, which is how one reply came to ask thirteen things",
+          fix: "fire the appended ask only when the drafted body asks nothing at all",
+          where: f.path,
+          line: "the appended ask is no longer a backstop",
+        });
+      }
+    }
+  }
+
   // DISC-09. Whether a client makes a material themselves is read from Tenkara
   // over a link that timed out or throttled 18 times in one day. Every one of
   // the five gates resolved that failure to "nothing is self-supplied", which

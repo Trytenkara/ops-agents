@@ -495,8 +495,8 @@
     {
       "id": "OUT-08",
       "title": "Supplier asks are staggered",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "OUT-09",
@@ -738,6 +738,7 @@
     "P1 — Two draft paths bypass the staging chokepoint",
     "Closed 2026-08-21 — zero results were accepted as an answer in nine places",
     "Closed 2026-08-21 — deliberate caps hid work in thirty-odd places",
+    "Closed 2026-08-22 — the ask cadence was real but nothing held it in place",
     "Closed 2026-08-22 — a Tenkara timeout would have resumed sourcing a material the client makes",
     "Closed 2026-08-21 — a directory's own inbox counted as a supplier's contact",
     "Closed 2026-08-21 — a lead parked against a case never came back",

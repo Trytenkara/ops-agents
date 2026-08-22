@@ -222,13 +222,3 @@ export function countAsksInBody(body: string): number {
   const questions = (text.match(/\?/g) ?? []).length;
   return Math.max(bullets, inlineEnumerated, questions);
 }
-
-// Kept for the case where a caller wants the flat, stage-agnostic selection.
-export function selectCompletenessAsks(
-  body: string,
-  missing: MissingApprovalField[],
-  limit: number = MAX_ASKS_PER_REPLY,
-): { ask: MissingApprovalField[]; deferred: MissingApprovalField[] } {
-  const uncovered = collapseRelatedAsks(missingAsksNotCovered(body ?? "", missing ?? []));
-  return { ask: uncovered.slice(0, limit), deferred: uncovered.slice(limit) };
-}

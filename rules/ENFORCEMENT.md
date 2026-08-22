@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-121 rules. 87 are actually enforced, 23 owe a check or a job,
+121 rules. 88 are actually enforced, 22 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 15 of the enforced rules hold only part of their invariant and say so in
@@ -12,9 +12,9 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 79 |
+| **Guard** | A shared module or build check makes it impossible. | 80 |
 | **Audit** | A scheduled job reports the break after the fact. | 8 |
-| **Check owed** | A build check is possible and is not built yet. | 8 |
+| **Check owed** | A build check is possible and is not built yet. | 7 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
 | **None** | Outside this repository. Cannot be checked here. | 2 |
@@ -31,7 +31,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (79)
+## Guard (80)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -91,6 +91,7 @@ this ledger read as enforced.
 | `OUT-06` | Internal notes never reach a supplier | Guard — `src/lib/internal-notes.ts` `stripInternalNotes` inside `sanitizeDraft`, `copy/sanitize-must-strip-internal-notes`. |
 | `OUT-14` | Never offer to stop contacting a supplier | Guard — `CONCESSION_STRIPS` in `src/lib/email-style.ts`, run inside `sanitizeDraft` at the staging chokepoint so it covers model-written copy as well as templates, plus rule 5 of the `src/lib/thread-tailor.ts` prompt; `copy/sanitize-must-strip-concessions`. |
 | `OUT-07` | Copy bans are applied at staging (see COMM-08) | Guard — `copy/staging-must-sanitize`. |
+| `OUT-08` | Supplier asks are staggered | Guard — `outreach/asks-must-be-staged`, six mutations. The stage map is checked against the fields the module can actually ask for, so a new askable field with no stage fails the build; the cap and the narrowing to one stage are both anchored; the reply drafter and the stalled-conversation chase must each select through `selectStagedAsks`; and the appended paragraph must stay a backstop that fires only when the drafted body asks nothing. |
 | `OUT-11` | A rejected draft is not redrafted | Guard — `src/lib/draft-suppression.ts` `isDraftSuppressed`, called by `stageDraft` and by Agent 02, which stages its own draft directly. |
 | `OUT-12` | "denied" in Tenkara does not mean "do not contact" | Guard — `suppliers/approval-denied-is-not-do-not-contact`. Recorded because a guard was built on the wrong reading of this column on 2026-08-19 and removed the same day. The check is on the meaning rather than on the old symbol names, which are already deleted: the word `denied` may not reach a suppression verdict, and the denied set may not be read out of the suppliers table. The two display sites that legitimately bucket the column are allowed by name. |
 | `OUT-13` | Do-not-contact has two authors, and one gate | Guard — `src/lib/do-not-contact.ts` `isDoNotContact`, called by `stageDraft`; the client list also still filters candidates in Agents 03 and 04. |
@@ -128,7 +129,7 @@ this ledger read as enforced.
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
 
-## Check owed (8)
+## Check owed (7)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -136,7 +137,6 @@ this ledger read as enforced.
 | `PRICING-02` | Delivery cost is per pack tier when pack size changes it | Check owed — `shipping/cost-per-tier`. |
 | `PRICING-03` | Delivery-cost extraction is opt-in per client | Check owed — `shipping/extraction-org-opt-in`. |
 | `PRICING-05` | A delivery cost is never fabricated | Check owed — `shipping/no-fabricated-costs`. |
-| `OUT-08` | Supplier asks are staggered | Check owed — `outreach/asks-must-be-staged`. |
 | `OUT-10` | A cancelled outreach must release its alias | Check owed — `outreach/cancel-must-release-alias`. |
 | `ORG-06` | Cross-client lookups are scoped at the query, not filtered after | Check owed — `orgs/name-lookup-must-scope-query`, plus an outstanding repair of the records already mislabelled. See `OUTSTANDING.md`. |
 | `SHIP-02` | Never stage everything | Check owed — a pre-commit hook that refuses paths outside those explicitly staged. See `OUTSTANDING.md`. |
