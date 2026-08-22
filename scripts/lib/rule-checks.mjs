@@ -2994,6 +2994,82 @@ export function runChecks(files, rulesDir) {
     }
   }
 
+  // PRICING-01/05. A delivery cost is a number with the currency it was read in,
+  // and a weight nobody measured is not a weight. Both were violated in the same
+  // path: USD assumed whatever the page said, and every volumetric pack
+  // converted at water density.
+  {
+    const rule = "shipping/cost-is-numeric-and-unfabricated";
+    const f = anchor("src/lib/browserbase-pull.ts", {
+      rule,
+      why: "a cost stored without the currency it was quoted in can be added to a landed price in the wrong money",
+      fix: "keep the checkout capture in src/lib/browserbase-pull.ts",
+    });
+    if (f) {
+      if (/currency: "USD"/.test(f.text)) {
+        violations.push({
+          rule,
+          why: "the currency is assumed rather than read, so a EUR or GBP checkout lands in the same column as dollars",
+          fix: "extract the currency off the page beside the amount",
+          where: "src/lib/browserbase-pull.ts",
+          line: 1,
+        });
+      }
+      if (!/\^\[A-Z\]\{3\}\$/.test(f.text) || !/Number\.isFinite\(amount\)/.test(f.text)) {
+        violations.push({
+          rule,
+          why: "an amount with no currency code, or a negative or non-finite one, is not a readable cost and must be null plus a reason",
+          fix: "reject the extraction unless the amount is finite and non-negative and the currency is a three-letter code",
+          where: "src/lib/browserbase-pull.ts",
+          line: 1,
+        });
+      }
+    }
+    const est = anchor("src/lib/shipping-estimation.ts", {
+      rule,
+      why: "a per-tier estimate is only as honest as the weight behind it",
+      fix: "keep the per-tier estimator at src/lib/shipping-estimation.ts",
+    });
+    if (est) {
+      if (!/resolveDensity\(/.test(est.text)) {
+        violations.push({
+          rule,
+          why: "converting a volumetric pack without the material's density assumes water, which DATA-07 forbids and which halved the weight of a 1.84 g/ml acid",
+          fix: "resolve the density from the material density index and return a null weight when it is unknown",
+          where: "src/lib/shipping-estimation.ts",
+          line: 1,
+        });
+      }
+      // A volumetric branch that writes a weight without consulting the density.
+      if (/volume_l = [^;]+;\s*(?:\/\/[^\n]*\n\s*)*weight_kg = (?![^;\n]*densityGml)/.test(est.text)) {
+        violations.push({
+          rule,
+          why: "a litre converted straight to a kilogram is a fabricated weight producing a fabricated cost that reads like a captured one",
+          fix: "multiply by the resolved density, or leave the weight null",
+          where: "src/lib/shipping-estimation.ts",
+          line: 1,
+        });
+      }
+    }
+    // PRICING-02. One number smeared across every rung makes the small pack look
+    // expensive to land and the bulk pack look free, so the per-rung figure is
+    // written per rung and never into the captured-cost field.
+    const esc2 = anchor("src/agents-runtime/agents/browserbase-escalation/index.ts", {
+      rule,
+      why: "the pull that captures one delivery cost is where it either gets spread per tier or smeared",
+      fix: "keep the escalation agent at src/agents-runtime/agents/browserbase-escalation/index.ts",
+    });
+    if (esc2 && !/tiers\[idx\]\.shipping_cost_estimate = /.test(esc2.text)) {
+      violations.push({
+        rule,
+        why: "a delivery cost that is not per rung is wrong on every rung but the one it was quoted for",
+        fix: "write the per-tier figure to `shipping_cost_estimate` on each tier",
+        where: "src/agents-runtime/agents/browserbase-escalation/index.ts",
+        line: 1,
+      });
+    }
+  }
+
   // PRICING-04. A ship-to read against the wrong table returns null, and null is
   // indistinguishable from "this client has no destination", which is how the
   // delivery-cost feature stayed inert for weeks against 4,044 pulls. One

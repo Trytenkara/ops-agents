@@ -279,14 +279,14 @@
     {
       "id": "PRICING-01",
       "title": "A shipping cost is a number or it is nothing",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "PRICING-02",
       "title": "Delivery cost is per pack tier when pack size changes it",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "PRICING-03",
@@ -303,8 +303,8 @@
     {
       "id": "PRICING-05",
       "title": "A delivery cost is never fabricated",
-      "bucket": "Check owed",
-      "owes": true
+      "bucket": "Guard",
+      "owes": false
     },
     {
       "id": "PRICING-06",
@@ -749,6 +749,7 @@
     "Closed 2026-08-22 — PERS-09: a paced loop outrunning its function",
     "CLOSED 2026-08-22 — Two hand-rolled retry classifiers, and a third fault behind them",
     "P2 — No pre-merge build gate",
+    "Closed 2026-08-22 — PRICING-01/02/05: the number, the currency, the weight",
     "Closed 2026-08-22 — PRICING-03/04: the delivery cost that was never attempted",
     "P2 — A discard on a revalidation draft can be answered but not acted on",
     "P2 — The Tier B scrape can overwrite an operator's price ladder",

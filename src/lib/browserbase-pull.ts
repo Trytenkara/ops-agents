@@ -38,6 +38,8 @@ export interface PullResult {
   sessionId?: string;
   // Optional shipping cost captured from checkout (populated when capturing shipping is enabled)
   shippingCost?: number | null;
+  // PRICING-01: an amount travels with the currency it was read in, or not at all.
+  shippingCurrency?: string | null;
   shippingAddress?: string | null;
 }
 
@@ -468,6 +470,7 @@ async function attempt(opts: {
         const shippingResult = await captureShippingCost(page, stagehand, shipToAddress, supplier);
         if (shippingResult.shippingCost != null) {
           result.shippingCost = shippingResult.shippingCost;
+          result.shippingCurrency = shippingResult.currency;
           result.shippingAddress = shippingResult.shippingAddress;
         }
       } catch (e) {
@@ -572,17 +575,31 @@ If the form uses dropdowns, select the matching option. If you can't find all fi
   }
 }
 
-async function extractShippingCost(stagehand: Stagehand, page: any, supplier: string): Promise<number | null> {
+/**
+ * PRICING-01. A delivery cost is a number and the currency it is quoted in, or
+ * it is nothing. The currency used to be assumed USD whatever the page said, so
+ * a EUR or GBP checkout landed in the same column as a dollar figure and could
+ * be added straight into a landed price. It is read off the page now, and a
+ * page that shows an amount without one has no readable cost.
+ */
+async function extractShippingCost(
+  stagehand: Stagehand,
+  page: any,
+  supplier: string,
+): Promise<{ amount: number; currency: string } | null> {
   try {
-    // Extract the shipping cost displayed on the checkout page
     const result = await stagehand.extract(
-      `Extract the NUMERIC shipping cost displayed on this checkout page. Look for labels like "Shipping", "Delivery", "Freight", "Shipping Cost", etc. Return the numeric value in USD (e.g., 25.00, 47.50, 0.00 for free shipping). If shipping is not visible or not a numeric value, return null.`,
+      `Extract the shipping cost displayed on this checkout page. Look for labels like "Shipping", "Delivery", "Freight", "Shipping Cost". Return the numeric amount and the ISO currency code shown beside it (USD, EUR, GBP, CAD...). Return nulls if shipping is not shown as a number, or if it is prose such as "varies by location" or "calculated at checkout".`,
       z.object({
         shippingCost: z.number().nullable(),
+        currency: z.string().nullable(),
       }),
     );
-
-    return result?.shippingCost ?? null;
+    const amount = result?.shippingCost;
+    const currency = (result?.currency ?? "").trim().toUpperCase();
+    if (amount == null || !Number.isFinite(amount) || amount < 0) return null;
+    if (!/^[A-Z]{3}$/.test(currency)) return null;
+    return { amount, currency };
   } catch (error) {
     console.error("Failed to extract shipping cost:", error);
     return null;
@@ -660,8 +677,8 @@ export async function captureShippingCost(
 
     if (shippingCost !== null) {
       return {
-        shippingCost,
-        currency: "USD",
+        shippingCost: shippingCost.amount,
+        currency: shippingCost.currency,
         shippingAddress: `${address.city}, ${address.state}, ${address.zip}, ${address.country}`,
         failedReason: null,
         attemptedAt,

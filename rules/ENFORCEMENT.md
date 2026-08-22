@@ -4,7 +4,7 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-121 rules. 92 are actually enforced, 9 owe a check or a job,
+121 rules. 95 are actually enforced, 6 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
 6 of the enforced rules hold only part of their invariant and say so in
@@ -12,9 +12,8 @@ their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
 |---|---|---|
-| **Guard** | A shared module or build check makes it impossible. | 86 |
+| **Guard** | A shared module or build check makes it impossible. | 89 |
 | **Audit** | A scheduled job reports the break after the fact. | 6 |
-| **Check owed** | A build check is possible and is not built yet. | 3 |
 | **Judgement** | Nothing mechanical can ever verify it. Human, by design. | 20 |
 | **Cross-reference** | Restates a rule enforced elsewhere. | 3 |
 | **None** | Outside this repository. Cannot be checked here. | 2 |
@@ -31,7 +30,7 @@ agent skill, a migration or a one-off script. That is not hypothetical: four
 skills went on posting to Slack channels `COMM-06` had retired for a day while
 this ledger read as enforced.
 
-## Guard (86)
+## Guard (89)
 
 | Rule | | Enforcement |
 |---|---|---|
@@ -67,7 +66,10 @@ this ledger read as enforced.
 | `DATA-14` | A captured price carries the words it was read from | Guard — `price/capture-must-carry-source-text`: `verifyPriceProvenance` in `src/lib/price-provenance.ts` is applied by `insertStagedQuotes` before the publish gate and again on the lead-headline mirror in `src/lib/tenkara-inbound.ts`; a price it cannot trace is stored as null with the reason and `needs_review`. The check also holds the two extractors to asking for the fragment, and holds `staged_quotes` to a `price_source_text` column (migration 0124). The backward half is the `unreconciled_quote` set in `src/lib/flagged-work.ts`, which runs the same reconciliation over stored rows on every load of the client's Overview tab, and `scripts/repair-unreconciled-quotes.mts`, which corrects the one class arithmetic can settle — a per-tonne price charged to a case that is not a tonne — and reports the rest rather than guessing. |
 | `DATA-16` | Every rung of a tiered quote is its own row | Guard — `price/tier-rungs-never-collapse`: `dupKey`, `echoKey` and `pricelessKey` in `src/lib/staged-quotes.ts` fall back to `provenanceKey(price_source_text)` when there is no basis to tell two rungs apart, so rungs separate on the words they were read from. The check holds all three keys to it. |
 | `DATA-17` | A later source fills a blank, it does not overwrite a checked value | Guard — `applySupplierStatedDetails` in `src/lib/supplier-profiles.ts`, the only path the reply handler writes a profile through; the direct-contact exception is carried by both `site_type` writes in `src/agents-runtime/agents/marketplace-validation/lead-price-pull.ts`. |
+| `PRICING-01` | A shipping cost is a number or it is nothing | Guard — `shipping/cost-is-numeric-and-unfabricated`. The checkout extraction returns an amount and a currency together, rejecting a non-finite or negative amount and anything without a three-letter code. The currency used to be hard-coded USD whatever the page showed, so a EUR or GBP checkout landed in the same column as dollars and could be added straight into a landed price. |
+| `PRICING-02` | Delivery cost is per pack tier when pack size changes it | Guard — `shipping/cost-is-numeric-and-unfabricated`. The captured cost is the one quoted for the MOQ rung; the other rungs carry a `shipping_cost_estimate` derived per rung from its own weight, which is a separate field from `shipping_cost` so an estimate can never be read as a captured number. |
 | `PRICING-03` | Delivery-cost extraction is opt-in per client | Guard — `shipping/ship-to-from-one-table`. The destination is read through one accessor over `client_tenkara_settings`, and a client with no usable address returns null so the pull declines to attempt. The checkout formatter used to answer a missing destination with a hard-coded Los Angeles address; a cost quoted to that is a real number for the wrong place, which is the fabrication PRICING-05 forbids. It returns null now. |
+| `PRICING-05` | A delivery cost is never fabricated | Guard — `shipping/cost-is-numeric-and-unfabricated`, the same check: no assumed density, no default destination, no assumed currency. |
 | `PRICING-07` | A marketplace that deals by email becomes a second, direct supplier | Guard — `splitDirectLeadFromMarketplace` in `src/lib/marketplace-direct-split.ts`, which refuses a platform address, refuses a lead already split, and reuses an existing direct sibling instead of stacking a second one. |
 | `PRICING-08` | A price row belongs to one lane and no writer may cross | Guard — `quote_profiles.lane`, not null, no default at the call site: `insertQuoteProfile` requires it, `seedQuoteProfilesFromStaged` reads and writes `direct` only, `syncQuoteProfilesFromMarketplace` reads and writes `marketplace` only, and the quotes tab groups by supplier and lane. |
 | `PERS-01` | Only a structural verdict is terminal | Guard — `src/lib/retry-verdict.ts` `classifyFailure`, held by `retry/no-inline-classifier`: the classifier must stay exported, the two loops that used to hand-roll their own (the Browserbase pull and the Tenkara owner push) must call it, the browser pull may not invent a `login_required` verdict of its own, and a second rate-limit regex anywhere in a runtime file fails the build. |
@@ -132,14 +134,6 @@ this ledger read as enforced.
 | `OUT-09` | Stalled conversations get chased | Audit — Agent 26 reports conversations past the gap with nothing sent, and separately the ones exempt only because a draft has sat staged on them for more than fourteen days. The exemption is the half worth watching: a thread is not chased while an operator has something waiting on it, and that is evaluated over the whole thread, so one draft nobody ever actioned stops the sequence for good. On its first production run the audit found the cadence itself healthy — nothing overdue with an empty outbox — and one thread held by a draft staged more than fourteen days earlier. That is the shape to watch, not the count: 3,461 drafts are sitting staged fleet-wide, so the number of threads this can silence is bounded by how many of them go unactioned. Capping the exemption is owed, and is a product decision rather than a check. |
 | `ORG-05` | The live data is audited every morning | Audit — the daily organisation-isolation audit. |
 | `SHIP-08` | Weekly rules review | Audit — `agent-25-rules-review`, weekly. It reads a snapshot of the rulebook generated at build time, and the build refuses if that snapshot has drifted from the rule files, so the review cannot report a rulebook that no longer exists. |
-
-## Check owed (3)
-
-| Rule | | Enforcement |
-|---|---|---|
-| `PRICING-01` | A shipping cost is a number or it is nothing | Check owed — `shipping/cost-must-be-numeric`. |
-| `PRICING-02` | Delivery cost is per pack tier when pack size changes it | Check owed — `shipping/cost-per-tier`. |
-| `PRICING-05` | A delivery cost is never fabricated | Check owed — `shipping/no-fabricated-costs`. |
 
 ## Judgement (20)
 

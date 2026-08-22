@@ -1193,6 +1193,31 @@ const MUTATIONS = [
     mutate: fixture("src/__selftest__/send2.ts", `const body = { subject, auto_send: true };\n`),
   },
   {
+    expect: "shipping/cost-is-numeric-and-unfabricated",
+    label: "the per-tier estimate stops being written per tier",
+    mutate: rename("agents/browserbase-escalation/index.ts", "tiers[idx].shipping_cost_estimate = ", "tiers[idx].shipping_cost = "),
+  },
+  {
+    expect: "shipping/cost-is-numeric-and-unfabricated",
+    label: "the currency goes back to being assumed",
+    mutate: rename("lib/browserbase-pull.ts", "currency: shippingCost.currency,", 'currency: "USD",'),
+  },
+  {
+    expect: "shipping/cost-is-numeric-and-unfabricated",
+    label: "the amount is taken without checking it is a finite number",
+    mutate: rename("lib/browserbase-pull.ts", "Number.isFinite(amount)", "true"),
+  },
+  {
+    expect: "shipping/cost-is-numeric-and-unfabricated",
+    label: "the estimator stops resolving a density",
+    mutate: rename("lib/shipping-estimation.ts", "resolveDensity(", "someOtherLookup("),
+  },
+  {
+    expect: "shipping/cost-is-numeric-and-unfabricated",
+    label: "a litre is converted straight to a kilogram again",
+    mutate: rename("lib/shipping-estimation.ts", "weight_kg = densityGml == null ? null : caseSize * densityGml;", "weight_kg = caseSize;"),
+  },
+  {
     expect: "shipping/ship-to-from-one-table",
     label: "the ship-to read stops going through the one accessor",
     mutate: rename("lib/tenkara-ship-to.ts", "getClientShipTo(", "getSomeOtherThing("),

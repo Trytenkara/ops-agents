@@ -17,7 +17,12 @@ a failure reason.
 Written because static text stored in a cost field reads as data downstream
 and cannot be added to a landed price.
 
-**Enforcement:** Check owed — `shipping/cost-must-be-numeric`.
+**Enforcement:** Guard — `shipping/cost-is-numeric-and-unfabricated`. The
+checkout extraction returns an amount and a currency together, rejecting a
+non-finite or negative amount and anything without a three-letter code. The
+currency used to be hard-coded USD whatever the page showed, so a EUR or GBP
+checkout landed in the same column as dollars and could be added straight into
+a landed price.
 
 ## PRICING-02 — Delivery cost is per pack tier when pack size changes it
 
@@ -25,7 +30,11 @@ When a listing's pack rungs ship differently, the cost is recorded per tier.
 One number smeared across all rungs makes the small pack look expensive to
 land and the bulk pack look free.
 
-**Enforcement:** Check owed — `shipping/cost-per-tier`.
+**Enforcement:** Guard — `shipping/cost-is-numeric-and-unfabricated`. The
+captured cost is the one quoted for the MOQ rung; the other rungs carry a
+`shipping_cost_estimate` derived per rung from its own weight, which is a
+separate field from `shipping_cost` so an estimate can never be read as a
+captured number.
 
 ## PRICING-03 — Delivery-cost extraction is opt-in per client
 
@@ -71,10 +80,14 @@ No guessed density, no assumed weight, no model estimate stored as if it had
 been read off the page. Unreadable means null plus
 `shipping_cost_failed_reason`, exactly as DATA-01 requires for prices. An
 estimate may exist only as a clearly separate figure that can never be
-mistaken for a captured cost. Known standing break: the per-tier estimator
-assumes water density for solids, which DATA-07 forbids.
+mistaken for a captured cost. The per-tier estimator used to convert every
+volumetric pack at water density, which DATA-07 forbids: a 200 L drum of a
+1.84 g/ml acid was weighed as 200 kg instead of 368, so the estimate came out
+at little over half. It resolves the material's density now and returns no
+weight — and so no estimate — when the density is unknown. The estimate stays
+in `shipping_cost_estimate`, never in `shipping_cost`.
 
-**Enforcement:** Check owed — `shipping/no-fabricated-costs`.
+**Enforcement:** Guard — `shipping/cost-is-numeric-and-unfabricated`, the same check: no assumed density, no default destination, no assumed currency.
 
 ## PRICING-06 — The primary price pull runs on the fleet's own platform
 

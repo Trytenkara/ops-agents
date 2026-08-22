@@ -652,6 +652,30 @@ ran an install, and it is bypassed by a single flag.
 
 **Owed:** widen the token's scope, then commit the workflow.
 
+## Closed 2026-08-22 — PRICING-01/02/05: the number, the currency, the weight
+
+Held back for weeks on the reasoning that the feature had never produced a
+number, so there was nothing to guard. That was backwards: the reason it had
+produced nothing was PRICING-04, and the moment that was fixed three
+fabrications were live at once.
+
+The currency was hard-coded USD whatever the checkout showed, so a EUR or GBP
+figure would have landed in the same column as dollars and been added straight
+into a landed price. It is read off the page beside the amount now, and an
+amount that is negative, non-finite, or has no three-letter code is no cost at
+all.
+
+The per-tier estimator converted every volumetric pack at water density: a
+200 L drum of a 1.84 g/ml acid weighed as 200 kg instead of 368, so the
+estimate came out at little over half. It resolves the material's density
+through the same exact-match index the $/kg work uses, and returns no weight,
+and so no estimate, when the density is unknown.
+
+The per-rung figure stays in `shipping_cost_estimate`. Nothing writes an
+estimate into `shipping_cost`.
+
+`shipping/cost-is-numeric-and-unfabricated`, five mutations.
+
 ## Closed 2026-08-22 — PRICING-03/04: the delivery cost that was never attempted
 
 The feature was not failing, it was inert. `getOrgShipToAddress` selected
@@ -813,9 +837,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | UI-02 | the seven existing global review routes. `ui/no-global-review-route` shipped 2026-08-20 as a ratchet, so no eighth can be added, but the seven that predate it are still live and still cross-client. Removing them is a product decision. |
 | UI-06 | somewhere to persist an audit finding. `ui/flagged-set-must-have-a-surface` makes every set in the registry render; findings that live nowhere never reach the registry, so the guard cannot see them. |
 | SHIP-07 | column granularity. `ship/migration-must-accompany-schema-read` shipped 2026-08-20 over tables and RPCs; all 49 tables and 15 functions read today are created by a migration, so it is a ratchet. A read of a *column* that no migration adds is still invisible, and that is the shape ENG-1036 took. |
-| PRICING-01 | `shipping/cost-must-be-numeric` |
-| PRICING-02 | `shipping/cost-per-tier` |
-| PRICING-05 | `shipping/no-fabricated-costs` — the per-tier estimator breaks it today, see the P2 above |
 
 ### Reported by an audit, and the audit closes nothing
 

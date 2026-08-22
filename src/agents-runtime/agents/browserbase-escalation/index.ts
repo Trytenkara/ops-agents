@@ -3,6 +3,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { agenticPull, type PullResult, captureShippingCost, type ShippingCaptureResult } from "@/lib/browserbase-pull";
 import { normalizeToUsd as fxNormalize } from "@/lib/fx";
 import { estimatePerTierShipping } from "@/lib/shipping-estimation";
+import { loadMaterialDensities } from "@/lib/material-density";
 import { getOrgShipToAddress, formatAddressForCheckout } from "@/lib/tenkara-ship-to";
 import { sanitizeTiers, type PriceTier } from "@/lib/price-tiers";
 import { publishablePrice, publishableTiers, withheldMark } from "@/lib/price-publish";
@@ -281,6 +282,7 @@ async function writePull(
       ...(priceChanged ? { previous_price: prev.price, price_changed_at: now } : {}),
       // Shipping cost fields (populated by captureShippingCost after price capture)
       shipping_cost: shippingResult?.shippingCost ?? null,
+      shipping_cost_currency: shippingResult?.currency ?? null,
       shipping_address_used: shippingResult?.shippingAddress ?? null,
       shipping_cost_attempted_at: shippingResult?.attemptedAt ?? null,
       shipping_cost_failed_reason: shippingResult?.failedReason ?? null,
@@ -291,7 +293,10 @@ async function writePull(
 
     // Add per-tier shipping cost estimates if we captured an MOQ shipping cost
     if (shippingResult?.shippingCost != null && tiers.length > 0) {
-      const estimates = await estimatePerTierShipping(shippingResult.shippingCost, tiers, lead.material_name ?? "");
+      // PRICING-05: the per-tier estimate is only as honest as the weight behind
+      // it, and a volumetric pack has no weight without the material's density.
+      const densities = await loadMaterialDensities(admin, lead.org_id);
+      const estimates = await estimatePerTierShipping(shippingResult.shippingCost, tiers, lead.material_name ?? "", densities);
       for (const [tierIdx, estimatedCost] of Object.entries(estimates)) {
         const idx = parseInt(tierIdx, 10);
         if (tiers[idx]) tiers[idx].shipping_cost_estimate = estimatedCost;
@@ -543,7 +548,7 @@ registerAgent({
           const shippingResult: ShippingCaptureResult | null = result.shippingCost != null
             ? {
                 shippingCost: result.shippingCost,
-                currency: "USD",
+                currency: result.shippingCurrency ?? null,
                 shippingAddress: shipToAddress ? `${shipToAddress.city}, ${shipToAddress.state}, ${shipToAddress.zip}, ${shipToAddress.country}` : null,
                 failedReason: null,
                 attemptedAt: new Date().toISOString(),

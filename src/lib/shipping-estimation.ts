@@ -1,5 +1,6 @@
 import { Anthropic } from "@anthropic-ai/sdk";
 import type { PriceTier } from "./price-tiers";
+import { resolveDensity, type DensityIndex } from "./material-density";
 
 const client = new Anthropic();
 
@@ -9,6 +10,7 @@ export async function estimatePerTierShipping(
   shippingCostMoq: number,
   priceTiers: PriceTier[],
   materialName: string,
+  densities: DensityIndex,
 ): Promise<Record<number, number | null>> {
   if (priceTiers.length <= 1) {
     // Only one tier, no estimation needed
@@ -17,7 +19,7 @@ export async function estimatePerTierShipping(
 
   // Build a tier summary with weights/volumes if available
   const tierSummary = priceTiers.map((t, i) => {
-    const breakdown = extractWeightInfo(t);
+    const breakdown = extractWeightInfo(t, resolveDensity(densities, materialName)?.density ?? null);
     return {
       index: i,
       pack_size: t.pack_size ?? "unknown",
@@ -95,8 +97,20 @@ Where keys are tier indices (as strings) and values are estimated costs in USD o
 
 // Helper: extract weight info from a tier's pack_size string
 // Returns estimated weight in kg, or null if unextractable
+/**
+ * PRICING-05 / DATA-07. A litre is not a kilogram. This used to convert every
+ * volumetric pack at water density, so a 200 L drum of a 1.84 g/ml acid was
+ * estimated at 200 kg instead of 368 and the per-tier shipping came out nearly
+ * half what it should be — a fabricated weight producing a fabricated cost that
+ * reads like a captured one.
+ *
+ * `densityGml` comes from the material density index, which matches on an exact
+ * name for the same reason. Unknown density means no weight, and the estimator
+ * is told to return null for that tier rather than guess.
+ */
 function extractWeightInfo(
   tier: PriceTier,
+  densityGml: number | null,
 ): { weight_kg: number | null; volume_l: number | null } {
   if (!tier.pack_size || !tier.case_size) {
     return { weight_kg: null, volume_l: null };
@@ -119,15 +133,14 @@ function extractWeightInfo(
     weight_kg = caseSize * 1000;
   } else if (unit === "l" || unit === "liter" || unit === "litre") {
     volume_l = caseSize;
-    // Rough density assumption for water-like liquids: 1 L ≈ 1 kg
-    weight_kg = caseSize;
+    weight_kg = densityGml == null ? null : caseSize * densityGml;
   } else if (unit === "ml" || unit === "milliliter") {
     volume_l = caseSize / 1000;
-    weight_kg = caseSize / 1000;
+    weight_kg = densityGml == null ? null : (caseSize / 1000) * densityGml;
   } else if (unit === "gal" || unit === "gallon") {
     // 1 gallon ≈ 3.785 liters
     volume_l = caseSize * 3.785;
-    weight_kg = caseSize * 3.785; // Assuming water density
+    weight_kg = densityGml == null ? null : caseSize * 3.785 * densityGml;
   } else if (unit === "oz" || unit === "ounce") {
     weight_kg = (caseSize * 28.3495) / 1000; // 1 oz ≈ 28.3495 grams
   }
