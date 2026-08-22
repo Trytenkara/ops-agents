@@ -22,7 +22,7 @@
       "id": "META-04",
       "title": "One shared module per invariant",
       "bucket": "Guard",
-      "owes": true
+      "owes": false
     },
     {
       "id": "META-05",
@@ -754,6 +754,7 @@
     "Closed 2026-08-20 — the quotes table now carries a lane",
     "Closed 2026-08-20 — a guard only bound the repository, and the skills were not in it",
     "The full enforcement debt",
+    "Closed 2026-08-22 — META-04: the ratchet nobody could count",
     "Open decisions",
     "Closed 2026-08-22 — a cancelled email left its supplier's other materials shelved for good",
     "Closed 2026-08-22 — the shared supplier table, and a guard no rule had claimed",

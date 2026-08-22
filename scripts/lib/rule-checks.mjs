@@ -16,6 +16,7 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { UNCLASSIFIED, vocabularyHint } from "./enforcement-vocab.mjs";
 import { collectRules, renderLedger, renderSnapshot } from "./enforcement-ledger.mjs";
 
@@ -117,6 +118,7 @@ export function runChecks(files, rulesDir) {
   // gate. These exact sites are grandfathered so the gate can be switched on
   // today and every NEW break fails. A ratchet, not an exemption: nothing is
   // added to this list. See rules/OUTSTANDING.md, the skills-corpus section.
+  const usedWaivers = new Set();
   const GRANDFATHERED = new Set([
     "contacts/no-inline-mailbox-list@skills/contact-finder-agent/backfill.py",
     "contacts/no-inline-mailbox-list@skills/detect-supplier-dupes/detect.mjs",
@@ -143,7 +145,23 @@ export function runChecks(files, rulesDir) {
     for (const f of files) {
       if (scope && !scope.includes(f.path)) continue;
       if (allow.some((a) => f.path.endsWith(a))) continue;
-      if (GRANDFATHERED.has(`${rule}@${f.path}`)) continue;
+      const waiver = `${rule}@${f.path}`;
+      if (GRANDFATHERED.has(waiver)) {
+        // Run the test anyway, purely to learn whether this waiver is still
+        // holding anything back. A waiver whose site was fixed or renamed
+        // covers nothing, and a ratchet with dead entries in it is one nobody
+        // can read: the next person cannot tell which four sites are the real
+        // debt. See the meta/no-second-copy-of-a-shared-guard check below.
+        for (const line of codeLines(f)) {
+          if (!line.trim()) continue;
+          if (exempt.some((re) => re.test(line))) continue;
+          if (test(normalize ? normalize(line) : line, f)) {
+            usedWaivers.add(waiver);
+            break;
+          }
+        }
+        continue;
+      }
       const lines = codeLines(f);
       f.text.split("\n").forEach((raw, i) => {
         const line = lines[i];
@@ -1593,13 +1611,34 @@ export function runChecks(files, rulesDir) {
         line: "the pull synthesises a login_required verdict of its own",
       });
     }
+    // The manual Tier B skill is a separate runtime in a separate repository: a
+    // plain .mjs run by node, which cannot import a TypeScript module out of
+    // this one. So it is allowed the one predicate below, and in exchange the
+    // behaviour that actually diverged is pinned from here. It had the same
+    // fault the pull did — everything that was not a 429 came back a login wall.
+    const skillPull = files.find((f) => f.path.endsWith("browserbase-price-pull/src/agentic.mjs"));
+    if (skillPull && /classification:\s*"login_required"/.test(skillPull.text)) {
+      violations.push({
+        rule,
+        why: "a proxy block reported as a login wall sends an operator to a page that is not gated",
+        fix: "return needs_review on exhaustion; login_required is the model's reading of the page only",
+        where: skillPull.path,
+        line: "the skill synthesises a login_required verdict of its own",
+      });
+    }
     forbid({
       rule,
       why: "a second rate-limit test is a second retry policy, and the two stop agreeing without anything failing",
       fix: "use classifyFailure from @/lib/retry-verdict, which reports rateLimited",
       // Hunter's is not a retry decision: it stands a paid provider down for the
       // rest of the run on any pacing complaint, including ones with no status.
-      allow: ["src/lib/retry-verdict.ts", "src/lib/hunter.ts"],
+      allow: [
+        "src/lib/retry-verdict.ts",
+        "src/lib/hunter.ts",
+        // Separate runtime, cannot import the shared module. Its exhaustion
+        // verdict is pinned above instead.
+        "browserbase-price-pull/src/agentic.mjs",
+      ],
       test: (l) => /\/[^/\n]*(rate.?limit|too many requests)[^/\n]*\/[gimsuy]*\s*\.test\(|=\s*\/[^/\n]*too many requests/i.test(l),
     });
   }
@@ -2765,6 +2804,75 @@ export function runChecks(files, rulesDir) {
     test: (l) =>
       /auto_?send|send_now|send_immediately|sendDraft|\/send["'`)]/i.test(l),
   });
+
+  // META-04. The waivers above are the only places a shared-module rule is
+  // knowingly broken, and they are the thing most likely to rot: the file gets
+  // renamed, or the site gets fixed, and the entry stays. Then the list reads
+  // as four live debts when it is two, and the next person cannot tell which.
+  // Worse, a stale entry is a standing permission — if that path ever comes
+  // back, it comes back pre-waived.
+  {
+    const rule = "meta/no-second-copy-of-a-shared-guard";
+    const RATCHET_SIZE = 9;
+    if (GRANDFATHERED.size > RATCHET_SIZE) {
+      violations.push({
+        rule,
+        why: "the grandfathered list is a ratchet, so it may only ever shrink; a new entry is a second copy shipped with permission",
+        fix: "import the shared module at the new site instead of adding it to GRANDFATHERED",
+        where: "scripts/lib/rule-checks.mjs",
+        line: `${GRANDFATHERED.size} grandfathered sites, ratchet is ${RATCHET_SIZE}`,
+      });
+    }
+    for (const waiver of GRANDFATHERED) {
+      if (usedWaivers.has(waiver)) continue;
+      const [id, path] = waiver.split("@");
+      // The skills are a second repository and only join the corpus under
+      // `--also`. Absent means not looked at, which is not the same as clean.
+      if (!files.some((f) => f.path === path)) continue;
+      violations.push({
+        rule,
+        why: "a waiver that holds nothing back still grants permission, and it makes the real debt unreadable by padding it",
+        fix: `delete "${waiver}" from GRANDFATHERED in scripts/lib/rule-checks.mjs, and lower RATCHET_SIZE to match`,
+        where: "scripts/lib/rule-checks.mjs",
+        line: `${id} no longer fires at ${path}`,
+      });
+    }
+  }
+
+  // Every rule id these checks can emit must be claimed by a rule in rules/.
+  // ORG-06 shipped with a working guard that no rule named, so the ledger
+  // reported it as unguarded for two days and the debt register carried a row
+  // for work that was already done. An unclaimed check is invisible in exactly
+  // the direction that wastes effort.
+  {
+    // Read from disk, not from the corpus: this file is not under src/, so it
+    // is not one of the files being scanned, and looking for it there made the
+    // check pass by finding nothing — the fail-open shape PERS-08 is about.
+    // The corpus still wins if it holds an override, which is how the self-test
+    // hands this a broken copy.
+    const self =
+      files.find((f) => f.path === "scripts/lib/rule-checks.mjs") ??
+      { text: readFileSync(fileURLToPath(import.meta.url), "utf8") };
+    {
+      const claimed = collectRules(rulesDir)
+        .map((r) => r.enforcement ?? "")
+        .join("\n");
+      const emitted = new Set(
+        [...self.text.matchAll(/(?:^|[\s{(,])rule:\s*"([a-z][a-z0-9-]*\/[a-z0-9-]+)"/gm)].map((m) => m[1])
+      );
+      for (const m of self.text.matchAll(/const rule = "([a-z][a-z0-9-]*\/[a-z0-9-]+)"/g)) emitted.add(m[1]);
+      for (const id of [...emitted].sort()) {
+        if (claimed.includes(id)) continue;
+        violations.push({
+          rule: "rules/no-orphaned-check-id",
+          why: "a check no rule names is not readable as enforcement: the ledger calls the rule unguarded and the register bills for work already done",
+          fix: `name \`${id}\` on the Enforcement line of the rule it enforces, or delete the check`,
+          where: "scripts/lib/rule-checks.mjs",
+          line: `${id} is enforced by nothing in rules/`,
+        });
+      }
+    }
+  }
 
   return violations;
 }

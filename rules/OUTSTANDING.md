@@ -731,7 +731,8 @@ shared data file both languages read, and doing that behind a build gate would
 have meant editing four running skills to turn the gate on. It is a ratchet, so
 every new break fails; nothing may be added to that list. The same cross-
 language duplication is why four skills each hardcode `C0B5M1QCE9E` rather than
-resolving it from one place.
+resolving it from one place. Since 2026-08-22 the ratchet is machine-held: see
+the META-04 section below.
 
 Two follow-ons closed with it on the same day.
 
@@ -767,7 +768,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 
 | Rule | The check |
 | --- | --- |
-| META-04 | `meta/no-second-copy-of-a-shared-guard`, beyond the invariants already covered |
 | COMM-08 | the scope's edges. `copy/no-rfq-or-em-dash-in-templates` holds a named list of outbound-copy files and `copy/scope-must-cover-every-draft-site` makes a `stageDraft` caller missing from it a violation. Copy reaching a supplier by some other path is still unseen. |
 | PERS-04 | the run-summary half. `retry/bound-must-be-declared` shipped 2026-08-20 and holds the rules-folder half: all seven bounds are now named under PERS-04 and an eighth fails the build. A bound must also appear in the run summary, which cannot be read from the source. |
 | PERS-09 | `runs/paced-loop-must-carry-deadline`. `deadlineAt` holds the one job it was written for; a new per-item push loop with no deadline passes the build today. |
@@ -794,6 +794,45 @@ what each one found on its first pass:
 | DISC-08 | the 52 orphaned cursors and the 15 markers written without `done`, all of which currently read as finished and gate their material off SourceReady permanently. Deleting them is a one-off repair nobody has run. |
 | OUT-09 | the exemption itself. A staged draft suppresses the chase for as long as it sits there, with no cap; the first audit run found one thread in that state and 3,461 staged drafts fleet-wide that could put others there. Capping it is a product decision. |
 | DATA-08 | the 7 materials where arming disagrees with Tenkara, and the widening phrasings the blocking code still misses. |
+
+## Closed 2026-08-22 — META-04: the ratchet nobody could count
+
+META-04 owed `meta/no-second-copy-of-a-shared-guard`, described as extending
+coverage "to the rest". There is no rest to extend to by pattern: two copies of
+a guard need not share a name, a language or even a shape, and the four known
+ones are a TypeScript module and a Python script that cannot import it. Nothing
+static finds that.
+
+What was actually unguarded was the escape hatch. `GRANDFATHERED` is a list of
+nine waived call sites, and it was a plain permission list: anything added to it
+stopped being checked, silently and for good, and nothing ever asked whether a
+waiver was still doing anything. Two ways that goes wrong, both invisible on a
+green build — the list grows, so "ratchet" becomes a synonym for "exemption
+list", which is the decay SHIP-04 warns about; or a waived site gets fixed or
+renamed and its entry stays, so a reader counting the debt sees nine when there
+are four.
+
+Now the size is pinned at nine and each waiver is re-tested on every run: the
+test runs even when the waiver applies, purely to record that it still matched
+something. A waiver that catches nothing fails the build and names itself.
+
+Two faults in the same tooling came out with it, both of the fail-open shape
+PERS-08 is about. `rules/no-orphaned-check-id` — added here to catch a check
+that no rule's Enforcement line names, after ORG-06 shipped a working guard the
+ledger reported as unguarded for two days — looked its own source up in the
+corpus, and `scripts/lib/rule-checks.mjs` is not under `src/`, so it found
+nothing and passed. It reads from disk now, with the corpus able to override it
+so the self-test can hand it a broken copy. With it running, five checks turned
+out to be orphans: the whole set that holds the ledger and the debt register
+honest. They are claimed by SHIP-04.
+
+And PERS-01's new guard fired on the skills corpus, correctly: the manual Tier B
+skill had the same fault Agent 19 had, returning `login_required` — the verdict
+that escalates to a human — for anything that was not a 429, including simply
+running out of attempts. Fixed. It keeps its own rate-limit predicate, because
+it is a separate node runtime in a separate repository and cannot import the
+shared classifier; the behaviour that diverged is pinned from the ops-agents
+side instead.
 
 ## Open decisions
 

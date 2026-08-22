@@ -101,9 +101,14 @@ export function isOwed(bucketName) {
  * admitted their missing half in prose — "the run-summary half is still owed"
  * — and were counted as fully enforced for it, which is the same failure one
  * sentence further in.
+ *
+ * Backticked spans are cut out first: they hold check ids, and one of the ids
+ * is `rules/owed-enforcement-must-be-outstanding`. Naming it marked the rule
+ * that names it as owing work it had just finished.
  */
 export function owesWork(enforcement, bucketName) {
-  return isOwed(bucketName) || /\bowed\b/.test(enforcement);
+  const prose = String(enforcement).replace(/`[^`]*`/g, " ");
+  return isOwed(bucketName) || /\bowed\b/.test(prose);
 }
 
 /** Human-readable list of the accepted openings, for the failure message. */

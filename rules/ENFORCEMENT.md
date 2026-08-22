@@ -4,10 +4,10 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-121 rules. 91 are actually enforced, 17 owe a check or a job,
+121 rules. 91 are actually enforced, 16 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
-13 of the enforced rules hold only part of their invariant and say so in
+12 of the enforced rules hold only part of their invariant and say so in
 their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
@@ -36,7 +36,7 @@ this ledger read as enforced.
 | Rule | | Enforcement |
 |---|---|---|
 | `META-02` | Prefer a positive invariant over a blocklist | Guard — `src/lib/mailbox-domain.ts`, `contacts/no-inline-mailbox-list`. |
-| `META-04` | One shared module per invariant | Guard for the invariants that have a `check-rules` id. Check owed — `meta/no-second-copy-of-a-shared-guard`, extending coverage to the rest. |
+| `META-04` | One shared module per invariant | Guard for the invariants that have a `check-rules` id, plus `meta/no-second-copy-of-a-shared-guard` over the ratchet itself: its size is pinned, so a new duplicate fails the build rather than being waived, and every waiver is re-tested on each run and fails once it no longer holds anything back. A waiver whose file was fixed or renamed grants permission for nothing and pads the list so the four real debts underneath cannot be counted. |
 | `META-05` | Ad-hoc scripts live in `scripts/` and get deleted | Guard — `tsconfig.json` include scope. |
 | `META-09` | A guard is not a guard until a deliberate break makes it fire | Guard — `npm run check:rules:self-test`, which runs ahead of `next build`, so an inert guard fails the deploy. It fails on two separate things: a mutation its check did not catch, and a check no mutation covers. Plus `scripts/install-hooks.mjs`, which installs both repositories' hooks from `npm install`, with `check-rules` refusing to pass locally while either has its hooks unset. |
 | `COMM-05` | Never speak as the human | Guard — `comm/one-slack-sender`: `postSlackMessage` in `src/lib/slack.ts` is the only place that posts, and no user token may appear anywhere. `postAgentAlert` used to hold a second copy of the same fetch and now delegates to it. |
@@ -116,7 +116,7 @@ this ledger read as enforced.
 | `UI-11` | A placeholder must never look like a value | Guard — `ui/no-numeric-placeholder-in-value-field`: a placeholder whose whole text is a number fails the build. A unit (`kg`), a format (`price per unit`) or an explicit `e.g.` stays legal, which is what the fix looks like. The three live breaks on the marketplace-pricing card — case size, case price, unit price — were fixed with the check. |
 | `SHIP-02` | Never stage everything | Guard — `shipping/no-blanket-stage`, three mutations: deleting the hook, the hook no longer looking at what the stage added, and a script that runs `git add -A`. What is left after those is judgement. |
 | `SHIP-03` | A red build is silent, so build before you push | Guard — pre-push hook, on machines that ran `npm install`. |
-| `SHIP-04` | Rules are checked before the build | Guard. |
+| `SHIP-04` | Rules are checked before the build | Guard — `rules/enforcement-ledger-must-match` regenerates the ledger and the runtime snapshot in memory and fails on any diff; `rules/every-rule-declares-enforcement` rejects an enforcement value outside the shared vocabulary; `rules/owed-enforcement-must-be-outstanding` and `rules/debt-register-must-match-the-ledger` hold the debt register to the ledger in both directions; `rules/no-orphaned-check-id` reads every check id out of `rule-checks.mjs` and fails on one no rule names. |
 | `SHIP-07` | Deploy and schema move together | Guard — `ship/migration-must-accompany-schema-read`: every table read through `.from(...)` and every `.rpc(...)` must be created by a migration in this repo. That is the granularity that can be read statically and the one that fails every call rather than one field; a missing *column* is still owed and is listed in `OUTSTANDING.md`. The check also fails if no migrations are in the corpus at all, since an empty schema would otherwise read as "nothing to check". |
 
 ## Audit (8)

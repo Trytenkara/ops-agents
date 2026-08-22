@@ -49,7 +49,21 @@ fails the deploy. Add a check whenever you add a shared guard. Reach for an
 exemption only after ruling out moving the logic into the shared module; an
 exemption list decays the same way a blocklist does.
 
-**Enforcement:** Guard.
+The check also reads the rulebook itself, because everything above depends on
+the rulebook being an honest account of what is enforced. `ENFORCEMENT.md` is
+generated, and for two days it was hand-edited and wrong: it published `PERS-08`
+as an enforced Guard while both the rule text and the guard were uncommitted.
+The same drift ran the other way — `ORG-06` shipped a working guard that no rule
+named, so the ledger called it unguarded and the debt register carried a row for
+work already done.
+
+**Enforcement:** Guard — `rules/enforcement-ledger-must-match` regenerates the
+ledger and the runtime snapshot in memory and fails on any diff;
+`rules/every-rule-declares-enforcement` rejects an enforcement value outside the
+shared vocabulary; `rules/owed-enforcement-must-be-outstanding` and
+`rules/debt-register-must-match-the-ledger` hold the debt register to the
+ledger in both directions; `rules/no-orphaned-check-id` reads every check id out
+of `rule-checks.mjs` and fails on one no rule names.
 
 ## SHIP-05 — Confirm what production is actually serving
 

@@ -1192,6 +1192,26 @@ const MUTATIONS = [
     label: "auto-send arrives as a flag on the draft body",
     mutate: fixture("src/__selftest__/send2.ts", `const body = { subject, auto_send: true };\n`),
   },
+  {
+    expect: "rules/no-orphaned-check-id",
+    label: "a check is added under an id no rule names",
+    mutate: fixture(
+      "scripts/lib/rule-checks.mjs",
+      'const rule = "zzz/no-rule-names-this";\n',
+    ),
+  },
+  {
+    // A waiver that holds nothing back still grants permission, and it pads the
+    // ratchet so the real debt underneath cannot be read. Handing the corpus a
+    // cleaned-up copy of a waived file is the same thing as somebody fixing it
+    // and leaving the entry behind.
+    expect: "meta/no-second-copy-of-a-shared-guard",
+    label: "a grandfathered site is fixed and its waiver is left in place",
+    mutate: fixture(
+      "skills/contact-finder-agent/backfill.py",
+      "# the inline mailbox list is gone\n",
+    ),
+  },
 ];
 
 // The checks over rules/ itself read from disk, so they mutate a copy.

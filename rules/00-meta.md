@@ -49,9 +49,17 @@ copies of a rule agree only by inspection, and one day one of them will not.
 The open-record owner derivation existed in four places; three agreed and the
 fourth stamped the wrong operator on every externally-staged draft.
 
-**Enforcement:** Guard for the invariants that have a `check-rules` id.
-Check owed — `meta/no-second-copy-of-a-shared-guard`, extending coverage to
-the rest.
+A second copy cannot be found by pattern in general — the two copies need not
+share a name, a language or a shape. What is enforceable is that every copy
+already known about is either deleted or held on a ratchet that cannot grow and
+cannot rot.
+
+**Enforcement:** Guard for the invariants that have a `check-rules` id, plus
+`meta/no-second-copy-of-a-shared-guard` over the ratchet itself: its size is
+pinned, so a new duplicate fails the build rather than being waived, and every
+waiver is re-tested on each run and fails once it no longer holds anything back.
+A waiver whose file was fixed or renamed grants permission for nothing and pads
+the list so the four real debts underneath cannot be counted.
 
 ## META-05 — Ad-hoc scripts live in `scripts/` and get deleted
 
