@@ -4,10 +4,10 @@ Generated from the Enforcement line of every rule by
 `npm run gen:enforcement`. Do not edit by hand: the rule files are the
 source of truth and this is only a view of them.
 
-121 rules. 91 are actually enforced, 19 owe a check or a job,
+121 rules. 91 are actually enforced, 18 owe a check or a job,
 20 are human judgement that nothing could ever check.
 
-15 of the enforced rules hold only part of their invariant and say so in
+14 of the enforced rules hold only part of their invariant and say so in
 their own Enforcement line. They are counted in both figures above.
 
 | Status | Meaning | Count |
@@ -55,7 +55,7 @@ this ledger read as enforced.
 | `DATA-01` | Never fabricate, approximate or infer a price | Guard — `src/lib/price-publish.ts` `publishablePrice` / `publishableTiers` at every price writer, `price/writer-must-gate`, for the amount; `src/lib/price-provenance.ts` `verifyPriceProvenance`, `price/capture-must-carry-source-text`, for the basis (DATA-14). |
 | `DATA-02` | A foreign price is published only through one conversion | Guard — `fx/no-direct-convertToUsd`. |
 | `DATA-04` | Agents may never invent a contact detail in an outgoing body | Guard — `src/lib/contact-guard.ts`, `contacts/staging-must-guard-fabrication`. |
-| `DATA-05` | Guessing a recipient is allowed; guessing content is not | Guard — `contacts/guessed-combo-requires-own-domain-and-flag`: the one branch in the repo that builds an address out of a name and a domain must keep both its `!isAggregatorDomain(...)` gate and its `guessed` confidence stamp. The two are checked together because each reads as redundant next to the other, so a cleanup removes one and leaves the rule half-true. The shared host list is owed: the gate reads a hand-copied copy in `enrich.ts` that has drifted 15 hosts behind `src/lib/aggregator-hosts.ts`, so a guess is still allowed on those hosts. |
+| `DATA-05` | Guessing a recipient is allowed; guessing content is not | Guard — `contacts/guessed-combo-requires-own-domain-and-flag`: the one branch in the repo that builds an address out of a name and a domain must keep both its `!isAggregatorDomain(...)` gate and its `guessed` confidence stamp. The two are checked together because each reads as redundant next to the other, so a cleanup removes one and leaves the rule half-true. The same check holds the list behind the gate: `enrich.ts` must read `NOT_A_SUPPLIER_HOST`, and that union must import the directory hosts from `marketplace-hosts.ts` rather than restate them. |
 | `DATA-06` | Only a same-run verification counts as a confirmed email | Guard — `VERIFYING_SOURCES` in `src/agents-runtime/agents/data-enrichment/enrich.ts`, `contacts/confidence-derived-from-source`. The check is on the derivation rather than the word: confidence must be computed from the source, the cache replay must be excluded, and no other line in the corpus may assign the literal. That last part is what stops the old shape coming back, since `= "verified"` reads like a harmless default at every call site that might add one. |
 | `DATA-07` | Density: bulk for solids, specific gravity for liquids | Guard — `src/lib/quote-density-guard.ts` `validateQuoteDensity` called inside `insertStagedQuotes`, and `density/solids-require-bulk` in `scripts/lib/rule-checks.mjs` fails the build if the guard is removed. Partially held by the enrichment sanitiser for display. |
 | `DATA-09` | Aliases never add a qualifier the input lacked | Guard — `GRADE_WORDS` in `src/lib/material-aliases.ts`. |

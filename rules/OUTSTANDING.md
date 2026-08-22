@@ -538,15 +538,37 @@ against the stated grade directly, per the standing preference for reading over
 another regex. The check needs a mutation behind it per META-09, which today it
 does not have.
 
-## P2 — Guessed contacts can be synthesised at a directory
+## CLOSED 2026-08-22 — Guessed contacts could be synthesised at a directory
 
-Breaks DATA-05. The guess builder is otherwise correct: right combinations,
-right source suffix, right confidence, and the body fabrication guard does not
-interfere. But the aggregator check uses a hand-copied private list that has
-drifted from the shared one and does not include the directory host list at
-all, so several well-known directories will get five synthesised addresses.
+Broke DATA-05. The guess builder was otherwise correct: right combinations,
+right source suffix, right confidence, and the body fabrication guard did not
+interfere. But the aggregator check read a hand-copied private list that had
+drifted fifteen hosts behind the shared one, so on those fifteen a directory
+would get five synthesised addresses.
 
-**Owed:** delete the private list, import the shared one (META-04).
+The drift was ten aggregators (Pharmaoffer, PharmaCompass, Ingredients Network,
+NXT Ingredients, Nutrada, TraceGains Gather, Global Trade Plaza, Usetorg, Globy,
+RecycleBlu — all added to the shared list on 2026-08-04) plus five directories
+the price pull already enumerated (ULProspector on both its hosts, Tridge,
+SpecialChem, Accio). Measured before the fix: zero leads carried an address at
+any of the fifteen, so this was latent rather than live.
+
+`src/lib/aggregator-hosts.ts` now exports `NOT_A_SUPPLIER_HOST`, the union of the
+aggregators, the directory hosts imported from `marketplace-hosts.ts`, and three
+transactional platforms that list deliberately keeps out for pricing reasons
+(Molbase, IngredientsOnline, ChemOndis — some of their listings really do check
+out, but a mailbox on them is still the platform's). `enrich.ts` reads the union
+and keeps no list of its own. Nothing was dropped: all 39 hosts of the old copy
+are in the union, which now holds 53.
+
+The guard grew three limbs, one per way this comes back: the gate reading a
+literal array again, the union no longer being exported, and the directory hosts
+being restated in the union rather than imported. Each has a mutation.
+
+Not covered, and deliberately: the wider "one host list in the repo" question is
+META-04's. Agent 19's `RFQ_WALL_HOSTS` overlaps heavily but is a different
+predicate (hosts that print no price even to a logged-in buyer, including real
+suppliers like Azelis), so it is not a copy of this list and was left alone.
 
 ## P2 — Nothing stops a paced loop from outrunning its function
 
@@ -730,7 +752,6 @@ reclassified as `Judgement` because nothing mechanical can ever verify it.
 | --- | --- |
 | META-04 | `meta/no-second-copy-of-a-shared-guard`, beyond the invariants already covered |
 | COMM-08 | the scope's edges. `copy/no-rfq-or-em-dash-in-templates` holds a named list of outbound-copy files and `copy/scope-must-cover-every-draft-site` makes a `stageDraft` caller missing from it a violation. Copy reaching a supplier by some other path is still unseen. |
-| DATA-05 | the shared host list. `contacts/guessed-combo-requires-own-domain-and-flag` shipped 2026-08-20 and holds the gate and the flag together. The gate still reads a hand-copied list in `enrich.ts` that has drifted 15 hosts behind `src/lib/aggregator-hosts.ts`, so a guess is allowed on those hosts. Merging the lists is a behaviour change for every other caller of the shared one, which is why it is not folded in here. |
 | PERS-01 | `retry/verdict-must-use-shared-classifier`. Three call sites use `classifyFailure` and two hand-rolled classifiers remain — see the P2 above. |
 | PERS-04 | the run-summary half. `retry/bound-must-be-declared` shipped 2026-08-20 and holds the rules-folder half: all seven bounds are now named under PERS-04 and an eighth fails the build. A bound must also appear in the run summary, which cannot be read from the source. |
 | PERS-09 | `runs/paced-loop-must-carry-deadline`. `deadlineAt` holds the one job it was written for; a new per-item push loop with no deadline passes the build today. |

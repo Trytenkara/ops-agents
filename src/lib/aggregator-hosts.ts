@@ -1,3 +1,5 @@
+import { DIRECTORY_HOSTS } from "@/lib/marketplace-hosts";
+
 // Aggregators — multi-seller B2B platforms that relay every order through a
 // "Send Inquiry" / "Contact Supplier" form instead of a checkout (Alibaba,
 // IndiaMART, Made-in-China, ...). They sit between a true marketplace and a
@@ -41,6 +43,30 @@ const AGGREGATORS: Array<[host: string, name: string]> = [
 ];
 
 export const AGGREGATOR_HOSTS: string[] = AGGREGATORS.map(([h]) => h);
+
+// Hosts where an address belongs to the platform rather than to the supplier:
+// the aggregators above, plus the lead directories and company-profile sites
+// that marketplace-hosts.ts already enumerates for the price pull. Discovery
+// mis-captures those as a supplier's own website (a Bloomberg company profile
+// URL), and a domain search against bloomberg.com then returns Bloomberg staff,
+// whom multi-contact outreach CCs in a body.
+//
+// The directory list is imported, not restated (META-04): enrichment kept a
+// hand-copied version of all of this and fell ten aggregators behind it, so on
+// those ten a platform address read as the supplier's own domain and the
+// guessed-address gate did not fire. Nothing had landed on one yet; the copy is
+// what made it a matter of time.
+//
+// These three are deliberately absent from the pricing list, because some of
+// their listings really do check out, but a mailbox on them is still the
+// platform's.
+const TRANSACTIONAL_PLATFORM_HOSTS = ["molbase.com", "ingredientsonline.com", "chemondis.com"];
+
+export const NOT_A_SUPPLIER_HOST: string[] = [
+  ...AGGREGATOR_HOSTS,
+  ...DIRECTORY_HOSTS,
+  ...TRANSACTIONAL_PLATFORM_HOSTS,
+];
 
 function normalizeHost(host: string | null | undefined): string | null {
   if (!host) return null;

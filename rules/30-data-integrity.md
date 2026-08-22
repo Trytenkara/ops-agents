@@ -84,14 +84,15 @@ operator can see it.
 repo that builds an address out of a name and a domain must keep both its
 `!isAggregatorDomain(...)` gate and its `guessed` confidence stamp. The two are
 checked together because each reads as redundant next to the other, so a cleanup
-removes one and leaves the rule half-true. The shared host list is owed: the
-gate reads a hand-copied copy in `enrich.ts` that has drifted 15 hosts behind
-`src/lib/aggregator-hosts.ts`, so a guess is still allowed on those hosts.
+removes one and leaves the rule half-true. The same check holds the list behind
+the gate: `enrich.ts` must read `NOT_A_SUPPLIER_HOST`, and that union must
+import the directory hosts from `marketplace-hosts.ts` rather than restate them.
 
-That branch still uses a hand-copied host list rather than the shared one in
-`src/lib/aggregator-hosts.ts`, and the copy has drifted; the guess is therefore
-allowed on 15 platform hosts the shared list knows about. Listed in
-`OUTSTANDING.md`.
+The gate used to read a hand-copied list that had drifted fifteen hosts behind
+the shared one — ten aggregators added on 2026-08-04 and five directories the
+price pull already knew about — so on those fifteen a platform address read as
+the supplier's own domain and the guess was allowed. No lead had landed on one
+at the time it was fixed (2026-08-22); the copy is what made it a matter of time.
 
 ## DATA-06 — Only a same-run verification counts as a confirmed email
 

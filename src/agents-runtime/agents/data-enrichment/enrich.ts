@@ -3,7 +3,7 @@ import { enrichContactViaGetProspect, isGetProspectConfigured } from "@/lib/getp
 import { enrichContactViaZoomInfo, enrichContactsViaZoomInfo, isZoomInfoConfigured } from "@/lib/zoominfo";
 import { enrichContactViaHunter, enrichContactsViaHunter, isHunterConfigured } from "@/lib/hunter";
 import { enrichContactsViaLeadMagic, enrichPrimaryViaLeadMagic, isLeadMagicConfigured } from "@/lib/leadmagic";
-import { AGGREGATOR_HOSTS } from "@/lib/aggregator-hosts";
+import { AGGREGATOR_HOSTS, NOT_A_SUPPLIER_HOST } from "@/lib/aggregator-hosts";
 import {
   contactDomainKey,
   readContactDomainCache,
@@ -77,59 +77,12 @@ export interface EmailCheck {
   is_aggregator_domain: boolean;
 }
 
-// Marketplaces, B2B directories, and sourcing aggregators. An email at one of
-// these domains is the platform's inbox, not the supplier's — cold outreach to
-// it is wrong (the KH Neochem draft that went to concierge@knowde.com). Match is
-// on the registrable-ish host suffix so sub-domains (x.knowde.com) also hit.
-const AGGREGATOR_DOMAINS = [
-  "knowde.com",
-  "alibaba.com",
-  "aliexpress.com",
-  "1688.com",
-  "made-in-china.com",
-  "indiamart.com",
-  "tradeindia.com",
-  "exportersindia.com",
-  "thomasnet.com",
-  "globalsources.com",
-  "ec21.com",
-  "tradekey.com",
-  "go4worldbusiness.com",
-  "dhgate.com",
-  "europages.com",
-  "kompass.com",
-  "echemi.com",
-  "chemicalbook.com",
-  "guidechem.com",
-  "molbase.com",
-  "ingredientsonline.com",
-  "chemondis.com",
-  "spotchemi.com",
-  // Company-profile / data-provider / business-directory sites. These get
-  // mis-captured by discovery as a supplier's "website" (e.g. a Bloomberg
-  // company-profile URL). Treating them as aggregator domains stops enrichment
-  // from trusting them as the supplier's own domain and rejects any contact on
-  // them — otherwise a domain-search (Hunter/ZoomInfo) against bloomberg.com
-  // returns Bloomberg staff, and multi-contact CCs the whole list.
-  "bloomberg.com",
-  "dnb.com",
-  "crunchbase.com",
-  "pitchbook.com",
-  "zoominfo.com",
-  "apollo.io",
-  "lusha.com",
-  "rocketreach.co",
-  "opencorporates.com",
-  "owler.com",
-  "linkedin.com",
-  // Trade/customs-data providers, directories, and social networks — same class
-  // as the profile sites above (a directory URL captured as the supplier site,
-  // whose domain-search then returns the platform's own staff).
-  "volza.com",
-  "bebee.com",
-  "environmental-expert.com",
-  "taiwantrade.com",
-];
+// An email at one of these hosts is the platform's inbox, not the supplier's:
+// cold outreach to it is wrong (the KH Neochem draft that went to
+// concierge@knowde.com). The list is shared, because this file used to keep its
+// own copy and fell ten aggregators behind it. Match is on the registrable-ish
+// host suffix so sub-domains (x.knowde.com) also hit.
+const AGGREGATOR_DOMAINS = NOT_A_SUPPLIER_HOST;
 
 export function isAggregatorDomain(host: string | null | undefined): boolean {
   if (!host) return false;

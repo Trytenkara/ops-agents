@@ -202,7 +202,7 @@
       "id": "DATA-05",
       "title": "Guessing a recipient is allowed; guessing content is not",
       "bucket": "Guard",
-      "owes": true
+      "owes": false
     },
     {
       "id": "DATA-06",
@@ -744,7 +744,7 @@
     "Closed 2026-08-21 — a lead parked against a case never came back",
     "Closed 2026-08-21 — call tasks reached nobody",
     "P1 — The dealbreaker-grade guard arms intermittently, and has never fired",
-    "P2 — Guessed contacts can be synthesised at a directory",
+    "CLOSED 2026-08-22 — Guessed contacts could be synthesised at a directory",
     "P2 — Nothing stops a paced loop from outrunning its function",
     "P2 — Two hand-rolled retry classifiers remain",
     "P2 — No pre-merge build gate",

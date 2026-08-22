@@ -19,7 +19,7 @@
 // Lead-source directories, RFQ relays, and company-profile/data sites. The
 // platform is never the supplier: these exist to FIND companies, and a row whose
 // supplier is the platform itself has to be fanned out or dropped, not quoted.
-const DIRECTORY_HOSTS = [
+export const DIRECTORY_HOSTS = [
   // Chemical/ingredient lead-gen directories — every "price" routes to an inquiry.
   "knowde.com",
   "ulprospector.com",

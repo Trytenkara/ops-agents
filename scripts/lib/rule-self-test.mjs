@@ -893,6 +893,35 @@ const MUTATIONS = [
     mutate: drop("src/agents-runtime/agents/data-enrichment/enrich.ts"),
   },
   {
+    expect: "contacts/guessed-combo-requires-own-domain-and-flag",
+    label: "the gate goes back to its own private copy of the host list",
+    mutate: edit("src/agents-runtime/agents/data-enrichment/enrich.ts", (t) =>
+      t.replace(
+        "const AGGREGATOR_DOMAINS = NOT_A_SUPPLIER_HOST;",
+        'const AGGREGATOR_DOMAINS = ["knowde.com", "alibaba.com"];',
+      ),
+    ),
+  },
+  {
+    expect: "contacts/guessed-combo-requires-own-domain-and-flag",
+    label: "the shared union of platform hosts stops being exported",
+    mutate: rename(
+      "src/lib/aggregator-hosts.ts",
+      "export const NOT_A_SUPPLIER_HOST",
+      "const NOT_A_SUPPLIER_HOST",
+    ),
+  },
+  {
+    expect: "contacts/guessed-combo-requires-own-domain-and-flag",
+    label: "the directory hosts are restated instead of imported",
+    mutate: edit("src/lib/aggregator-hosts.ts", (t) =>
+      t.replace(
+        'import { DIRECTORY_HOSTS } from "@/lib/marketplace-hosts";',
+        'const DIRECTORY_HOSTS = ["knowde.com", "thomasnet.com"];',
+      ),
+    ),
+  },
+  {
     expect: "contacts/confidence-derived-from-source",
     label: "every resolved address is stamped verified again, whatever found it",
     mutate: edit("src/agents-runtime/agents/data-enrichment/enrich.ts", (t) =>

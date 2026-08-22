@@ -1572,6 +1572,47 @@ export function runChecks(files, rulesDir) {
           });
         }
       }
+      // The gate is only as good as the list behind it. This file kept its own
+      // copy of the hosts and fell fifteen behind the shared one, so on those
+      // fifteen a platform address read as the supplier's own domain and the
+      // gate did not fire at all.
+      if (!/const AGGREGATOR_DOMAINS\s*=\s*NOT_A_SUPPLIER_HOST\b/.test(text)) {
+        violations.push({
+          rule,
+          why: "a second copy of the platform-host list drifts, and every host it lacks is one the guess is allowed on",
+          fix: "const AGGREGATOR_DOMAINS = NOT_A_SUPPLIER_HOST, imported from @/lib/aggregator-hosts",
+          where: enrich.path,
+          line: "the aggregator host list here is not the shared one",
+        });
+      }
+    }
+    const shared = anchor("src/lib/aggregator-hosts.ts", {
+      rule,
+      why: "this is the one list of hosts at which an address belongs to the platform rather than the supplier",
+      fix: "restore src/lib/aggregator-hosts.ts",
+    });
+    if (shared) {
+      if (!/export const NOT_A_SUPPLIER_HOST\b/.test(shared.text)) {
+        violations.push({
+          rule,
+          why: "without the union there is nothing for the guess gate to read, and the caller goes back to a copy",
+          fix: "keep exporting NOT_A_SUPPLIER_HOST from src/lib/aggregator-hosts.ts",
+          where: shared.path,
+          line: "NOT_A_SUPPLIER_HOST is no longer exported",
+        });
+      }
+      // The union is aggregators + the directory hosts the price pull already
+      // enumerates. Restating that second list here would rebuild the same
+      // drift one level up.
+      if (!/import\s*\{[^}]*\bDIRECTORY_HOSTS\b[^}]*\}\s*from\s*"@\/lib\/marketplace-hosts"/.test(shared.text)) {
+        violations.push({
+          rule,
+          why: "the directory hosts are maintained for the price pull; a second copy here is the same fault one level up",
+          fix: "import { DIRECTORY_HOSTS } from \"@/lib/marketplace-hosts\"",
+          where: shared.path,
+          line: "the directory host list is restated rather than imported",
+        });
+      }
     }
   }
 
